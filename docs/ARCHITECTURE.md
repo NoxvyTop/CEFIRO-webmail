@@ -162,6 +162,70 @@ Piezas técnicas:
 | Notificaciones | SSE + Notification API | Aviso instantáneo sin polling |
 | Internacionalización | i18n desde el inicio | Textos en archivos de traducción; habilita funcionalidades futuras por idioma |
 
+## Backend (BFF)
+
+Módulos por dominio con arquitectura hexagonal liviana: la lógica de negocio
+en el centro y los sistemas externos (Stalwart, Authentik, Postgres) detrás
+de puertos (interfaces) implementados por adaptadores en `infra/`.
+
+```
+apps/server/src/
+├── modules/
+│   ├── auth/           # flujo OIDC, sesiones
+│   ├── mail/           # proxy JMAP, adjuntos (blobs)
+│   ├── notifications/  # eventos Stalwart → SSE al navegador
+│   ├── credentials/    # cifrado y custodia de credenciales de buzón
+│   ├── settings/       # firmas, preferencias
+│   └── setup/          # modo bootstrap
+├── core/               # tipos de dominio, errores, puertos
+└── infra/              # adaptadores: Postgres, cliente Stalwart, cliente Authentik
+```
+
+### Modelo de datos propio
+
+Solo datos de la aplicación; el correo vive en Stalwart.
+
+| Tabla | Qué guarda |
+|-------|-----------|
+| `users` | email, nombre, rol (empleado/admin), idioma preferido |
+| `mail_credentials` | credencial del buzón cifrada (ciphertext + nonce + versión de clave) |
+| `signatures` | firmas por usuario (varias, una por defecto) |
+| `user_preferences` | notificaciones, tema, ajustes de UI |
+| `sessions` | sesiones activas (id opaco, expiración) |
+| `audit_log` | actor, acción, objetivo, fecha, IP, detalle (JSON) |
+
+Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
+descifrada no se persiste nunca — se re-descifra bajo demanda y se cachea
+solo en memoria.
+
+La auditoría cubre eventos de seguridad y administración: logins (éxito y
+fallo), altas/bajas/cambios de usuarios, cambios de credenciales, acciones
+del portal admin y cambios de configuración. No se audita la lectura de
+correos (volumen, privacidad, ruido).
+
+### Flujo típico — abrir la bandeja
+
+1. El SPA pide `GET /api/mail/messages?folder=inbox`.
+2. El BFF valida la cookie de sesión y obtiene la credencial del buzón.
+3. El BFF ejecuta JMAP contra Stalwart (`Email/query` + `Email/get`
+   encadenados en una sola petición HTTP).
+4. Respuesta tipada al SPA con los tipos de `packages/shared`.
+
+### Adjuntos
+
+Suben y bajan en streaming a través del BFF hacia el almacenamiento de blobs
+de Stalwart: nunca tocan disco propio ni pasan completos por memoria. El BFF
+y Stalwart comparten host (red interna de Docker), por lo que el salto extra
+es despreciable. Refuerzos: soporte de Range (reanudación y fragmentos),
+cabeceras de caché (los blobs son inmutables) y previsualización de PDF e
+imágenes en el navegador.
+
+### Papelera con retención
+
+La regla de borrado tras X días la ejecuta Stalwart. En F1 se configura
+directamente en Stalwart; desde F2 el plazo se definirá en el portal de
+administración vía la API de Stalwart.
+
 ## Fases de entrega
 
 | Fase | Alcance |
