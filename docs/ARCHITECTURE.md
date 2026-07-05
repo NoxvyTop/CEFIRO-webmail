@@ -1,0 +1,94 @@
+# Arquitectura — NoxvyTop Webmail
+
+> Documento vivo. Se actualiza a medida que el diseño evoluciona.
+
+## Vista general
+
+```
+┌─────────────┐        ┌──────────────────────────────┐
+│  Navegador   │  HTTPS │   BFF (Bun + Hono + TS)      │
+│  React SPA   │───────▶│                              │
+│              │  SSE   │  - Sesiones (cookie httpOnly)│
+└─────────────┘        │  - Proxy JMAP autenticado    │
+                        │  - API admin / preferencias  │
+                        │  - Puente de notificaciones  │
+                        └──┬──────┬──────┬──────┬─────┘
+                           │      │      │      │
+                    JMAP   │ OIDC │ API  │ XML- │  SQL
+                           ▼      ▼ admin▼ RPC  ▼
+                      ┌────────┐ ┌────────┐ ┌───────┐ ┌──────────┐
+                      │Stalwart│ │Authentik│ │Odoo 17│ │PostgreSQL│
+                      └────────┘ └────────┘ └───────┘ └──────────┘
+```
+
+## Stack
+
+| Capa | Tecnología |
+|------|-----------|
+| Frontend | React + Vite (SPA, TypeScript) |
+| Backend (BFF) | Bun + Hono + TypeScript |
+| Base de datos propia | PostgreSQL |
+| Correo | Stalwart (protocolo JMAP) |
+| Identidad / SSO | Authentik (OIDC) |
+| Suite de organización | Odoo 17 (integración por fases) |
+
+## Principios de diseño
+
+1. **El navegador nunca habla directo con Stalwart, Authentik ni Odoo.**
+   Todo pasa por el BFF. La credencial del buzón (segunda contraseña, que el
+   empleado no conoce) vive únicamente en el servidor. Cero secretos en el
+   frontend.
+
+2. **El BFF es delgado a propósito.**
+   Para el correo es esencialmente un proxy JMAP con sesión: recibe la
+   petición del SPA, adjunta la credencial del buzón y la reenvía a Stalwart.
+   No se duplica la lógica de correo que Stalwart ya resuelve. El BFF solo
+   contiene lógica propia donde aporta valor: provisioning, preferencias e
+   integración con Odoo.
+
+3. **PostgreSQL guarda solo datos propios de la aplicación**:
+   firmas, preferencias de usuario, configuración del administrador y mapeos
+   con Odoo. Los correos, carpetas y etiquetas viven en Stalwart — nunca se
+   duplican en la base propia. Una sola fuente de verdad por dato.
+
+4. **Notificaciones sin polling.**
+   Stalwart empuja eventos JMAP al BFF, y el BFF los reenvía al navegador por
+   SSE (Server-Sent Events).
+
+5. **Monorepo con contratos compartidos.**
+   `apps/web` (SPA), `apps/server` (BFF), `packages/shared` (tipos y
+   contratos). Frontend y backend comparten los mismos tipos TypeScript, por
+   lo que no pueden desincronizarse.
+
+6. **Backend runtime-agnostic.**
+   Hono + Web APIs estándar; ninguna API exclusiva de Bun en la lógica de
+   negocio. Migrar de Bun a Node debe seguir siendo barato.
+
+## Modelo de autenticación (resumen)
+
+Dos credenciales por empleado:
+
+- **Contraseña Authentik**: la única que el empleado conoce. Login al webmail
+  vía SSO (OIDC).
+- **Contraseña del buzón Stalwart**: gestionada por el sistema. El empleado
+  nunca la ve ni la usa.
+
+El alta de empleados la realiza únicamente el administrador desde el portal
+de administración: con nombre, correo y contraseña se provisiona la cuenta en
+Authentik (grupo correspondiente) y el buzón en Stalwart. El empleado inicia
+sesión con SSO y accede directamente a su bandeja.
+
+## Fases de entrega
+
+| Fase | Alcance |
+|------|---------|
+| F1 — Correo | Leer, redactar, responder, adjuntos, carpetas, búsqueda, firmas, etiquetas, notificaciones, papelera con retención, login SSO |
+| F2 — Administración | Portal admin (alta → provisiona Authentik + Stalwart), grupos de correo, aviso de correo de grupo con activación/desactivación de recepción |
+| F3 — Organización | Filtros/reglas (UI de Sieve), respuestas automáticas |
+| F4 — Suite Odoo | Calendario embebido, módulo de tareas, configurables por el admin |
+
+Cada fase llega a `main` funcionando.
+
+## Flujo de ramas
+
+`init-desarollo` (desarrollo) → `preproduc` (testing) → `main` (producción).
