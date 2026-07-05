@@ -1,0 +1,30 @@
+# Local development tooling
+.atl/
+.claude/
+*.local.md
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build output
+dist/
+build/
+out/
+
+# Logs and temp files
+*.log
+logs/
+tmp/
+temp/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
