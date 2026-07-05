@@ -64,7 +64,7 @@
    Hono + Web APIs estándar; ninguna API exclusiva de Bun en la lógica de
    negocio. Migrar de Bun a Node debe seguir siendo barato.
 
-## Modelo de autenticación (resumen)
+## Modelo de autenticación
 
 Dos credenciales por empleado:
 
@@ -77,6 +77,54 @@ El alta de empleados la realiza únicamente el administrador desde el portal
 de administración: con nombre, correo y contraseña se provisiona la cuenta en
 Authentik (grupo correspondiente) y el buzón en Stalwart. El empleado inicia
 sesión con SSO y accede directamente a su bandeja.
+
+### Flujo de login (OIDC)
+
+1. El empleado abre el webmail y pulsa "Iniciar sesión" → redirección a
+   Authentik (Authorization Code + PKCE).
+2. Se autentica en Authentik con su contraseña.
+3. Authentik entrega al BFF los tokens OIDC (ID, access, refresh) con la
+   identidad verificada (email).
+4. El BFF crea una sesión propia y entrega al navegador una cookie
+   `httpOnly` + `Secure` + `SameSite`, opaca (solo identifica la sesión).
+
+### Dónde vive cada credencial
+
+| Credencial | Dónde vive | Llega al navegador |
+|------------|-----------|--------------------|
+| Cookie de sesión del webmail | Navegador (httpOnly) | Sí (opaca) |
+| Tokens OIDC de Authentik | Solo en el BFF | Nunca |
+| Contraseña del buzón Stalwart | PostgreSQL, cifrada | Nunca |
+
+Cada aplicación conectada a Authentik (webmail, Odoo, etc.) es un cliente
+OIDC independiente con su propio `client_id`/`client_secret`; los tokens de
+una aplicación no sirven para otra. El SSO entre aplicaciones lo mantiene
+Authentik con su propia cookie en su dominio.
+
+### Puente SSO → buzón
+
+La contraseña del buzón se guarda cifrada (AES-256-GCM) en PostgreSQL. La
+clave maestra de cifrado vive fuera de la base, en el secreto de entorno del
+contenedor. Al iniciar sesión por SSO, el BFF localiza la credencial por
+email, la descifra solo en memoria para esa sesión y con ella se autentica
+ante Stalwart vía JMAP.
+
+Reglas no negociables:
+
+- La clave maestra nunca se almacena en la base de datos ni en el repositorio.
+- Las credenciales nunca aparecen en logs.
+- El descifrado es por sesión y solo en memoria.
+- TLS en todo el trayecto BFF ↔ Stalwart.
+
+### Modo bootstrap
+
+Primer arranque al estilo Stalwart: con `BOOTSTRAP_MODE=true` en el entorno,
+la aplicación inicia en modo configuración e imprime en consola un usuario
+administrador temporal con contraseña generada. Con esa cuenta se configura
+el administrador real y se cargan las credenciales de buzón iniciales desde
+una pantalla mínima de setup. Al volver el entorno a producción y reiniciar,
+el modo configuración desaparece. Esa pantalla de setup es la semilla del
+portal de administración de la Fase 2.
 
 ## Fases de entrega
 
