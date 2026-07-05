@@ -126,6 +126,42 @@ una pantalla mínima de setup. Al volver el entorno a producción y reiniciar,
 el modo configuración desaparece. Esa pantalla de setup es la semilla del
 portal de administración de la Fase 2.
 
+## Frontend
+
+Layout de tres paneles: barra lateral (carpetas, etiquetas y zona de
+módulos), lista de mensajes con scroll virtual y panel de lectura. La zona de
+módulos de la barra lateral prepara el caparazón para los módulos de Odoo
+(calendario, tareas) sin tocar el núcleo de correo.
+
+Organización por features (Screaming Architecture):
+
+```
+apps/web/src/
+├── features/
+│   ├── mailbox/     # lista, hilo, carpetas, etiquetas
+│   ├── composer/    # redactar, adjuntos, firmas
+│   ├── search/
+│   ├── auth/        # login SSO, sesión
+│   ├── settings/    # firmas, notificaciones, preferencias
+│   └── setup/       # pantalla de bootstrap/admin mínimo
+├── shared/          # componentes UI base, hooks, utilidades
+└── app/             # shell, router, providers
+```
+
+Cada feature es autocontenida; dentro se aplica el patrón
+container/presentational.
+
+Piezas técnicas:
+
+| Pieza | Elección | Motivo |
+|-------|----------|--------|
+| Estado de servidor | TanStack Query | Caché, invalidación por SSE, updates optimistas |
+| Lista de mensajes | Scroll virtual | Fluidez con buzones de miles de correos |
+| Editor de redacción | TipTap | Rich text mantenido y extensible |
+| Sistema de diseño | Tailwind CSS + Radix UI | Accesibilidad de base, tema claro/oscuro |
+| Notificaciones | SSE + Notification API | Aviso instantáneo sin polling |
+| Internacionalización | i18n desde el inicio | Textos en archivos de traducción; habilita funcionalidades futuras por idioma |
+
 ## Fases de entrega
 
 | Fase | Alcance |
