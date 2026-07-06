@@ -23,6 +23,9 @@ services:
       DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
       PORT: "8080"
       CHOKIDAR_USEPOLLING: "1"
+      APP_URL: http://localhost:5173
+      MASTER_KEY: ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=
+      BOOTSTRAP_MODE: "true"
     ports:
       - "5173:5173"
       - "8090:8080"

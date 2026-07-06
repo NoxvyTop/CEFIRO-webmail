@@ -48,6 +48,18 @@ docker compose -f docker-compose.dev.yml exec dev sh -c "cd apps/server && bun r
 - `8080`: Odoo local — por eso la API se publica en `8090`.
 - `5432`: otro Postgres — por eso el de dev se publica en `5434`.
 
+## Modo bootstrap (setup inicial)
+
+El contenedor de desarrollo arranca con `BOOTSTRAP_MODE=true`. Al iniciar,
+la API imprime en consola una credencial temporal:
+
+    docker compose -f docker-compose.dev.yml logs dev | grep "bootstrap mode"
+
+Con esa contraseña se entra en http://localhost:5173/setup para configurar
+el proveedor OIDC (Authentik) y crear los primeros usuarios con su
+contraseña de buzón. En producción `BOOTSTRAP_MODE` debe ser `false`; se
+activa solo para el primer arranque o para recuperación.
+
 ## Desarrollo directo en el host (alternativa)
 
 Sigue funcionando: `docker compose -f docker-compose.dev.yml up -d postgres`,
