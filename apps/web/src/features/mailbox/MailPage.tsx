@@ -2,10 +2,9 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { fetchMailboxes, MailApiError } from "./api";
+import { fetchMailboxes } from "./api";
+import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Sidebar } from "./Sidebar";
-
-const NON_RETRYABLE_CODES = new Set(["mail_not_configured", "mail_credentials_missing"]);
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -16,10 +15,7 @@ export function MailPage() {
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
     queryFn: fetchMailboxes,
-    retry: (failureCount, error) => {
-      if (error instanceof MailApiError && NON_RETRYABLE_CODES.has(error.code)) return false;
-      return failureCount < 3;
-    },
+    retry: mailRetry,
   });
 
   const mailboxes = mailboxesQuery.data ?? [];
@@ -41,10 +37,6 @@ export function MailPage() {
     });
   }
 
-  const errorCode = mailboxesQuery.error instanceof MailApiError
-    ? mailboxesQuery.error.code
-    : null;
-
   return (
     <div className="flex flex-1 overflow-hidden">
       <Sidebar
@@ -53,9 +45,9 @@ export function MailPage() {
         onSelectMailbox={handleSelectMailbox}
       />
       <section aria-label={t("mail.listRegion")} className="flex-1 overflow-y-auto border-r">
-        {errorCode && NON_RETRYABLE_CODES.has(errorCode) && (
+        {mailboxesQuery.isError && (
           <p role="alert" className="p-4 text-sm text-amber-700">
-            {t(`mail.errors.${errorCode}`)}
+            {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
       </section>
