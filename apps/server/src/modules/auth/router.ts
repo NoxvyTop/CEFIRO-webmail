@@ -135,10 +135,16 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         clientId: sso.clientId,
       });
       const { email } = await verify(idToken);
-      const user = await users.findByEmail(email);
+      let user = await users.findByEmail(email);
+      if (user && !user.active) {
+        await audit.record({ actor: email, action: "login.denied_archived" });
+        return c.redirect("/?auth_error=account_archived");
+      }
       if (!user) {
-        await audit.record({ actor: "system", action: "login.denied", detail: { email } });
-        return c.redirect("/?auth_error=unknown_user");
+        // JIT provisioning: first SSO login creates the app-side row.
+        const displayName = email.split("@")[0] ?? email;
+        user = await users.create({ email, displayName });
+        await audit.record({ actor: email, action: "user.jit_created" });
       }
       const ttl = deps.sessionTtlHours ?? 12;
       const { token } = await deps.sessions.create(user.id, ttl);
