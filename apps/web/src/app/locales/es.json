@@ -9,6 +9,14 @@
       "state": "La sesión de inicio expiró, inténtalo de nuevo",
       "unknown_user": "Tu cuenta no está registrada en el correo",
       "oidc": "No se pudo completar el inicio de sesión"
+    },
+    "bootstrap": {
+      "title": "Acceso de emergencia",
+      "email": "Usuario",
+      "password": "Contraseña",
+      "submit": "Entrar",
+      "error": "Credencial inválida",
+      "hint": "Solo disponible en modo de configuración o recuperación"
     }
   },
   "setup": {
