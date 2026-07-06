@@ -7,6 +7,7 @@ const configSchema = z.object({
   appUrl: z.string().url(),
   bootstrapMode: z.boolean(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
+  stalwartUrl: z.string().url().optional(),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -21,5 +22,6 @@ export function loadConfig(
     appUrl: env.APP_URL,
     bootstrapMode: env.BOOTSTRAP_MODE === "true" || env.BOOTSTRAP_MODE === "1",
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
+    stalwartUrl: env.STALWART_URL || undefined,
   });
 }
