@@ -7,6 +7,7 @@ import { fetchMailboxes } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
+import { ThreadView } from "../reader/ThreadView";
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -71,7 +72,13 @@ export function MailPage() {
           />
         )}
       </section>
-      <section aria-label={t("mail.readerRegion")} className="flex-1 overflow-y-auto" />
+      <section aria-label={t("mail.readerRegion")} className="flex-1 overflow-y-auto">
+        {threadParam ? (
+          <ThreadView threadId={threadParam} />
+        ) : (
+          <p className="p-4 text-sm text-gray-500">{t("mail.selectMessage")}</p>
+        )}
+      </section>
     </div>
   );
 }

@@ -44,6 +44,10 @@
     "empty": "No messages",
     "noSubject": "(no subject)",
     "selectMessage": "Select a message",
+    "attachmentsSoon": "Download coming soon",
+    "loadImages": "Load images",
+    "emailContent": "Email content",
+    "emptyBody": "(no content)",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
