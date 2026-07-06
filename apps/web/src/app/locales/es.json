@@ -44,7 +44,6 @@
     "empty": "No hay mensajes",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un mensaje",
-    "attachmentsSoon": "Descarga disponible próximamente",
     "loadImages": "Cargar imágenes",
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
@@ -59,5 +58,52 @@
   "modules": {
     "title": "Módulos",
     "mail": "Correo"
+  },
+  "composer": {
+    "title": "Redactar",
+    "from": "De",
+    "to": "Para",
+    "cc": "Cc",
+    "bcc": "Cco",
+    "addCcBcc": "Cc/Cco",
+    "subject": "Asunto",
+    "body": "Mensaje",
+    "signature": "Firma",
+    "reply": "Responder",
+    "replyAll": "Responder a todos",
+    "attach": "Adjuntar",
+    "send": "Enviar",
+    "cancel": "Cancelar",
+    "sending": "Enviando…",
+    "invalidEmail": "Correo inválido",
+    "invalidLink": "URL inválida o no segura",
+    "bold": "Negrita",
+    "italic": "Cursiva",
+    "bulletList": "Lista con viñetas",
+    "link": "Enlace",
+    "linkUrl": "URL del enlace",
+    "removeRecipient": "Quitar {{email}}",
+    "removeAttachment": "Quitar {{name}}",
+    "errors": {
+      "noRecipients": "Agrega al menos un destinatario",
+      "invalid_identity": "Identidad inválida",
+      "send_failed": "No se pudo enviar",
+      "generic": "Ocurrió un error"
+    }
+  },
+  "attachments": {
+    "download": "Descargar",
+    "view": "Ver"
+  },
+  "settings": {
+    "title": "Ajustes",
+    "signatures": "Firmas",
+    "back": "Volver",
+    "newSignature": "Nueva firma",
+    "name": "Nombre",
+    "default": "Predeterminada",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar"
   }
 }

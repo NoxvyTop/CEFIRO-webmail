@@ -44,7 +44,6 @@
     "empty": "No messages",
     "noSubject": "(no subject)",
     "selectMessage": "Select a message",
-    "attachmentsSoon": "Download coming soon",
     "loadImages": "Load images",
     "emailContent": "Email content",
     "emptyBody": "(no content)",
@@ -59,5 +58,52 @@
   "modules": {
     "title": "Modules",
     "mail": "Mail"
+  },
+  "composer": {
+    "title": "Compose",
+    "from": "From",
+    "to": "To",
+    "cc": "Cc",
+    "bcc": "Bcc",
+    "addCcBcc": "Cc/Bcc",
+    "subject": "Subject",
+    "body": "Message",
+    "signature": "Signature",
+    "reply": "Reply",
+    "replyAll": "Reply all",
+    "attach": "Attach",
+    "send": "Send",
+    "cancel": "Cancel",
+    "sending": "Sending…",
+    "invalidEmail": "Invalid email",
+    "invalidLink": "Invalid or unsafe URL",
+    "bold": "Bold",
+    "italic": "Italic",
+    "bulletList": "Bulleted list",
+    "link": "Link",
+    "linkUrl": "Link URL",
+    "removeRecipient": "Remove {{email}}",
+    "removeAttachment": "Remove {{name}}",
+    "errors": {
+      "noRecipients": "Add at least one recipient",
+      "invalid_identity": "Invalid identity",
+      "send_failed": "Could not send",
+      "generic": "Something went wrong"
+    }
+  },
+  "attachments": {
+    "download": "Download",
+    "view": "View"
+  },
+  "settings": {
+    "title": "Settings",
+    "signatures": "Signatures",
+    "back": "Back",
+    "newSignature": "New signature",
+    "name": "Name",
+    "default": "Default",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit"
   }
 }
