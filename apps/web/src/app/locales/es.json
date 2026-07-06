@@ -44,7 +44,6 @@
     "empty": "No hay mensajes",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un mensaje",
-    "attachmentsSoon": "Descarga disponible próximamente",
     "loadImages": "Cargar imágenes",
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
@@ -91,5 +90,20 @@
       "send_failed": "No se pudo enviar",
       "generic": "Ocurrió un error"
     }
+  },
+  "attachments": {
+    "download": "Descargar",
+    "view": "Ver"
+  },
+  "settings": {
+    "title": "Ajustes",
+    "signatures": "Firmas",
+    "back": "Volver",
+    "newSignature": "Nueva firma",
+    "name": "Nombre",
+    "default": "Predeterminada",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar"
   }
 }

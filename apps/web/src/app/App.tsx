@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { MailPage } from "../features/mailbox/MailPage";
@@ -98,6 +98,9 @@ export function App() {
             {t(health.data.status === "ok" ? "health.ok" : "health.degraded")}
           </p>
         )}
+        <Link to="/settings" className="rounded-md border px-3 py-1 text-sm">
+          {t("settings.title")}
+        </Link>
         <button
           type="button"
           onClick={() => void logout()}

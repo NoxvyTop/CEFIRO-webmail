@@ -24,6 +24,25 @@ function formatSizeKb(size: number) {
   return `${(size / 1024).toFixed(1)} KB`;
 }
 
+// Mirrors the server's SAFE_INLINE_CONTENT_TYPES allowlist (apps/server/src/modules/mail/router.ts):
+// only these types are ever served inline (without dl=1), so only these get a "view" link.
+const PREVIEWABLE_CONTENT_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+function isPreviewable(type: string): boolean {
+  return PREVIEWABLE_CONTENT_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
+}
+
+function blobUrl(blobId: string, name: string, type: string, download: boolean): string {
+  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
+}
+
 export function ThreadView({ threadId }: ThreadViewProps) {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
@@ -70,15 +89,35 @@ export function ThreadView({ threadId }: ThreadViewProps) {
             {toCcLabel && <div className="text-xs text-gray-500">{toCcLabel}</div>}
             {email.attachments.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
-                {email.attachments.map((attachment) => (
-                  <span
-                    key={attachment.blobId}
-                    title={t("mail.attachmentsSoon")}
-                    className="rounded-full bg-gray-100 px-2 py-1 text-xs"
-                  >
-                    {attachment.name} ({formatSizeKb(attachment.size)})
-                  </span>
-                ))}
+                {email.attachments.map((attachment) => {
+                  const attachmentName = attachment.name ?? "attachment";
+                  return (
+                    <span
+                      key={attachment.blobId}
+                      className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-xs"
+                    >
+                      <span>
+                        {attachmentName} ({formatSizeKb(attachment.size)})
+                      </span>
+                      <a
+                        href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
+                        className="text-blue-700 underline"
+                      >
+                        {t("attachments.download")}
+                      </a>
+                      {isPreviewable(attachment.type) && (
+                        <a
+                          href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-blue-700 underline"
+                        >
+                          {t("attachments.view")}
+                        </a>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
             )}
             <div className="mt-2">

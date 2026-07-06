@@ -1,6 +1,7 @@
 import type { RouteObject } from "react-router-dom";
 import { RequireAuth } from "../features/auth/RequireAuth";
 import { SetupPage } from "../features/setup/SetupPage";
+import { SettingsPage } from "../features/settings/SettingsPage";
 import { App } from "./App";
 
 export const routes: RouteObject[] = [
@@ -9,6 +10,14 @@ export const routes: RouteObject[] = [
     element: (
       <RequireAuth>
         <App />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/settings",
+    element: (
+      <RequireAuth>
+        <SettingsPage />
       </RequireAuth>
     ),
   },

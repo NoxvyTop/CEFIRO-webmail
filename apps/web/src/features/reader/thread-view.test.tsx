@@ -79,8 +79,22 @@ describe("ThreadView", () => {
 
     expect(await screen.findByRole("heading", { name: "Re: Quarterly report" })).toBeInTheDocument();
 
-    const attachmentChip = await screen.findByText(/report\.pdf/);
-    expect(attachmentChip).toHaveAttribute("title", i18n.t("mail.attachmentsSoon"));
+    expect(await screen.findByText(/report\.pdf/)).toBeInTheDocument();
+  });
+
+  it("renders a download link and, for previewable types, a view link", async () => {
+    stubFetch();
+    renderThread();
+
+    const downloadLink = await screen.findByRole("link", { name: i18n.t("attachments.download") });
+    expect(downloadLink).toHaveAttribute(
+      "href",
+      "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf&dl=1",
+    );
+
+    const viewLink = screen.getByRole("link", { name: i18n.t("attachments.view") });
+    expect(viewLink).toHaveAttribute("href", "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf");
+    expect(viewLink).toHaveAttribute("target", "_blank");
   });
 
   it("blocks the remote image by default and unblocks it after clicking load images", async () => {
