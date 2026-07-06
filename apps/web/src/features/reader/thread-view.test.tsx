@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ThreadView } from "./ThreadView";
@@ -64,7 +65,9 @@ function renderThread(threadId = "t1") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <ThreadView threadId={threadId} />
+      <MemoryRouter>
+        <ThreadView threadId={threadId} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }

@@ -70,6 +70,8 @@
     "subject": "Subject",
     "body": "Message",
     "signature": "Signature",
+    "reply": "Reply",
+    "replyAll": "Reply all",
     "attach": "Attach",
     "send": "Send",
     "cancel": "Cancel",

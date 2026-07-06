@@ -3,12 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailSummary } from "@webmail/shared";
-import { fetchMailboxes } from "./api";
+import { fetchMailboxes, fetchThread } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
+import { Composer } from "../composer/Composer";
+import { fetchIdentities } from "../composer/api";
+import { emptyDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -19,11 +22,27 @@ export function MailPage() {
   const mailboxParam = searchParams.get("mailbox");
   const threadParam = searchParams.get("thread");
   const queryParam = searchParams.get("q");
+  const composeParam = searchParams.get("compose");
+  const replyMatch = composeParam?.match(/^reply(-all)?:(.+)$/) ?? null;
+  const replyAll = Boolean(replyMatch?.[1]);
+  const replyEmailId = replyMatch?.[2];
 
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
     queryFn: fetchMailboxes,
     retry: mailRetry,
+  });
+
+  const identitiesQuery = useQuery({
+    queryKey: ["mail", "identities"],
+    queryFn: fetchIdentities,
+    enabled: Boolean(composeParam),
+  });
+
+  const composeThreadQuery = useQuery({
+    queryKey: ["mail", "thread", threadParam ?? ""],
+    queryFn: () => fetchThread(threadParam as string),
+    enabled: Boolean(replyMatch) && Boolean(threadParam),
   });
 
   const mailboxes = mailboxesQuery.data ?? [];
@@ -52,6 +71,30 @@ export function MailPage() {
       return next;
     });
   }
+
+  function removeComposeParam() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("compose");
+      return next;
+    });
+  }
+
+  function resolveComposeDraft(): ComposerDraft | null {
+    if (!composeParam) return null;
+    const identities = identitiesQuery.data;
+    if (!identities) return null;
+
+    if (composeParam === "new") return emptyDraft(identities);
+    if (!replyMatch) return null;
+    if (composeThreadQuery.isLoading) return null;
+
+    const email = composeThreadQuery.data?.emails.find((candidate) => candidate.id === replyEmailId);
+    if (!email) return emptyDraft(identities);
+    return replyDraft(email, identities, replyAll);
+  }
+
+  const composeDraft = resolveComposeDraft();
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -82,6 +125,7 @@ export function MailPage() {
           <p className="p-4 text-sm text-gray-500">{t("mail.selectMessage")}</p>
         )}
       </section>
+      {composeDraft && <Composer initial={composeDraft} onClose={removeComposeParam} />}
     </div>
   );
 }

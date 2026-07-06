@@ -70,6 +70,8 @@
     "subject": "Asunto",
     "body": "Mensaje",
     "signature": "Firma",
+    "reply": "Responder",
+    "replyAll": "Responder a todos",
     "attach": "Adjuntar",
     "send": "Enviar",
     "cancel": "Cancelar",

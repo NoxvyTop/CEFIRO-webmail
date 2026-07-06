@@ -49,6 +49,14 @@ export function App() {
     setNotificationPermission(permission);
   }
 
+  function handleCompose() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("compose", "new");
+      return next;
+    });
+  }
+
   return (
     <div className="flex h-screen flex-col">
       <header className="flex items-center gap-4 border-b px-4 py-2">
@@ -63,6 +71,13 @@ export function App() {
             className="w-full rounded-md border px-3 py-1 text-sm"
           />
         </form>
+        <button
+          type="button"
+          onClick={handleCompose}
+          className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white"
+        >
+          {t("composer.title")}
+        </button>
         {notificationPermission === "default" && (
           <button
             type="button"

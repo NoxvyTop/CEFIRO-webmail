@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import type { EmailAddress } from "@webmail/shared";
 import { fetchThread } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
@@ -25,12 +26,21 @@ function formatSizeKb(size: number) {
 
 export function ThreadView({ threadId }: ThreadViewProps) {
   const { t } = useTranslation();
+  const [, setSearchParams] = useSearchParams();
 
   const threadQuery = useQuery({
     queryKey: ["mail", "thread", threadId],
     queryFn: () => fetchThread(threadId),
     retry: mailRetry,
   });
+
+  function openCompose(param: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("compose", param);
+      return next;
+    });
+  }
 
   if (threadQuery.isError) {
     return (
@@ -74,6 +84,24 @@ export function ThreadView({ threadId }: ThreadViewProps) {
             <div className="mt-2">
               <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} />
             </div>
+            {email.id === lastEmail.id && (
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => openCompose(`reply:${email.id}`)}
+                  className="rounded-md border px-2 py-1 text-xs"
+                >
+                  {t("composer.reply")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCompose(`reply-all:${email.id}`)}
+                  className="rounded-md border px-2 py-1 text-xs"
+                >
+                  {t("composer.replyAll")}
+                </button>
+              </div>
+            )}
           </article>
         );
       })}
