@@ -119,8 +119,13 @@ function toEmailDetail(email: JmapEmailDetail): EmailDetail {
   };
 }
 
+function basicAuthHeader(auth: { email: string; password: string }): string {
+  return `Basic ${btoa(`${auth.email}:${auth.password}`)}`;
+}
+
 export function createMailRouter(deps: MailDeps) {
   const router = new Hono<{ Variables: MailVariables }>();
+  const fetchFn = deps.fetchFn ?? fetch;
 
   router.use("*", requireSession(deps.sessions));
   router.use("*", requireMail(deps));
@@ -150,6 +155,44 @@ export function createMailRouter(deps: MailDeps) {
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder);
     return c.json(mailboxes);
+  });
+
+  router.get("/events", async (c) => {
+    const session = c.get("jmapSession");
+    if (!session.eventSourceUrl) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    const upstreamUrl = session.eventSourceUrl
+      .replaceAll("{types}", "Email,Mailbox")
+      .replaceAll("{closeafter}", "no")
+      .replaceAll("{ping}", "30");
+
+    const upstream = await fetchFn(upstreamUrl, {
+      headers: {
+        authorization: basicAuthHeader(c.get("jmapAuth")),
+        accept: "text/event-stream",
+      },
+      signal: c.req.raw.signal,
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    return new Response(upstream.body, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+      },
+    });
   });
 
   router.get("/messages", async (c) => {

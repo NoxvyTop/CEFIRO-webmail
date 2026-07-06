@@ -8,6 +8,7 @@ export type MailDeps = {
   sessions: SessionStore;
   mailCredentials: MailCredentialsRepo;
   jmap: JmapClient | null;
+  fetchFn?: typeof fetch;
 };
 
 export type MailVariables = AuthVariables & {
