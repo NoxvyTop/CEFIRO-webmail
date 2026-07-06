@@ -16,6 +16,8 @@ vendor/
 dist/
 build/
 out/
+coverage/
+*.tsbuildinfo
 
 # Logs and temp files
 *.log
@@ -28,3 +30,4 @@ temp/
 .idea/
 .DS_Store
 Thumbs.db
+.superpowers/
