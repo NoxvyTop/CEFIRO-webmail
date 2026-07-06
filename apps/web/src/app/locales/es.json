@@ -35,5 +35,21 @@
       "locale": "Idioma",
       "mailPassword": "Contraseña del buzón"
     }
+  },
+  "mail": {
+    "listRegion": "Lista de mensajes",
+    "readerRegion": "Lectura",
+    "unread": "{{count}} sin leer",
+    "searchPlaceholder": "Buscar en el correo",
+    "empty": "No hay mensajes",
+    "selectMessage": "Selecciona un mensaje",
+    "errors": {
+      "mailNotConfigured": "El correo aún no está configurado",
+      "mailCredentialsMissing": "Faltan las credenciales del buzón"
+    }
+  },
+  "modules": {
+    "title": "Módulos",
+    "mail": "Correo"
   }
 }

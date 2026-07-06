@@ -35,5 +35,21 @@
       "locale": "Language",
       "mailPassword": "Mailbox password"
     }
+  },
+  "mail": {
+    "listRegion": "Message list",
+    "readerRegion": "Reading pane",
+    "unread": "{{count}} unread",
+    "searchPlaceholder": "Search mail",
+    "empty": "No messages",
+    "selectMessage": "Select a message",
+    "errors": {
+      "mailNotConfigured": "Mail is not configured yet",
+      "mailCredentialsMissing": "Your mailbox credentials are missing"
+    }
+  },
+  "modules": {
+    "title": "Modules",
+    "mail": "Mail"
   }
 }
