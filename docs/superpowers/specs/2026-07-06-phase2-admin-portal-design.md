@@ -95,3 +95,59 @@ login muestra únicamente el botón de Authentik; el formulario no existe en
 el DOM — cero superficie de ataque. Le da forma de UI a la puerta de
 recuperación que en F1 ya existía como API (`/api/setup`, guardada por el
 `x-setup-token`).
+
+## Sección 3: El portal de administración
+
+Crece desde la pantalla de setup de F1 (config OIDC, alta de credenciales,
+creación del admin), pero ahora es una sección completa del webmail,
+accesible para usuarios con rol `admin` fuera del modo bootstrap. Vive en
+`/admin` (bajo `RequireAuth` + chequeo de rol admin).
+
+### Secciones del portal
+
+- **Usuarios** — tabla central. Lista todas las filas de `users` (JIT +
+  altas del admin). Por usuario: email, nombre, rol, estado del buzón
+  (vinculado / sin vincular / archivado); acciones de vincular/editar la
+  conexión Stalwart, cambiar rol, alta proactiva ("Nuevo usuario") y
+  archivar/reactivar.
+- **Buzones compartidos** (Sección 4): `info@`, `test@`, grupales — su
+  credencial Stalwart cifrada + qué usuarios acceden.
+- **Grupos de correo** (Sección 5): zona de grupos y bandeja unificada.
+- **Configuración** (de F1, integrada): proveedor OIDC (`sso_config`) e
+  integraciones (`integrations`, preparada para Odoo en F4).
+
+### Seguridad del portal (no negociable)
+
+- Todas las rutas `/api/admin/*` exigen sesión CON rol `admin`
+  (`requireAdmin` compuesto sobre `requireSession`).
+- Toda acción del admin se audita (`audit_log`): altas/ediciones de
+  usuarios, cambios de credenciales, cambios de rol, cambios de config,
+  gestión de buzones compartidos, archivar/reactivar. Nunca se audita el
+  contenido de correos.
+- El primer admin nace del bootstrap (F1); de ahí en más, un admin promueve
+  a otros desde la pestaña Usuarios.
+
+### Baja de empleados — archivado (soft-delete)
+
+En vez de borrar, se **archiva** (`users.active = false`), al estilo Odoo:
+conserva la fila, el historial y la auditoría. El flujo operativo completo
+lo reparte el admin entre los tres sistemas (Authentik desactivado, Stalwart
+con email cambiado, webmail archivado); el portal controla su parte de forma
+que no queden huecos:
+
+1. **Revoca todas las sesiones activas al instante.** Desactivar en
+   Authentik solo impide logins NUEVOS; no mata la sesión ya emitida (TTL de
+   12 h). Archivar borra las filas de `sessions` del usuario → queda afuera
+   inmediatamente, sin esperar el TTL.
+2. **Archivado = no puede entrar.** Un usuario archivado no obtiene sesión
+   aunque aparezca un token válido de Authentik. El JIT del primer login
+   **no reactiva** una fila archivada; reactivar es una acción deliberada del
+   admin.
+3. **Quita el acceso a buzones compartidos** (se saca de las listas de
+   delegación).
+
+Caso borde señalado (no se sobre-diseña ahora): si el email liberado se
+reutiliza para otro empleado, la fila archivada "es dueña" del email; el
+admin resuelve manualmente (renombrar o borrar la archivada).
+
+Requiere una columna nueva: `users.active boolean not null default true`.
