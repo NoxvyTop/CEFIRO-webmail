@@ -1,0 +1,4 @@
+{
+  "app": { "title": "NoxvyTop Mail" },
+  "health": { "ok": "Service running", "degraded": "Service degraded" }
+}
