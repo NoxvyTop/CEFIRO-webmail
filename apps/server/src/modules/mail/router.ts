@@ -3,6 +3,7 @@ import {
   blobUploadResultSchema,
   emailUpdateSchema,
   identitySchema,
+  sendEmailSchema,
   signatureInputSchema,
   type AttachmentMeta,
   type EmailAddress,
@@ -572,6 +573,119 @@ export function createMailRouter(deps: MailDeps) {
       { code: "update_failed", message: "errors.update_failed", traceId: c.get("traceId") },
       409,
     );
+  });
+
+  router.post("/send", requireMail(deps), async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const parsed = sendEmailSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const input = parsed.data;
+
+    const session = c.get("jmapSession");
+    const auth = c.get("jmapAuth");
+
+    const lookup = await deps.jmap!.request(auth, session, [
+      ["Identity/get", { accountId: session.accountId, ids: [input.identityId] }, "i"],
+      ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
+    ]);
+
+    const identityResult = (lookup[0]?.[1] ?? {}) as { list?: JmapIdentity[] };
+    const identity = (identityResult.list ?? [])[0];
+    if (!identity) {
+      return c.json(
+        { code: "invalid_identity", message: "errors.invalid_identity", traceId: c.get("traceId") },
+        400,
+      );
+    }
+
+    const mailboxResult = (lookup[1]?.[1] ?? {}) as { list?: JmapMailbox[] };
+    const mailboxList = mailboxResult.list ?? [];
+    const draftsId = mailboxList.find((m) => m.role === "drafts")?.id;
+    const sentId = mailboxList.find((m) => m.role === "sent")?.id;
+    if (!draftsId || !sentId) {
+      return c.json(
+        { code: "mailbox_roles_missing", message: "errors.mailbox_roles_missing", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    const create: Record<string, unknown> = {
+      from: [{ name: identity.name || null, email: identity.email }],
+      to: input.to,
+      cc: input.cc,
+      bcc: input.bcc,
+      subject: input.subject,
+      keywords: { $seen: true },
+      mailboxIds: { [draftsId]: true },
+      bodyValues: {
+        t: { value: input.textBody },
+        ...(input.htmlBody ? { h: { value: input.htmlBody } } : {}),
+      },
+      textBody: [{ partId: "t", type: "text/plain" }],
+      ...(input.htmlBody ? { htmlBody: [{ partId: "h", type: "text/html" }] } : {}),
+      ...(input.attachments.length > 0
+        ? {
+            attachments: input.attachments.map((a) => ({
+              blobId: a.blobId,
+              type: a.type,
+              name: a.name,
+              disposition: "attachment",
+            })),
+          }
+        : {}),
+      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
+      ...(input.references ? { references: input.references } : {}),
+    };
+
+    const sendResponses = await deps.jmap!.request(auth, session, [
+      ["Email/set", { accountId: session.accountId, create: { draft: create } }, "e"],
+      [
+        "EmailSubmission/set",
+        {
+          accountId: session.accountId,
+          create: { sub: { emailId: "#draft", identityId: input.identityId } },
+          onSuccessUpdateEmail: {
+            "#sub": {
+              [`mailboxIds/${draftsId}`]: null,
+              [`mailboxIds/${sentId}`]: true,
+              "keywords/$draft": null,
+            },
+          },
+        },
+        "s",
+      ],
+    ]);
+
+    const emailSetResult = (sendResponses[0]?.[1] ?? {}) as { notCreated?: Record<string, unknown> };
+    const submissionResult = (sendResponses[1]?.[1] ?? {}) as {
+      notCreated?: Record<string, unknown>;
+      created?: Record<string, unknown>;
+    };
+
+    if (
+      (emailSetResult.notCreated && "draft" in emailSetResult.notCreated) ||
+      (submissionResult.notCreated && "sub" in submissionResult.notCreated)
+    ) {
+      return c.json(
+        { code: "send_failed", message: "errors.send_failed", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    return c.json({ ok: true });
   });
 
   return router;
