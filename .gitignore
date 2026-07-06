@@ -19,6 +19,7 @@ out/
 coverage/
 *.tsbuildinfo
 apps/**/src/**/*.js
+.vite/
 
 # Logs and temp files
 *.log

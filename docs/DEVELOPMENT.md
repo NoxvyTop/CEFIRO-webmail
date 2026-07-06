@@ -65,3 +65,10 @@ activa solo para el primer arranque o para recuperación.
 Sigue funcionando: `docker compose -f docker-compose.dev.yml up -d postgres`,
 luego `bun --watch src/index.ts` en `apps/server` (con `DATABASE_URL` del
 `.env`) y `bunx vite` en `apps/web`.
+
+## Correo (Stalwart)
+
+La API de correo usa la variable `STALWART_URL` (URL interna del servidor
+JMAP). Sin ella, los endpoints de correo responden 503
+`mail_not_configured` — útil en desarrollo sin un Stalwart accesible. Los
+tests no necesitan Stalwart: usan un cliente JMAP simulado.
