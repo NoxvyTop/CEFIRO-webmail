@@ -8,7 +8,14 @@ type Env = { Variables: { traceId: string } };
 
 export type HealthCheck = () => Promise<boolean>;
 
-export function createApp(checks: Record<string, HealthCheck> = {}) {
+export type CreateAppOptions = {
+  checks?: Record<string, HealthCheck>;
+  authRouter?: Hono<any>;
+  setupRouter?: Hono<any>;
+};
+
+export function createApp(options: CreateAppOptions = {}) {
+  const checks = options.checks ?? {};
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -29,6 +36,9 @@ export function createApp(checks: Record<string, HealthCheck> = {}) {
     };
     return c.json(body);
   });
+
+  if (options.authRouter) app.route("/api/auth", options.authRouter as never);
+  if (options.setupRouter) app.route("/api/setup", options.setupRouter as never);
 
   app.notFound((c) =>
     c.json(

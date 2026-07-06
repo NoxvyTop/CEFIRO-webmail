@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [init-desarollo, preproduc, main]
+    branches: ["init-**", preproduc, main]
   pull_request:
 
 jobs:

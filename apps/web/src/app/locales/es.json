@@ -1,4 +1,39 @@
 {
   "app": { "title": "Correo NoxvyTop" },
-  "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" }
+  "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" },
+  "auth": {
+    "signIn": "Iniciar sesión con SSO",
+    "signOut": "Cerrar sesión",
+    "signedInAs": "Sesión iniciada como {{email}}",
+    "errors": {
+      "state": "La sesión de inicio expiró, inténtalo de nuevo",
+      "unknown_user": "Tu cuenta no está registrada en el correo",
+      "oidc": "No se pudo completar el inicio de sesión"
+    }
+  },
+  "setup": {
+    "title": "Configuración inicial",
+    "tokenLabel": "Contraseña temporal de consola",
+    "connect": "Conectar",
+    "disabled": "El modo de configuración está desactivado",
+    "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
+    "ssoTitle": "Proveedor SSO (OIDC)",
+    "userTitle": "Nuevo usuario",
+    "save": "Guardar",
+    "create": "Crear",
+    "saved": "Guardado",
+    "created": "Usuario creado",
+    "error": "Error: revisa los datos",
+    "fields": {
+      "issuer": "Issuer",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "scopes": "Scopes",
+      "email": "Correo",
+      "displayName": "Nombre",
+      "role": "Rol",
+      "locale": "Idioma",
+      "mailPassword": "Contraseña del buzón"
+    }
+  }
 }

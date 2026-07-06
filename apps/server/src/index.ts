@@ -1,12 +1,60 @@
 import { serveStatic } from "hono/bun";
+import { fileURLToPath } from "node:url";
 import { createApp } from "./app";
+import { loadConfig } from "./core/config";
+import { log } from "./core/logger";
 import { createDb } from "./infra/db/client";
 import { checkDb } from "./infra/db/health";
+import { migrate } from "./infra/db/migrate";
+import { createAuditRepo } from "./infra/repos/audit";
+import { createMailCredentialsRepo } from "./infra/repos/mail-credentials";
+import { createSsoConfigRepo } from "./infra/repos/sso-config";
+import { createUsersRepo } from "./infra/repos/users";
+import { importMasterKey } from "./modules/credentials/crypto";
+import { createAuthRouter } from "./modules/auth/router";
+import { createSessionStore } from "./modules/auth/sessions";
+import { createBootstrap } from "./modules/setup/bootstrap";
+import { createSetupRouter } from "./modules/setup/router";
 
-const port = Number(process.env.PORT ?? 8080);
-const dbUrl = process.env.DATABASE_URL;
-const db = dbUrl ? createDb(dbUrl) : undefined;
-const app = createApp(db ? { postgres: () => checkDb(db) } : {});
+let config;
+try {
+  config = loadConfig(process.env);
+} catch (error) {
+  log("error", "invalid configuration", { error: String(error) });
+  process.exit(1);
+}
+
+const db = createDb(config.databaseUrl);
+await migrate(db, fileURLToPath(new URL("../migrations", import.meta.url)));
+
+const masterKey = await importMasterKey(config.masterKey);
+const users = createUsersRepo(db);
+const audit = createAuditRepo(db);
+const sessions = createSessionStore(db);
+const ssoConfig = createSsoConfigRepo(db, masterKey);
+const mailCredentials = createMailCredentialsRepo(db, masterKey);
+const bootstrap = createBootstrap(config.bootstrapMode);
+
+if (bootstrap.enabled) {
+  log("warn", "bootstrap mode active", {
+    user: "bootstrap-admin",
+    password: bootstrap.password,
+  });
+}
+
+const app = createApp({
+  checks: { postgres: () => checkDb(db) },
+  authRouter: createAuthRouter({
+    sessions,
+    users,
+    audit,
+    ssoConfig,
+    masterKey,
+    appUrl: config.appUrl,
+    sessionTtlHours: config.sessionTtlHours,
+  }),
+  setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
+});
 
 if (process.env.NODE_ENV === "production") {
   const root = process.env.STATIC_DIR ?? "../web/dist";
@@ -14,6 +62,6 @@ if (process.env.NODE_ENV === "production") {
   app.use("*", serveStatic({ root, path: "index.html" }));
 }
 
-console.log(JSON.stringify({ level: "info", msg: "server started", port }));
+log("info", "server started", { port: config.port, bootstrapMode: config.bootstrapMode });
 
-export default { port, fetch: app.fetch };
+export default { port: config.port, fetch: app.fetch };
