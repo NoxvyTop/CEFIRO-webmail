@@ -64,3 +64,34 @@ email) y la reutiliza en vez de crear una nueva. Los dos caminos conviven.
 El JIT busca por email (normalizado a minúsculas, como en F1). Si existe una
 fila para ese email → la reutiliza y actualiza el nombre si cambió. Si no
 existe → la crea. Nunca duplica.
+
+## Sección 2: Pantalla de login con doble entrada
+
+Dos formas de entrar, cada una con su propósito.
+
+### Botón "Iniciar sesión con Authentik" (OAuth2/OIDC)
+
+La vía de los empleados, ya construida en F1. La contraseña del empleado se
+queda en Authentik y nunca toca el webmail. Es la puerta normal del día a
+día.
+
+### Formulario email + contraseña — solo emergencia
+
+Valida contra la **credencial local de bootstrap** (la que la consola
+imprime con `BOOTSTRAP_MODE=true`), NO contra Authentik. Nada de ROPC: la
+contraseña de Authentik jamás pasa por el BFF. Sirve para dos momentos:
+
+- **Primer arranque**: con el SSO aún sin configurar, se entra con la
+  credencial de consola a configurar el proveedor OIDC y dar de alta
+  usuarios.
+- **Recuperación**: si una config OIDC defectuosa deja a todos afuera, se
+  activa el modo bootstrap y se entra por esta puerta a corregirlo.
+
+### El formulario es invisible fuera de bootstrap
+
+El formulario email+contraseña **solo se renderiza cuando el modo bootstrap
+está activo**. En operación normal (`BOOTSTRAP_MODE=false`) la pantalla de
+login muestra únicamente el botón de Authentik; el formulario no existe en
+el DOM — cero superficie de ataque. Le da forma de UI a la puerta de
+recuperación que en F1 ya existía como API (`/api/setup`, guardada por el
+`x-setup-token`).
