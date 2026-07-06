@@ -8,6 +8,7 @@ import { checkDb } from "./infra/db/health";
 import { migrate } from "./infra/db/migrate";
 import { createAuditRepo } from "./infra/repos/audit";
 import { createMailCredentialsRepo } from "./infra/repos/mail-credentials";
+import { createSignaturesRepo } from "./infra/repos/signatures";
 import { createSsoConfigRepo } from "./infra/repos/sso-config";
 import { createUsersRepo } from "./infra/repos/users";
 import { importMasterKey } from "./modules/credentials/crypto";
@@ -35,6 +36,7 @@ const audit = createAuditRepo(db);
 const sessions = createSessionStore(db);
 const ssoConfig = createSsoConfigRepo(db, masterKey);
 const mailCredentials = createMailCredentialsRepo(db, masterKey);
+const signatures = createSignaturesRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
 const jmap = config.stalwartUrl ? createJmapClient({ baseUrl: config.stalwartUrl }) : null;
 
@@ -59,7 +61,7 @@ const app = createApp({
     sessionTtlHours: config.sessionTtlHours,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
-  mailRouter: createMailRouter({ sessions, mailCredentials, jmap }),
+  mailRouter: createMailRouter({ sessions, mailCredentials, signatures, jmap }),
 });
 
 if (process.env.NODE_ENV === "production") {

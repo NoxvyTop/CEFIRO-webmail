@@ -4,6 +4,7 @@ import { createDb } from "../../infra/db/client";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
+import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -111,7 +112,7 @@ afterAll(() => sql.end());
 
 function makeApp(jmap: JmapClient | null) {
   return createApp({
-    mailRouter: createMailRouter({ sessions, mailCredentials, jmap }),
+    mailRouter: createMailRouter({ sessions, mailCredentials, signatures: createSignaturesRepo(sql), jmap }),
   });
 }
 

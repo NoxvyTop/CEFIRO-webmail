@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import {
   emailUpdateSchema,
   identitySchema,
+  signatureInputSchema,
   type AttachmentMeta,
   type EmailAddress,
   type EmailDetail,
@@ -136,9 +137,78 @@ export function createMailRouter(deps: MailDeps) {
   const fetchFn = deps.fetchFn ?? fetch;
 
   router.use("*", requireSession(deps.sessions));
-  router.use("*", requireMail(deps));
 
-  router.get("/mailboxes", async (c) => {
+  router.get("/signatures", async (c) => {
+    const user = c.get("user");
+    const list = await deps.signatures.list(user.userId);
+    return c.json(list);
+  });
+
+  router.post("/signatures", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const parsed = signatureInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const created = await deps.signatures.create(user.userId, parsed.data);
+    return c.json(created);
+  });
+
+  router.put("/signatures/:id", async (c) => {
+    const user = c.get("user");
+    const id = c.req.param("id");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const parsed = signatureInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const updated = await deps.signatures.update(user.userId, id, parsed.data);
+    if (!updated) {
+      return c.json(
+        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+        404,
+      );
+    }
+    return c.json(updated);
+  });
+
+  router.delete("/signatures/:id", async (c) => {
+    const user = c.get("user");
+    const id = c.req.param("id");
+    const removed = await deps.signatures.remove(user.userId, id);
+    if (!removed) {
+      return c.json(
+        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+        404,
+      );
+    }
+    return c.json({ ok: true });
+  });
+
+  router.get("/mailboxes", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
@@ -165,7 +235,7 @@ export function createMailRouter(deps: MailDeps) {
     return c.json(mailboxes);
   });
 
-  router.get("/identities", async (c) => {
+  router.get("/identities", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       ["Identity/get", { accountId: session.accountId }, "0"],
@@ -181,7 +251,7 @@ export function createMailRouter(deps: MailDeps) {
     return c.json(identities);
   });
 
-  router.get("/events", async (c) => {
+  router.get("/events", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
     if (!session.eventSourceUrl) {
       return c.json(
@@ -219,7 +289,7 @@ export function createMailRouter(deps: MailDeps) {
     });
   });
 
-  router.get("/messages", async (c) => {
+  router.get("/messages", requireMail(deps), async (c) => {
     const mailboxId = c.req.query("mailboxId");
     if (!mailboxId) {
       return c.json(
@@ -288,7 +358,7 @@ export function createMailRouter(deps: MailDeps) {
     return c.json(page);
   });
 
-  router.get("/threads/:threadId", async (c) => {
+  router.get("/threads/:threadId", requireMail(deps), async (c) => {
     const threadId = c.req.param("threadId");
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
@@ -346,7 +416,7 @@ export function createMailRouter(deps: MailDeps) {
     return c.json(thread);
   });
 
-  router.patch("/messages/:id", async (c) => {
+  router.patch("/messages/:id", requireMail(deps), async (c) => {
     const id = c.req.param("id");
     let body: unknown;
     try {
