@@ -226,6 +226,62 @@ La regla de borrado tras X días la ejecuta Stalwart. En F1 se configura
 directamente en Stalwart; desde F2 el plazo se definirá en el portal de
 administración vía la API de Stalwart.
 
+## Manejo de errores y observabilidad
+
+- **Errores tipados en el dominio**: los adaptadores traducen cada fallo
+  externo (Stalwart caído, Authentik sin respuesta, error JMAP) a un error de
+  dominio conocido.
+- **Sobre de error uniforme** hacia el SPA: `{ code, message, traceId }`,
+  donde `message` es una clave i18n.
+- **traceId de punta a punta**: cada petición lleva un identificador que la
+  sigue por SPA → BFF → Stalwart y aparece en todos los logs relacionados.
+- **Logs estructurados** (JSON), filtrables por usuario, ruta y traceId.
+  Ninguna credencial aparece jamás en logs.
+- **Frontend resiliente**: reintentos con backoff para fallos transitorios;
+  si Stalwart no responde, banner de desconexión manteniendo visible el
+  contenido cacheado.
+- **Health checks**: endpoint que reporta el estado de Postgres, Stalwart y
+  Authentik.
+
+## Testing
+
+1. **Unitarios** (base): dominio del BFF y componentes de presentación
+   (Vitest).
+2. **Integración**: módulos del BFF contra un Stalwart JMAP simulado y un
+   Postgres real de test — cifrado de credenciales, flujo OIDC, proxy JMAP.
+3. **E2E** (pocos y críticos): Playwright contra el stack completo en Docker
+   — login SSO, leer, redactar, enviar, adjuntar.
+
+`packages/shared` valida los contratos front↔back con Zod: verificación en
+compilación y en runtime.
+
+## Despliegue
+
+- Docker Compose en el mismo servidor que Stalwart: un contenedor de
+  aplicación (el BFF sirve la API y el SPA estático) + un contenedor
+  PostgreSQL, en red interna compartida con Stalwart.
+- TLS termina en el reverse proxy existente del servidor.
+- **CI (GitHub Actions)**: cada push ejecuta lint + typecheck + tests; merge
+  a `preproduc` publica imagen de staging; merge a `main` publica la imagen
+  de producción en GHCR y el servidor la actualiza.
+- Secretos (clave maestra de cifrado, client secret de Authentik) por
+  variables de entorno del servidor — nunca en el repositorio ni en la
+  imagen.
+
+### Restricción de egress (regla de diseño)
+
+Preproducción y producción operan con egress restringido: la conexión
+permitida es hacia GitHub/GHCR (repos e imágenes propios).
+
+- **La aplicación en runtime no realiza ninguna petición a internet.**
+- Fuentes autoalojadas (woff2 dentro del bundle, vía paquetes npm), sin CDNs
+  de ningún tipo; iconos y librerías empaquetados en build.
+- Las dependencias se resuelven en CI (build), quedan horneadas en la imagen
+  y fijadas por lockfile (`bun.lock`) para builds reproducibles.
+- Las imágenes remotas dentro de correos HTML las carga el navegador del
+  empleado (no el servidor) y se bloquean por defecto con botón
+  "cargar imágenes" (anti-tracking).
+
 ## Fases de entrega
 
 | Fase | Alcance |
