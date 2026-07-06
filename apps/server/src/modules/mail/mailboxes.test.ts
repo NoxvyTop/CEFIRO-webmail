@@ -19,6 +19,8 @@ const stubJmap: JmapClient = {
     apiUrl: "https://mail.test/jmap/",
     accountId: "acc-1",
     eventSourceUrl: "https://mail.test/es",
+    uploadUrl: "https://mail.test/upload/{accountId}/",
+    downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
   }),
   request: async () => [
     [

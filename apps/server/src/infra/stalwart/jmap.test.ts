@@ -5,6 +5,8 @@ const auth = { email: "u@noxvytop.com", password: "mailbox-pw" };
 const sessionBody = {
   apiUrl: "https://mail.test/jmap/",
   eventSourceUrl: "https://mail.test/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  uploadUrl: "https://mail.test/jmap/upload/{accountId}/",
+  downloadUrl: "https://mail.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
   primaryAccounts: { "urn:ietf:params:jmap:mail": "acc-1" },
 };
 
@@ -21,6 +23,10 @@ describe("jmap client", () => {
     const session = await client.getSession(auth);
     expect(session.accountId).toBe("acc-1");
     expect(session.apiUrl).toBe("https://mail.test/jmap/");
+    expect(session.uploadUrl).toBe("https://mail.test/jmap/upload/{accountId}/");
+    expect(session.downloadUrl).toBe(
+      "https://mail.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
+    );
     const [url, init] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(String(url)).toBe("https://mail.test/.well-known/jmap");
     expect((init.headers as Record<string, string>).authorization).toBe(
@@ -49,6 +55,8 @@ describe("jmap client", () => {
       apiUrl: "https://mail.test/jmap/",
       accountId: "acc-1",
       eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
     };
     const responses = await client.request(auth, session, [
       ["Mailbox/get", { accountId: "acc-1" }, "0"],
@@ -57,6 +65,7 @@ describe("jmap client", () => {
     const [, init] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     const body = JSON.parse(init.body as string);
     expect(body.using).toContain("urn:ietf:params:jmap:mail");
+    expect(body.using).toContain("urn:ietf:params:jmap:submission");
     expect(body.methodCalls[0][0]).toBe("Mailbox/get");
   });
 
@@ -71,6 +80,8 @@ describe("jmap client", () => {
       apiUrl: "https://mail.test/jmap/",
       accountId: "acc-1",
       eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
     };
     await expect(
       client.request(auth, session, [["Mailbox/get", {}, "0"]]),
