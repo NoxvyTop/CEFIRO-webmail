@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { HealthResponse } from "@webmail/shared";
 import { DomainError } from "./core/errors";
 import { log } from "./core/logger";
@@ -33,7 +34,7 @@ export function createApp() {
       log("warn", "domain error", { traceId, code: err.code });
       return c.json(
         { code: err.code, message: err.messageKey, traceId },
-        err.httpStatus as 400,
+        err.httpStatus as ContentfulStatusCode,
       );
     }
     log("error", "unhandled error", { traceId, error: String(err) });
