@@ -75,6 +75,7 @@
     "cancel": "Cancel",
     "sending": "Sending…",
     "invalidEmail": "Invalid email",
+    "invalidLink": "Invalid or unsafe URL",
     "bold": "Bold",
     "italic": "Italic",
     "bulletList": "Bulleted list",

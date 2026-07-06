@@ -75,6 +75,7 @@
     "cancel": "Cancelar",
     "sending": "Enviando…",
     "invalidEmail": "Correo inválido",
+    "invalidLink": "URL inválida o no segura",
     "bold": "Negrita",
     "italic": "Cursiva",
     "bulletList": "Lista con viñetas",

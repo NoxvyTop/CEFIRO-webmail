@@ -11,6 +11,32 @@ export interface RichTextEditorProps {
   ariaLabel: string;
 }
 
+// Protocols allowed for links inserted or auto-linked in the composer. Anything else
+// (javascript:, data:, vbscript:, file:, etc.) is a stored-XSS vector once the composed
+// HTML is rendered elsewhere (reply quotes, recipient's mail client).
+const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+// Matches DOMPurify's / TipTap's own whitespace-stripping defense: control characters and
+// unicode whitespace can be interleaved into a scheme to dodge naive prefix checks, e.g.
+// "java\tscript:alert(1)" or "\tjavascript:alert(1)". Stripping them first before extracting
+// the scheme neutralizes that obfuscation instead of being fooled by it.
+const CONTROL_AND_WHITESPACE_PATTERN = new RegExp('[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]', 'g');
+
+/**
+ * Returns true only for absolute http:, https:, or mailto: URLs. Relative URLs, unknown
+ * schemes, and obfuscated dangerous schemes (leading whitespace/control chars, embedded
+ * control chars splitting the scheme name) are rejected.
+ */
+export function isSafeLinkUrl(url: string): boolean {
+  if (typeof url !== "string") return false;
+  const stripped = url.replace(CONTROL_AND_WHITESPACE_PATTERN, "");
+  const match = stripped.match(/^([a-z][a-z0-9+.-]*):/i);
+  const schemeName = match?.[1];
+  if (!schemeName) return false;
+  const scheme = `${schemeName.toLowerCase()}:`;
+  return SAFE_LINK_PROTOCOLS.has(scheme);
+}
+
 interface ErrorBoundaryProps {
   fallback: ReactNode;
   children: ReactNode;
@@ -63,13 +89,25 @@ function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorPr
   );
 }
 
+// Shared Link extension config: restricts inserted, pasted, and auto-linked URLs to the
+// http/https/mailto allowlist via isAllowedUri (covers setLink + paste) and shouldAutoLink
+// (covers as-you-type autolinking). Note: the extension's built-in `protocols` option only
+// ADDS to a broad default allowlist (ftp, tel, cid, xmpp, ...) rather than replacing it, so
+// isSafeLinkUrl is the actual enforcement here; `protocols` is kept for documentation/parity.
+const configuredLink = Link.configure({
+  protocols: ["http", "https", "mailto"],
+  isAllowedUri: (url) => isSafeLinkUrl(url),
+  shouldAutoLink: (url) => isSafeLinkUrl(url),
+});
+
 function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   const { t } = useTranslation();
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
+  const [linkInvalid, setLinkInvalid] = useState(false);
 
   const editor = useEditor({
-    extensions: [StarterKit, Link],
+    extensions: [StarterKit, configuredLink],
     content: html,
     immediatelyRender: false,
     editorProps: {
@@ -94,11 +132,20 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   function applyLink() {
     if (!editor) return;
     const url = linkUrl.trim();
-    if (url) {
-      editor.chain().focus().setLink({ href: url }).run();
+    if (!url) {
+      setLinkUrl("");
+      setLinkInputOpen(false);
+      setLinkInvalid(false);
+      return;
     }
+    if (!isSafeLinkUrl(url)) {
+      setLinkInvalid(true);
+      return;
+    }
+    editor.chain().focus().setLink({ href: url }).run();
     setLinkUrl("");
     setLinkInputOpen(false);
+    setLinkInvalid(false);
   }
 
   return (
@@ -140,7 +187,10 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
           <input
             aria-label={t("composer.linkUrl")}
             value={linkUrl}
-            onChange={(event) => setLinkUrl(event.target.value)}
+            onChange={(event) => {
+              setLinkUrl(event.target.value);
+              setLinkInvalid(false);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
@@ -150,6 +200,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
             className="ml-1 rounded border px-1 py-0.5 text-xs"
           />
         )}
+        {linkInvalid && <p className="text-xs text-amber-700">{t("composer.invalidLink")}</p>}
       </div>
       <EditorContent editor={editor} className="min-h-32 p-2 text-sm" />
     </div>
