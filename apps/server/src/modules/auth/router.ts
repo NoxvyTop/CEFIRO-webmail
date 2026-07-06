@@ -3,6 +3,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
+import type { Bootstrap } from "../setup/bootstrap";
 import { SESSION_COOKIE, requireSession, type AuthVariables } from "./middleware";
 import {
   buildAuthUrl,
@@ -49,6 +50,7 @@ export type AuthRouterDeps = {
   appUrl?: string;
   sessionTtlHours?: number;
   oidcClient?: OidcClient;
+  bootstrap?: Bootstrap;
 };
 
 export function createAuthRouter(deps: AuthRouterDeps) {
@@ -56,6 +58,8 @@ export function createAuthRouter(deps: AuthRouterDeps) {
   const oidc = deps.oidcClient ?? defaultOidcClient;
 
   router.get("/me", requireSession(deps.sessions), (c) => c.json(c.get("user")));
+
+  router.get("/mode", (c) => c.json({ bootstrapMode: deps.bootstrap?.enabled ?? false }));
 
   router.post("/logout", async (c) => {
     const token = getCookie(c, SESSION_COOKIE);
