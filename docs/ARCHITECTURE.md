@@ -116,15 +116,29 @@ Reglas no negociables:
 - El descifrado es por sesión y solo en memoria.
 - TLS en todo el trayecto BFF ↔ Stalwart.
 
-### Modo bootstrap
+### Configuración OIDC administrable
 
-Primer arranque al estilo Stalwart: con `BOOTSTRAP_MODE=true` en el entorno,
-la aplicación inicia en modo configuración e imprime en consola un usuario
-administrador temporal con contraseña generada. Con esa cuenta se configura
-el administrador real y se cargan las credenciales de buzón iniciales desde
-una pantalla mínima de setup. Al volver el entorno a producción y reiniciar,
-el modo configuración desaparece. Esa pantalla de setup es la semilla del
-portal de administración de la Fase 2.
+La configuración del proveedor SSO (issuer, client_id, client_secret,
+scopes) vive en la base de datos y se edita desde el portal de
+administración, no en variables de entorno. Esto permite reconfigurar
+Authentik o migrar a otro proveedor OIDC sin tocar código ni redesplegar.
+En el entorno solo quedan secretos de infraestructura: clave maestra de
+cifrado y conexión a Postgres.
+
+### Modo bootstrap / recuperación
+
+Al estilo Stalwart, `BOOTSTRAP_MODE=true` en el entorno cumple dos roles:
+
+- **Primer arranque**: la aplicación inicia en modo configuración e imprime
+  en consola un usuario administrador temporal con contraseña generada. Con
+  esa cuenta se configura el administrador real, el proveedor OIDC y las
+  credenciales de buzón iniciales desde una pantalla mínima de setup.
+- **Recuperación**: si una configuración OIDC defectuosa deja a todos sin
+  acceso, se activa el modo, se entra con la credencial temporal de consola,
+  se corrige la configuración y se vuelve a producción.
+
+Al volver el entorno a producción y reiniciar, el modo desaparece. La
+pantalla de setup es la semilla del portal de administración de la Fase 2.
 
 Alcance del alta en F1: los empleados ya existen en Authentik y en Stalwart
 (creados manualmente en cada sistema). La pantalla de setup solo registra el
@@ -134,10 +148,25 @@ administración en F2.
 
 ## Frontend
 
-Layout de tres paneles: barra lateral (carpetas, etiquetas y zona de
-módulos), lista de mensajes con scroll virtual y panel de lectura. La zona de
-módulos de la barra lateral prepara el caparazón para los módulos de Odoo
-(calendario, tareas) sin tocar el núcleo de correo.
+Layout de tres paneles: barra lateral (carpetas, etiquetas, zona de grupos y
+zona de módulos), lista de mensajes con scroll virtual y panel de lectura.
+La zona de módulos de la barra lateral prepara el caparazón para los módulos
+de Odoo (calendario, tareas) sin tocar el núcleo de correo. La zona de
+grupos (F2) muestra los buzones grupales de Stalwart.
+
+### Identidades múltiples (F1)
+
+Un usuario puede tener varias direcciones de correo. Vía identidades JMAP:
+
+- Selector de "enviar como" al redactar y responder.
+- Indicador en cada correo recibido de a qué dirección llegó.
+- Al responder se preselecciona la identidad que recibió el correo.
+
+### Grupos de correo (F2)
+
+- Zona de grupos en la barra lateral para ver los correos grupales.
+- Toggle por usuario "recibir los correos del grupo en mi bandeja
+  principal", activable y desactivable.
 
 Organización por features (Screaming Architecture):
 
@@ -201,6 +230,7 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `user_preferences` | notificaciones, tema, ajustes de UI |
 | `sessions` | sesiones activas (id opaco, expiración) |
 | `audit_log` | actor, acción, objetivo, fecha, IP, detalle (JSON) |
+| `sso_config` | proveedor OIDC: issuer, client_id, client_secret (cifrado), scopes |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
 descifrada no se persiste nunca — se re-descifra bajo demanda y se cachea
@@ -224,9 +254,36 @@ correos (volumen, privacidad, ruido).
 Suben y bajan en streaming a través del BFF hacia el almacenamiento de blobs
 de Stalwart: nunca tocan disco propio ni pasan completos por memoria. El BFF
 y Stalwart comparten host (red interna de Docker), por lo que el salto extra
-es despreciable. Refuerzos: soporte de Range (reanudación y fragmentos),
-cabeceras de caché (los blobs son inmutables) y previsualización de PDF e
-imágenes en el navegador.
+es despreciable. Refuerzos: soporte de Range (reanudación y fragmentos) y
+cabeceras de caché (los blobs son inmutables).
+
+### Previsualización de documentos
+
+Los documentos imprimibles se visualizan en el navegador sin guardarse en el
+ordenador del empleado:
+
+- PDF e imágenes: renderizado nativo del navegador, alimentado por streaming
+  con Range.
+- Documentos de ofimática (Word, Excel): visor client-side empaquetado en el
+  bundle (sin CDNs, por la restricción de egress).
+
+"Sin descargar" significa sin archivo en disco: los bytes se transmiten a la
+memoria del navegador para renderizarse.
+
+### Seguridad de adjuntos y contenido
+
+- **El servidor nunca abre ni interpreta archivos**: el BFF solo transmite
+  bytes entre Stalwart y el navegador. Un adjunto malicioso no puede
+  ejecutarse en el servidor porque nada lo parsea ahí.
+- El renderizado ocurre en el sandbox del navegador del empleado.
+- **HTML de correos**: sanitizado con DOMPurify y renderizado en iframe
+  aislado con CSP estricta (el vector principal en webmails es el HTML del
+  correo, no los adjuntos).
+- **Antivirus en la entrega**: se recomienda integrar ClamAV en Stalwart
+  para escanear los correos al llegar (configuración del servidor de
+  correo, fuera de esta aplicación).
+- La restricción de egress limita el alcance de cualquier compromiso del
+  servidor.
 
 ### Papelera con retención
 
@@ -294,8 +351,8 @@ permitida es hacia GitHub/GHCR (repos e imágenes propios).
 
 | Fase | Alcance |
 |------|---------|
-| F1 — Correo | Leer, redactar, responder, adjuntos, carpetas, búsqueda, firmas, etiquetas, notificaciones, papelera con retención, login SSO |
-| F2 — Administración | Portal admin (alta → provisiona Authentik + Stalwart), grupos de correo, aviso de correo de grupo con activación/desactivación de recepción |
+| F1 — Correo | Leer, redactar, responder, adjuntos con previsualización, carpetas, búsqueda, firmas, etiquetas, identidades múltiples (enviar como / recibido en), notificaciones, papelera con retención, login SSO, bootstrap/recuperación |
+| F2 — Administración | Portal admin (alta → provisiona Authentik + Stalwart, configuración OIDC), zona de grupos de correo, aviso de correo de grupo con activación/desactivación de recepción en bandeja principal |
 | F3 — Organización | Filtros/reglas (UI de Sieve), respuestas automáticas |
 | F4 — Suite Odoo | Calendario embebido, módulo de tareas, configurables por el admin |
 
