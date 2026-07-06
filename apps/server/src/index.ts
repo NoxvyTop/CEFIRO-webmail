@@ -16,6 +16,7 @@ import { createAuthRouter } from "./modules/auth/router";
 import { createSessionStore } from "./modules/auth/sessions";
 import { createJmapClient } from "./infra/stalwart/jmap";
 import { createMailRouter } from "./modules/mail/router";
+import { createAdminRouter } from "./modules/admin/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
 
@@ -62,6 +63,7 @@ const app = createApp({
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, jmap }),
+  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit }),
 });
 
 if (process.env.NODE_ENV === "production") {
