@@ -1,12 +1,13 @@
 import { Hono } from "hono";
-import type {
-  AttachmentMeta,
-  EmailAddress,
-  EmailDetail,
-  EmailSummary,
-  Mailbox,
-  MessagesPage,
-  ThreadDetail,
+import {
+  emailUpdateSchema,
+  type AttachmentMeta,
+  type EmailAddress,
+  type EmailDetail,
+  type EmailSummary,
+  type Mailbox,
+  type MessagesPage,
+  type ThreadDetail,
 } from "@webmail/shared";
 import { requireSession } from "../auth/middleware";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
@@ -276,6 +277,61 @@ export function createMailRouter(deps: MailDeps) {
       emails: emails.map(toEmailDetail),
     };
     return c.json(thread);
+  });
+
+  router.patch("/messages/:id", async (c) => {
+    const id = c.req.param("id");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const parsed = emailUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (parsed.data.keywords) {
+      for (const [key, value] of Object.entries(parsed.data.keywords)) {
+        patch[`keywords/${key}`] = value === true ? true : null;
+      }
+    }
+    if (parsed.data.mailboxIds) {
+      patch.mailboxIds = parsed.data.mailboxIds;
+    }
+
+    const session = c.get("jmapSession");
+    const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
+      ["Email/set", { accountId: session.accountId, update: { [id]: patch } }, "s"],
+    ]);
+
+    const setResult = (responses[0]?.[1] ?? {}) as {
+      updated?: Record<string, unknown>;
+      notUpdated?: Record<string, unknown>;
+    };
+
+    if (setResult.notUpdated && id in setResult.notUpdated) {
+      return c.json(
+        { code: "update_failed", message: "errors.update_failed", traceId: c.get("traceId") },
+        409,
+      );
+    }
+    if (setResult.updated && id in setResult.updated) {
+      return c.json({ ok: true });
+    }
+
+    return c.json(
+      { code: "update_failed", message: "errors.update_failed", traceId: c.get("traceId") },
+      409,
+    );
   });
 
   return router;
