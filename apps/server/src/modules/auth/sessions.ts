@@ -64,6 +64,10 @@ export function createSessionStore(sql: Db) {
       const id = await hashToken(token);
       await sql`delete from sessions where id = ${id}`;
     },
+    async revokeAllForUser(userId: string): Promise<number> {
+      const rows = await sql`delete from sessions where user_id = ${userId} returning id`;
+      return rows.length;
+    },
   };
 }
 
