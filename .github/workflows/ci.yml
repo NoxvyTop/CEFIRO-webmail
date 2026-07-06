@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [init-desarollo, preproduc, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+        env:
+          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
+
+  publish:
+    if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/noxvytop/webmail:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
