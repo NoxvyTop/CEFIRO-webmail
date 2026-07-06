@@ -7,11 +7,14 @@ import { fetchMailboxes } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
+import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 
 export function MailPage() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  useMailEvents(true);
 
   const mailboxParam = searchParams.get("mailbox");
   const threadParam = searchParams.get("thread");

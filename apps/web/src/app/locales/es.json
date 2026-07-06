@@ -48,6 +48,8 @@
     "loadImages": "Cargar imágenes",
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
+    "newMailNotification": "Correo nuevo",
+    "enableNotifications": "Activar notificaciones",
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",

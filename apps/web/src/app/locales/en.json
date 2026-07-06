@@ -48,6 +48,8 @@
     "loadImages": "Load images",
     "emailContent": "Email content",
     "emptyBody": "(no content)",
+    "newMailNotification": "New mail",
+    "enableNotifications": "Enable notifications",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
