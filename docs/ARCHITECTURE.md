@@ -231,6 +231,7 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `sessions` | sesiones activas (id opaco, expiración) |
 | `audit_log` | actor, acción, objetivo, fecha, IP, detalle (JSON) |
 | `sso_config` | proveedor OIDC: issuer, client_id, client_secret (cifrado), scopes |
+| `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
 descifrada no se persiste nunca — se re-descifra bajo demanda y se cachea
@@ -290,6 +291,28 @@ memoria del navegador para renderizarse.
 La regla de borrado tras X días la ejecuta Stalwart. En F1 se configura
 directamente en Stalwart; desde F2 el plazo se definirá en el portal de
 administración vía la API de Stalwart.
+
+## Configurador de integraciones
+
+El portal de administración incluye un configurador de integraciones
+externas. Cada integración se registra con:
+
+- **Tipo**: qué conecta (ej. `odoo-calendar`, `odoo-tasks`; extensible a
+  futuros proveedores).
+- **Configuración**: URL del servidor, base de datos, credenciales de
+  servicio (cifradas con la misma clave maestra).
+- **Estado**: activada o desactivada por el administrador.
+
+Las integraciones activadas aparecen como módulos en la zona de módulos de
+la barra lateral de los empleados. Activar el calendario de Odoo, por
+ejemplo, hace visible el módulo Calendario sin redesplegar la aplicación.
+
+En el backend, cada integración es un adaptador detrás de un puerto común
+(patrón ya definido en la arquitectura hexagonal): agregar un proveedor
+nuevo es escribir un adaptador, no tocar el núcleo.
+
+El configurador llega con el portal de administración (F2); los primeros
+adaptadores de Odoo llegan en F4.
 
 ## Manejo de errores y observabilidad
 
