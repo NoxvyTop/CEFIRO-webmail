@@ -6,7 +6,9 @@ import { log } from "./core/logger";
 
 type Env = { Variables: { traceId: string } };
 
-export function createApp() {
+export type HealthCheck = () => Promise<boolean>;
+
+export function createApp(checks: Record<string, HealthCheck> = {}) {
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -16,8 +18,15 @@ export function createApp() {
     await next();
   });
 
-  app.get("/api/health", (c) => {
-    const body: HealthResponse = { status: "ok", checks: {} };
+  app.get("/api/health", async (c) => {
+    const results: Record<string, boolean> = {};
+    for (const [name, check] of Object.entries(checks)) {
+      results[name] = await check();
+    }
+    const body: HealthResponse = {
+      status: Object.values(results).every(Boolean) ? "ok" : "degraded",
+      checks: results,
+    };
     return c.json(body);
   });
 

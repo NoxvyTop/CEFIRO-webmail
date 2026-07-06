@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate": "bun run scripts/migrate.ts"
   },
   "dependencies": {
     "@webmail/shared": "workspace:*",
