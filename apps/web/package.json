@@ -12,12 +12,15 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.1.0",
     "@tanstack/react-query": "^5.60.0",
+    "@tanstack/react-virtual": "^3.10.0",
     "@webmail/shared": "workspace:*",
+    "dompurify": "^3.2.0",
     "i18next": "^24.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^15.0.0",
-    "react-router-dom": "^7.1.0"
+    "react-router-dom": "^7.1.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
