@@ -18,6 +18,10 @@ type SsoRow = {
 
 export function createSsoConfigRepo(sql: Db, key: CryptoKey) {
   return {
+    async exists(): Promise<boolean> {
+      const rows = await sql<{ id: number }[]>`select id from sso_config where id = 1`;
+      return rows.length > 0;
+    },
     async get(): Promise<SsoConfig | null> {
       const rows = await sql<SsoRow[]>`
         select issuer, client_id, client_secret_ciphertext, client_secret_iv, scopes
