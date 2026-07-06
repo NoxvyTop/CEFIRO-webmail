@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import {
+  blobUploadResultSchema,
   emailUpdateSchema,
   identitySchema,
   signatureInputSchema,
@@ -287,6 +288,108 @@ export function createMailRouter(deps: MailDeps) {
         connection: "keep-alive",
       },
     });
+  });
+
+  router.post("/blobs", requireMail(deps), async (c) => {
+    const session = c.get("jmapSession");
+    if (!session.uploadUrl) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    const uploadUrl = session.uploadUrl.replaceAll(
+      "{accountId}",
+      encodeURIComponent(session.accountId),
+    );
+    const contentType = c.req.header("content-type") ?? "application/octet-stream";
+
+    const upstream = await fetchFn(uploadUrl, {
+      method: "POST",
+      headers: {
+        authorization: basicAuthHeader(c.get("jmapAuth")),
+        "content-type": contentType,
+      },
+      body: c.req.raw.body,
+      duplex: "half",
+    } as RequestInit);
+
+    if (!upstream.ok) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    const body = (await upstream.json()) as { blobId?: string; type?: string; size?: number };
+    const parsed = blobUploadResultSchema.safeParse({
+      blobId: body.blobId,
+      type: body.type ?? "application/octet-stream",
+      size: body.size ?? 0,
+    });
+    if (!parsed.success) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    return c.json(parsed.data);
+  });
+
+  router.get("/blobs/:blobId", requireMail(deps), async (c) => {
+    const session = c.get("jmapSession");
+    if (!session.downloadUrl) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    const blobId = c.req.param("blobId");
+    const name = c.req.query("name") ?? "attachment";
+    const type = c.req.query("type") ?? "application/octet-stream";
+    const dl = c.req.query("dl");
+
+    const downloadUrl = session.downloadUrl
+      .replaceAll("{accountId}", encodeURIComponent(session.accountId))
+      .replaceAll("{blobId}", encodeURIComponent(blobId))
+      .replaceAll("{name}", encodeURIComponent(name))
+      .replaceAll("{type}", encodeURIComponent(type));
+
+    const range = c.req.header("range");
+    const upstream = await fetchFn(downloadUrl, {
+      headers: {
+        authorization: basicAuthHeader(c.get("jmapAuth")),
+        ...(range ? { range } : {}),
+      },
+      signal: c.req.raw.signal,
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      return c.json(
+        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    const headers = new Headers();
+    headers.set("content-type", upstream.headers.get("content-type") ?? type);
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) headers.set("content-length", contentLength);
+    const contentRange = upstream.headers.get("content-range");
+    if (contentRange) headers.set("content-range", contentRange);
+    const acceptRanges = upstream.headers.get("accept-ranges");
+    if (acceptRanges) headers.set("accept-ranges", acceptRanges);
+    headers.set("cache-control", "private, max-age=31536000, immutable");
+    const disposition = dl === "1" ? "attachment" : "inline";
+    headers.set(
+      "content-disposition",
+      `${disposition}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    );
+
+    return new Response(upstream.body, { status: upstream.status, headers });
   });
 
   router.get("/messages", requireMail(deps), async (c) => {
