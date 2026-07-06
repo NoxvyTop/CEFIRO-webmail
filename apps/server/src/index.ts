@@ -6,7 +6,7 @@ import { checkDb } from "./infra/db/health";
 const port = Number(process.env.PORT ?? 8080);
 const dbUrl = process.env.DATABASE_URL;
 const db = dbUrl ? createDb(dbUrl) : undefined;
-const app = createApp(db ? { postgres: () => checkDb(db) } : {});
+const app = createApp(db ? { checks: { postgres: () => checkDb(db) } } : {});
 
 if (process.env.NODE_ENV === "production") {
   const root = process.env.STATIC_DIR ?? "../web/dist";
