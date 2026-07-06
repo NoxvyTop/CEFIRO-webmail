@@ -5,6 +5,8 @@ export type JmapSession = {
   apiUrl: string;
   accountId: string;
   eventSourceUrl: string;
+  uploadUrl: string;
+  downloadUrl: string;
 };
 export type JmapMethodCall = [string, Record<string, unknown>, string];
 export type JmapMethodResponse = [string, Record<string, unknown>, string];
@@ -36,6 +38,8 @@ export function createJmapClient(input: {
       const body = (await res.json()) as {
         apiUrl?: string;
         eventSourceUrl?: string;
+        uploadUrl?: string;
+        downloadUrl?: string;
         primaryAccounts?: Record<string, string>;
       };
       const accountId = body.primaryAccounts?.["urn:ietf:params:jmap:mail"];
@@ -46,6 +50,8 @@ export function createJmapClient(input: {
         apiUrl: body.apiUrl,
         accountId,
         eventSourceUrl: body.eventSourceUrl ?? "",
+        uploadUrl: body.uploadUrl ?? "",
+        downloadUrl: body.downloadUrl ?? "",
       };
     },
 
@@ -61,7 +67,11 @@ export function createJmapClient(input: {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+          using: [
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:mail",
+            "urn:ietf:params:jmap:submission",
+          ],
           methodCalls: calls,
         }),
       });

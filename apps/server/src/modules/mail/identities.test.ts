@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { createDb } from "../../infra/db/client";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
@@ -9,6 +10,7 @@ import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createMailRouter } from "./router";
+import { identitySchema } from "@webmail/shared";
 import type { JmapClient } from "../../infra/stalwart/jmap";
 
 const url =
@@ -25,11 +27,12 @@ const stubJmap: JmapClient = {
   }),
   request: async () => [
     [
-      "Mailbox/get",
+      "Identity/get",
       {
         list: [
-          { id: "mb2", name: "Sent", parentId: null, role: "sent", sortOrder: 2, unreadEmails: 0, totalEmails: 5 },
-          { id: "mb1", name: "Inbox", role: "inbox", sortOrder: 1, unreadEmails: 3, totalEmails: 10 },
+          { id: "id-1", name: "Primary Identity", email: "user@example.com" },
+          { id: "id-2", name: null, email: "alt@example.com" },
+          { id: "id-3", name: "No Email Identity" },
         ],
       },
       "0",
@@ -72,14 +75,14 @@ function makeApp(jmap: JmapClient | null) {
   });
 }
 
-describe("GET /api/mail/mailboxes", () => {
+describe("GET /api/mail/identities", () => {
   it("requires a session", async () => {
-    const res = await makeApp(stubJmap).request("/api/mail/mailboxes");
+    const res = await makeApp(stubJmap).request("/api/mail/identities");
     expect(res.status).toBe(401);
   });
 
   it("returns 503 when stalwart is not configured", async () => {
-    const res = await makeApp(null).request("/api/mail/mailboxes", {
+    const res = await makeApp(null).request("/api/mail/identities", {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(503);
@@ -87,20 +90,33 @@ describe("GET /api/mail/mailboxes", () => {
   });
 
   it("returns 503 when the user has no mail credential", async () => {
-    const res = await makeApp(stubJmap).request("/api/mail/mailboxes", {
+    const res = await makeApp(stubJmap).request("/api/mail/identities", {
       headers: { cookie: `session=${tokenNoCred}` },
     });
     expect(res.status).toBe(503);
     expect(((await res.json()) as { code: string }).code).toBe("mail_credentials_missing");
   });
 
-  it("maps and sorts mailboxes", async () => {
-    const res = await makeApp(stubJmap).request("/api/mail/mailboxes", {
+  it("returns identities with mapped names and filtered by email", async () => {
+    const res = await makeApp(stubJmap).request("/api/mail/identities", {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ id: string; parentId: string | null }>;
-    expect(body.map((m) => m.id)).toEqual(["mb1", "mb2"]);
-    expect(body[0]?.parentId).toBeNull();
+    const body = (await res.json()) as unknown;
+    const parsed = z.array(identitySchema).safeParse(body);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toHaveLength(2);
+      expect(parsed.data[0]).toEqual({
+        id: "id-1",
+        name: "Primary Identity",
+        email: "user@example.com",
+      });
+      expect(parsed.data[1]).toEqual({
+        id: "id-2",
+        name: "",
+        email: "alt@example.com",
+      });
+    }
   });
 });
