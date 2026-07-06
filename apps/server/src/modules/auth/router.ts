@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { bootstrapLoginSchema } from "@webmail/shared";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
@@ -33,6 +34,8 @@ export type OidcClient = {
     clientId: string;
   }): (idToken: string) => Promise<{ email: string }>;
 };
+
+const BOOTSTRAP_ADMIN_EMAIL = "bootstrap-admin@webmail.local";
 
 const defaultOidcClient: OidcClient = {
   discover: (issuer) => discover(issuer),
@@ -106,6 +109,60 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         scopes: sso.scopes,
       }),
     );
+  });
+
+  router.post("/bootstrap", async (c) => {
+    const { bootstrap, users, audit, appUrl } = deps;
+    if (!bootstrap?.enabled || !users || !audit) {
+      return c.json({ code: "not_found", message: "errors.not_found", traceId: c.get("traceId") }, 404);
+    }
+    let body: { email: string; password: string };
+    try {
+      const parsed = bootstrapLoginSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
+        return c.json(
+          { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+          400,
+        );
+      }
+      body = parsed.data;
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const ip = c.req.header("x-forwarded-for");
+    const ok = await bootstrap.verify(body.password);
+    if (!ok) {
+      await audit.record({ actor: BOOTSTRAP_ADMIN_EMAIL, action: "bootstrap.login_failed", ip });
+      return c.json(
+        { code: "unauthorized", message: "errors.unauthorized", traceId: c.get("traceId") },
+        401,
+      );
+    }
+    let admin = await users.findByEmail(BOOTSTRAP_ADMIN_EMAIL);
+    if (!admin) {
+      admin = await users.create({
+        email: BOOTSTRAP_ADMIN_EMAIL,
+        displayName: "Bootstrap Admin",
+        role: "admin",
+      });
+    } else {
+      if (!admin.active) await users.setActive(admin.id, true);
+      if (admin.role !== "admin") await users.setRole(admin.id, "admin");
+    }
+    const ttl = deps.sessionTtlHours ?? 12;
+    const { token } = await deps.sessions.create(admin.id, ttl);
+    setCookie(c, SESSION_COOKIE, token, {
+      httpOnly: true,
+      path: "/",
+      sameSite: "Lax",
+      secure: (appUrl ?? "").startsWith("https"),
+      maxAge: ttl * 3600,
+    });
+    await audit.record({ actor: BOOTSTRAP_ADMIN_EMAIL, action: "bootstrap.login", ip });
+    return c.json({ ok: true });
   });
 
   router.get("/callback", async (c) => {
