@@ -126,6 +126,12 @@ una pantalla mínima de setup. Al volver el entorno a producción y reiniciar,
 el modo configuración desaparece. Esa pantalla de setup es la semilla del
 portal de administración de la Fase 2.
 
+Alcance del alta en F1: los empleados ya existen en Authentik y en Stalwart
+(creados manualmente en cada sistema). La pantalla de setup solo registra el
+usuario en la aplicación y su credencial de buzón cifrada. El alta completa
+con provisioning automático (Authentik + Stalwart) llega con el portal de
+administración en F2.
+
 ## Frontend
 
 Layout de tres paneles: barra lateral (carpetas, etiquetas y zona de
@@ -183,7 +189,9 @@ apps/server/src/
 
 ### Modelo de datos propio
 
-Solo datos de la aplicación; el correo vive en Stalwart.
+Solo datos de la aplicación; el correo vive en Stalwart. Este es el modelo
+de F1 — las fases siguientes añaden sus tablas (grupos de correo y
+configuración de administración en F2, mapeos con Odoo en F4).
 
 | Tabla | Qué guarda |
 |-------|-----------|
