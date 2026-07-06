@@ -297,4 +297,58 @@ describe("GET /api/mail/blobs/:blobId", () => {
     );
     expect(res.headers.get("content-disposition")).toBe(`inline; filename*=UTF-8''attachment`);
   });
+
+  it("forces attachment disposition and neutralizes content-type for text/html (stored-XSS prevention)", async () => {
+    upstreamResponse = new Response("<script>alert(1)</script>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
+
+    const res = await makeApp(stubJmap, stubFetch()).request(
+      "/api/mail/blobs/b1?name=evil.html&type=text%2Fhtml",
+      { headers: { cookie: `session=${token}` } },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toMatch(/^attachment/);
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
+
+  it("allows inline disposition for safe-listed application/pdf and still sets hardening headers", async () => {
+    upstreamResponse = new Response("%PDF-1.4", {
+      status: 200,
+      headers: { "content-type": "application/pdf" },
+    });
+
+    const res = await makeApp(stubJmap, stubFetch()).request(
+      "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf",
+      { headers: { cookie: `session=${token}` } },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toMatch(/^inline/);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
+
+  it("forces attachment disposition and neutralizes content-type for image/svg+xml (script vector, never safe)", async () => {
+    upstreamResponse = new Response("<svg onload='alert(1)'></svg>", {
+      status: 200,
+      headers: { "content-type": "image/svg+xml" },
+    });
+
+    const res = await makeApp(stubJmap, stubFetch()).request(
+      "/api/mail/blobs/b1?name=evil.svg&type=image%2Fsvg%2Bxml",
+      { headers: { cookie: `session=${token}` } },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toMatch(/^attachment/);
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
 });

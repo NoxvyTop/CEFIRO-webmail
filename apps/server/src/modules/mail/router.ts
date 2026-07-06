@@ -134,6 +134,23 @@ function basicAuthHeader(auth: { email: string; password: string }): string {
   return `Basic ${btoa(`${auth.email}:${auth.password}`)}`;
 }
 
+// Content-types that are safe to render inline in the browser: no active script
+// execution vectors (e.g. no text/html, image/svg+xml, xml, octet-stream).
+const SAFE_INLINE_CONTENT_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "text/plain",
+]);
+
+function baseMimeType(contentType: string): string {
+  const semicolonIndex = contentType.indexOf(";");
+  const raw = semicolonIndex === -1 ? contentType : contentType.slice(0, semicolonIndex);
+  return raw.trim().toLowerCase();
+}
+
 export function createMailRouter(deps: MailDeps) {
   const router = new Hono<{ Variables: MailVariables }>();
   const fetchFn = deps.fetchFn ?? fetch;
@@ -375,8 +392,14 @@ export function createMailRouter(deps: MailDeps) {
       );
     }
 
+    const resolvedContentType = upstream.headers.get("content-type") ?? type;
+    const isSafeInline = SAFE_INLINE_CONTENT_TYPES.has(baseMimeType(resolvedContentType));
+
     const headers = new Headers();
-    headers.set("content-type", upstream.headers.get("content-type") ?? type);
+    // Non-safe-listed types (html, svg, xml, octet-stream, etc.) are never echoed
+    // back verbatim: neutralize to application/octet-stream so a browser won't
+    // auto-render them even if the file is later reopened from disk.
+    headers.set("content-type", isSafeInline ? resolvedContentType : "application/octet-stream");
     const contentLength = upstream.headers.get("content-length");
     if (contentLength) headers.set("content-length", contentLength);
     const contentRange = upstream.headers.get("content-range");
@@ -384,7 +407,13 @@ export function createMailRouter(deps: MailDeps) {
     const acceptRanges = upstream.headers.get("accept-ranges");
     if (acceptRanges) headers.set("accept-ranges", acceptRanges);
     headers.set("cache-control", "private, max-age=31536000, immutable");
-    const disposition = dl === "1" ? "attachment" : "inline";
+    // Defense-in-depth against stored-XSS via attachment preview: even for
+    // safe-listed types, disable script execution in the rendering context.
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("content-security-policy", "sandbox");
+    // Only safe-listed content-types may render inline; everything else is
+    // forced to download regardless of the `dl` query param.
+    const disposition = dl === "1" || !isSafeInline ? "attachment" : "inline";
     headers.set(
       "content-disposition",
       `${disposition}; filename*=UTF-8''${encodeURIComponent(name)}`,
