@@ -22,17 +22,6 @@ export type AdminDeps = {
 
 type Env = { Variables: AuthVariables };
 
-async function isMailboxLinked(deps: AdminDeps, userId: string): Promise<boolean> {
-  try {
-    return (await deps.mailCredentials.get(userId)) !== null;
-  } catch {
-    // A row exists but couldn't be decrypted with the current master key
-    // (e.g. after key rotation). Presence of ciphertext still means a
-    // mailbox credential is linked, even if this process can't read it.
-    return true;
-  }
-}
-
 async function toAdminUser(deps: AdminDeps, user: UserRecord): Promise<AdminUser> {
   return {
     id: user.id,
@@ -41,7 +30,7 @@ async function toAdminUser(deps: AdminDeps, user: UserRecord): Promise<AdminUser
     role: user.role,
     locale: user.locale,
     active: user.active,
-    mailboxLinked: await isMailboxLinked(deps, user.id),
+    mailboxLinked: await deps.mailCredentials.exists(user.id),
   };
 }
 

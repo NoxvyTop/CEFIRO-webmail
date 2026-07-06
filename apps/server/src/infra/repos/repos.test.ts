@@ -73,6 +73,27 @@ describe("mail credentials repo", () => {
     const creds = createMailCredentialsRepo(sql, key);
     expect(await creds.get(crypto.randomUUID())).toBeNull();
   });
+
+  it("exists() reports presence without decrypting", async () => {
+    const users = createUsersRepo(sql);
+    const key = await importMasterKey(keyB64());
+    const creds = createMailCredentialsRepo(sql, key);
+    const user = await users.create({
+      email: `e-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Exists User",
+    });
+    expect(await creds.exists(user.id)).toBe(false);
+    await creds.set(user.id, "mailbox-secret-exists");
+
+    // A key mismatch would make get() throw on decrypt, but exists() only
+    // checks row presence, so it must still report true.
+    const wrongKey = await importMasterKey(keyB64());
+    const credsWithWrongKey = createMailCredentialsRepo(sql, wrongKey);
+    expect(await credsWithWrongKey.exists(user.id)).toBe(true);
+    await expect(credsWithWrongKey.get(user.id)).rejects.toThrow();
+
+    expect(await creds.exists(user.id)).toBe(true);
+  });
 });
 
 describe("audit repo", () => {
