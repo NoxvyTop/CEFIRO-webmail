@@ -1,8 +1,9 @@
-import { Component, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import { useTranslation } from "react-i18next";
+import { sanitizeEmailHtml } from "../reader/sanitize";
 
 export interface RichTextEditorProps {
   html: string;
@@ -36,6 +37,13 @@ class EditorErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
 }
 
 function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorProps) {
+  // Sanitize initial HTML seed only once to prevent rendering remote/active content.
+  // Do not re-sanitize on every render to avoid resetting contentEditable cursor position.
+  const safeHtml = useMemo(
+    () => sanitizeEmailHtml(html, { allowRemoteImages: false }).html,
+    [], // Empty dependency array: capture initial html value only
+  );
+
   function handleInput(event: FormEvent<HTMLDivElement>) {
     onChange(event.currentTarget.innerHTML);
   }
@@ -48,8 +56,8 @@ function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorPr
       contentEditable
       suppressContentEditableWarning
       className="min-h-32 rounded-md border p-2 text-sm"
-      // eslint-disable-next-line react/no-danger -- initial content only; edits flow through onInput
-      dangerouslySetInnerHTML={{ __html: html }}
+      // eslint-disable-next-line react/no-danger -- initial content only; sanitized seed + ongoing edits through onInput
+      dangerouslySetInnerHTML={{ __html: safeHtml }}
       onInput={handleInput}
     />
   );
