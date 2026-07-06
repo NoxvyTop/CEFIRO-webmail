@@ -1,4 +1,14 @@
 {
   "app": { "title": "Correo NoxvyTop" },
-  "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" }
+  "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" },
+  "auth": {
+    "signIn": "Iniciar sesión con SSO",
+    "signOut": "Cerrar sesión",
+    "signedInAs": "Sesión iniciada como {{email}}",
+    "errors": {
+      "state": "La sesión de inicio expiró, inténtalo de nuevo",
+      "unknown_user": "Tu cuenta no está registrada en el correo",
+      "oidc": "No se pudo completar el inicio de sesión"
+    }
+  }
 }
