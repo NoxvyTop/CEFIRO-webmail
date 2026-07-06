@@ -151,3 +151,46 @@ reutiliza para otro empleado, la fila archivada "es dueña" del email; el
 admin resuelve manualmente (renombrar o borrar la archivada).
 
 Requiere una columna nueva: `users.active boolean not null default true`.
+
+## Sección 4: Buzones compartidos delegados
+
+Un buzón compartido (`info@`, `test@`) es una "cuenta extra" que el webmail
+muestra a los usuarios autorizados, sin login aparte.
+
+### Gestión desde el portal
+
+- Registrar un buzón: nombre visible ("Info"), dirección
+  (`info@noxvytop.com`) y su credencial Stalwart cifrada (misma mecánica que
+  la credencial de un usuario).
+- Mapear qué usuarios acceden a cada buzón compartido.
+- Todo auditado.
+
+### Experiencia del usuario autorizado
+
+- Entra con su SSO normal. En la barra lateral, un **selector de cuenta**
+  (estilo "cambiar cuenta" de Gmail): su buzón personal + los compartidos a
+  los que accede.
+- Al elegir `info@`, el webmail carga ese buzón vía JMAP con la credencial
+  compartida (descifrada en memoria para esa petición) — lee, marca, mueve,
+  todo lo de F1.
+- **Enviar como** `info@`: al componer desde el contexto del buzón
+  compartido, el selector "enviar como" incluye la dirección compartida y el
+  envío usa esa credencial. Reusa el composer de F1.
+
+### Modelo de datos
+
+| Tabla | Qué guarda |
+|-------|-----------|
+| `shared_mailboxes` | id, nombre visible, dirección, credencial cifrada (ciphertext+iv+key_version) |
+| `shared_mailbox_access` | mapeo buzón compartido ↔ usuario autorizado |
+
+### Autorización server-side (no negociable)
+
+El BFF verifica en CADA petición que la sesión que pide `info@` esté en
+`shared_mailbox_access` para ese buzón. Nunca se confía en la elección del
+frontend; un usuario no autorizado recibe 403. La autorización vive en el
+servidor.
+
+Reusa todo F1: almacén de credenciales cifradas, proxy JMAP, composer con
+identidades. Un buzón compartido es, técnicamente, otra credencial de buzón
+que varios usuarios pueden usar.
