@@ -152,7 +152,12 @@ admin resuelve manualmente (renombrar o borrar la archivada).
 
 Requiere una columna nueva: `users.active boolean not null default true`.
 
-## Sección 4: Buzones compartidos delegados
+## Sección 4: Buzones compartidos delegados — DIFERIDO (issue #13)
+
+> **NO se implementa en F2.** Diferido al issue #13 (Modelo B: buzón
+> compartido con credencial + bandeja colaborativa). Se retoma cuando el
+> volumen haga que el Modelo A (Sección 5) se quede corto. El diseño se
+> conserva acá como referencia para ese momento.
 
 Un buzón compartido (`info@`, `test@`) es una "cuenta extra" que el webmail
 muestra a los usuarios autorizados, sin login aparte.
@@ -194,3 +199,63 @@ servidor.
 Reusa todo F1: almacén de credenciales cifradas, proxy JMAP, composer con
 identidades. Un buzón compartido es, técnicamente, otra credencial de buzón
 que varios usuarios pueden usar.
+
+## Sección 5: Correos grupales (Modelo A) — lo que SÍ va en F2
+
+El modelo elegido para las direcciones compartidas de F2. Una dirección
+grupal (`soporte@`, `administracion@`, `incidencias@`) es una **lista de
+miembros**; Stalwart entrega una copia a la bandeja propia de cada miembro.
+No hay buzón aparte ni credencial compartida.
+
+### Recepción — la copia cae en tu bandeja
+
+- La membresía y la entrega a miembros se configuran en **Stalwart** (el
+  admin las gestiona ahí; el webmail no escribe en Stalwart).
+- Cuando llega un correo a `soporte@`, Stalwart deja una copia en el buzón
+  propio de cada miembro. El webmail lo muestra en la bandeja normal del
+  usuario — ya funciona con F1, es su propio correo.
+
+### Zona de grupos + toggle de vista
+
+- **Zona de grupos** en la barra lateral: una vista que filtra el correo
+  propio del usuario por dirección de destino grupal (JMAP expone a qué
+  dirección llegó cada correo — el "recibido en" de F1).
+- **Toggle por usuario** (preferencia del webmail en `user_preferences`, no
+  toca Stalwart): el correo grupal SIEMPRE llega físicamente; el toggle
+  controla solo la VISTA — activado = se muestra mezclado en la bandeja
+  principal; desactivado = se muestra solo en la zona de grupos.
+
+### Responder — como la persona (por defecto)
+
+Un correo grupal lo agarra un miembro y responde con **su dirección
+personal** (`beto@`). El cliente le sigue escribiendo a Beto directo: un
+dueño por conversación. Es el comportamiento por defecto del composer de F1
+— cero configuración extra.
+
+### Enviar como la dirección de empresa (identidades F1)
+
+Para las direcciones que deben salir **como la empresa** (`administracion@`,
+`incidencias@`): se cubre con el selector "enviar como" de F1 (identidades
+JMAP), NO con la maquinaria de buzón compartido (issue #13).
+
+- En Stalwart se configura que los usuarios autorizados puedan enviar desde
+  esas direcciones (la función "una contraseña, varias direcciones").
+- Stalwart las expone como identidades; el desplegable "De" del composer de
+  F1 las ofrece automáticamente. El correo sale como la dirección de
+  empresa, usando la credencial propia del usuario.
+- **Accountability preservada**: hacia afuera se ve la dirección de empresa;
+  la auditoría (`audit_log`) registra qué usuario la envió. Se ganan las dos
+  cosas — marca hacia afuera, responsabilidad hacia adentro.
+
+### Dependencia (config de Stalwart, la gestiona el admin)
+
+El "enviar como la empresa" y la entrega a miembros dependen de que Stalwart
+esté configurado en consecuencia (aliases/identidades y membresía de grupo).
+Es config del admin en Stalwart; el webmail solo consume lo que Stalwart
+expone vía JMAP.
+
+### Modelo de datos
+
+Ninguna tabla nueva de correo. Solo una preferencia por usuario en
+`user_preferences` para el toggle de vista (ej. clave
+`groupMailInMainInbox: boolean` por dirección grupal, o global).
