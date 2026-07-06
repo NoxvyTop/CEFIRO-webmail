@@ -32,6 +32,18 @@ describe("users repo", () => {
     expect(found?.id).toBe(created.id);
     expect(await users.findByEmail("nobody@noxvytop.com")).toBeNull();
   });
+
+  it("finds users case-insensitively and stores emails lowercased", async () => {
+    const users = createUsersRepo(sql);
+    const local = `case-${crypto.randomUUID()}`;
+    const created = await users.create({
+      email: `${local.toUpperCase()}@NoxvyTop.com`,
+      displayName: "Case User",
+    });
+    expect(created.email).toBe(`${local.toUpperCase()}@noxvytop.com`.toLowerCase());
+    const found = await users.findByEmail(`${local.toUpperCase()}@NOXVYTOP.COM`);
+    expect(found?.id).toBe(created.id);
+  });
 });
 
 describe("mail credentials repo", () => {

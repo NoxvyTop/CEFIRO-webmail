@@ -32,7 +32,7 @@ export function createUsersRepo(sql: Db) {
   return {
     async findByEmail(email: string): Promise<UserRecord | null> {
       const rows = await sql<UserRow[]>`
-        select id, email, display_name, role, locale from users where email = ${email}
+        select id, email, display_name, role, locale from users where email = ${email.toLowerCase()}
       `;
       return rows[0] ? toRecord(rows[0]) : null;
     },
@@ -44,7 +44,7 @@ export function createUsersRepo(sql: Db) {
     }): Promise<UserRecord> {
       const rows = await sql<UserRow[]>`
         insert into users (email, display_name, role, locale)
-        values (${input.email}, ${input.displayName}, ${input.role ?? "employee"}, ${input.locale ?? "es"})
+        values (${input.email.toLowerCase()}, ${input.displayName}, ${input.role ?? "employee"}, ${input.locale ?? "es"})
         returning id, email, display_name, role, locale
       `;
       return toRecord(rows[0]!);
