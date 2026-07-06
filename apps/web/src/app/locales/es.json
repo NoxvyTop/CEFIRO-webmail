@@ -44,8 +44,9 @@
     "empty": "No hay mensajes",
     "selectMessage": "Selecciona un mensaje",
     "errors": {
-      "mailNotConfigured": "El correo aún no está configurado",
-      "mailCredentialsMissing": "Faltan las credenciales del buzón"
+      "mail_not_configured": "El servidor de correo no está configurado",
+      "mail_credentials_missing": "Tu buzón no está vinculado todavía",
+      "generic": "No se pudo cargar el correo"
     }
   },
   "modules": {

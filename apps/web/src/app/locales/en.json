@@ -44,8 +44,9 @@
     "empty": "No messages",
     "selectMessage": "Select a message",
     "errors": {
-      "mailNotConfigured": "Mail is not configured yet",
-      "mailCredentialsMissing": "Your mailbox credentials are missing"
+      "mail_not_configured": "The mail server is not configured",
+      "mail_credentials_missing": "Your mailbox is not linked yet",
+      "generic": "Mail could not be loaded"
     }
   },
   "modules": {

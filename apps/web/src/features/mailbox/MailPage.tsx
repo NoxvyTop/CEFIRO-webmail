@@ -53,14 +53,9 @@ export function MailPage() {
         onSelectMailbox={handleSelectMailbox}
       />
       <section aria-label={t("mail.listRegion")} className="flex-1 overflow-y-auto border-r">
-        {errorCode === "mail_not_configured" && (
+        {errorCode && NON_RETRYABLE_CODES.has(errorCode) && (
           <p role="alert" className="p-4 text-sm text-amber-700">
-            {t("mail.errors.mailNotConfigured")}
-          </p>
-        )}
-        {errorCode === "mail_credentials_missing" && (
-          <p role="alert" className="p-4 text-sm text-amber-700">
-            {t("mail.errors.mailCredentialsMissing")}
+            {t(`mail.errors.${errorCode}`)}
           </p>
         )}
       </section>
