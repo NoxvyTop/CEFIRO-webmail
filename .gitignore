@@ -18,6 +18,7 @@ build/
 out/
 coverage/
 *.tsbuildinfo
+apps/**/src/**/*.js
 
 # Logs and temp files
 *.log
