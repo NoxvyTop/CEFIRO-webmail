@@ -43,4 +43,12 @@ describe("loadConfig", () => {
   it("rejects a non-url APP_URL", () => {
     expect(() => loadConfig({ ...validEnv, APP_URL: "not-a-url" })).toThrow();
   });
+
+  it("parses optional STALWART_URL and treats empty as undefined", () => {
+    expect(loadConfig(validEnv).stalwartUrl).toBeUndefined();
+    expect(loadConfig({ ...validEnv, STALWART_URL: "" }).stalwartUrl).toBeUndefined();
+    expect(
+      loadConfig({ ...validEnv, STALWART_URL: "https://mail.noxvytop.com" }).stalwartUrl,
+    ).toBe("https://mail.noxvytop.com");
+  });
 });

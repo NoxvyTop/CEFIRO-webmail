@@ -13,6 +13,8 @@ import { createUsersRepo } from "./infra/repos/users";
 import { importMasterKey } from "./modules/credentials/crypto";
 import { createAuthRouter } from "./modules/auth/router";
 import { createSessionStore } from "./modules/auth/sessions";
+import { createJmapClient } from "./infra/stalwart/jmap";
+import { createMailRouter } from "./modules/mail/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
 
@@ -34,6 +36,9 @@ const sessions = createSessionStore(db);
 const ssoConfig = createSsoConfigRepo(db, masterKey);
 const mailCredentials = createMailCredentialsRepo(db, masterKey);
 const bootstrap = createBootstrap(config.bootstrapMode);
+const jmap = config.stalwartUrl ? createJmapClient({ baseUrl: config.stalwartUrl }) : null;
+
+log("info", "mail proxy", { configured: jmap !== null });
 
 if (bootstrap.enabled) {
   log("warn", "bootstrap mode active", {
@@ -54,6 +59,7 @@ const app = createApp({
     sessionTtlHours: config.sessionTtlHours,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
+  mailRouter: createMailRouter({ sessions, mailCredentials, jmap }),
 });
 
 if (process.env.NODE_ENV === "production") {

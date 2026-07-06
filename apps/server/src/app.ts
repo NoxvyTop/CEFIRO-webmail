@@ -12,6 +12,7 @@ export type CreateAppOptions = {
   checks?: Record<string, HealthCheck>;
   authRouter?: Hono<any>;
   setupRouter?: Hono<any>;
+  mailRouter?: Hono<any>;
 };
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -39,6 +40,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
   if (options.authRouter) app.route("/api/auth", options.authRouter as never);
   if (options.setupRouter) app.route("/api/setup", options.setupRouter as never);
+  if (options.mailRouter) app.route("/api/mail", options.mailRouter as never);
 
   app.notFound((c) =>
     c.json(

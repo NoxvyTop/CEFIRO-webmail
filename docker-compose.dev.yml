@@ -26,6 +26,9 @@ services:
       APP_URL: http://localhost:5173
       MASTER_KEY: ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=
       BOOTSTRAP_MODE: "true"
+      # Explicitly unconfigured in local dev; developers with a reachable
+      # Stalwart instance can point this at it.
+      STALWART_URL: ""
     ports:
       - "5173:5173"
       - "8090:8080"
