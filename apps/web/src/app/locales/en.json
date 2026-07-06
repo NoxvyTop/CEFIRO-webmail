@@ -59,5 +59,34 @@
   "modules": {
     "title": "Modules",
     "mail": "Mail"
+  },
+  "composer": {
+    "title": "Compose",
+    "from": "From",
+    "to": "To",
+    "cc": "Cc",
+    "bcc": "Bcc",
+    "addCcBcc": "Cc/Bcc",
+    "subject": "Subject",
+    "body": "Message",
+    "signature": "Signature",
+    "attach": "Attach",
+    "send": "Send",
+    "cancel": "Cancel",
+    "sending": "Sending…",
+    "invalidEmail": "Invalid email",
+    "bold": "Bold",
+    "italic": "Italic",
+    "bulletList": "Bulleted list",
+    "link": "Link",
+    "linkUrl": "Link URL",
+    "removeRecipient": "Remove {{email}}",
+    "removeAttachment": "Remove {{name}}",
+    "errors": {
+      "noRecipients": "Add at least one recipient",
+      "invalid_identity": "Invalid identity",
+      "send_failed": "Could not send",
+      "generic": "Something went wrong"
+    }
   }
 }
