@@ -42,6 +42,7 @@
     "unread": "{{count}} unread",
     "searchPlaceholder": "Search mail",
     "empty": "No messages",
+    "noSubject": "(no subject)",
     "selectMessage": "Select a message",
     "errors": {
       "mail_not_configured": "The mail server is not configured",

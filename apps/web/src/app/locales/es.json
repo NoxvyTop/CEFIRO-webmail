@@ -42,6 +42,7 @@
     "unread": "{{count}} sin leer",
     "searchPlaceholder": "Buscar en el correo",
     "empty": "No hay mensajes",
+    "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un mensaje",
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",

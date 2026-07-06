@@ -2,8 +2,10 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
+import type { EmailSummary } from "@webmail/shared";
 import { fetchMailboxes } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
+import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
 
 export function MailPage() {
@@ -11,6 +13,8 @@ export function MailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const mailboxParam = searchParams.get("mailbox");
+  const threadParam = searchParams.get("thread");
+  const queryParam = searchParams.get("q");
 
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
@@ -37,6 +41,14 @@ export function MailPage() {
     });
   }
 
+  function handleSelectMessage(email: EmailSummary) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("thread", email.threadId);
+      return next;
+    });
+  }
+
   return (
     <div className="flex flex-1 overflow-hidden">
       <Sidebar
@@ -49,6 +61,14 @@ export function MailPage() {
           <p role="alert" className="p-4 text-sm text-amber-700">
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
+        )}
+        {!mailboxesQuery.isError && selectedMailboxId && (
+          <MessageList
+            mailboxId={selectedMailboxId}
+            query={queryParam}
+            selectedThreadId={threadParam}
+            onSelect={handleSelectMessage}
+          />
         )}
       </section>
       <section aria-label={t("mail.readerRegion")} className="flex-1 overflow-y-auto" />
