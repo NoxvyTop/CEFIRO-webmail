@@ -23,6 +23,10 @@ export function createMailCredentialsRepo(sql: Db, key: CryptoKey) {
       if (!row) return null;
       return decryptSecret(key, new Uint8Array(row.ciphertext), new Uint8Array(row.iv));
     },
+    async exists(userId: string): Promise<boolean> {
+      const rows = await sql`select 1 from mail_credentials where user_id = ${userId}`;
+      return rows.length > 0;
+    },
   };
 }
 

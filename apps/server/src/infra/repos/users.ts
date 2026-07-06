@@ -8,6 +8,7 @@ export type UserRecord = {
   displayName: string;
   role: UserRole;
   locale: string;
+  active: boolean;
 };
 
 type UserRow = {
@@ -16,6 +17,7 @@ type UserRow = {
   display_name: string;
   role: UserRole;
   locale: string;
+  active: boolean;
 };
 
 function toRecord(row: UserRow): UserRecord {
@@ -25,6 +27,7 @@ function toRecord(row: UserRow): UserRecord {
     displayName: row.display_name,
     role: row.role,
     locale: row.locale,
+    active: row.active,
   };
 }
 
@@ -32,7 +35,8 @@ export function createUsersRepo(sql: Db) {
   return {
     async findByEmail(email: string): Promise<UserRecord | null> {
       const rows = await sql<UserRow[]>`
-        select id, email, display_name, role, locale from users where email = ${email.toLowerCase()}
+        select id, email, display_name, role, locale, active
+        from users where email = ${email.toLowerCase()}
       `;
       return rows[0] ? toRecord(rows[0]) : null;
     },
@@ -45,9 +49,30 @@ export function createUsersRepo(sql: Db) {
       const rows = await sql<UserRow[]>`
         insert into users (email, display_name, role, locale)
         values (${input.email.toLowerCase()}, ${input.displayName}, ${input.role ?? "employee"}, ${input.locale ?? "es"})
-        returning id, email, display_name, role, locale
+        returning id, email, display_name, role, locale, active
       `;
       return toRecord(rows[0]!);
+    },
+    async list(): Promise<UserRecord[]> {
+      const rows = await sql<UserRow[]>`
+        select id, email, display_name, role, locale, active
+        from users order by active desc, email asc
+      `;
+      return rows.map(toRecord);
+    },
+    async setRole(id: string, role: UserRole): Promise<UserRecord | null> {
+      const rows = await sql<UserRow[]>`
+        update users set role = ${role} where id = ${id}
+        returning id, email, display_name, role, locale, active
+      `;
+      return rows[0] ? toRecord(rows[0]) : null;
+    },
+    async setActive(id: string, active: boolean): Promise<UserRecord | null> {
+      const rows = await sql<UserRow[]>`
+        update users set active = ${active} where id = ${id}
+        returning id, email, display_name, role, locale, active
+      `;
+      return rows[0] ? toRecord(rows[0]) : null;
     },
     async count(): Promise<number> {
       const rows = await sql<{ count: string }[]>`select count(*)::text as count from users`;

@@ -101,7 +101,7 @@ describe("oidc login flow", () => {
     expect(cb.headers.get("location")).toBe("/?auth_error=state");
   });
 
-  it("redirects unknown users with an error", async () => {
+  it("JIT-provisions unknown users instead of denying them", async () => {
     email = `unknown-${crypto.randomUUID()}@noxvytop.com`; // verifier stub now returns an email with no user
     const login = await app.request("/api/auth/login");
     const state = new URL(login.headers.get("location")!).searchParams.get("state")!;
@@ -110,6 +110,8 @@ describe("oidc login flow", () => {
       `/api/auth/callback?code=abc&state=${state}`,
       { headers: { cookie: `oidc_state=${sealed}` } },
     );
-    expect(cb.headers.get("location")).toBe("/?auth_error=unknown_user");
+    expect(cb.headers.get("location")).toBe("/");
+    expect(cookieValue(cb, "session")).toBeTruthy();
+    expect(await createUsersRepo(sql).findByEmail(email)).not.toBeNull();
   });
 });
