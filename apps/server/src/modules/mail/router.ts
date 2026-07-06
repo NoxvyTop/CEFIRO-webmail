@@ -1,5 +1,13 @@
 import { Hono } from "hono";
-import type { EmailAddress, EmailSummary, Mailbox, MessagesPage } from "@webmail/shared";
+import type {
+  AttachmentMeta,
+  EmailAddress,
+  EmailDetail,
+  EmailSummary,
+  Mailbox,
+  MessagesPage,
+  ThreadDetail,
+} from "@webmail/shared";
 import { requireSession } from "../auth/middleware";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 
@@ -29,6 +37,26 @@ type JmapEmail = {
   size?: number;
 };
 
+type JmapBodyPart = { partId: string; type?: string | null };
+type JmapBodyValue = { value: string };
+type JmapAttachment = {
+  blobId?: string;
+  name?: string | null;
+  type?: string | null;
+  size?: number;
+};
+
+type JmapEmailDetail = JmapEmail & {
+  cc?: JmapEmailAddress[];
+  replyTo?: JmapEmailAddress[];
+  htmlBody?: JmapBodyPart[];
+  textBody?: JmapBodyPart[];
+  bodyValues?: Record<string, JmapBodyValue>;
+  attachments?: JmapAttachment[];
+};
+
+type JmapThread = { id: string; emailIds: string[] };
+
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 
@@ -55,6 +83,38 @@ function toEmailSummary(email: JmapEmail): EmailSummary {
     keywords: email.keywords ?? {},
     hasAttachment: email.hasAttachment ?? false,
     size: email.size ?? 0,
+  };
+}
+
+function concatBodyValues(
+  parts: JmapBodyPart[] | undefined,
+  bodyValues: Record<string, JmapBodyValue> | undefined,
+): string | null {
+  const values = (parts ?? [])
+    .map((part) => bodyValues?.[part.partId]?.value)
+    .filter((value): value is string => value !== undefined);
+  return values.length === 0 ? null : values.join("");
+}
+
+function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
+  return (attachments ?? [])
+    .filter((a): a is JmapAttachment & { blobId: string } => Boolean(a.blobId))
+    .map((a) => ({
+      blobId: a.blobId,
+      name: a.name ?? null,
+      type: a.type ?? "application/octet-stream",
+      size: a.size ?? 0,
+    }));
+}
+
+function toEmailDetail(email: JmapEmailDetail): EmailDetail {
+  return {
+    ...toEmailSummary(email),
+    cc: toEmailAddresses(email.cc),
+    replyTo: toEmailAddresses(email.replyTo),
+    bodyHtml: concatBodyValues(email.htmlBody, email.bodyValues),
+    bodyText: concatBodyValues(email.textBody, email.bodyValues),
+    attachments: toAttachments(email.attachments),
   };
 }
 
@@ -158,6 +218,64 @@ export function createMailRouter(deps: MailDeps) {
       emails: sorted.map(toEmailSummary),
     };
     return c.json(page);
+  });
+
+  router.get("/threads/:threadId", async (c) => {
+    const threadId = c.req.param("threadId");
+    const session = c.get("jmapSession");
+    const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
+      ["Thread/get", { accountId: session.accountId, ids: [threadId] }, "t"],
+      [
+        "Email/get",
+        {
+          accountId: session.accountId,
+          "#ids": { resultOf: "t", name: "Thread/get", path: "/list/*/emailIds" },
+          properties: [
+            "id",
+            "threadId",
+            "mailboxIds",
+            "from",
+            "to",
+            "cc",
+            "replyTo",
+            "subject",
+            "receivedAt",
+            "preview",
+            "keywords",
+            "hasAttachment",
+            "size",
+            "htmlBody",
+            "textBody",
+            "bodyValues",
+            "attachments",
+          ],
+          fetchHTMLBodyValues: true,
+          fetchTextBodyValues: true,
+          maxBodyValueBytes: 524288,
+        },
+        "g",
+      ],
+    ]);
+
+    const threadResult = (responses[0]?.[1] ?? {}) as { list?: JmapThread[] };
+    const threadList = threadResult.list ?? [];
+    if (threadList.length === 0) {
+      return c.json(
+        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+        404,
+      );
+    }
+
+    const getResult = (responses[1]?.[1] ?? {}) as { list?: JmapEmailDetail[] };
+    const emails = [...(getResult.list ?? [])].sort(
+      (a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt),
+    );
+
+    const thread: ThreadDetail = {
+      id: threadId,
+      emails: emails.map(toEmailDetail),
+    };
+    return c.json(thread);
   });
 
   return router;
