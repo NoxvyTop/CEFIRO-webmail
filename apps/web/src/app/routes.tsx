@@ -1,5 +1,6 @@
 import type { RouteObject } from "react-router-dom";
 import { RequireAuth } from "../features/auth/RequireAuth";
+import { SetupPage } from "../features/setup/SetupPage";
 import { App } from "./App";
 
 export const routes: RouteObject[] = [
@@ -11,4 +12,5 @@ export const routes: RouteObject[] = [
       </RequireAuth>
     ),
   },
+  { path: "/setup", element: <SetupPage /> },
 ];

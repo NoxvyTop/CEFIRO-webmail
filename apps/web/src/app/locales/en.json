@@ -10,5 +10,30 @@
       "unknown_user": "Your account is not registered in the mail system",
       "oidc": "Sign-in could not be completed"
     }
+  },
+  "setup": {
+    "title": "Initial setup",
+    "tokenLabel": "Temporary console password",
+    "connect": "Connect",
+    "disabled": "Setup mode is disabled",
+    "status": "SSO configured: {{sso}} — Users: {{count}}",
+    "ssoTitle": "SSO provider (OIDC)",
+    "userTitle": "New user",
+    "save": "Save",
+    "create": "Create",
+    "saved": "Saved",
+    "created": "User created",
+    "error": "Error: check the fields",
+    "fields": {
+      "issuer": "Issuer",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "scopes": "Scopes",
+      "email": "Email",
+      "displayName": "Name",
+      "role": "Role",
+      "locale": "Language",
+      "mailPassword": "Mailbox password"
+    }
   }
 }
