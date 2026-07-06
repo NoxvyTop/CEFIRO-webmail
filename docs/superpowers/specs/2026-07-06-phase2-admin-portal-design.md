@@ -7,18 +7,22 @@
 ## Alcance de la Fase 2
 
 - Provisioning JIT de usuarios en el primer login SSO.
-- Portal de administración: alta/gestión de usuarios (conexión Stalwart),
-  grupos de correo, buzones compartidos, configuración OIDC e integraciones.
+- Portal de administración (`/admin`): alta/gestión de usuarios (conexión
+  Stalwart), archivado con revocación de sesiones, configuración OIDC e
+  integraciones.
 - Login con doble entrada: SSO (única vía para empleados) + puerta de
   emergencia bootstrap/recuperación.
-- Buzones compartidos delegados (funcionales `info@`, `test@`, y grupales):
-  selector de cuenta, leer y enviar como.
-- Grupos de correo: zona en la barra lateral + vista de bandeja unificada
-  opcional por usuario.
+- Correos grupales (Modelo A): zona en la barra lateral + toggle de vista de
+  bandeja unificada por usuario; responder como la persona; enviar como la
+  dirección de empresa vía identidades de F1.
 
-Fuera de alcance: correos de distribución (solo enrutamiento en Stalwart,
-sin bandeja); creación automática de buzones en Stalwart (queda manual, el
-admin la gestiona en Stalwart).
+Fuera de alcance de F2:
+
+- **Buzones compartidos con credencial + bandeja colaborativa** (Modelo B):
+  diferido al issue #13. Se retoma cuando el volumen lo pida.
+- Correos de distribución (solo enrutamiento en Stalwart, sin bandeja).
+- Creación automática de cuentas/buzones en Stalwart y en Authentik (queda
+  gestionado por el admin en cada sistema).
 
 ## Decisiones clave (resueltas en brainstorming)
 
@@ -259,3 +263,72 @@ expone vía JMAP.
 Ninguna tabla nueva de correo. Solo una preferencia por usuario en
 `user_preferences` para el toggle de vista (ej. clave
 `groupMailInMainInbox: boolean` por dirección grupal, o global).
+
+## Sección 6: Modelo de datos consolidado (F2)
+
+Cambios sobre el esquema de F1 (todo aditivo — migración nueva, no rompe
+nada existente):
+
+| Cambio | Detalle |
+|--------|---------|
+| `users.active` | `boolean not null default true` — archivado (soft-delete) |
+| `user_preferences` | ya existe (F1); F2 añade la clave del toggle de bandeja unificada de grupos |
+| `audit_log` | ya existe (F1); F2 registra las acciones nuevas del portal |
+| `sso_config`, `integrations` | ya existen (F1); el portal les da UI completa |
+
+NO se crean tablas de buzón compartido (`shared_mailboxes`,
+`shared_mailbox_access`) — eso vive en el issue #13 (diferido). El
+provisioning JIT reusa la tabla `users` de F1.
+
+## Sección 7: Manejo de errores
+
+- **Provisioning JIT**: si el token OIDC no trae email verificado → 401 con
+  sobre de error tipado; no se crea fila. Si el usuario está archivado →
+  login rechazado con clave i18n dedicada (`errors.account_archived`), sin
+  crear sesión.
+- **Portal admin**: `requireAdmin` → 403 `errors.forbidden` para sesiones
+  sin rol admin. Cuerpos inválidos → 400 `errors.invalid_body` (incluido
+  JSON malformado, como en F1). Email duplicado en alta proactiva → 409
+  `errors.user_exists`.
+- **Config de Stalwart faltante**: si una dirección grupal o identidad no
+  está expuesta por Stalwart, el webmail no inventa nada — simplemente no
+  aparece en el selector/zona. Sin errores ruidosos; el admin lo resuelve en
+  Stalwart.
+- **Login doble**: credencial de bootstrap inválida → 401
+  `errors.unauthorized`; el formulario solo existe en modo bootstrap.
+
+Todos los errores siguen el sobre uniforme de F1 `{ code, message, traceId }`
+con `message` como clave i18n.
+
+## Sección 8: Testing
+
+Misma pirámide que F1:
+
+1. **Unitarios**: lógica del portal (reconciliación JIT por email,
+   `requireAdmin`, revocación de sesiones al archivar), componentes de
+   presentación del portal y la zona de grupos.
+2. **Integración** (Postgres real): provisioning JIT crea/reutiliza/rechaza
+   filas correctamente; archivar borra sesiones y bloquea reingreso; alta
+   proactiva; auditoría de acciones admin.
+3. **E2E** (pocos, críticos): flujo de alta del admin, archivado con
+   revocación de sesión, toggle de vista de grupos.
+
+Contratos front↔back con Zod en `packages/shared`, como en F1.
+
+## Descomposición en planes de implementación
+
+F2 se entregará en planes acotados, cada uno un PR revisable (como F1):
+
+1. **Portal — base + provisioning JIT**: `requireAdmin`, `users.active`,
+   reconciliación JIT en el callback OIDC, endpoints admin de usuarios
+   (listar, alta proactiva, cambiar rol, archivar/reactivar con revocación
+   de sesiones), auditoría.
+2. **Login doble**: formulario de emergencia bootstrap en la pantalla de
+   login (solo en modo bootstrap), sobre la API `/api/setup` de F1.
+3. **Portal — UI**: pantalla `/admin` (tabla de usuarios, config OIDC e
+   integraciones migradas desde la pantalla de setup de F1).
+4. **Grupos de correo**: zona de grupos en la barra lateral (filtro por
+   dirección de destino), toggle de bandeja unificada en `user_preferences`.
+
+El "enviar como la empresa" NO necesita plan propio — ya funciona con las
+identidades de F1 en cuanto Stalwart expone las direcciones.
