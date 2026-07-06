@@ -45,18 +45,21 @@ export function createSignaturesRepo(sql: Db) {
 
     async update(userId: string, id: string, input: SignatureInput): Promise<Signature | null> {
       return sql.begin(async (tx) => {
-        if (input.isDefault) {
-          await tx`
-            update signatures set is_default = false where user_id = ${userId} and id != ${id}
-          `;
-        }
         const rows = await tx<SignatureRow[]>`
           update signatures
           set name = ${input.name}, content_html = ${input.contentHtml}, is_default = ${input.isDefault}
           where id = ${id} and user_id = ${userId}
           returning id, name, content_html, is_default
         `;
-        return rows[0] ? toSignature(rows[0]) : null;
+        if (!rows[0]) {
+          return null;
+        }
+        if (input.isDefault) {
+          await tx`
+            update signatures set is_default = false where user_id = ${userId} and id != ${id}
+          `;
+        }
+        return toSignature(rows[0]);
       });
     },
 

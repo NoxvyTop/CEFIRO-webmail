@@ -187,4 +187,31 @@ describe("signatures routes", () => {
     });
     expect(deleteRes.status).toBe(404);
   });
+
+  it("keeps default signature intact when update target is missing", async () => {
+    const app = makeApp(null);
+
+    const s1Res = await app.request("/api/mail/signatures", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Default Sig", contentHtml: "<p>Default</p>", isDefault: true }),
+    });
+    const s1 = (await s1Res.json()) as z.infer<typeof signatureSchema>;
+    expect(s1.isDefault).toBe(true);
+
+    const nonexistentId = crypto.randomUUID();
+    const updateRes = await app.request(`/api/mail/signatures/${nonexistentId}`, {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Ghost", contentHtml: "<p>Gone</p>", isDefault: true }),
+    });
+    expect(updateRes.status).toBe(404);
+
+    const listRes = await app.request("/api/mail/signatures", {
+      headers: { cookie: `session=${token}` },
+    });
+    const list = (await listRes.json()) as z.infer<typeof signatureSchema>[];
+    const refreshedS1 = list.find((s) => s.id === s1.id);
+    expect(refreshedS1?.isDefault).toBe(true);
+  });
 });
