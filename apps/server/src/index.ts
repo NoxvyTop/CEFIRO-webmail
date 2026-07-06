@@ -60,6 +60,7 @@ const app = createApp({
     masterKey,
     appUrl: config.appUrl,
     sessionTtlHours: config.sessionTtlHours,
+    bootstrap,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, jmap }),
