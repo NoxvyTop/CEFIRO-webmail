@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import {
   emailUpdateSchema,
+  identitySchema,
   type AttachmentMeta,
   type EmailAddress,
   type EmailDetail,
   type EmailSummary,
+  type Identity,
   type Mailbox,
   type MessagesPage,
   type ThreadDetail,
@@ -57,6 +59,12 @@ type JmapEmailDetail = JmapEmail & {
 };
 
 type JmapThread = { id: string; emailIds: string[] };
+
+type JmapIdentity = {
+  id: string;
+  name?: string | null;
+  email: string;
+};
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -155,6 +163,22 @@ export function createMailRouter(deps: MailDeps) {
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder);
     return c.json(mailboxes);
+  });
+
+  router.get("/identities", async (c) => {
+    const session = c.get("jmapSession");
+    const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
+      ["Identity/get", { accountId: session.accountId }, "0"],
+    ]);
+    const list = (responses[0]?.[1].list ?? []) as JmapIdentity[];
+    const identities: Identity[] = list
+      .filter((i) => i.email)
+      .map((i) => ({
+        id: i.id,
+        name: i.name ?? "",
+        email: i.email,
+      }));
+    return c.json(identities);
   });
 
   router.get("/events", async (c) => {
