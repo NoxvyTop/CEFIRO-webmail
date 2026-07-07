@@ -69,7 +69,13 @@ function reducer(state: ComposerState, action: Action): ComposerState {
 }
 
 function initState(draft: ComposerDraft): ComposerState {
-  return { draft, attachments: [], uploads: [], sending: false, sendError: null };
+  return {
+    draft,
+    attachments: draft.attachments ?? [],
+    uploads: [],
+    sending: false,
+    sendError: null,
+  };
 }
 
 function htmlToPlainText(html: string): string {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EmailDetail, Identity } from "@webmail/shared";
-import { emptyDraft, replyDraft } from "./reply";
+import { emptyDraft, replyDraft, forwardDraft } from "./reply";
 
 const identities: Identity[] = [
   { id: "id1", name: "Alice", email: "alice@example.com" },
@@ -122,5 +122,50 @@ describe("replyDraft", () => {
     const draft = replyDraft(makeEmail(), identities, false);
     expect(draft.inReplyTo).toBeUndefined();
     expect(draft.references).toBeUndefined();
+  });
+});
+
+describe("forwardDraft", () => {
+  it("prefixes the subject with a single Fwd:", () => {
+    expect(forwardDraft(makeEmail(), identities).subject).toBe("Fwd: Meeting notes");
+  });
+
+  it("does not double-prefix an already-Fwd: subject", () => {
+    const email = makeEmail({ subject: "FWD: Meeting notes" });
+    expect(forwardDraft(email, identities).subject).toBe("FWD: Meeting notes");
+  });
+
+  it("starts with no recipients", () => {
+    const draft = forwardDraft(makeEmail(), identities);
+    expect(draft.to).toEqual([]);
+    expect(draft.cc).toEqual([]);
+    expect(draft.bcc).toEqual([]);
+  });
+
+  it("quotes the sanitized original body with attribution", () => {
+    const draft = forwardDraft(makeEmail(), identities);
+    expect(draft.bodyHtml).toContain("Hello");
+    expect(draft.bodyHtml).toContain("<blockquote>");
+    expect(draft.bodyHtml).toContain("2024-01-01T00:00:00Z");
+    expect(draft.bodyHtml).toContain("Bob");
+    expect(draft.bodyHtml).not.toMatch(/src=["']https?:\/\//i);
+  });
+
+  it("reuses the original attachments by blobId with a name fallback", () => {
+    const email = makeEmail({
+      attachments: [
+        { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
+        { blobId: "b2", name: null, type: "image/png", size: 512 },
+      ],
+    });
+    const draft = forwardDraft(email, identities);
+    expect(draft.attachments).toEqual([
+      { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
+      { blobId: "b2", name: "attachment", type: "image/png", size: 512 },
+    ]);
+  });
+
+  it("picks the identity that received the original", () => {
+    expect(forwardDraft(makeEmail(), identities).identityId).toBe("id1");
   });
 });
