@@ -4,10 +4,13 @@ import {
   setActiveInputSchema,
   setMailCredentialInputSchema,
   setRoleInputSchema,
+  setupSsoSchema,
+  type AdminSsoView,
   type AdminUser,
 } from "@webmail/shared";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
+import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UserRecord, UsersRepo } from "../../infra/repos/users";
 import type { AuthVariables } from "../auth/middleware";
 import type { SessionStore } from "../auth/sessions";
@@ -18,6 +21,7 @@ export type AdminDeps = {
   users: UsersRepo;
   mailCredentials: MailCredentialsRepo;
   audit: AuditRepo;
+  ssoConfig: SsoConfigRepo;
 };
 
 type Env = { Variables: AuthVariables };
@@ -171,6 +175,32 @@ export function createAdminRouter(deps: AdminDeps) {
       });
     }
     return c.json(await toAdminUser(deps, updated));
+  });
+
+  router.get("/sso", async (c) => {
+    const pub = await deps.ssoConfig.getPublic();
+    const body: AdminSsoView = pub
+      ? { configured: true, ...pub }
+      : { configured: false, issuer: null, clientId: null, scopes: null };
+    return c.json(body);
+  });
+
+  router.put("/sso", async (c) => {
+    const parsed = await parseBody(c, setupSsoSchema);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    await deps.ssoConfig.set(parsed.data);
+    await deps.audit.record({
+      actor: c.get("user").email,
+      action: "sso_config.update",
+      target: parsed.data.issuer,
+      detail: { issuer: parsed.data.issuer, clientId: parsed.data.clientId },
+    });
+    return c.json({ ok: true });
   });
 
   return router;

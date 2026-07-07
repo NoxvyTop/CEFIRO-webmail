@@ -1,5 +1,7 @@
 import type { RouteObject } from "react-router-dom";
 import { RequireAuth } from "../features/auth/RequireAuth";
+import { RequireAdmin } from "../features/admin/RequireAdmin";
+import { AdminPage } from "../features/admin/AdminPage";
 import { SetupPage } from "../features/setup/SetupPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { App } from "./App";
@@ -19,6 +21,14 @@ export const routes: RouteObject[] = [
       <RequireAuth>
         <SettingsPage />
       </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin",
+    element: (
+      <RequireAdmin>
+        <AdminPage />
+      </RequireAdmin>
     ),
   },
   { path: "/setup", element: <SetupPage /> },

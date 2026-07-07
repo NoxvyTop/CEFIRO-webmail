@@ -30,3 +30,11 @@ export const setMailCredentialInputSchema = z.object({
   mailPassword: z.string().min(8),
 });
 export type SetMailCredentialInput = z.infer<typeof setMailCredentialInputSchema>;
+
+export const adminSsoViewSchema = z.object({
+  configured: z.boolean(),
+  issuer: z.string().nullable(),
+  clientId: z.string().nullable(),
+  scopes: z.string().nullable(),
+});
+export type AdminSsoView = z.infer<typeof adminSsoViewSchema>;
