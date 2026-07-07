@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { SignatureSettings } from "./SignatureSettings";
+import { VacationSettings } from "./VacationSettings";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -17,6 +18,11 @@ export function SettingsPage() {
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-medium">{t("settings.signatures")}</h2>
         <SignatureSettings />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">{t("vacation.title")}</h2>
+        <VacationSettings />
       </section>
     </main>
   );
