@@ -17,7 +17,7 @@ export function Sidebar({
   const { t } = useTranslation();
 
   return (
-    <aside className="flex w-[230px] shrink-0 flex-col gap-4 border-r border-line p-3">
+    <aside className="flex w-[230px] shrink-0 overflow-y-auto flex-col gap-4 border-r border-line p-3">
       <button
         type="button"
         onClick={onCompose}

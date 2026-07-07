@@ -55,15 +55,15 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex h-[60px] shrink-0 items-center gap-4 border-b border-line bg-panel px-4 text-ink">
-        <div className="flex min-w-[210px] items-center gap-3">
+      <header className="flex h-[60px] shrink-0 items-center gap-4 overflow-x-hidden border-b border-line bg-panel px-4 text-ink">
+        <div className="flex shrink-0 items-center gap-3 md:min-w-[210px]">
           <CefiroLogo size={32} />
-          <div className="flex flex-col">
+          <div className="hidden flex-col md:flex">
             <span className="text-[15px] font-bold tracking-[0.32em]">CÉFIRO</span>
             <span className="text-[10.5px] text-muted">{t("app.tagline")}</span>
           </div>
         </div>
-        <form onSubmit={handleSearchSubmit} className="max-w-[560px] flex-1">
+        <form onSubmit={handleSearchSubmit} className="min-w-0 max-w-[560px] flex-1">
           <div className="flex h-10 items-center gap-2 rounded-[10px] border border-line bg-soft px-3">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 text-muted">
               <circle cx="11" cy="11" r="7" />
@@ -85,7 +85,7 @@ export function App() {
             type="button"
             onClick={() => void handleEnableNotifications()}
             aria-label={t("mail.enableNotifications")}
-            className="rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
+            className="shrink-0 rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
           >
             🔔
           </button>
@@ -94,30 +94,30 @@ export function App() {
           <p className="text-sm text-warn">{t("health.degraded")}</p>
         )}
         {user?.role === "admin" && (
-          <Link to="/admin" className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
+          <Link to="/admin" className="shrink-0 rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
             {t("admin.title")}
           </Link>
         )}
-        <Link to="/settings" className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
+        <Link to="/settings" className="shrink-0 rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
           {t("settings.title")}
         </Link>
         <button
           type="button"
           onClick={toggleTheme}
           aria-label={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
-          className="rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
+          className="shrink-0 rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
         >
           {theme === "night" ? "☀" : "🌙"}
         </button>
         <button
           type="button"
           onClick={() => void logout()}
-          className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+          className="shrink-0 rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
         >
           {t("auth.signOut")}
         </button>
         {user && (
-          <span aria-label={t("auth.signedInAs", { email: user.email })} title={user.email}>
+          <span aria-label={t("auth.signedInAs", { email: user.email })} title={user.email} className="shrink-0">
             <Avatar name={user.displayName ?? null} email={user.email} size={36} />
           </span>
         )}

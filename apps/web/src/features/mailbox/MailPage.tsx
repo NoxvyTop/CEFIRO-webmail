@@ -175,7 +175,7 @@ export function MailPage() {
       />
       <section
         aria-label={t("mail.listRegion")}
-        className="flex min-w-[280px] flex-[0_1_390px] flex-col overflow-y-auto border-r border-line bg-panel"
+        className="flex min-w-[280px] flex-[0_1_390px] flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel"
       >
         {mailboxesQuery.isError && (
           <p role="alert" className="p-4 text-sm text-warn">
@@ -204,7 +204,7 @@ export function MailPage() {
           />
         )}
       </section>
-      <section aria-label={t("mail.readerRegion")} className="flex-1 overflow-y-auto">
+      <section aria-label={t("mail.readerRegion")} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
         {threadParam ? (
           <ThreadView threadId={threadParam} />
         ) : (

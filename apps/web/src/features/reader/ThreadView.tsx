@@ -77,7 +77,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-line px-4">
+      <div className="flex h-[52px] shrink-0 items-center gap-2 overflow-x-hidden border-b border-line px-4">
         <button
           type="button"
           onClick={() => openCompose(`reply:${lastEmail.id}`)}
@@ -101,7 +101,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[780px] px-10 pb-16 pt-8" style={{ animation: "fadeUp 0.25s ease-out" }}>
+        <div className="mx-auto max-w-[780px] px-5 pb-16 pt-8 md:px-10" style={{ animation: "fadeUp 0.25s ease-out" }}>
           <h2 className="text-[26px] font-semibold leading-[1.25] tracking-[-0.01em]">
             {lastEmail.subject || t("mail.noSubject")}
           </h2>
