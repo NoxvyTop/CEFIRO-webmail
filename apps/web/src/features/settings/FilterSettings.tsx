@@ -132,14 +132,14 @@ export function FilterSettings() {
       {errorKey && (
         <div
           role="alert"
-          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/40 bg-soft p-2 text-sm text-danger"
         >
           <span>{t(errorKey)}</span>
           {errorKey === "settings.errors.sieve_sync_failed" && (
             <button
               type="button"
               onClick={() => syncMutation.mutate()}
-              className="rounded-md border border-red-300 px-2 py-1 text-xs"
+              className="rounded-md border border-danger/40 px-2 py-1 text-xs hover:bg-hover"
             >
               {t("filters.reapply")}
             </button>
@@ -147,18 +147,18 @@ export function FilterSettings() {
         </div>
       )}
       {reapplied && !errorKey && (
-        <p className="text-sm text-green-700">{t("filters.reapplied")}</p>
+        <p className="text-sm text-accent">{t("filters.reapplied")}</p>
       )}
 
       {rules.length === 0 && !filtersQuery.isLoading && (
-        <p className="text-sm text-gray-600">{t("filters.empty")}</p>
+        <p className="text-sm text-muted">{t("filters.empty")}</p>
       )}
 
       <ul className="flex flex-col gap-2">
         {rules.map((rule, index) => (
           <li
             key={rule.id}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2 text-sm"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line p-2 text-sm"
           >
             <div className="flex items-center gap-2">
               <span>{rule.name}</span>
@@ -169,7 +169,7 @@ export function FilterSettings() {
                 aria-label={t("filters.moveUp")}
                 disabled={index === 0}
                 onClick={() => move(index, -1)}
-                className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
+                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
               >
                 ↑
               </button>
@@ -178,7 +178,7 @@ export function FilterSettings() {
                 aria-label={t("filters.moveDown")}
                 disabled={index === rules.length - 1}
                 onClick={() => move(index, 1)}
-                className="rounded-md border px-2 py-1 text-xs disabled:opacity-50"
+                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
               >
                 ↓
               </button>
@@ -193,8 +193,8 @@ export function FilterSettings() {
                 }
                 className={
                   rule.enabled
-                    ? "rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700"
-                    : "rounded-md border px-2 py-1 text-xs text-gray-600"
+                    ? "rounded-md border border-accent/40 bg-sel px-2 py-1 text-xs text-accent"
+                    : "rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-hover"
                 }
               >
                 {rule.enabled ? t("filters.enabled") : t("filters.disabled")}
@@ -205,14 +205,14 @@ export function FilterSettings() {
                   setEditingId(rule.id);
                   setFormOpen(true);
                 }}
-                className="rounded-md border px-2 py-1 text-xs"
+                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
               >
                 {t("settings.edit")}
               </button>
               <button
                 type="button"
                 onClick={() => deleteMutation.mutate(rule.id)}
-                className="rounded-md border px-2 py-1 text-xs"
+                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
               >
                 {t("settings.delete")}
               </button>
@@ -228,7 +228,7 @@ export function FilterSettings() {
             setEditingId(null);
             setFormOpen(true);
           }}
-          className="self-start rounded-md border px-3 py-1 text-sm"
+          className="self-start rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
         >
           {t("filters.newRule")}
         </button>
