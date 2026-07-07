@@ -143,6 +143,7 @@
     "signature": "Signature",
     "reply": "Reply",
     "replyAll": "Reply all",
+    "forward": "Forward",
     "attach": "Attach",
     "send": "Send",
     "cancel": "Cancel",

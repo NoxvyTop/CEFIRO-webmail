@@ -139,6 +139,13 @@ export function ThreadView({ threadId }: ThreadViewProps) {
                 >
                   {t("composer.replyAll")}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => openCompose(`forward:${email.id}`)}
+                  className="rounded-md border px-2 py-1 text-xs"
+                >
+                  {t("composer.forward")}
+                </button>
               </div>
             )}
           </article>

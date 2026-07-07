@@ -120,4 +120,13 @@ describe("ThreadView", () => {
     const textNode = await screen.findByText("Thanks, looks good!");
     expect(textNode.tagName).toBe("PRE");
   });
+
+  it("renders a Forward button for the last email", async () => {
+    stubFetch();
+    renderThread();
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("composer.forward") }),
+    ).toBeInTheDocument();
+  });
 });

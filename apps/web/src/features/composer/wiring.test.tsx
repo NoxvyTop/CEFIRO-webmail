@@ -42,7 +42,7 @@ const thread = {
       replyTo: [],
       bodyHtml: "<p>Hi</p>",
       bodyText: null,
-      attachments: [],
+      attachments: [{ blobId: "b1", name: "doc.pdf", type: "application/pdf", size: 2048 }],
     },
   ],
 };
@@ -94,5 +94,16 @@ describe("composer wiring", () => {
 
     const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.title") });
     expect(within(dialog).getByText("a@x.com")).toBeInTheDocument();
+  });
+
+  it("opens the composer at compose=forward:e1 with Fwd subject, no recipients and the original attachment", async () => {
+    stubFetch();
+    renderAt("/?mailbox=mb1&thread=t1&compose=forward:e1");
+
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.title") });
+    const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
+    expect((subject as HTMLInputElement).value).toMatch(/^Fwd: /);
+    expect(within(dialog).getByText(/doc\.pdf/)).toBeInTheDocument();
+    expect(within(dialog).queryByText("a@x.com")).not.toBeInTheDocument();
   });
 });
