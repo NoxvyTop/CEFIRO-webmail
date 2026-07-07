@@ -18,8 +18,10 @@ function mailboxPaths(mailboxes: Mailbox[]): string[] {
   const byId = new Map(mailboxes.map((mailbox) => [mailbox.id, mailbox]));
   return mailboxes.map((mailbox) => {
     const parts = [mailbox.name];
+    const visited = new Set([mailbox.id]);
     let parent = mailbox.parentId ? byId.get(mailbox.parentId) : undefined;
-    while (parent) {
+    while (parent && !visited.has(parent.id)) {
+      visited.add(parent.id);
       parts.unshift(parent.name);
       parent = parent.parentId ? byId.get(parent.parentId) : undefined;
     }

@@ -184,6 +184,7 @@
       "sieve_invalid": "The generated filter script was rejected — contact your administrator",
       "sieve_sync_failed": "Saved, but not applied to the mail server yet",
       "vacationMessageRequired": "Write a message for the automatic reply",
+      "vacationDateOrder": "The end date must not be before the start date",
       "generic": "Something went wrong"
     }
   },

@@ -80,6 +80,18 @@ describe("VacationSettings", () => {
     expect(updateVacationSettings).not.toHaveBeenCalled();
   });
 
+  it("blocks saving when the end date is before the start date", async () => {
+    renderVacation({ ...settings, startsAt: "2026-07-20", endsAt: "2026-07-10" });
+
+    await screen.findByLabelText(i18n.t("vacation.enabled"));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("vacation.save") }));
+
+    expect(
+      await screen.findByText(i18n.t("settings.errors.vacationDateOrder")),
+    ).toBeInTheDocument();
+    expect(updateVacationSettings).not.toHaveBeenCalled();
+  });
+
   it("shows the sync-failed error from the server", async () => {
     const { MailApiError } = await import("../mailbox/api");
     updateVacationSettings.mockRejectedValueOnce(new MailApiError(502, "sieve_sync_failed"));

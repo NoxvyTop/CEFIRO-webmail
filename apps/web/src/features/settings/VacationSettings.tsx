@@ -64,6 +64,10 @@ export function VacationSettings() {
       setErrorKey("settings.errors.vacationMessageRequired");
       return;
     }
+    if (form.startsAt !== null && form.endsAt !== null && form.startsAt > form.endsAt) {
+      setErrorKey("settings.errors.vacationDateOrder");
+      return;
+    }
     saveMutation.mutate(form);
   }
 
