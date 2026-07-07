@@ -17,6 +17,7 @@ function toFilterRule(row: FilterRuleRow): FilterRule {
     position: row.position,
     name: row.name,
     matchType: row.match_type as FilterRule["matchType"],
+    // jsonb arrays arrive as strings under Bun + postgres.js; jsonb objects auto-parse
     conditions: typeof row.conditions === "string" ? JSON.parse(row.conditions) : row.conditions,
     actions: typeof row.actions === "string" ? JSON.parse(row.actions) : row.actions,
     enabled: row.enabled,
