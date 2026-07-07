@@ -23,7 +23,9 @@ let filterRules: ReturnType<typeof createFilterRulesRepo>;
 let vacationSettings: ReturnType<typeof createVacationSettingsRepo>;
 let token: string;
 let token2: string;
+let token3: string;
 let userId: string;
+let user3Id: string;
 
 const ruleBody = {
   name: "invoices",
@@ -56,6 +58,18 @@ beforeAll(async () => {
     displayName: "Sieve Router User 2",
   });
   token2 = (await sessions.create(user2.id, 1)).token;
+
+  const user3 = await users.create({
+    email: `sieve-r3-${crypto.randomUUID()}@noxvytop.com`,
+    displayName: "Sieve Router User 3",
+  });
+  user3Id = user3.id;
+  token3 = (await sessions.create(user3.id, 1)).token;
+
+  await sql`
+    insert into mail_credentials (user_id, ciphertext, iv, key_version)
+    values (${user3Id}, ${crypto.getRandomValues(new Uint8Array(32))}, ${crypto.getRandomValues(new Uint8Array(12))}, 1)
+  `;
 });
 afterAll(() => sql.end());
 
@@ -230,6 +244,13 @@ describe("sieve routes", () => {
     const res = await post(makeApp(client), "/api/mail/filters/sync", {}, token2);
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe("skipped");
+  });
+
+  it("reports failed, not skipped, when the credential row cannot be decrypted", async () => {
+    const { client } = stubJmap();
+    const res = await post(makeApp(client), "/api/mail/filters/sync", {}, token3);
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("sieve_sync_failed");
   });
 
   it("reads default vacation settings and round-trips an update", async () => {
