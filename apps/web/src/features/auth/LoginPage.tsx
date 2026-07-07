@@ -47,23 +47,23 @@ export function LoginPage() {
         <p className="text-sm text-danger">{t(`auth.errors.${error}`)}</p>
       )}
       <div className="flex w-full max-w-[400px] flex-col gap-5 rounded-2xl border border-line bg-panel p-7 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-        <a
-          href="/api/auth/login"
-          className="flex h-[46px] items-center justify-center gap-2 rounded-[11px] bg-accent px-4 font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98]"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <rect x="4" y="10" width="16" height="10" rx="2" />
-            <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-          </svg>
-          {t("auth.signIn")}
-        </a>
+        {mode?.bootstrapMode !== true && (
+          <a
+            href="/api/auth/login"
+            className="flex h-[46px] items-center justify-center gap-2 rounded-[11px] bg-accent px-4 font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98]"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <rect x="4" y="10" width="16" height="10" rx="2" />
+              <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+            </svg>
+            {t("auth.signIn")}
+          </a>
+        )}
         {mode?.bootstrapMode === true && (
           <>
-            <div className="flex items-center gap-3 text-xs uppercase tracking-wider text-muted">
-              <span className="h-px flex-1 bg-line" aria-hidden="true" />
-              {t("auth.orCredentials")}
-              <span className="h-px flex-1 bg-line" aria-hidden="true" />
-            </div>
+            <h2 className="text-center text-sm font-semibold text-ink">
+              {t("auth.bootstrap.title")}
+            </h2>
             <form
               onSubmit={handleBootstrapSubmit}
               aria-label={t("auth.bootstrap.title")}
@@ -105,11 +105,6 @@ export function LoginPage() {
               <p className="text-xs text-muted">{t("auth.bootstrap.hint")}</p>
             </form>
           </>
-        )}
-        {mode && mode.bootstrapMode !== true && (
-          <p className="rounded-[10px] bg-soft p-3 text-center text-sm text-muted">
-            {t("auth.recoveryNotice")}
-          </p>
         )}
       </div>
       <p className="text-[11.5px] tracking-[0.14em] text-muted">

@@ -74,8 +74,6 @@
     "signOut": "Cerrar sesión",
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
-    "orCredentials": "o con credenciales",
-    "recoveryNotice": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
     "errors": {
       "state": "La sesión de inicio expiró, inténtalo de nuevo",
       "unknown_user": "Tu cuenta no está registrada en el correo",

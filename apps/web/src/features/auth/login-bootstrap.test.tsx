@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 describe("login screen bootstrap form", () => {
-  it("shows the emergency form when bootstrapMode is true", async () => {
+  it("shows only the emergency form when bootstrapMode is true", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
@@ -43,9 +43,10 @@ describe("login screen bootstrap form", () => {
     expect(await screen.findByLabelText("Usuario")).toBeInTheDocument();
     expect(screen.getByLabelText("Contraseña")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeInTheDocument();
+    expect(screen.queryByText("Iniciar sesión con SSO")).not.toBeInTheDocument();
   });
 
-  it("does not show the emergency form when bootstrapMode is false", async () => {
+  it("shows only the SSO action when bootstrapMode is false", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
@@ -54,20 +55,8 @@ describe("login screen bootstrap form", () => {
 
     expect(await screen.findByText("Iniciar sesión con SSO")).toBeInTheDocument();
     expect(screen.queryByLabelText("Contraseña")).not.toBeInTheDocument();
-  });
-
-  it("shows the recovery notice when credentials are disabled", async () => {
-    stubFetch({
-      "/api/auth/me": () => new Response("{}", { status: 401 }),
-      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
-    });
-    renderAt("/");
-
-    expect(
-      await screen.findByText(
-        "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Usuario")).not.toBeInTheDocument();
+    expect(screen.queryByText("Acceso de emergencia")).not.toBeInTheDocument();
   });
 
   it("submits the emergency form to /api/auth/bootstrap", async () => {
