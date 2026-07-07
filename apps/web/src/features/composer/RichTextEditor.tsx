@@ -81,7 +81,7 @@ function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorPr
       aria-multiline="true"
       contentEditable
       suppressContentEditableWarning
-      className="min-h-32 rounded-md border p-2 text-sm"
+      className="min-h-32 rounded-md border border-line p-2 text-sm"
       // eslint-disable-next-line react/no-danger -- initial content only; sanitized seed + ongoing edits through onInput
       dangerouslySetInnerHTML={{ __html: safeHtml }}
       onInput={handleInput}
@@ -149,13 +149,13 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   }
 
   return (
-    <div className="rounded-md border">
-      <div role="toolbar" className="flex items-center gap-1 border-b p-1">
+    <div className="rounded-md border border-line">
+      <div role="toolbar" className="flex items-center gap-1 border-b border-line bg-soft p-1">
         <button
           type="button"
           aria-label={t("composer.bold")}
           onClick={() => editor.chain().focus().toggleBold().run()}
-          className="rounded px-2 py-1 text-sm font-bold"
+          className="rounded px-2 py-1 text-sm font-bold hover:bg-hover"
         >
           B
         </button>
@@ -163,7 +163,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
           type="button"
           aria-label={t("composer.italic")}
           onClick={() => editor.chain().focus().toggleItalic().run()}
-          className="rounded px-2 py-1 text-sm italic"
+          className="rounded px-2 py-1 text-sm italic hover:bg-hover"
         >
           I
         </button>
@@ -171,7 +171,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
           type="button"
           aria-label={t("composer.bulletList")}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
-          className="rounded px-2 py-1 text-sm"
+          className="rounded px-2 py-1 text-sm hover:bg-hover"
         >
           •
         </button>
@@ -179,7 +179,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
           type="button"
           aria-label={t("composer.link")}
           onClick={() => setLinkInputOpen((open) => !open)}
-          className="rounded px-2 py-1 text-sm underline"
+          className="rounded px-2 py-1 text-sm underline hover:bg-hover"
         >
           {t("composer.link")}
         </button>
@@ -197,10 +197,10 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
                 applyLink();
               }
             }}
-            className="ml-1 rounded border px-1 py-0.5 text-xs"
+            className="ml-1 rounded border border-line bg-panel px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
           />
         )}
-        {linkInvalid && <p className="text-xs text-amber-700">{t("composer.invalidLink")}</p>}
+        {linkInvalid && <p className="text-xs text-warn">{t("composer.invalidLink")}</p>}
       </div>
       <EditorContent editor={editor} className="min-h-32 p-2 text-sm" />
     </div>

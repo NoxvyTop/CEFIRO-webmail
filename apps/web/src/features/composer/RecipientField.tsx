@@ -43,18 +43,18 @@ export function RecipientField({ label, value, onChange }: RecipientFieldProps) 
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1 rounded-md border p-1">
+      <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-soft p-1 focus-within:border-accent">
         {value.map((address) => (
           <span
             key={address.email}
-            className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs"
+            className="flex items-center gap-1 rounded-full bg-sel px-2 py-0.5 text-xs"
           >
             {address.name || address.email}
             <button
               type="button"
               aria-label={t("composer.removeRecipient", { email: address.email })}
               onClick={() => handleRemove(address.email)}
-              className="text-gray-500"
+              className="text-muted"
             >
               ×
             </button>
@@ -68,10 +68,10 @@ export function RecipientField({ label, value, onChange }: RecipientFieldProps) 
             setInvalid(false);
           }}
           onKeyDown={handleKeyDown}
-          className="min-w-24 flex-1 border-none text-sm outline-none"
+          className="min-w-24 flex-1 border-none bg-transparent text-sm text-ink outline-none placeholder:text-muted"
         />
       </div>
-      {invalid && <p className="text-xs text-amber-700">{t("composer.invalidEmail")}</p>}
+      {invalid && <p className="text-xs text-warn">{t("composer.invalidEmail")}</p>}
     </div>
   );
 }

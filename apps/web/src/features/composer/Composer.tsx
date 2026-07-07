@@ -52,10 +52,10 @@ export function Composer({ initial, onClose }: ComposerProps) {
     <div
       role="dialog"
       aria-label={t("composer.title")}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-end justify-end bg-[rgba(3,5,9,0.55)] p-6"
     >
-      <div className="flex max-h-full w-full max-w-2xl flex-col gap-3 overflow-y-auto rounded-md bg-white p-4">
-        <h2 className="text-lg font-semibold">{t("composer.title")}</h2>
+      <div className="flex max-h-full w-full max-w-[640px] flex-col gap-3 overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-[0_24px_70px_rgba(0,0,0,0.5)]">
+        <h2 className="-mx-4 -mt-4 flex h-12 items-center rounded-t-[14px] bg-soft px-4 text-sm font-semibold">{t("composer.title")}</h2>
 
         <label className="flex flex-col gap-1 text-sm">
           {t("composer.from")}
@@ -63,7 +63,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
             aria-label={t("composer.from")}
             value={state.draft.identityId}
             onChange={(event) => setField("identityId", event.target.value)}
-            className="rounded-md border p-1"
+            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           >
             {identities.map((identity) => (
               <option key={identity.id} value={identity.id}>
@@ -83,7 +83,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
           <button
             type="button"
             onClick={() => setShowCcBcc(true)}
-            className="self-start text-xs text-blue-700 underline"
+            className="self-start text-xs text-accent underline"
           >
             {t("composer.addCcBcc")}
           </button>
@@ -109,7 +109,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
             aria-label={t("composer.subject")}
             value={state.draft.subject}
             onChange={(event) => setField("subject", event.target.value)}
-            className="rounded-md border p-1"
+            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           />
         </label>
 
@@ -119,7 +119,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
             aria-label={t("composer.signature")}
             value={appliedSignatureId}
             onChange={(event) => handleSignatureChange(event.target.value)}
-            className="rounded-md border p-1"
+            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           >
             <option value="" />
             {signatures.map((signature) => (
@@ -158,7 +158,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
                     type="button"
                     aria-label={t("composer.removeAttachment", { name: attachment.name })}
                     onClick={() => removeAttachment(attachment.blobId)}
-                    className="text-gray-500"
+                    className="text-muted"
                   >
                     ×
                   </button>
@@ -168,7 +168,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
                 <li key={upload.id} className="flex items-center justify-between gap-2 text-xs">
                   <span>{upload.name}</span>
                   {upload.error ? (
-                    <span role="alert" className="text-amber-700">
+                    <span role="alert" className="text-warn">
                       {t("composer.errors.generic")}
                     </span>
                   ) : (
@@ -181,21 +181,25 @@ export function Composer({ initial, onClose }: ComposerProps) {
         </div>
 
         {state.sendError && (
-          <p role="alert" className="text-sm text-amber-700">
+          <p role="alert" className="text-sm text-warn">
             {t(state.sendError)}
           </p>
         )}
 
         <div className="mt-2 flex items-center justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded-md border px-3 py-1 text-sm">
+          <button type="button" onClick={onClose} className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
             {t("composer.cancel")}
           </button>
           <button
             type="button"
             onClick={handleSend}
             disabled={state.sending}
-            className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+            className="flex items-center gap-2 rounded-[11px] bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
           >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M22 2 11 13" />
+              <path d="M22 2 15 22l-4-9-9-4Z" />
+            </svg>
             {state.sending ? t("composer.sending") : t("composer.send")}
           </button>
         </div>
