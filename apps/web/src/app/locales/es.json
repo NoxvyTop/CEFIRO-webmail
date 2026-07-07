@@ -127,6 +127,10 @@
     "title": "Módulos",
     "mail": "Correo"
   },
+  "groups": {
+    "title": "Grupos",
+    "showInInbox": "Mostrar en bandeja principal"
+  },
   "composer": {
     "title": "Redactar",
     "from": "De",

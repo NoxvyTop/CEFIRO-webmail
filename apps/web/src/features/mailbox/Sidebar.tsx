@@ -1,13 +1,18 @@
-import type { Mailbox } from "@webmail/shared";
+import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 
 interface SidebarProps {
   mailboxes: Mailbox[];
   selectedMailboxId: string | null;
   onSelectMailbox: (mailboxId: string) => void;
+  groups: Identity[];
+  selectedGroup: string | null;
+  onSelectGroup: (address: string) => void;
 }
 
-export function Sidebar({ mailboxes, selectedMailboxId, onSelectMailbox }: SidebarProps) {
+export function Sidebar({
+  mailboxes, selectedMailboxId, onSelectMailbox, groups, selectedGroup, onSelectGroup,
+}: SidebarProps) {
   const { t } = useTranslation();
 
   return (
@@ -37,6 +42,27 @@ export function Sidebar({ mailboxes, selectedMailboxId, onSelectMailbox }: Sideb
           );
         })}
       </ul>
+      {groups.length > 0 && (
+        <nav aria-label={t("groups.title")} className="text-sm">
+          <ul className="flex flex-col gap-1">
+            {groups.map((group) => {
+              const selected = group.email === selectedGroup;
+              return (
+                <li key={group.id}>
+                  <button
+                    type="button"
+                    aria-current={selected ? "true" : undefined}
+                    onClick={() => onSelectGroup(group.email)}
+                    className="flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-sm aria-[current=true]:bg-gray-100"
+                  >
+                    <span>{group.email}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      )}
       <nav aria-label={t("modules.title")} className="mt-auto border-t pt-2 text-sm">
         <span aria-current="true">{t("modules.mail")}</span>
       </nav>

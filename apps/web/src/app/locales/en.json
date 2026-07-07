@@ -127,6 +127,10 @@
     "title": "Modules",
     "mail": "Mail"
   },
+  "groups": {
+    "title": "Groups",
+    "showInInbox": "Show in main inbox"
+  },
   "composer": {
     "title": "Compose",
     "from": "From",
