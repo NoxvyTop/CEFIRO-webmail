@@ -65,6 +65,9 @@
     "signIn": "Sign in with SSO",
     "signOut": "Sign out",
     "signedInAs": "Signed in as {{email}}",
+    "subtitle": "Sign in to your team's mail",
+    "orCredentials": "or with credentials",
+    "recoveryNotice": "Credential access is disabled. Available only in recovery mode.",
     "errors": {
       "state": "The sign-in attempt expired, try again",
       "unknown_user": "Your account is not registered in the mail system",

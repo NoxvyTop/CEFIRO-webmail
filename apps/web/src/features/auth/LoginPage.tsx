@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authModeSchema, type AuthMode } from "@webmail/shared";
 import { bootstrapLogin } from "./useAuth";
+import { CefiroLogo } from "../../app/ui/CefiroLogo";
 
 const KNOWN_ERRORS = new Set(["state", "unknown_user", "oidc"]);
 
@@ -36,51 +37,84 @@ export function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6">
-      <h1 className="text-3xl font-semibold">{t("app.title")}</h1>
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-canvas px-4">
+      <div className="flex flex-col items-center gap-3">
+        <CefiroLogo size={72} />
+        <h1 className="text-[19px] font-bold tracking-[0.32em] text-ink">CÉFIRO</h1>
+        <p className="text-sm text-muted">{t("auth.subtitle")}</p>
+      </div>
       {error && KNOWN_ERRORS.has(error) && (
-        <p className="text-sm text-red-600">{t(`auth.errors.${error}`)}</p>
+        <p className="text-sm text-[#F26565]">{t(`auth.errors.${error}`)}</p>
       )}
-      <a
-        href="/api/auth/login"
-        className="rounded-md bg-blue-600 px-4 py-2 text-white"
-      >
-        {t("auth.signIn")}
-      </a>
-      {mode?.bootstrapMode === true && (
-        <form
-          onSubmit={handleBootstrapSubmit}
-          aria-label={t("auth.bootstrap.title")}
-          className="flex flex-col gap-3 rounded-md border border-gray-300 p-4"
+      <div className="flex w-full max-w-[400px] flex-col gap-5 rounded-2xl border border-line bg-panel p-7 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+        <a
+          href="/api/auth/login"
+          className="flex h-[46px] items-center justify-center gap-2 rounded-[11px] bg-accent px-4 font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98]"
         >
-          <h2 className="text-lg font-medium">{t("auth.bootstrap.title")}</h2>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="bootstrap-email">{t("auth.bootstrap.email")}</label>
-            <input
-              id="bootstrap-email"
-              type="text"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="bootstrap-password">{t("auth.bootstrap.password")}</label>
-            <input
-              id="bootstrap-password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </div>
-          <button type="submit" className="rounded-md bg-gray-700 px-4 py-2 text-white">
-            {t("auth.bootstrap.submit")}
-          </button>
-          {bootstrapError && (
-            <p className="text-sm text-red-600">{t("auth.bootstrap.error")}</p>
-          )}
-          <p className="text-xs text-gray-500">{t("auth.bootstrap.hint")}</p>
-        </form>
-      )}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <rect x="4" y="10" width="16" height="10" rx="2" />
+            <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          </svg>
+          {t("auth.signIn")}
+        </a>
+        {mode?.bootstrapMode === true && (
+          <>
+            <div className="flex items-center gap-3 text-xs uppercase tracking-wider text-muted">
+              <span className="h-px flex-1 bg-line" aria-hidden="true" />
+              {t("auth.orCredentials")}
+              <span className="h-px flex-1 bg-line" aria-hidden="true" />
+            </div>
+            <form
+              onSubmit={handleBootstrapSubmit}
+              aria-label={t("auth.bootstrap.title")}
+              className="flex flex-col gap-3"
+            >
+              <div className="flex flex-col gap-1 text-sm">
+                <label htmlFor="bootstrap-email" className="text-muted">
+                  {t("auth.bootstrap.email")}
+                </label>
+                <input
+                  id="bootstrap-email"
+                  type="text"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+                />
+              </div>
+              <div className="flex flex-col gap-1 text-sm">
+                <label htmlFor="bootstrap-password" className="text-muted">
+                  {t("auth.bootstrap.password")}
+                </label>
+                <input
+                  id="bootstrap-password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+                />
+              </div>
+              <button
+                type="submit"
+                className="h-11 rounded-[11px] border border-line text-ink transition hover:border-accent"
+              >
+                {t("auth.bootstrap.submit")}
+              </button>
+              {bootstrapError && (
+                <p className="text-sm text-[#F26565]">{t("auth.bootstrap.error")}</p>
+              )}
+              <p className="text-xs text-muted">{t("auth.bootstrap.hint")}</p>
+            </form>
+          </>
+        )}
+        {mode && mode.bootstrapMode !== true && (
+          <p className="rounded-[10px] bg-soft p-3 text-center text-sm text-muted">
+            {t("auth.recoveryNotice")}
+          </p>
+        )}
+      </div>
+      <p className="text-[11.5px] tracking-[0.14em] text-muted">
+        <span className="font-bold text-accent">CÉFIRO</span> · {t("app.tagline")}
+      </p>
     </main>
   );
 }

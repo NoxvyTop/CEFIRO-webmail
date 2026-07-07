@@ -56,6 +56,20 @@ describe("login screen bootstrap form", () => {
     expect(screen.queryByLabelText("Contraseña")).not.toBeInTheDocument();
   });
 
+  it("shows the recovery notice when credentials are disabled", async () => {
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
+    });
+    renderAt("/");
+
+    expect(
+      await screen.findByText(
+        "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("submits the emergency form to /api/auth/bootstrap", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);
