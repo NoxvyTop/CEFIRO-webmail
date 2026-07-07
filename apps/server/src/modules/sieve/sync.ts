@@ -30,7 +30,7 @@ export async function syncSieveScript(input: {
     ["Mailbox/get", { accountId, properties: ["name", "role"] }, "0"],
   ]);
   const mailboxes =
-    (mailboxResponses[0]?.[1] as { list?: { name: string; role?: string | null }[] })
+    ((mailboxResponses[0]?.[1] ?? {}) as { list?: { name: string; role?: string | null }[] })
       .list ?? [];
   const trashFolder =
     mailboxes.find((mailbox) => mailbox.role === "trash")?.name ?? DEFAULT_TRASH_FOLDER;
@@ -48,7 +48,7 @@ export async function syncSieveScript(input: {
     [SIEVE_CAPABILITY],
   );
   const scripts =
-    (getResponses[0]?.[1] as { list?: { id: string; name: string }[] }).list ?? [];
+    ((getResponses[0]?.[1] ?? {}) as { list?: { id: string; name: string }[] }).list ?? [];
   const existing = scripts.find((s) => s.name === MANAGED_SCRIPT_NAME) ?? null;
 
   if (script === "") {
@@ -78,7 +78,7 @@ export async function syncSieveScript(input: {
     [["SieveScript/validate", { accountId, blobId }, "0"]],
     [SIEVE_CAPABILITY],
   );
-  const validateResult = validateResponses[0]?.[1] as { error?: unknown };
+  const validateResult = (validateResponses[0]?.[1] ?? {}) as { error?: unknown };
   if (validateResult.error != null) {
     throw new DomainError("sieve_invalid", 502, "errors.sieve_invalid");
   }
