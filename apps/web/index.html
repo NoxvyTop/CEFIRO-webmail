@@ -8,11 +8,15 @@
     <script>
       try {
         var cefiroTheme = localStorage.getItem("cefiro-theme");
-        if (cefiroTheme === "light" || cefiroTheme === "night") {
-          document.documentElement.dataset.theme = cefiroTheme;
+        if (cefiroTheme !== "light" && cefiroTheme !== "night") {
+          cefiroTheme =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "night";
         }
+        document.documentElement.dataset.theme = cefiroTheme;
       } catch (e) {
-        /* storage unavailable — keep default */
+        /* keep the default */
       }
     </script>
   </head>
