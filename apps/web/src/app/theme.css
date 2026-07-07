@@ -12,6 +12,8 @@
   --soft: #171a24;
   --hover: #191d28;
   --sel: #15302b;
+  --danger: #f26565;
+  --warn: #e5a13d;
 }
 
 :root[data-theme="light"] {
@@ -25,6 +27,8 @@
   --soft: #edf7f3;
   --hover: #f3f7f6;
   --sel: #dcf2ea;
+  --danger: #f26565;
+  --warn: #e5a13d;
 }
 
 @theme inline {
@@ -38,6 +42,8 @@
   --color-soft: var(--soft);
   --color-hover: var(--hover);
   --color-sel: var(--sel);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
   --font-sans: "Space Grotesk Variable", system-ui, sans-serif;
 }
 

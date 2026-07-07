@@ -44,7 +44,7 @@ export function LoginPage() {
         <p className="text-sm text-muted">{t("auth.subtitle")}</p>
       </div>
       {error && KNOWN_ERRORS.has(error) && (
-        <p className="text-sm text-[#F26565]">{t(`auth.errors.${error}`)}</p>
+        <p className="text-sm text-danger">{t(`auth.errors.${error}`)}</p>
       )}
       <div className="flex w-full max-w-[400px] flex-col gap-5 rounded-2xl border border-line bg-panel p-7 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
         <a
@@ -100,7 +100,7 @@ export function LoginPage() {
                 {t("auth.bootstrap.submit")}
               </button>
               {bootstrapError && (
-                <p className="text-sm text-[#F26565]">{t("auth.bootstrap.error")}</p>
+                <p className="text-sm text-danger">{t("auth.bootstrap.error")}</p>
               )}
               <p className="text-xs text-muted">{t("auth.bootstrap.hint")}</p>
             </form>
