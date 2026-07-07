@@ -14,6 +14,8 @@ interface MessageListProps {
   selectedThreadId: string | null;
   onSelect: (email: EmailSummary) => void;
   virtualized?: boolean;
+  to?: string;
+  excludeTo?: string[];
 }
 
 function rowClassName(unread: boolean, selected: boolean) {
@@ -24,7 +26,7 @@ function rowClassName(unread: boolean, selected: boolean) {
 }
 
 export function MessageList({
-  mailboxId, query, selectedThreadId, onSelect, virtualized = true,
+  mailboxId, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
 }: MessageListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -32,14 +34,16 @@ export function MessageList({
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const queryKey = useMemo(
-    () => ["mail", "messages", mailboxId, query] as const,
-    [mailboxId, query],
+    () => ["mail", "messages", mailboxId, query, to ?? null, (excludeTo ?? []).join(",")] as const,
+    [mailboxId, query, to, excludeTo],
   );
 
   const messagesQuery = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) =>
-      fetchMessages({ mailboxId, position: pageParam, limit: PAGE_SIZE, query: query ?? undefined }),
+      fetchMessages({
+        mailboxId, position: pageParam, limit: PAGE_SIZE, query: query ?? undefined, to, excludeTo,
+      }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
       lastPage.position + lastPage.emails.length < lastPage.total
