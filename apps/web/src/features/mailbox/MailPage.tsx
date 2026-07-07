@@ -12,7 +12,7 @@ import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
-import { emptyDraft, replyDraft, type ComposerDraft } from "../composer/reply";
+import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { useAuth } from "../auth/useAuth";
 
 export function MailPage() {
@@ -28,9 +28,9 @@ export function MailPage() {
   const queryParam = searchParams.get("q");
   const composeParam = searchParams.get("compose");
   const groupParam = searchParams.get("group");
-  const replyMatch = composeParam?.match(/^reply(-all)?:(.+)$/) ?? null;
-  const replyAll = Boolean(replyMatch?.[1]);
-  const replyEmailId = replyMatch?.[2];
+  const composeMatch = composeParam?.match(/^(reply|reply-all|forward):(.+)$/) ?? null;
+  const composeMode = composeMatch?.[1];
+  const composeEmailId = composeMatch?.[2];
 
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
@@ -67,7 +67,7 @@ export function MailPage() {
   const composeThreadQuery = useQuery({
     queryKey: ["mail", "thread", threadParam ?? ""],
     queryFn: () => fetchThread(threadParam as string),
-    enabled: Boolean(replyMatch) && Boolean(threadParam),
+    enabled: Boolean(composeMatch) && Boolean(threadParam),
   });
 
   const mailboxes = mailboxesQuery.data ?? [];
@@ -136,12 +136,15 @@ export function MailPage() {
     if (!identities) return null;
 
     if (composeParam === "new") return emptyDraft(identities);
-    if (!replyMatch) return null;
+    if (!composeMatch) return null;
     if (composeThreadQuery.isLoading) return null;
 
-    const email = composeThreadQuery.data?.emails.find((candidate) => candidate.id === replyEmailId);
+    const email = composeThreadQuery.data?.emails.find(
+      (candidate) => candidate.id === composeEmailId,
+    );
     if (!email) return emptyDraft(identities);
-    return replyDraft(email, identities, replyAll);
+    if (composeMode === "forward") return forwardDraft(email, identities);
+    return replyDraft(email, identities, composeMode === "reply-all");
   }
 
   const composeDraft = resolveComposeDraft();

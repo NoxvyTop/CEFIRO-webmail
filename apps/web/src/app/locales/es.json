@@ -143,6 +143,7 @@
     "signature": "Firma",
     "reply": "Responder",
     "replyAll": "Responder a todos",
+    "forward": "Reenviar",
     "attach": "Adjuntar",
     "send": "Enviar",
     "cancel": "Cancelar",

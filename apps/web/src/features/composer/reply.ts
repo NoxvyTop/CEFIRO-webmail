@@ -1,6 +1,8 @@
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { sanitizeEmailHtml } from "../reader/sanitize";
 
+export type DraftAttachment = { blobId: string; name: string; type: string; size: number };
+
 export type ComposerDraft = {
   identityId: string;
   to: EmailAddress[];
@@ -14,6 +16,8 @@ export type ComposerDraft = {
   // fields are kept for a future plan that surfaces Message-IDs.
   inReplyTo?: string[];
   references?: string[];
+  // present only on forward drafts: original attachments reattached by blobId
+  attachments?: DraftAttachment[];
 };
 
 function normalizeEmail(email: string): string {
@@ -53,6 +57,10 @@ function pickIdentity(email: EmailDetail, identities: Identity[]): Identity | un
 
 function deriveSubject(subject: string): string {
   return /^re:/i.test(subject.trim()) ? subject : `Re: ${subject}`;
+}
+
+function deriveForwardSubject(subject: string): string {
+  return /^fwd:/i.test(subject.trim()) ? subject : `Fwd: ${subject}`;
 }
 
 function quotedBody(email: EmailDetail): string {
@@ -99,5 +107,23 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
     bcc: [],
     subject: deriveSubject(email.subject),
     bodyHtml: quotedBody(email),
+  };
+}
+
+export function forwardDraft(email: EmailDetail, identities: Identity[]): ComposerDraft {
+  const identity = pickIdentity(email, identities);
+  return {
+    identityId: identity?.id ?? identities[0]?.id ?? "",
+    to: [],
+    cc: [],
+    bcc: [],
+    subject: deriveForwardSubject(email.subject),
+    bodyHtml: quotedBody(email),
+    attachments: email.attachments.map((attachment) => ({
+      blobId: attachment.blobId,
+      name: attachment.name?.trim() || "attachment",
+      type: attachment.type,
+      size: attachment.size,
+    })),
   };
 }
