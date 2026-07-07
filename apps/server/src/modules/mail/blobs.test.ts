@@ -25,6 +25,7 @@ const stubJmap: JmapClient = {
     downloadUrl: "https://mail.test/dl/{accountId}/{blobId}/{name}?accept={type}",
   }),
   request: async () => [],
+  uploadBlob: async () => "blob-id",
 };
 
 const stubJmapEmpty: JmapClient = {
@@ -36,6 +37,7 @@ const stubJmapEmpty: JmapClient = {
     downloadUrl: "",
   }),
   request: async () => [],
+  uploadBlob: async () => "blob-id",
 };
 
 let sessions: ReturnType<typeof createSessionStore>;

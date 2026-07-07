@@ -59,6 +59,7 @@ export function createJmapClient(input: {
       auth: JmapAuth,
       session: JmapSession,
       calls: JmapMethodCall[],
+      extraUsing: string[] = [],
     ): Promise<JmapMethodResponse[]> {
       const res = await fetchFn(session.apiUrl, {
         method: "POST",
@@ -71,6 +72,7 @@ export function createJmapClient(input: {
             "urn:ietf:params:jmap:core",
             "urn:ietf:params:jmap:mail",
             "urn:ietf:params:jmap:submission",
+            ...extraUsing,
           ],
           methodCalls: calls,
         }),
@@ -83,6 +85,29 @@ export function createJmapClient(input: {
         }
       }
       return body.methodResponses;
+    },
+
+    async uploadBlob(
+      auth: JmapAuth,
+      session: JmapSession,
+      content: string,
+      contentType: string,
+    ): Promise<string> {
+      const url = session.uploadUrl.replace(
+        "{accountId}",
+        encodeURIComponent(session.accountId),
+      );
+      const res = await fetchFn(url, {
+        method: "POST",
+        headers: { authorization: basicAuth(auth), "content-type": contentType },
+        body: content,
+      });
+      if (!res.ok) throw toDomainError(res.status);
+      const body = (await res.json()) as { blobId?: string };
+      if (!body.blobId) {
+        throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+      }
+      return body.blobId;
     },
   };
 }
