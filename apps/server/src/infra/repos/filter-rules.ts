@@ -86,7 +86,12 @@ export function createFilterRulesRepo(sql: Db) {
           select id from filter_rules where user_id = ${userId}
         `;
         const owned = new Set(rows.map((row) => row.id));
-        if (ids.length !== owned.size || !ids.every((id) => owned.has(id))) {
+        const unique = new Set(ids);
+        if (
+          ids.length !== owned.size ||
+          unique.size !== ids.length ||
+          !ids.every((id) => owned.has(id))
+        ) {
           return false;
         }
         for (const [index, id] of ids.entries()) {

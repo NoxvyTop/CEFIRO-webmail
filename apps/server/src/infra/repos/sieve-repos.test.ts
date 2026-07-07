@@ -67,6 +67,7 @@ describe("filter rules repo", () => {
     const after = await filterRules.list(userId);
     expect(after.map((r) => r.id)).toEqual(reversed);
     expect(await filterRules.reorder(userId, [reversed[0]!])).toBe(false);
+    expect(await filterRules.reorder(userId, [reversed[0]!, reversed[0]!])).toBe(false);
     expect(await filterRules.reorder(otherUserId, reversed)).toBe(false);
   });
 
