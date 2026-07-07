@@ -3,7 +3,48 @@
   "admin": {
     "title": "Administration",
     "forbidden": "You do not have admin permissions",
-    "back": "Back"
+    "back": "Back",
+    "empty": "No users",
+    "mailbox": {
+      "linked": "Mailbox linked",
+      "unlinked": "Not linked"
+    },
+    "status": {
+      "active": "Active",
+      "archived": "Archived"
+    },
+    "columns": {
+      "email": "Email",
+      "name": "Name",
+      "role": "Role",
+      "mailbox": "Mailbox",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "roles": {
+      "employee": "Employee",
+      "admin": "Admin"
+    },
+    "actions": {
+      "linkMailbox": "Link mailbox",
+      "saveCredential": "Save",
+      "role": "Role",
+      "archive": "Archive",
+      "reactivate": "Reactivate",
+      "confirmArchive": "Confirm archive"
+    },
+    "new": {
+      "title": "New user",
+      "email": "Email",
+      "name": "Name",
+      "role": "Role",
+      "mailPassword": "Mailbox password (optional)",
+      "create": "Create"
+    },
+    "errors": {
+      "load": "Could not load users",
+      "action": "The action could not be completed"
+    }
   },
   "health": { "ok": "Service running", "degraded": "Service degraded" },
   "auth": {

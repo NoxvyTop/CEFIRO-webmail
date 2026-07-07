@@ -3,7 +3,48 @@
   "admin": {
     "title": "Administración",
     "forbidden": "No tenés permisos de administrador",
-    "back": "Volver"
+    "back": "Volver",
+    "empty": "No hay usuarios",
+    "mailbox": {
+      "linked": "Buzón vinculado",
+      "unlinked": "Sin vincular"
+    },
+    "status": {
+      "active": "Activo",
+      "archived": "Archivado"
+    },
+    "columns": {
+      "email": "Correo",
+      "name": "Nombre",
+      "role": "Rol",
+      "mailbox": "Buzón",
+      "status": "Estado",
+      "actions": "Acciones"
+    },
+    "roles": {
+      "employee": "Empleado",
+      "admin": "Administrador"
+    },
+    "actions": {
+      "linkMailbox": "Vincular buzón",
+      "saveCredential": "Guardar",
+      "role": "Rol",
+      "archive": "Archivar",
+      "reactivate": "Reactivar",
+      "confirmArchive": "Confirmar archivado"
+    },
+    "new": {
+      "title": "Nuevo usuario",
+      "email": "Correo",
+      "name": "Nombre",
+      "role": "Rol",
+      "mailPassword": "Contraseña del buzón (opcional)",
+      "create": "Crear"
+    },
+    "errors": {
+      "load": "No se pudieron cargar los usuarios",
+      "action": "No se pudo completar la acción"
+    }
   },
   "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" },
   "auth": {
