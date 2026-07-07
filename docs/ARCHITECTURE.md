@@ -375,7 +375,7 @@ permitida es hacia GitHub/GHCR (repos e imágenes propios).
 | Fase | Alcance | Estado |
 |------|---------|--------|
 | F1 — Correo | Leer, redactar, responder, adjuntos con previsualización, carpetas, búsqueda, firmas, etiquetas, identidades múltiples (enviar como / recibido en), notificaciones, papelera con retención, login SSO, bootstrap/recuperación | ✅ Completa |
-| F2 — Administración | Portal admin (alta → provisiona Authentik + Stalwart, configuración OIDC), zona de grupos de correo, aviso de correo de grupo con activación/desactivación de recepción en bandeja principal | Pendiente |
+| F2 — Administración | Portal admin (`/admin`): provisioning JIT en el primer login SSO, gestión de usuarios (credencial de buzón, rol, archivado con revocación de sesiones), config OIDC administrable; login doble (SSO + puerta de emergencia bootstrap); correos grupales (Modelo A: copia a la bandeja, zona de grupos, toggle de bandeja unificada) | ✅ Completa |
 | F3 — Organización | Filtros/reglas (UI de Sieve), respuestas automáticas | Pendiente |
 | F4 — Suite Odoo | Calendario embebido, módulo de tareas, configurables por el admin | Pendiente |
 
@@ -388,6 +388,17 @@ real por SSO/SSE), y redacción (composer con editor enriquecido, responder
 y responder a todos, identidades, firmas, adjuntos con subida y descarga,
 envío por JMAP EmailSubmission). Se entregó en cuatro planes
 (fundación, autenticación, lectura, redacción) sobre la base de Stalwart.
+
+La Fase 2 (administración) está completa: provisioning JIT de usuarios en el
+primer login SSO, portal de administración en `/admin` (gestión de usuarios,
+credenciales de buzón, roles, archivado con revocación inmediata de
+sesiones, configuración OIDC administrable), login con doble entrada (SSO +
+puerta de emergencia bootstrap solo visible en modo bootstrap), y correos
+grupales (Modelo A: el correo grupal llega copiado a la bandeja del miembro,
+zona de grupos derivada de las identidades, y toggle por usuario de bandeja
+unificada). El buzón compartido con credencial y bandeja colaborativa
+(Modelo B) queda diferido (issue #13). El webmail no escribe en Authentik ni
+en Stalwart: consume identidades/membresías que el admin configura allí.
 
 ## Flujo de ramas
 
