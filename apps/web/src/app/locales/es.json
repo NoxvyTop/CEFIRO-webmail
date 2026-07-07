@@ -1,5 +1,5 @@
 {
-  "app": { "title": "Céfiro", "tagline": "correo del ecosistema", "themeLight": "Cambiar a tema claro", "themeNight": "Cambiar a tema noche" },
+  "app": { "title": "Céfiro", "tagline": "correo del ecosistema", "themeLight": "Cambiar a tema claro", "themeNight": "Cambiar a tema noche", "sentWith": "Enviado con", "sealMotto": "el viento que mueve tu equipo" },
   "admin": {
     "title": "Administración",
     "forbidden": "No tenés permisos de administrador",

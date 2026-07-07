@@ -10,6 +10,7 @@ import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
+import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -207,7 +208,10 @@ export function MailPage() {
         {threadParam ? (
           <ThreadView threadId={threadParam} />
         ) : (
-          <p className="p-4 text-sm text-gray-500">{t("mail.selectMessage")}</p>
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
+            <CefiroLogo size={52} />
+            <p className="text-sm">{t("mail.selectMessage")}</p>
+          </div>
         )}
       </section>
       {composeDraft && <Composer initial={composeDraft} onClose={removeComposeParam} />}
