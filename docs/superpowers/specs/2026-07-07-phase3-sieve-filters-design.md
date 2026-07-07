@@ -61,3 +61,38 @@ Principios:
 
 Filtros y vacaciones viven en el **mismo script generado** (la respuesta de
 vacaciones es una acción `vacation` de Sieve). Un script, una activación.
+
+## Sección 2: Modelo de datos de las reglas
+
+**Tabla `filter_rules`** (una fila por regla, por usuario):
+
+| Columna | Qué guarda |
+|---------|-----------|
+| `id`, `user_id` | identidad y dueño (ownership en SQL, como firmas) |
+| `position` | orden de evaluación (las reglas se aplican en orden) |
+| `name` | nombre visible ("Facturas a carpeta Contabilidad") |
+| `match_type` | `all` / `any` (¿todas las condiciones o alguna?) |
+| `conditions` | JSONB: array de condiciones |
+| `actions` | JSONB: array de acciones |
+| `enabled` | activar/desactivar sin borrar |
+
+**Condición** (JSONB): `{ "field": "from"|"to"|"subject"|"body", "op":
+"contains"|"is", "value": string }`. `from` = remitente; `to` = para-o-cc
+combinados; `subject`/`body` = texto.
+
+**Acción** (JSONB): `{ "type": "fileinto", "folder": string }` (mover a
+carpeta) · `{ "type": "seen" }` (marcar leído) · `{ "type": "flag",
+"keyword": string }` (destacar/etiquetar) · `{ "type": "delete" }` (a la
+papelera) · `{ "type": "stop" }` (detener reglas siguientes).
+
+**Por qué JSONB y no tablas separadas**: condiciones y acciones son un array
+flexible que siempre se lee/escribe junto con su regla; su forma la valida
+Zod en `packages/shared`. Normalizarlas sería sobre-diseño. Una fila = una
+regla completa.
+
+**Validación en dos capas**: Zod valida la forma antes de guardar; el
+generador + `SieveScript/validate` de Stalwart validan el Sieve resultante
+antes de activarlo.
+
+**Carpetas para `fileinto`**: se eligen de la lista de buzones reales que ya
+trae JMAP (F1) — desplegable, nunca texto libre.
