@@ -36,7 +36,7 @@ const thread = {
       receivedAt: "2026-07-01T10:00:00.000Z",
       preview: "preview",
       keywords: {},
-      hasAttachment: false,
+      hasAttachment: true,
       size: 100,
       cc: [],
       replyTo: [],
