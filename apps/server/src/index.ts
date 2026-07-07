@@ -12,11 +12,14 @@ import { createSignaturesRepo } from "./infra/repos/signatures";
 import { createSsoConfigRepo } from "./infra/repos/sso-config";
 import { createUserPreferencesRepo } from "./infra/repos/user-preferences";
 import { createUsersRepo } from "./infra/repos/users";
+import { createFilterRulesRepo } from "./infra/repos/filter-rules";
+import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { importMasterKey } from "./modules/credentials/crypto";
 import { createAuthRouter } from "./modules/auth/router";
 import { createSessionStore } from "./modules/auth/sessions";
 import { createJmapClient } from "./infra/stalwart/jmap";
 import { createMailRouter } from "./modules/mail/router";
+import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
@@ -40,6 +43,8 @@ const ssoConfig = createSsoConfigRepo(db, masterKey);
 const mailCredentials = createMailCredentialsRepo(db, masterKey);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
+const filterRules = createFilterRulesRepo(db);
+const vacationSettings = createVacationSettingsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
 const jmap = config.stalwartUrl ? createJmapClient({ baseUrl: config.stalwartUrl }) : null;
 
@@ -66,6 +71,7 @@ const app = createApp({
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap }),
+  sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
 });
 

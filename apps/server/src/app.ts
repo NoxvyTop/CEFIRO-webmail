@@ -13,6 +13,7 @@ export type CreateAppOptions = {
   authRouter?: Hono<any>;
   setupRouter?: Hono<any>;
   mailRouter?: Hono<any>;
+  sieveRouter?: Hono<any>;
   adminRouter?: Hono<any>;
 };
 
@@ -42,6 +43,7 @@ export function createApp(options: CreateAppOptions = {}) {
   if (options.authRouter) app.route("/api/auth", options.authRouter as never);
   if (options.setupRouter) app.route("/api/setup", options.setupRouter as never);
   if (options.mailRouter) app.route("/api/mail", options.mailRouter as never);
+  if (options.sieveRouter) app.route("/api/mail", options.sieveRouter as never);
   if (options.adminRouter) app.route("/api/admin", options.adminRouter as never);
 
   app.notFound((c) =>
