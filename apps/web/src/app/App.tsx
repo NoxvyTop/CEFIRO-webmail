@@ -5,6 +5,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { MailPage } from "../features/mailbox/MailPage";
+import { Avatar } from "./ui/Avatar";
+import { CefiroLogo } from "./ui/CefiroLogo";
 import { useTheme } from "./ui/useTheme";
 
 async function fetchHealth() {
@@ -51,78 +53,74 @@ export function App() {
     setNotificationPermission(permission);
   }
 
-  function handleCompose() {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set("compose", "new");
-      return next;
-    });
-  }
-
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-4 border-b border-line bg-panel px-4 py-2 text-ink">
-        <h1 className="text-lg font-semibold">{t("app.title")}</h1>
-        <form onSubmit={handleSearchSubmit} className="flex-1">
-          <input
-            type="search"
-            value={searchValue}
-            onChange={(event) => setSearchValue(event.target.value)}
-            placeholder={t("mail.searchPlaceholder")}
-            aria-label={t("mail.searchPlaceholder")}
-            className="w-full rounded-md border px-3 py-1 text-sm"
-          />
+      <header className="flex h-[60px] shrink-0 items-center gap-4 border-b border-line bg-panel px-4 text-ink">
+        <div className="flex min-w-[210px] items-center gap-3">
+          <CefiroLogo size={32} />
+          <div className="flex flex-col">
+            <span className="text-[15px] font-bold tracking-[0.32em]">CÉFIRO</span>
+            <span className="text-[10.5px] text-muted">{t("app.tagline")}</span>
+          </div>
+        </div>
+        <form onSubmit={handleSearchSubmit} className="max-w-[560px] flex-1">
+          <div className="flex h-10 items-center gap-2 rounded-[10px] border border-line bg-soft px-3">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 text-muted">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              type="search"
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              placeholder={t("mail.searchPlaceholder")}
+              aria-label={t("mail.searchPlaceholder")}
+              className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted"
+            />
+            <kbd aria-hidden="true" className="rounded border border-line px-1.5 text-[11px] text-muted">/</kbd>
+          </div>
         </form>
-        <button
-          type="button"
-          onClick={handleCompose}
-          className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white"
-        >
-          {t("composer.title")}
-        </button>
         {notificationPermission === "default" && (
           <button
             type="button"
             onClick={() => void handleEnableNotifications()}
             aria-label={t("mail.enableNotifications")}
-            className="rounded-md border px-2 py-1 text-sm"
+            className="rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
           >
             🔔
           </button>
         )}
-        {user && (
-          <p className="text-sm text-gray-600">
-            {t("auth.signedInAs", { email: user.email })}
-          </p>
-        )}
-        {health.data && (
-          <p className="text-sm text-gray-500">
-            {t(health.data.status === "ok" ? "health.ok" : "health.degraded")}
-          </p>
+        {health.data && health.data.status !== "ok" && (
+          <p className="text-sm text-warn">{t("health.degraded")}</p>
         )}
         {user?.role === "admin" && (
-          <Link to="/admin" className="rounded-md border px-3 py-1 text-sm">
+          <Link to="/admin" className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
             {t("admin.title")}
           </Link>
         )}
-        <Link to="/settings" className="rounded-md border px-3 py-1 text-sm">
+        <Link to="/settings" className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
           {t("settings.title")}
         </Link>
         <button
           type="button"
           onClick={toggleTheme}
           aria-label={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
-          className="rounded-md border border-line px-2 py-1 text-sm"
+          className="rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
         >
           {theme === "night" ? "☀" : "🌙"}
         </button>
         <button
           type="button"
           onClick={() => void logout()}
-          className="rounded-md border px-3 py-1 text-sm"
+          className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
         >
           {t("auth.signOut")}
         </button>
+        {user && (
+          <span aria-label={t("auth.signedInAs", { email: user.email })} title={user.email}>
+            <Avatar name={user.displayName ?? null} email={user.email} size={36} />
+          </span>
+        )}
       </header>
       <MailPage />
     </div>

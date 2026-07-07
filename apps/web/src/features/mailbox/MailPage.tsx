@@ -122,6 +122,14 @@ export function MailPage() {
     });
   }
 
+  function handleCompose() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("compose", "new");
+      return next;
+    });
+  }
+
   function removeComposeParam() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -158,6 +166,7 @@ export function MailPage() {
         groups={groups}
         selectedGroup={groupParam}
         onSelectGroup={handleSelectGroup}
+        onCompose={handleCompose}
       />
       <section aria-label={t("mail.listRegion")} className="flex-1 overflow-y-auto border-r">
         {mailboxesQuery.isError && (

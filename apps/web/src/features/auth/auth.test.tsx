@@ -56,7 +56,7 @@ describe("auth flow", () => {
       }),
     );
     renderAt("/");
-    expect(await screen.findByText("Céfiro")).toBeInTheDocument();
+    expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
     expect(await screen.findByText("Cerrar sesión")).toBeInTheDocument();
   });
 });
