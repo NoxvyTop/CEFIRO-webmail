@@ -1259,7 +1259,8 @@ describe("FilterSettings", () => {
     fireEvent.change(screen.getByLabelText(i18n.t("filters.name")), {
       target: { value: "clients" },
     });
-    fireEvent.change(screen.getByLabelText(i18n.t("filters.value")), {
+    // per-row aria-labels are suffixed with the 1-based row number (a11y fix)
+    fireEvent.change(screen.getByLabelText(`${i18n.t("filters.value")} 1`), {
       target: { value: "@client.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
