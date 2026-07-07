@@ -1,5 +1,5 @@
 {
-  "app": { "title": "NoxvyTop Mail" },
+  "app": { "title": "Céfiro", "tagline": "correo del ecosistema" },
   "admin": {
     "title": "Administration",
     "forbidden": "You do not have admin permissions",

@@ -1,0 +1,77 @@
+/* Cefiro design tokens — source of truth: docs/design/cefiro/README.md */
+
+:root,
+:root[data-theme="night"] {
+  --bg: #0a0b10;
+  --panel: #12141c;
+  --ink: #eceef4;
+  --muted: #8b90a2;
+  --line: #232838;
+  --accent: #6fe3c1;
+  --accent-ink: #07130f;
+  --soft: #171a24;
+  --hover: #191d28;
+  --sel: #15302b;
+}
+
+:root[data-theme="light"] {
+  --bg: #f1f4f4;
+  --panel: #ffffff;
+  --ink: #101318;
+  --muted: #66707e;
+  --line: #e2e7e9;
+  --accent: #0fa383;
+  --accent-ink: #ffffff;
+  --soft: #edf7f3;
+  --hover: #f3f7f6;
+  --sel: #dcf2ea;
+}
+
+@theme inline {
+  --color-canvas: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-soft: var(--soft);
+  --color-hover: var(--hover);
+  --color-sel: var(--sel);
+  --font-sans: "Space Grotesk Variable", system-ui, sans-serif;
+}
+
+@keyframes logoSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes windFlow {
+  to {
+    stroke-dashoffset: -96;
+  }
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
