@@ -73,6 +73,27 @@ type JmapIdentity = {
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 
+type JmapFilter = Record<string, unknown>;
+
+function recipientMatch(address: string): JmapFilter {
+  return { operator: "OR", conditions: [{ to: address }, { cc: address }] };
+}
+
+function buildMessagesFilter(input: {
+  mailboxId: string;
+  query?: string;
+  to?: string;
+  excludeTo: string[];
+}): JmapFilter {
+  const conditions: JmapFilter[] = [{ inMailbox: input.mailboxId }];
+  if (input.query) conditions.push({ text: input.query });
+  if (input.to) conditions.push(recipientMatch(input.to));
+  if (input.excludeTo.length > 0) {
+    conditions.push({ operator: "NOT", conditions: input.excludeTo.map(recipientMatch) });
+  }
+  return conditions.length === 1 ? conditions[0]! : { operator: "AND", conditions };
+}
+
 function toEmailAddresses(addresses?: JmapEmailAddress[]): EmailAddress[] {
   return (addresses ?? []).map((a) => ({ name: a.name ?? null, email: a.email }));
 }
@@ -460,12 +481,19 @@ export function createMailRouter(deps: MailDeps) {
       );
     }
     const query = c.req.query("query");
+    const to = c.req.query("to");
+    const excludeTo =
+      c.req
+        .query("excludeTo")
+        ?.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean) ?? [];
     const position = Number(c.req.query("position") ?? "0") || 0;
     const requestedLimit = Number(c.req.query("limit") ?? String(DEFAULT_LIMIT)) || DEFAULT_LIMIT;
     const limit = Math.min(requestedLimit, MAX_LIMIT);
 
     const session = c.get("jmapSession");
-    const filter = query ? { inMailbox: mailboxId, text: query } : { inMailbox: mailboxId };
+    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo });
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
         "Email/query",

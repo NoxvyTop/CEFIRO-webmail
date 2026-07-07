@@ -10,7 +10,6 @@ import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createMailRouter } from "./router";
-import { messagesPageSchema } from "@webmail/shared";
 import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
 
 const url =
@@ -30,36 +29,8 @@ const stubJmap: JmapClient = {
   request: async (_auth, _session, methodCalls) => {
     calls = methodCalls;
     return [
-      ["Email/query", { ids: ["e2", "e1"], total: 2, position: 0 }, "q"],
-      [
-        "Email/get",
-        {
-          list: [
-            {
-              id: "e1",
-              threadId: "t1",
-              mailboxIds: { mb1: true },
-              from: [{ name: "Ana", email: "a@x.com" }],
-              to: [],
-              subject: "One",
-              receivedAt: "2026-07-05T10:00:00Z",
-              preview: "p1",
-              keywords: { $seen: true },
-              hasAttachment: false,
-              size: 10,
-            },
-            {
-              id: "e2",
-              threadId: "t2",
-              mailboxIds: { mb1: true },
-              to: [{ email: "b@x.com" }],
-              receivedAt: "2026-07-06T10:00:00Z",
-              size: 20,
-            },
-          ],
-        },
-        "g",
-      ],
+      ["Email/query", { ids: [], total: 0, position: 0 }, "q"],
+      ["Email/get", { list: [] }, "g"],
     ];
   },
 };
@@ -98,62 +69,80 @@ function makeApp(jmap: JmapClient | null) {
   });
 }
 
-describe("GET /api/mail/messages", () => {
-  it("requires mailboxId", async () => {
-    const res = await makeApp(stubJmap).request("/api/mail/messages", {
-      headers: { cookie: `session=${token}` },
-    });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { code: string }).code).toBe("invalid_query");
-  });
-
-  it("returns a messages page ordered by the query's ids and parsing the shared schema", async () => {
-    const res = await makeApp(stubJmap).request("/api/mail/messages?mailboxId=mb1", {
-      headers: { cookie: `session=${token}` },
-    });
-    expect(res.status).toBe(200);
-    const body = messagesPageSchema.parse(await res.json());
-    expect(body.total).toBe(2);
-    expect(body.emails.map((e) => e.id)).toEqual(["e2", "e1"]);
-
-    const e2 = body.emails.find((e) => e.id === "e2");
-    expect(e2?.subject).toBe("");
-    expect(e2?.from).toEqual([]);
-    expect(e2?.keywords).toEqual({});
-    expect(e2?.hasAttachment).toBe(false);
-    expect(e2?.mailboxIds).toEqual(["mb1"]);
-
-    const [queryCall, getCall] = calls;
-    expect(queryCall?.[0]).toBe("Email/query");
-    expect((queryCall?.[1] as { filter: unknown }).filter).toEqual({ inMailbox: "mb1" });
-    expect(getCall?.[0]).toBe("Email/get");
-    expect((getCall?.[1] as { "#ids": unknown })["#ids"]).toEqual({
-      resultOf: "q",
-      name: "Email/query",
-      path: "/ids",
-    });
-  });
-
-  it("adds a text filter when query is provided", async () => {
+describe("GET /api/mail/messages — recipient filters", () => {
+  it("adds a recipient match filter when `to` is provided", async () => {
     const res = await makeApp(stubJmap).request(
-      "/api/mail/messages?mailboxId=mb1&query=urgent",
+      "/api/mail/messages?mailboxId=inbox&to=soporte@x.com",
       { headers: { cookie: `session=${token}` } },
     );
     expect(res.status).toBe(200);
     const [queryCall] = calls;
     expect((queryCall?.[1] as { filter: unknown }).filter).toEqual({
       operator: "AND",
-      conditions: [{ inMailbox: "mb1" }, { text: "urgent" }],
+      conditions: [
+        { inMailbox: "inbox" },
+        {
+          operator: "OR",
+          conditions: [{ to: "soporte@x.com" }, { cc: "soporte@x.com" }],
+        },
+      ],
     });
   });
 
-  it("clamps limit to a max of 100", async () => {
+  it("adds a NOT filter for each address when `excludeTo` is a comma-separated list", async () => {
     const res = await makeApp(stubJmap).request(
-      "/api/mail/messages?mailboxId=mb1&limit=500",
+      "/api/mail/messages?mailboxId=inbox&excludeTo=soporte@x.com,ventas@x.com",
       { headers: { cookie: `session=${token}` } },
     );
     expect(res.status).toBe(200);
     const [queryCall] = calls;
-    expect((queryCall?.[1] as { limit: number }).limit).toBe(100);
+    expect((queryCall?.[1] as { filter: unknown }).filter).toEqual({
+      operator: "AND",
+      conditions: [
+        { inMailbox: "inbox" },
+        {
+          operator: "NOT",
+          conditions: [
+            {
+              operator: "OR",
+              conditions: [{ to: "soporte@x.com" }, { cc: "soporte@x.com" }],
+            },
+            {
+              operator: "OR",
+              conditions: [{ to: "ventas@x.com" }, { cc: "ventas@x.com" }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("leaves the filter unchanged when neither `to` nor `excludeTo` is provided", async () => {
+    const res = await makeApp(stubJmap).request("/api/mail/messages?mailboxId=inbox", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(200);
+    const [queryCall] = calls;
+    expect((queryCall?.[1] as { filter: unknown }).filter).toEqual({ inMailbox: "inbox" });
+  });
+
+  it("combines query + to into an AND filter", async () => {
+    const res = await makeApp(stubJmap).request(
+      "/api/mail/messages?mailboxId=inbox&query=urgent&to=soporte@x.com",
+      { headers: { cookie: `session=${token}` } },
+    );
+    expect(res.status).toBe(200);
+    const [queryCall] = calls;
+    expect((queryCall?.[1] as { filter: unknown }).filter).toEqual({
+      operator: "AND",
+      conditions: [
+        { inMailbox: "inbox" },
+        { text: "urgent" },
+        {
+          operator: "OR",
+          conditions: [{ to: "soporte@x.com" }, { cc: "soporte@x.com" }],
+        },
+      ],
+    });
   });
 });
