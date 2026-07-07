@@ -41,7 +41,7 @@ describe("FilterRuleForm", () => {
     fireEvent.change(screen.getByLabelText(i18n.t("filters.name")), {
       target: { value: "invoices" },
     });
-    fireEvent.change(screen.getByLabelText(i18n.t("filters.value")), {
+    fireEvent.change(screen.getByLabelText(`${i18n.t("filters.value")} 1`), {
       target: { value: "billing@" },
     });
     expect(save).toBeEnabled();
@@ -54,7 +54,7 @@ describe("FilterRuleForm", () => {
     fireEvent.change(screen.getByLabelText(i18n.t("filters.name")), {
       target: { value: "invoices" },
     });
-    fireEvent.change(screen.getByLabelText(i18n.t("filters.value")), {
+    fireEvent.change(screen.getByLabelText(`${i18n.t("filters.value")} 1`), {
       target: { value: "billing@" },
     });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
@@ -71,18 +71,18 @@ describe("FilterRuleForm", () => {
   it("adds and removes conditions up to the limit", () => {
     renderForm();
     fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.addCondition") }));
-    expect(screen.getAllByLabelText(i18n.t("filters.value"))).toHaveLength(2);
+    expect(screen.getAllByLabelText(new RegExp(i18n.t("filters.value")))).toHaveLength(2);
 
     const removeButtons = screen.getAllByRole("button", { name: i18n.t("filters.remove") });
     fireEvent.click(removeButtons[0]!);
-    expect(screen.getAllByLabelText(i18n.t("filters.value"))).toHaveLength(1);
+    expect(screen.getAllByLabelText(new RegExp(i18n.t("filters.value")))).toHaveLength(1);
   });
 
   it("shows the folder dropdown with nested paths for a move action", () => {
     renderForm({
       initial: { ...emptyRule, actions: [{ type: "fileinto", folder: "Clients/Acme" }] },
     });
-    const folderSelect = screen.getByLabelText(i18n.t("filters.folder"));
+    const folderSelect = screen.getByLabelText(`${i18n.t("filters.folder")} 1`);
     expect(folderSelect).toHaveValue("Clients/Acme");
     expect(screen.getByRole("option", { name: "Clients/Acme" })).toBeInTheDocument();
   });
@@ -91,15 +91,15 @@ describe("FilterRuleForm", () => {
     renderForm({
       initial: { ...emptyRule, actions: [{ type: "flag", keyword: "" }] },
     });
-    const keywordInput = screen.getByLabelText(i18n.t("filters.keyword"));
+    const keywordInput = screen.getByLabelText(`${i18n.t("filters.keyword")} 1`);
     fireEvent.change(keywordInput, { target: { value: 'Imp"ort ant!' } });
     expect(keywordInput).toHaveValue("Important");
   });
 
   it("changing the action type resets its parameters", () => {
     renderForm();
-    const actionSelect = screen.getByLabelText(i18n.t("filters.action"));
+    const actionSelect = screen.getByLabelText(`${i18n.t("filters.action")} 1`);
     fireEvent.change(actionSelect, { target: { value: "fileinto" } });
-    expect(screen.getByLabelText(i18n.t("filters.folder"))).toHaveValue("Inbox");
+    expect(screen.getByLabelText(`${i18n.t("filters.folder")} 1`)).toHaveValue("Inbox");
   });
 });

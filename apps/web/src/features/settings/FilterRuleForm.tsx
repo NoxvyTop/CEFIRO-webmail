@@ -107,7 +107,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
         {conditions.map((condition, index) => (
           <div key={index} className="flex flex-wrap items-center gap-2">
             <select
-              aria-label={t("filters.field")}
+              aria-label={`${t("filters.field")} ${index + 1}`}
               value={condition.field}
               onChange={(event) =>
                 updateCondition(index, { field: event.target.value as FilterCondition["field"] })
@@ -121,7 +121,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               ))}
             </select>
             <select
-              aria-label={t("filters.op")}
+              aria-label={`${t("filters.op")} ${index + 1}`}
               value={condition.op}
               onChange={(event) =>
                 updateCondition(index, { op: event.target.value as FilterCondition["op"] })
@@ -135,7 +135,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               ))}
             </select>
             <input
-              aria-label={t("filters.value")}
+              aria-label={`${t("filters.value")} ${index + 1}`}
               value={condition.value}
               maxLength={500}
               onChange={(event) => updateCondition(index, { value: event.target.value })}
@@ -169,7 +169,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
         {actions.map((action, index) => (
           <div key={index} className="flex flex-wrap items-center gap-2">
             <select
-              aria-label={t("filters.action")}
+              aria-label={`${t("filters.action")} ${index + 1}`}
               value={action.type}
               onChange={(event) =>
                 setActions(
@@ -190,7 +190,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
             </select>
             {action.type === "fileinto" && (
               <select
-                aria-label={t("filters.folder")}
+                aria-label={`${t("filters.folder")} ${index + 1}`}
                 value={action.folder}
                 onChange={(event) =>
                   setActions(
@@ -210,7 +210,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
             )}
             {action.type === "flag" && (
               <input
-                aria-label={t("filters.keyword")}
+                aria-label={`${t("filters.keyword")} ${index + 1}`}
                 value={action.keyword}
                 maxLength={64}
                 onChange={(event) =>
