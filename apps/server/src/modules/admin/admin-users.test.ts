@@ -5,6 +5,7 @@ import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createAuditRepo } from "../../infra/repos/audit";
+import { createSsoConfigRepo } from "../../infra/repos/sso-config";
 import { importMasterKey } from "../credentials/crypto";
 import { createApp } from "../../app";
 import { createSessionStore } from "../auth/sessions";
@@ -18,6 +19,7 @@ const sessions = createSessionStore(sql);
 const users = createUsersRepo(sql);
 const audit = createAuditRepo(sql);
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
+let ssoConfig: ReturnType<typeof createSsoConfigRepo>;
 let app: ReturnType<typeof createApp>;
 
 async function createAdmin() {
@@ -45,9 +47,10 @@ beforeAll(async () => {
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
   mailCredentials = createMailCredentialsRepo(sql, masterKey);
+  ssoConfig = createSsoConfigRepo(sql, masterKey);
   app = createApp({
     authRouter: createAuthRouter({ sessions }),
-    adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit }),
+    adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
   });
 });
 afterAll(() => sql.end());

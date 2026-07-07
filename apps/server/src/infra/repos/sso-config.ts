@@ -40,6 +40,13 @@ export function createSsoConfigRepo(sql: Db, key: CryptoKey) {
         scopes: row.scopes,
       };
     },
+    async getPublic(): Promise<{ issuer: string; clientId: string; scopes: string } | null> {
+      const rows = await sql<{ issuer: string; client_id: string; scopes: string }[]>`
+        select issuer, client_id, scopes from sso_config where id = 1
+      `;
+      const row = rows[0];
+      return row ? { issuer: row.issuer, clientId: row.client_id, scopes: row.scopes } : null;
+    },
     async set(config: SsoConfig): Promise<void> {
       const { ciphertext, iv } = await encryptSecret(key, config.clientSecret);
       await sql`

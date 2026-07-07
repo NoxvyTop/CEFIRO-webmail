@@ -64,7 +64,7 @@ const app = createApp({
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, jmap }),
-  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit }),
+  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
 });
 
 if (process.env.NODE_ENV === "production") {
