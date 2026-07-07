@@ -160,4 +160,43 @@ describe("FilterSettings", () => {
     expect(await screen.findByText(i18n.t("filters.reapplied"))).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("closes the form when a sieve sync error occurs on create", async () => {
+    createFilterRule.mockRejectedValueOnce(new MailApiError(502, "sieve_sync_failed"));
+    renderFilters();
+
+    await screen.findByText("invoices");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.newRule") }));
+    fireEvent.change(screen.getByLabelText(i18n.t("filters.name")), {
+      target: { value: "pending" },
+    });
+    fireEvent.change(screen.getByLabelText(`${i18n.t("filters.value")} 1`), {
+      target: { value: "x@y" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent(i18n.t("settings.errors.sieve_sync_failed"));
+    expect(screen.queryByLabelText(i18n.t("filters.name"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("filters.newRule") })).toBeInTheDocument();
+  });
+
+  it("keeps the form open on a non-sieve error", async () => {
+    createFilterRule.mockRejectedValueOnce(new MailApiError(400, "invalid_body"));
+    renderFilters();
+
+    await screen.findByText("invoices");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.newRule") }));
+    fireEvent.change(screen.getByLabelText(i18n.t("filters.name")), {
+      target: { value: "bad" },
+    });
+    fireEvent.change(screen.getByLabelText(`${i18n.t("filters.value")} 1`), {
+      target: { value: "x@y" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent(i18n.t("settings.errors.invalid_body"));
+    expect(screen.getByLabelText(i18n.t("filters.name"))).toBeInTheDocument();
+  });
 });
