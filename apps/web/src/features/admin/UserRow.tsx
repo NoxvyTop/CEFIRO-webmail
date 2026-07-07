@@ -65,7 +65,7 @@ export function UserRow({ user }: { user: AdminUser }) {
       : t("admin.actions.reactivate");
 
   return (
-    <tr className="border-t">
+    <tr className="border-t border-line">
       <td className="p-2">{user.email}</td>
       <td className="p-2">{user.displayName}</td>
       <td className="p-2">
@@ -73,7 +73,7 @@ export function UserRow({ user }: { user: AdminUser }) {
           aria-label={t("admin.actions.role")}
           value={user.role}
           onChange={(event) => roleMutation.mutate(event.target.value as "employee" | "admin")}
-          className="rounded-md border p-1"
+          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
         >
           <option value="employee">{t("admin.roles.employee")}</option>
           <option value="admin">{t("admin.roles.admin")}</option>
@@ -86,7 +86,7 @@ export function UserRow({ user }: { user: AdminUser }) {
       <td className="p-2">
         <div className="flex flex-col items-start gap-1">
           {!credentialOpen && (
-            <button type="button" onClick={() => setCredentialOpen(true)} className="rounded-md border px-2 py-1 text-xs">
+            <button type="button" onClick={() => setCredentialOpen(true)} className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover">
               {t("admin.actions.linkMailbox")}
             </button>
           )}
@@ -99,18 +99,18 @@ export function UserRow({ user }: { user: AdminUser }) {
                 required
                 value={mailPassword}
                 onChange={(event) => setMailPassword(event.target.value)}
-                className="rounded-md border p-1 text-xs"
+                className="rounded-md border border-line bg-soft p-1 text-xs text-ink outline-none focus:border-accent"
               />
-              <button type="submit" className="rounded-md border px-2 py-1 text-xs">
+              <button type="submit" className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover">
                 {t("admin.actions.saveCredential")}
               </button>
             </form>
           )}
-          <button type="button" onClick={handleArchiveClick} className="rounded-md border px-2 py-1 text-xs">
+          <button type="button" onClick={handleArchiveClick} className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover">
             {archiveLabel}
           </button>
           {hasError && (
-            <p role="alert" className="text-xs text-red-600">
+            <p role="alert" className="text-xs text-danger">
               {t("admin.errors.action")}
             </p>
           )}

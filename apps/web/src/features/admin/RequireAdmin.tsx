@@ -13,10 +13,10 @@ export function RequireAdmin({ children }: { children: ReactNode }) {
   if (user.role !== "admin") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {t("admin.forbidden")}
         </p>
-        <Link to="/" className="text-sm text-blue-700 underline">
+        <Link to="/" className="text-sm text-accent underline">
           {t("admin.back")}
         </Link>
       </div>

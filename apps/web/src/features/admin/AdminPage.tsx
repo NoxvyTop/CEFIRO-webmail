@@ -75,7 +75,7 @@ export function AdminPage() {
               required
               value={newUser.email}
               onChange={(event) => setNewUser({ ...newUser, email: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -84,7 +84,7 @@ export function AdminPage() {
               required
               value={newUser.displayName}
               onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -94,7 +94,7 @@ export function AdminPage() {
               onChange={(event) =>
                 setNewUser({ ...newUser, role: event.target.value as "employee" | "admin" })
               }
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             >
               <option value="employee">{t("admin.roles.employee")}</option>
               <option value="admin">{t("admin.roles.admin")}</option>
@@ -107,15 +107,15 @@ export function AdminPage() {
               minLength={8}
               value={newUser.mailPassword}
               onChange={(event) => setNewUser({ ...newUser, mailPassword: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
-          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white">
+          <button type="submit" className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
             {t("admin.new.create")}
           </button>
         </form>
         {createMutation.isError && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger">
             {t("admin.errors.action")}
           </p>
         )}
@@ -123,7 +123,7 @@ export function AdminPage() {
 
       <section className="flex flex-col gap-3">
         {usersQuery.isError && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger">
             {t("admin.errors.load")}
           </p>
         )}
@@ -188,7 +188,7 @@ export function AdminPage() {
             <input
               value={ssoForm.issuer}
               onChange={(event) => setSsoForm({ ...ssoForm, issuer: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -196,7 +196,7 @@ export function AdminPage() {
             <input
               value={ssoForm.clientId}
               onChange={(event) => setSsoForm({ ...ssoForm, clientId: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -205,7 +205,7 @@ export function AdminPage() {
               type="password"
               value={ssoForm.clientSecret}
               onChange={(event) => setSsoForm({ ...ssoForm, clientSecret: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -213,16 +213,16 @@ export function AdminPage() {
             <input
               value={ssoForm.scopes}
               onChange={(event) => setSsoForm({ ...ssoForm, scopes: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
-          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white">
+          <button type="submit" className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
             {t("admin.sso.save")}
           </button>
         </form>
         {ssoMutation.isSuccess && <p>{t("admin.sso.saved")}</p>}
         {ssoMutation.isError && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger">
             {t("admin.sso.error")}
           </p>
         )}
