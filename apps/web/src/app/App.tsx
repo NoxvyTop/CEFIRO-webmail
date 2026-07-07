@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { MailPage } from "../features/mailbox/MailPage";
+import { useTheme } from "./ui/useTheme";
 
 async function fetchHealth() {
   const res = await fetch("/api/health");
@@ -18,6 +19,7 @@ function currentNotificationPermission(): NotificationPermission | null {
 export function App() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
   const [searchParams, setSearchParams] = useSearchParams();
   const queryParam = searchParams.get("q") ?? "";
@@ -59,7 +61,7 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-4 border-b px-4 py-2">
+      <header className="flex items-center gap-4 border-b border-line bg-panel px-4 py-2 text-ink">
         <h1 className="text-lg font-semibold">{t("app.title")}</h1>
         <form onSubmit={handleSearchSubmit} className="flex-1">
           <input
@@ -106,6 +108,14 @@ export function App() {
         <Link to="/settings" className="rounded-md border px-3 py-1 text-sm">
           {t("settings.title")}
         </Link>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
+          className="rounded-md border border-line px-2 py-1 text-sm"
+        >
+          {theme === "night" ? "☀" : "🌙"}
+        </button>
         <button
           type="button"
           onClick={() => void logout()}

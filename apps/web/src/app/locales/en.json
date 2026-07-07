@@ -1,5 +1,5 @@
 {
-  "app": { "title": "Céfiro", "tagline": "correo del ecosistema" },
+  "app": { "title": "Céfiro", "tagline": "correo del ecosistema", "themeLight": "Switch to light theme", "themeNight": "Switch to night theme" },
   "admin": {
     "title": "Administration",
     "forbidden": "You do not have admin permissions",
