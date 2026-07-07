@@ -1,5 +1,10 @@
 {
   "app": { "title": "Correo NoxvyTop" },
+  "admin": {
+    "title": "Administración",
+    "forbidden": "No tenés permisos de administrador",
+    "back": "Volver"
+  },
   "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" },
   "auth": {
     "signIn": "Iniciar sesión con SSO",

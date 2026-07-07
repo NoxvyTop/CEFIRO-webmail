@@ -98,6 +98,11 @@ export function App() {
             {t(health.data.status === "ok" ? "health.ok" : "health.degraded")}
           </p>
         )}
+        {user?.role === "admin" && (
+          <Link to="/admin" className="rounded-md border px-3 py-1 text-sm">
+            {t("admin.title")}
+          </Link>
+        )}
         <Link to="/settings" className="rounded-md border px-3 py-1 text-sm">
           {t("settings.title")}
         </Link>

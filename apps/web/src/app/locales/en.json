@@ -1,5 +1,10 @@
 {
   "app": { "title": "NoxvyTop Mail" },
+  "admin": {
+    "title": "Administration",
+    "forbidden": "You do not have admin permissions",
+    "back": "Back"
+  },
   "health": { "ok": "Service running", "degraded": "Service degraded" },
   "auth": {
     "signIn": "Sign in with SSO",
