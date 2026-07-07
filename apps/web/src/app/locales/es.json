@@ -1,5 +1,11 @@
 {
-  "app": { "title": "Céfiro", "tagline": "correo del ecosistema", "themeLight": "Cambiar a tema claro", "themeNight": "Cambiar a tema noche", "sentWith": "Enviado con", "sealMotto": "el viento que mueve tu equipo" },
+  "app": {
+    "tagline": "correo del ecosistema",
+    "themeLight": "Cambiar a tema claro",
+    "themeNight": "Cambiar a tema noche",
+    "sentWith": "Enviado con",
+    "sealMotto": "el viento que mueve tu equipo"
+  },
   "admin": {
     "title": "Administración",
     "forbidden": "No tenés permisos de administrador",
@@ -60,7 +66,9 @@
       }
     }
   },
-  "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" },
+  "health": {
+    "degraded": "Servicio degradado"
+  },
   "auth": {
     "signIn": "Iniciar sesión con SSO",
     "signOut": "Cerrar sesión",

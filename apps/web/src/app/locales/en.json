@@ -1,5 +1,11 @@
 {
-  "app": { "title": "Céfiro", "tagline": "correo del ecosistema", "themeLight": "Switch to light theme", "themeNight": "Switch to night theme", "sentWith": "Sent with", "sealMotto": "the wind that moves your team" },
+  "app": {
+    "tagline": "correo del ecosistema",
+    "themeLight": "Switch to light theme",
+    "themeNight": "Switch to night theme",
+    "sentWith": "Sent with",
+    "sealMotto": "the wind that moves your team"
+  },
   "admin": {
     "title": "Administration",
     "forbidden": "You do not have admin permissions",
@@ -60,7 +66,9 @@
       }
     }
   },
-  "health": { "ok": "Service running", "degraded": "Service degraded" },
+  "health": {
+    "degraded": "Service degraded"
+  },
   "auth": {
     "signIn": "Sign in with SSO",
     "signOut": "Sign out",
