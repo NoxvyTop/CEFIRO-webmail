@@ -5,6 +5,7 @@ import {
   vacationSettingsInputSchema,
 } from "@webmail/shared";
 import { DomainError } from "../../core/errors";
+import { log } from "../../core/logger";
 import type { FilterRulesRepo } from "../../infra/repos/filter-rules";
 import type { VacationSettingsRepo } from "../../infra/repos/vacation-settings";
 import { requireSession } from "../auth/middleware";
@@ -30,6 +31,7 @@ async function trySync(
   try {
     password = await deps.mailCredentials.get(user.userId);
   } catch {
+    log("warn", "sieve sync failed: credential decrypt error", { userId: user.userId });
     return "failed";
   }
   if (password === null) return "skipped";
@@ -44,8 +46,11 @@ async function trySync(
     return "ok";
   } catch (error) {
     if (error instanceof DomainError && error.code === "sieve_invalid") {
+      log("warn", "sieve sync rejected: generated script invalid", { userId: user.userId });
       return "invalid";
     }
+    const code = error instanceof DomainError ? error.code : "unexpected";
+    log("warn", "sieve sync failed", { userId: user.userId, code });
     return "failed";
   }
 }

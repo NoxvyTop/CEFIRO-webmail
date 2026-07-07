@@ -74,6 +74,7 @@ function ruleToSieve(rule: FilterRule, trashFolder: string, requires: Set<string
   const actions = rule.actions
     .map((action) => `  ${actionToSieve(action, trashFolder, requires)}`)
     .join("\n");
+  // safe without quote(): sanitized single line inside a #-to-end-of-line comment
   return `# rule: ${sanitizeSingleLine(rule.name)}\nif ${test} {\n${actions}\n}`;
 }
 
