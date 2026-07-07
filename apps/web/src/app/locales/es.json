@@ -44,6 +44,20 @@
     "errors": {
       "load": "No se pudieron cargar los usuarios",
       "action": "No se pudo completar la acción"
+    },
+    "sso": {
+      "title": "Proveedor SSO (OIDC)",
+      "configured": "Configurado",
+      "notConfigured": "Sin configurar",
+      "save": "Guardar",
+      "saved": "Guardado",
+      "error": "No se pudo guardar",
+      "fields": {
+        "issuer": "Issuer",
+        "clientId": "Client ID",
+        "clientSecret": "Client Secret",
+        "scopes": "Scopes"
+      }
     }
   },
   "health": { "ok": "Servicio operativo", "degraded": "Servicio degradado" },

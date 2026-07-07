@@ -44,6 +44,20 @@
     "errors": {
       "load": "Could not load users",
       "action": "The action could not be completed"
+    },
+    "sso": {
+      "title": "SSO provider (OIDC)",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "save": "Save",
+      "saved": "Saved",
+      "error": "Could not save",
+      "fields": {
+        "issuer": "Issuer",
+        "clientId": "Client ID",
+        "clientSecret": "Client Secret",
+        "scopes": "Scopes"
+      }
     }
   },
   "health": { "ok": "Service running", "degraded": "Service degraded" },

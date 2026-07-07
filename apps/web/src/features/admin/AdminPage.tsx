@@ -2,27 +2,42 @@ import { type FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { CreateUserInput } from "@webmail/shared";
-import { createAdminUser, fetchAdminUsers } from "./api";
+import { createAdminUser, fetchAdminSso, fetchAdminUsers, updateAdminSso } from "./api";
 import { UserRow } from "./UserRow";
 
 const USERS_QUERY_KEY = ["admin", "users"] as const;
+const SSO_QUERY_KEY = ["admin", "sso"] as const;
 
 type NewUserForm = { email: string; displayName: string; role: "employee" | "admin"; mailPassword: string };
 
 const EMPTY_NEW_USER: NewUserForm = { email: "", displayName: "", role: "employee", mailPassword: "" };
 
+type SsoForm = { issuer: string; clientId: string; clientSecret: string; scopes: string };
+
+const EMPTY_SSO_FORM: SsoForm = { issuer: "", clientId: "", clientSecret: "", scopes: "" };
+
 export function AdminPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const usersQuery = useQuery({ queryKey: USERS_QUERY_KEY, queryFn: fetchAdminUsers });
+  const ssoQuery = useQuery({ queryKey: SSO_QUERY_KEY, queryFn: fetchAdminSso });
 
   const [newUser, setNewUser] = useState(EMPTY_NEW_USER);
+  const [ssoForm, setSsoForm] = useState(EMPTY_SSO_FORM);
 
   const createMutation = useMutation({
     mutationFn: (input: CreateUserInput) => createAdminUser(input),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY });
       setNewUser(EMPTY_NEW_USER);
+    },
+  });
+
+  const ssoMutation = useMutation({
+    mutationFn: (input: SsoForm) => updateAdminSso(input),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: SSO_QUERY_KEY });
+      setSsoForm(EMPTY_SSO_FORM);
     },
   });
 
@@ -38,7 +53,13 @@ export function AdminPage() {
     createMutation.mutate(input);
   }
 
+  function handleSsoSubmit(event: FormEvent) {
+    event.preventDefault();
+    ssoMutation.mutate(ssoForm);
+  }
+
   const users = usersQuery.data ?? [];
+  const sso = ssoQuery.data;
 
   return (
     <main aria-label={t("admin.title")} className="flex flex-col gap-6 p-6">
@@ -127,6 +148,83 @@ export function AdminPage() {
               ))}
             </tbody>
           </table>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-base font-medium">{t("admin.sso.title")}</h2>
+
+        {sso && (
+          <div className="flex flex-col gap-1 text-sm">
+            <p>{sso.configured ? t("admin.sso.configured") : t("admin.sso.notConfigured")}</p>
+            {sso.configured && (
+              <dl className="flex flex-col gap-1">
+                {sso.issuer && (
+                  <div className="flex gap-2">
+                    <dt className="font-medium">{t("admin.sso.fields.issuer")}</dt>
+                    <dd>{sso.issuer}</dd>
+                  </div>
+                )}
+                {sso.clientId && (
+                  <div className="flex gap-2">
+                    <dt className="font-medium">{t("admin.sso.fields.clientId")}</dt>
+                    <dd>{sso.clientId}</dd>
+                  </div>
+                )}
+                {sso.scopes && (
+                  <div className="flex gap-2">
+                    <dt className="font-medium">{t("admin.sso.fields.scopes")}</dt>
+                    <dd>{sso.scopes}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
+          </div>
+        )}
+
+        <form onSubmit={handleSsoSubmit} className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            {t("admin.sso.fields.issuer")}
+            <input
+              value={ssoForm.issuer}
+              onChange={(event) => setSsoForm({ ...ssoForm, issuer: event.target.value })}
+              className="rounded-md border p-1"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            {t("admin.sso.fields.clientId")}
+            <input
+              value={ssoForm.clientId}
+              onChange={(event) => setSsoForm({ ...ssoForm, clientId: event.target.value })}
+              className="rounded-md border p-1"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            {t("admin.sso.fields.clientSecret")}
+            <input
+              type="password"
+              value={ssoForm.clientSecret}
+              onChange={(event) => setSsoForm({ ...ssoForm, clientSecret: event.target.value })}
+              className="rounded-md border p-1"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            {t("admin.sso.fields.scopes")}
+            <input
+              value={ssoForm.scopes}
+              onChange={(event) => setSsoForm({ ...ssoForm, scopes: event.target.value })}
+              className="rounded-md border p-1"
+            />
+          </label>
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white">
+            {t("admin.sso.save")}
+          </button>
+        </form>
+        {ssoMutation.isSuccess && <p>{t("admin.sso.saved")}</p>}
+        {ssoMutation.isError && (
+          <p role="alert" className="text-sm text-red-600">
+            {t("admin.sso.error")}
+          </p>
         )}
       </section>
     </main>

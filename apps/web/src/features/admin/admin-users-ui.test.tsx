@@ -8,16 +8,20 @@ import { AdminPage } from "./AdminPage";
 
 const {
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
+  fetchAdminSso, updateAdminSso,
 } = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   createAdminUser: vi.fn(),
   setUserRole: vi.fn(),
   setUserActive: vi.fn(),
   setUserCredential: vi.fn(),
+  fetchAdminSso: vi.fn(),
+  updateAdminSso: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
+  fetchAdminSso, updateAdminSso,
 }));
 
 const adminActive: AdminUser = {
