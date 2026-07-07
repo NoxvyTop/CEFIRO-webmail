@@ -133,7 +133,8 @@
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "generic": "Mail could not be loaded"
-    }
+    },
+    "backToList": "Back to messages"
   },
   "modules": {
     "title": "Modules",

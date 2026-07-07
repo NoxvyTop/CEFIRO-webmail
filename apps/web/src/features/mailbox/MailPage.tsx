@@ -175,7 +175,9 @@ export function MailPage() {
       />
       <section
         aria-label={t("mail.listRegion")}
-        className="flex min-w-[280px] flex-[0_1_390px] flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel"
+        className={`${
+          threadParam ? "hidden lg:flex" : "flex"
+        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel lg:flex-[0_1_390px]`}
       >
         {mailboxesQuery.isError && (
           <p role="alert" className="p-4 text-sm text-warn">
@@ -204,7 +206,12 @@ export function MailPage() {
           />
         )}
       </section>
-      <section aria-label={t("mail.readerRegion")} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+      <section
+        aria-label={t("mail.readerRegion")}
+        className={`${
+          threadParam ? "block" : "hidden lg:block"
+        } min-w-0 flex-1 overflow-y-auto overflow-x-hidden`}
+      >
         {threadParam ? (
           <ThreadView threadId={threadParam} />
         ) : (

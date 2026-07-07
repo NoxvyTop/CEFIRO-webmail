@@ -62,6 +62,14 @@ export function ThreadView({ threadId }: ThreadViewProps) {
     });
   }
 
+  function backToList() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("thread");
+      return next;
+    });
+  }
+
   if (threadQuery.isError) {
     return (
       <p role="alert" className="p-4 text-sm text-warn">
@@ -78,6 +86,14 @@ export function ThreadView({ threadId }: ThreadViewProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-[52px] shrink-0 items-center gap-2 overflow-x-hidden border-b border-line px-4">
+        <button
+          type="button"
+          onClick={backToList}
+          aria-label={t("mail.backToList")}
+          className="flex h-8 items-center rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink lg:hidden"
+        >
+          ←
+        </button>
         <button
           type="button"
           onClick={() => openCompose(`reply:${lastEmail.id}`)}

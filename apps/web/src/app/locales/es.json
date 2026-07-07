@@ -133,7 +133,8 @@
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "generic": "No se pudo cargar el correo"
-    }
+    },
+    "backToList": "Volver a la lista"
   },
   "modules": {
     "title": "Módulos",
