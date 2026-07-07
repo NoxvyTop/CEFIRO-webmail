@@ -156,12 +156,14 @@ describe("forwardDraft", () => {
       attachments: [
         { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
         { blobId: "b2", name: null, type: "image/png", size: 512 },
+        { blobId: "b3", name: "  ", type: "text/plain", size: 10 },
       ],
     });
     const draft = forwardDraft(email, identities);
     expect(draft.attachments).toEqual([
       { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
       { blobId: "b2", name: "attachment", type: "image/png", size: 512 },
+      { blobId: "b3", name: "attachment", type: "text/plain", size: 10 },
     ]);
   });
 

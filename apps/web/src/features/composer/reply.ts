@@ -121,7 +121,7 @@ export function forwardDraft(email: EmailDetail, identities: Identity[]): Compos
     bodyHtml: quotedBody(email),
     attachments: email.attachments.map((attachment) => ({
       blobId: attachment.blobId,
-      name: attachment.name ?? "attachment",
+      name: attachment.name?.trim() || "attachment",
       type: attachment.type,
       size: attachment.size,
     })),
