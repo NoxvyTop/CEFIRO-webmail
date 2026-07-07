@@ -376,7 +376,7 @@ permitida es hacia GitHub/GHCR (repos e imágenes propios).
 |------|---------|--------|
 | F1 — Correo | Leer, redactar, responder, adjuntos con previsualización, carpetas, búsqueda, firmas, etiquetas, identidades múltiples (enviar como / recibido en), notificaciones, papelera con retención, login SSO, bootstrap/recuperación | ✅ Completa |
 | F2 — Administración | Portal admin (`/admin`): provisioning JIT en el primer login SSO, gestión de usuarios (credencial de buzón, rol, archivado con revocación de sesiones), config OIDC administrable; login doble (SSO + puerta de emergencia bootstrap); correos grupales (Modelo A: copia a la bandeja, zona de grupos, toggle de bandeja unificada) | ✅ Completa |
-| F3 — Organización | Filtros/reglas (UI de Sieve), respuestas automáticas | Pendiente |
+| F3 — Organización | Filtros/reglas (UI de Sieve), respuestas automáticas | ✅ Completa |
 | F4 — Suite Odoo | Calendario embebido, módulo de tareas, configurables por el admin | Pendiente |
 
 Cada fase llega a `main` funcionando.
