@@ -18,3 +18,12 @@ export function useAuth() {
 
   return { user: query.data, isLoading: query.isLoading, logout };
 }
+
+export async function bootstrapLogin(email: string, password: string): Promise<boolean> {
+  const res = await fetch("/api/auth/bootstrap", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  return res.ok;
+}
