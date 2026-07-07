@@ -5,6 +5,7 @@ import {
   identitySchema,
   sendEmailSchema,
   signatureInputSchema,
+  userPreferencesUpdateSchema,
   type AttachmentMeta,
   type EmailAddress,
   type EmailDetail,
@@ -225,6 +226,34 @@ export function createMailRouter(deps: MailDeps) {
       );
     }
     return c.json({ ok: true });
+  });
+
+  router.get("/preferences", async (c) => {
+    const user = c.get("user");
+    const preferences = await deps.userPreferences.get(user.userId);
+    return c.json(preferences);
+  });
+
+  router.put("/preferences", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const parsed = userPreferencesUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const preferences = await deps.userPreferences.merge(user.userId, parsed.data);
+    return c.json(preferences);
   });
 
   router.get("/mailboxes", requireMail(deps), async (c) => {

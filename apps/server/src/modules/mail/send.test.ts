@@ -5,6 +5,7 @@ import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
+import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -88,7 +89,13 @@ beforeEach(() => {
 
 function makeApp() {
   return createApp({
-    mailRouter: createMailRouter({ sessions, mailCredentials, signatures: createSignaturesRepo(sql), jmap: stubJmap }),
+    mailRouter: createMailRouter({
+      sessions,
+      mailCredentials,
+      signatures: createSignaturesRepo(sql),
+      userPreferences: createUserPreferencesRepo(sql),
+      jmap: stubJmap,
+    }),
   });
 }
 

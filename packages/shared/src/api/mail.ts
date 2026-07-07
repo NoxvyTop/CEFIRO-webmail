@@ -71,3 +71,13 @@ export const emailUpdateSchema = z
     message: "at least one of keywords or mailboxIds is required",
   });
 export type EmailUpdate = z.infer<typeof emailUpdateSchema>;
+
+export const userPreferencesSchema = z.object({
+  groupMailInMainInbox: z.boolean(),
+});
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+
+export const userPreferencesUpdateSchema = z.object({
+  groupMailInMainInbox: z.boolean().optional(),
+});
+export type UserPreferencesUpdate = z.infer<typeof userPreferencesUpdateSchema>;
