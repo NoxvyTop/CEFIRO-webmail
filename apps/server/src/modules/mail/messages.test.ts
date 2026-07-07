@@ -62,6 +62,7 @@ const stubJmap: JmapClient = {
       ],
     ];
   },
+  uploadBlob: async () => "blob-id",
 };
 
 let sessions: ReturnType<typeof createSessionStore>;

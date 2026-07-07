@@ -33,6 +33,7 @@ const stubJmap: JmapClient = {
     calls = methodCalls;
     return [["Email/set", nextResponse, "s"]];
   },
+  uploadBlob: async () => "blob-id",
 };
 
 let sessions: ReturnType<typeof createSessionStore>;

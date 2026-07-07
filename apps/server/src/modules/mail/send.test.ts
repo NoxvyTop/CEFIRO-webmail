@@ -55,6 +55,7 @@ const stubJmap: JmapClient = {
       ["EmailSubmission/set", submissionResponse, "s"],
     ];
   },
+  uploadBlob: async () => "blob-id",
 };
 
 let sessions: ReturnType<typeof createSessionStore>;
