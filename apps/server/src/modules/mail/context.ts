@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SignaturesRepo } from "../../infra/repos/signatures";
+import type { UserPreferencesRepo } from "../../infra/repos/user-preferences";
 import type { JmapAuth, JmapClient, JmapSession } from "../../infra/stalwart/jmap";
 import type { SessionStore } from "../auth/sessions";
 import type { AuthVariables } from "../auth/middleware";
@@ -9,6 +10,7 @@ export type MailDeps = {
   sessions: SessionStore;
   mailCredentials: MailCredentialsRepo;
   signatures: SignaturesRepo;
+  userPreferences: UserPreferencesRepo;
   jmap: JmapClient | null;
   fetchFn?: typeof fetch;
 };

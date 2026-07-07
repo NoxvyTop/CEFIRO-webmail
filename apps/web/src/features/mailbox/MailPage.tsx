@@ -1,9 +1,10 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailSummary } from "@webmail/shared";
 import { fetchMailboxes, fetchThread } from "./api";
+import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
@@ -12,10 +13,13 @@ import { ThreadView } from "../reader/ThreadView";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, replyDraft, type ComposerDraft } from "../composer/reply";
+import { useAuth } from "../auth/useAuth";
 
 export function MailPage() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   useMailEvents(true);
 
@@ -23,6 +27,7 @@ export function MailPage() {
   const threadParam = searchParams.get("thread");
   const queryParam = searchParams.get("q");
   const composeParam = searchParams.get("compose");
+  const groupParam = searchParams.get("group");
   const replyMatch = composeParam?.match(/^reply(-all)?:(.+)$/) ?? null;
   const replyAll = Boolean(replyMatch?.[1]);
   const replyEmailId = replyMatch?.[2];
@@ -36,8 +41,28 @@ export function MailPage() {
   const identitiesQuery = useQuery({
     queryKey: ["mail", "identities"],
     queryFn: fetchIdentities,
-    enabled: Boolean(composeParam),
   });
+
+  const preferencesQuery = useQuery({
+    queryKey: ["mail", "preferences"],
+    queryFn: fetchPreferences,
+  });
+  const preferences = preferencesQuery.data;
+
+  const toggleGroupMailInInboxMutation = useMutation({
+    mutationFn: (next: boolean) => updatePreferences({ groupMailInMainInbox: next }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "preferences"] });
+      queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
+  });
+
+  const groups = useMemo(
+    () => (user ? deriveGroupAddresses(identitiesQuery.data ?? [], user.email) : []),
+    [identitiesQuery.data, user],
+  );
+
+  const groupAddresses = useMemo(() => groups.map((group) => group.email), [groups]);
 
   const composeThreadQuery = useQuery({
     queryKey: ["mail", "thread", threadParam ?? ""],
@@ -47,12 +72,27 @@ export function MailPage() {
 
   const mailboxes = mailboxesQuery.data ?? [];
 
-  const selectedMailboxId = useMemo(() => {
-    if (mailboxParam) return mailboxParam;
+  const inboxMailboxId = useMemo(() => {
     if (mailboxes.length === 0) return null;
     const inbox = mailboxes.find((mailbox) => mailbox.role === "inbox");
     return (inbox ?? mailboxes[0])?.id ?? null;
-  }, [mailboxParam, mailboxes]);
+  }, [mailboxes]);
+
+  const selectedMailboxId = useMemo(() => {
+    if (mailboxParam) return mailboxParam;
+    return inboxMailboxId;
+  }, [mailboxParam, inboxMailboxId]);
+
+  const messageListMailboxId = groupParam ? inboxMailboxId : selectedMailboxId;
+
+  const messageListTo = groupParam ?? undefined;
+
+  const isMainInboxSelected = !groupParam && selectedMailboxId !== null && selectedMailboxId === inboxMailboxId;
+
+  const messageListExcludeTo =
+    isMainInboxSelected && preferences?.groupMailInMainInbox === false && groupAddresses.length > 0
+      ? groupAddresses
+      : undefined;
 
   function handleSelectMailbox(mailboxId: string) {
     setSearchParams((prev) => {
@@ -60,6 +100,16 @@ export function MailPage() {
       next.set("mailbox", mailboxId);
       next.delete("thread");
       next.delete("q");
+      next.delete("group");
+      return next;
+    });
+  }
+
+  function handleSelectGroup(address: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("group", address);
+      next.delete("thread");
       return next;
     });
   }
@@ -102,6 +152,9 @@ export function MailPage() {
         mailboxes={mailboxes}
         selectedMailboxId={selectedMailboxId}
         onSelectMailbox={handleSelectMailbox}
+        groups={groups}
+        selectedGroup={groupParam}
+        onSelectGroup={handleSelectGroup}
       />
       <section aria-label={t("mail.listRegion")} className="flex-1 overflow-y-auto border-r">
         {mailboxesQuery.isError && (
@@ -109,12 +162,24 @@ export function MailPage() {
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
-        {!mailboxesQuery.isError && selectedMailboxId && (
+        {groupAddresses.length > 0 && (
+          <label className="flex items-center gap-2 border-b p-2 text-sm">
+            <input
+              type="checkbox"
+              checked={preferences?.groupMailInMainInbox ?? false}
+              onChange={(event) => toggleGroupMailInInboxMutation.mutate(event.target.checked)}
+            />
+            {t("groups.showInInbox")}
+          </label>
+        )}
+        {!mailboxesQuery.isError && messageListMailboxId && (
           <MessageList
-            mailboxId={selectedMailboxId}
+            mailboxId={messageListMailboxId}
             query={queryParam}
             selectedThreadId={threadParam}
             onSelect={handleSelectMessage}
+            to={messageListTo}
+            excludeTo={messageListExcludeTo}
           />
         )}
       </section>
