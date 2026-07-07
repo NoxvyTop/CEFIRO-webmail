@@ -111,6 +111,7 @@
     "listRegion": "Message list",
     "readerRegion": "Reading pane",
     "unread": "{{count}} unread",
+    "messageCount": "{{count}} messages",
     "searchPlaceholder": "Search mail",
     "empty": "No messages",
     "noSubject": "(no subject)",

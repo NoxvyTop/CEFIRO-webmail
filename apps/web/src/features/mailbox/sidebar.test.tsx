@@ -54,21 +54,23 @@ describe("mailbox sidebar", () => {
     stubFetch();
     renderAt("/");
 
-    const inbox = await screen.findByText("Inbox");
-    expect(await screen.findByText("Archive")).toBeInTheDocument();
+    // The mailbox name is also echoed in the message-list header, so scope to
+    // the sidebar entry (rendered first) rather than asserting a single match.
+    const [inbox] = await screen.findAllByText("Inbox");
+    expect(await screen.findAllByText("Archive")).not.toHaveLength(0);
     expect(await screen.findByText("3")).toBeInTheDocument();
-    expect(inbox.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
+    expect(inbox!.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
   });
 
   it("selects the clicked mailbox via the URL", async () => {
     stubFetch();
     renderAt("/");
 
-    await screen.findByText("Inbox");
-    const archive = await screen.findByText("Archive");
-    fireEvent.click(archive);
+    await screen.findAllByText("Inbox");
+    const [archive] = await screen.findAllByText("Archive");
+    fireEvent.click(archive!);
 
-    expect(await screen.findByText("Archive")).toBeInTheDocument();
-    expect(archive.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
+    expect(await screen.findAllByText("Archive")).not.toHaveLength(0);
+    expect(archive!.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
   });
 });

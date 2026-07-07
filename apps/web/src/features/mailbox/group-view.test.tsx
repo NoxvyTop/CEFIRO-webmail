@@ -86,7 +86,7 @@ describe("group view filtering", () => {
   it("excludes group addresses from the main inbox when the toggle is off", async () => {
     const { fetchMock } = renderAt("/", { groupMailInMainInbox: false });
 
-    await screen.findByText("Inbox");
+    await screen.findAllByText("Inbox");
     await vi.waitFor(() => {
       const found = messagesCalls(fetchMock);
       expect(found.some((url) => url.includes("excludeTo=soporte%40x.com"))).toBe(true);

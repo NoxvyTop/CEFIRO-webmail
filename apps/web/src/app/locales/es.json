@@ -111,6 +111,7 @@
     "listRegion": "Lista de mensajes",
     "readerRegion": "Lectura",
     "unread": "{{count}} sin leer",
+    "messageCount": "{{count}} correos",
     "searchPlaceholder": "Buscar en el correo",
     "empty": "No hay mensajes",
     "noSubject": "(sin asunto)",

@@ -94,6 +94,10 @@ export function MailPage() {
       ? groupAddresses
       : undefined;
 
+  const messageListTitle = groupParam
+    ? groupParam
+    : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+
   function handleSelectMailbox(mailboxId: string) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -168,14 +172,17 @@ export function MailPage() {
         onSelectGroup={handleSelectGroup}
         onCompose={handleCompose}
       />
-      <section aria-label={t("mail.listRegion")} className="flex-1 overflow-y-auto border-r">
+      <section
+        aria-label={t("mail.listRegion")}
+        className="flex min-w-[280px] flex-[0_1_390px] flex-col overflow-y-auto border-r border-line bg-panel"
+      >
         {mailboxesQuery.isError && (
-          <p role="alert" className="p-4 text-sm text-amber-700">
+          <p role="alert" className="p-4 text-sm text-warn">
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
         {groupAddresses.length > 0 && (
-          <label className="flex items-center gap-2 border-b p-2 text-sm">
+          <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">
             <input
               type="checkbox"
               checked={preferences?.groupMailInMainInbox ?? false}
@@ -192,6 +199,7 @@ export function MailPage() {
             onSelect={handleSelectMessage}
             to={messageListTo}
             excludeTo={messageListExcludeTo}
+            title={messageListTitle}
           />
         )}
       </section>

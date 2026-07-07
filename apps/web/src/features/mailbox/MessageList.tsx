@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   useInfiniteQuery, useMutation, useQueryClient, type InfiniteData,
 } from "@tanstack/react-query";
@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import type { EmailSummary, MessagesPage } from "@webmail/shared";
 import { fetchMessages, updateMessage, PAGE_SIZE } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
+import { Avatar } from "../../app/ui/Avatar";
 
 interface MessageListProps {
   mailboxId: string;
@@ -16,17 +17,21 @@ interface MessageListProps {
   virtualized?: boolean;
   to?: string;
   excludeTo?: string[];
+  title?: string;
 }
 
 function rowClassName(unread: boolean, selected: boolean) {
-  const base = "flex cursor-pointer items-start gap-2 border-b p-2 text-sm";
+  const base =
+    "flex cursor-pointer items-start gap-2 border-b border-line p-3 text-sm transition-colors hover:bg-hover";
   const weight = unread ? "font-semibold" : "font-normal";
-  const highlight = selected ? "bg-gray-100" : "";
-  return [base, weight, highlight].filter(Boolean).join(" ");
+  const highlight = selected
+    ? "bg-sel border-l-[3px] border-l-accent pl-[9px]"
+    : "border-l-[3px] border-l-transparent pl-[9px]";
+  return [base, weight, highlight].join(" ");
 }
 
 export function MessageList({
-  mailboxId, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
+  mailboxId, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo, title,
 }: MessageListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -56,6 +61,8 @@ export function MessageList({
     () => messagesQuery.data?.pages.flatMap((page) => page.emails) ?? [],
     [messagesQuery.data],
   );
+
+  const total = messagesQuery.data?.pages[0]?.total ?? 0;
 
   const markSeenMutation = useMutation({
     mutationFn: (email: EmailSummary) => updateMessage(email.id, { keywords: { $seen: true } }),
@@ -87,7 +94,7 @@ export function MessageList({
   const rowVirtualizer = useVirtualizer({
     count: emails.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 64,
+    estimateSize: () => 84,
     overscan: 10,
   });
 
@@ -141,35 +148,34 @@ export function MessageList({
         className={rowClassName(unread, selected)}
       >
         {unread && (
-          <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-600" />
+          <span aria-hidden="true" className="mt-4 h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
         )}
+        <Avatar name={email.from[0]?.name ?? null} email={email.from[0]?.email ?? "?"} size={38} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="truncate">{fromLabel}</span>
-            <span className="shrink-0 text-xs text-gray-500">{dateLabel}</span>
+            <span className="truncate text-[14px]">{fromLabel}</span>
+            <span className="shrink-0 text-xs text-muted">{dateLabel}</span>
           </div>
-          <div className="truncate">{subjectLabel}</div>
-          <div className="truncate text-xs text-gray-500">{email.preview}</div>
+          <div className="truncate text-[13.5px]">{subjectLabel}</div>
+          <div className="truncate text-[12.5px] text-muted">{email.preview}</div>
         </div>
       </div>
     );
   }
 
+  let content: ReactNode;
+
   if (messagesQuery.isError) {
-    return (
-      <p role="alert" className="p-4 text-sm text-amber-700">
+    content = (
+      <p role="alert" className="p-4 text-sm text-warn">
         {t(mailErrorKey(messagesQuery.error))}
       </p>
     );
-  }
-
-  if (!messagesQuery.isLoading && emails.length === 0) {
-    return <p className="p-4 text-sm text-gray-500">{t("mail.empty")}</p>;
-  }
-
-  if (virtualized) {
-    return (
-      <div ref={parentRef} role="listbox" className="h-full overflow-y-auto">
+  } else if (!messagesQuery.isLoading && emails.length === 0) {
+    content = <p className="p-4 text-sm text-muted">{t("mail.empty")}</p>;
+  } else if (virtualized) {
+    content = (
+      <div ref={parentRef} role="listbox" className="min-h-0 flex-1 overflow-y-auto">
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
           {virtualItems.map((virtualRow) => {
             const email = emails[virtualRow.index];
@@ -193,12 +199,24 @@ export function MessageList({
         </div>
       </div>
     );
+  } else {
+    content = (
+      <div role="listbox" className="min-h-0 flex-1 overflow-y-auto">
+        {emails.map((email) => renderRow(email))}
+        {messagesQuery.hasNextPage && <div ref={sentinelRef} aria-hidden="true" data-testid="load-more-sentinel" />}
+      </div>
+    );
   }
 
   return (
-    <div role="listbox" className="h-full overflow-y-auto">
-      {emails.map((email) => renderRow(email))}
-      {messagesQuery.hasNextPage && <div ref={sentinelRef} aria-hidden="true" data-testid="load-more-sentinel" />}
+    <div className="flex h-full flex-col">
+      {title && (
+        <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-3">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <span className="text-xs text-muted">{t("mail.messageCount", { count: total })}</span>
+        </div>
+      )}
+      {content}
     </div>
   );
 }
