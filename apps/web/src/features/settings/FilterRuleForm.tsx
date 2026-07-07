@@ -267,7 +267,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
         <button
           type="submit"
           disabled={!valid}
-          className="rounded-md bg-accent px-3 py-1 text-sm text-white disabled:opacity-50"
+          className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
         >
           {t("settings.save")}
         </button>

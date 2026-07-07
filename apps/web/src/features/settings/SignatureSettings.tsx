@@ -160,7 +160,7 @@ export function SignatureSettings() {
             </button>
             <button
               type="submit"
-              className="rounded-md bg-accent px-3 py-1 text-sm text-white"
+              className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
             >
               {t("settings.save")}
             </button>

@@ -152,7 +152,7 @@ export function VacationSettings() {
       )}
 
       <div className="flex items-center gap-3">
-        <button type="submit" className="self-start rounded-md bg-accent px-3 py-1 text-sm text-white">
+        <button type="submit" className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
           {t("vacation.save")}
         </button>
         {saved && <span className="text-sm text-accent">{t("vacation.saved")}</span>}
