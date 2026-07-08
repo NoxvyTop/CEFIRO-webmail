@@ -33,9 +33,42 @@ jobs:
         env:
           DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
 
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - run: bun install --frozen-lockfile
+      - run: cd e2e && bunx playwright install --with-deps chromium
+      - run: cd e2e && bunx playwright test
+        env:
+          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
+          CI: "true"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+
   publish:
     if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main')
-    needs: test
+    needs: [test, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read
