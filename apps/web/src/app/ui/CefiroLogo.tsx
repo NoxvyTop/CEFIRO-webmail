@@ -10,6 +10,8 @@ export function CefiroLogo({ size = 32 }: CefiroLogoProps) {
       aria-hidden="true"
       className="text-accent"
     >
+      {/* dash flow, not a rotation: transform animations promote a GPU layer
+          whose bounds show up as a faint box behind the logo */}
       <circle
         cx="20"
         cy="20"
@@ -18,7 +20,7 @@ export function CefiroLogo({ size = 32 }: CefiroLogoProps) {
         strokeWidth="1.3"
         strokeDasharray="3.5 6.5"
         opacity="0.45"
-        style={{ transformOrigin: "center", animation: "logoSpin 28s linear infinite" }}
+        style={{ animation: "ringFlow 25s linear infinite" }}
       />
       <g stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeDasharray="12 36">
         <path
@@ -37,7 +39,7 @@ export function CefiroLogo({ size = 32 }: CefiroLogoProps) {
         r="1.6"
         fill="currentColor"
         stroke="none"
-        style={{ transformOrigin: "33px 8px", animation: "twinkle 2.4s ease-in-out infinite" }}
+        style={{ animation: "twinkle 2.4s ease-in-out infinite" }}
       />
     </svg>
   );

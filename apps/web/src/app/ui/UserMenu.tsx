@@ -67,7 +67,7 @@ export function UserMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-[calc(100%+8px)] z-50 flex min-w-[230px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-[0_24px_70px_rgba(0,0,0,0.5)]"
+          className="absolute right-0 top-[calc(100%+8px)] z-50 flex min-w-[230px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
         >
           <div className="px-3 py-2">
             {user.displayName && <div className="font-semibold">{user.displayName}</div>}

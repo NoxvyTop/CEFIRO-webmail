@@ -21,7 +21,7 @@ export function Sidebar({
       <button
         type="button"
         onClick={onCompose}
-        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98]"
+        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
           <path d="M12 20h9" />

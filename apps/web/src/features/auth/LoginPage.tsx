@@ -46,11 +46,11 @@ export function LoginPage() {
       {error && KNOWN_ERRORS.has(error) && (
         <p className="text-sm text-danger">{t(`auth.errors.${error}`)}</p>
       )}
-      <div className="flex w-full max-w-[400px] flex-col gap-5 rounded-2xl border border-line bg-panel p-7 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+      <div className="flex w-full max-w-[400px] flex-col gap-5 rounded-2xl border border-line bg-panel p-7 shadow-card">
         {mode?.bootstrapMode !== true && (
           <a
             href="/api/auth/login"
-            className="flex h-[46px] items-center justify-center gap-2 rounded-[11px] bg-accent px-4 font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98]"
+            className="flex h-[46px] items-center justify-center gap-2 rounded-[11px] bg-accent px-4 font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
               <rect x="4" y="10" width="16" height="10" rx="2" />

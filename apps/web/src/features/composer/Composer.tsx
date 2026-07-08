@@ -55,7 +55,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
       aria-label={t("composer.title")}
       className="fixed inset-0 z-50 flex items-end justify-end bg-[rgba(3,5,9,0.55)] p-6"
     >
-      <div className="flex max-h-full w-full max-w-[640px] flex-col gap-3 overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-[0_24px_70px_rgba(0,0,0,0.5)]">
+      <div className="flex max-h-full w-full max-w-[640px] flex-col gap-3 overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-pop">
         <h2 className="-mx-4 -mt-4 flex h-12 items-center rounded-t-[14px] bg-soft px-4 text-sm font-semibold">{t("composer.title")}</h2>
 
         <label className="flex flex-col gap-1 text-sm">
@@ -195,7 +195,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
             type="button"
             onClick={handleSend}
             disabled={state.sending}
-            className="flex items-center gap-2 rounded-[11px] bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-[0_2px_14px_rgba(111,227,193,0.25)] transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            className="flex items-center gap-2 rounded-[11px] bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M22 2 11 13" />
