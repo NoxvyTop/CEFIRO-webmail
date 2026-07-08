@@ -60,7 +60,8 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex h-[60px] shrink-0 items-center gap-4 overflow-x-hidden border-b border-line bg-panel px-4 text-ink">
+      {/* no overflow clipping here: it would cut off the absolutely-positioned user menu */}
+      <header className="flex h-[60px] shrink-0 items-center gap-4 border-b border-line bg-panel px-4 text-ink">
         <div className="flex shrink-0 items-center gap-3 md:min-w-[210px]">
           <CefiroLogo size={32} />
           <div className="hidden flex-col md:flex">
