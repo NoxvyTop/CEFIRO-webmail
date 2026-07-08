@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -36,9 +36,11 @@ export function MailPage() {
   const composeParam = searchParams.get("compose");
   const groupParam = searchParams.get("group");
   const starredParam = searchParams.get("starred") === "1";
+  const labelParam = searchParams.get("label");
   const composeMatch = composeParam?.match(/^(reply|reply-all|forward):(.+)$/) ?? null;
   const composeMode = composeMatch?.[1];
   const composeEmailId = composeMatch?.[2];
+  const [availableLabels, setAvailableLabels] = useState<string[]>([]);
 
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
@@ -109,7 +111,9 @@ export function MailPage() {
       ? groupAddresses
       : undefined;
 
-  const messageListHasKeyword = starredParam ? "$flagged" : undefined;
+  const messageListHasKeyword = starredParam
+    ? (labelParam ? `$flagged,${labelParam}` : "$flagged")
+    : (labelParam ?? undefined);
 
   const messageListTitle = starredParam
     ? t("mail.starredView")
@@ -153,6 +157,28 @@ export function MailPage() {
       next.delete("thread");
       next.delete("group");
       next.delete("label");
+      return next;
+    });
+  }
+
+  function handleSelectLabel(label: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (next.get("label") === label) {
+        next.delete("label");
+      } else {
+        next.set("label", label);
+      }
+      next.delete("thread");
+      return next;
+    });
+  }
+
+  function handleClearLabel() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("label");
+      next.delete("thread");
       return next;
     });
   }
@@ -211,6 +237,9 @@ export function MailPage() {
         groups={groups}
         selectedGroup={groupParam}
         onSelectGroup={handleSelectGroup}
+        labels={availableLabels}
+        selectedLabel={labelParam}
+        onSelectLabel={handleSelectLabel}
         onCompose={handleCompose}
       />
       <section
@@ -245,6 +274,9 @@ export function MailPage() {
             to={messageListTo}
             excludeTo={messageListExcludeTo}
             title={messageListTitle}
+            onLabels={setAvailableLabels}
+            activeLabel={labelParam ?? undefined}
+            onClearLabel={handleClearLabel}
           />
         )}
       </section>

@@ -8,7 +8,8 @@ import type { EmailSummary, MessagesPage } from "@webmail/shared";
 import { fetchMessages, updateMessage, PAGE_SIZE } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
-import { StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
 
 interface MessageListProps {
   mailboxId?: string;
@@ -20,6 +21,9 @@ interface MessageListProps {
   to?: string;
   excludeTo?: string[];
   title?: string;
+  onLabels?: (labels: string[]) => void;
+  activeLabel?: string;
+  onClearLabel?: () => void;
 }
 
 function rowClassName(unread: boolean, selected: boolean) {
@@ -34,11 +38,13 @@ function rowClassName(unread: boolean, selected: boolean) {
 
 export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo, title,
+  onLabels, activeLabel, onClearLabel,
 }: MessageListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const parentRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const lastLabelsRef = useRef<string>("");
 
   const queryKey = useMemo(
     () =>
@@ -66,6 +72,20 @@ export function MessageList({
   );
 
   const total = messagesQuery.data?.pages[0]?.total ?? 0;
+
+  useEffect(() => {
+    if (!onLabels) return;
+    const union = new Set<string>();
+    for (const email of emails) {
+      for (const label of userLabels(email.keywords)) union.add(label);
+    }
+    const sorted = Array.from(union).sort();
+    const joined = sorted.join(",");
+    if (joined !== lastLabelsRef.current) {
+      lastLabelsRef.current = joined;
+      onLabels(sorted);
+    }
+  }, [emails, onLabels]);
 
   const markSeenMutation = useMutation({
     mutationFn: (email: EmailSummary) => updateMessage(email.id, { keywords: { $seen: true } }),
@@ -167,6 +187,7 @@ export function MessageList({
     const date = new Date(email.receivedAt);
     const dateLabel = Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
     const starred = Boolean(email.keywords.$flagged);
+    const rowLabels = userLabels(email.keywords).slice(0, 2);
 
     return (
       <div
@@ -191,6 +212,19 @@ export function MessageList({
           </div>
           <div className="truncate text-[13.5px]">{subjectLabel}</div>
           <div className="truncate text-[12.5px] text-muted">{email.preview}</div>
+          {rowLabels.length > 0 && (
+            <div className="mt-1 flex gap-1">
+              {rowLabels.map((label) => (
+                <span
+                  key={label}
+                  className="rounded-full px-2 text-[11px]"
+                  style={{ color: labelColor(label), background: labelBackground(label) }}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <button
           type="button"
@@ -254,8 +288,26 @@ export function MessageList({
     <div className="flex h-full flex-col">
       {title && (
         <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-3">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <span className="text-xs text-muted">{t("mail.messageCount", { count: total })}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="truncate text-sm font-semibold">{title}</h2>
+            {activeLabel && (
+              <span
+                className="flex shrink-0 items-center gap-1 rounded-full px-2 text-[11px]"
+                style={{ color: labelColor(activeLabel), background: labelBackground(activeLabel) }}
+              >
+                {activeLabel}
+                <button
+                  type="button"
+                  aria-label={t("mail.clearLabel")}
+                  onClick={onClearLabel}
+                  className="flex h-3.5 w-3.5 items-center justify-center"
+                >
+                  <CloseIcon size={10} />
+                </button>
+              </span>
+            )}
+          </div>
+          <span className="shrink-0 text-xs text-muted">{t("mail.messageCount", { count: total })}</span>
         </div>
       )}
       {content}

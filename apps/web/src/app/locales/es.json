@@ -138,7 +138,9 @@
     "archive": "Archivar",
     "star": "Destacar",
     "unstar": "Quitar destacado",
-    "archived": "Correo archivado"
+    "archived": "Correo archivado",
+    "labels": "Etiquetas",
+    "clearLabel": "Quitar filtro de etiqueta"
   },
   "modules": {
     "title": "Módulos",

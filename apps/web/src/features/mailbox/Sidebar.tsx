@@ -1,6 +1,7 @@
 import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { StarIcon } from "../../app/ui/icons";
+import { labelColor } from "../../app/ui/labels";
 
 interface SidebarProps {
   mailboxes: Mailbox[];
@@ -11,12 +12,15 @@ interface SidebarProps {
   groups: Identity[];
   selectedGroup: string | null;
   onSelectGroup: (address: string) => void;
+  labels: string[];
+  selectedLabel: string | null;
+  onSelectLabel: (label: string) => void;
   onCompose: () => void;
 }
 
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
-  groups, selectedGroup, onSelectGroup, onCompose,
+  groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
 }: SidebarProps) {
   const { t } = useTranslation();
 
@@ -67,6 +71,35 @@ export function Sidebar({
         <StarIcon size={16} />
         <span>{t("mail.starredView")}</span>
       </button>
+      {labels.length > 0 && (
+        <nav aria-label={t("mail.labels")} className="text-sm">
+          <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+            {t("mail.labels")}
+          </p>
+          <ul className="flex flex-col gap-1">
+            {labels.map((label) => {
+              const selected = label === selectedLabel;
+              return (
+                <li key={label}>
+                  <button
+                    type="button"
+                    aria-current={selected ? "true" : undefined}
+                    onClick={() => onSelectLabel(label)}
+                    className="flex h-[34px] w-full items-center gap-2 truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                      style={{ background: labelColor(label) }}
+                    />
+                    <span className="truncate">{label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      )}
       {groups.length > 0 && (
         <nav aria-label={t("groups.title")} className="text-sm">
           <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">

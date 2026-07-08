@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
+import { labelBackground, labelColor } from "../../app/ui/labels";
 import { MessageList } from "./MessageList";
 
 const emailUnread = {
@@ -47,6 +48,20 @@ const emailStarred = {
   size: 150,
 };
 
+const emailLabeled = {
+  id: "e4",
+  threadId: "t4",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Dana", email: "dana@example.com" }],
+  to: [],
+  subject: "Labeled email",
+  receivedAt: "2026-07-01T07:00:00.000Z",
+  preview: "preview text four",
+  keywords: { important: true, $seen: true },
+  hasAttachment: false,
+  size: 120,
+};
+
 function stubFetch(page: { total: number; position: number; emails: unknown[] }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -63,7 +78,10 @@ function stubFetch(page: { total: number; position: number; emails: unknown[] })
   return fetchMock;
 }
 
-function renderList(onSelect = vi.fn()) {
+function renderList(
+  onSelect = vi.fn(),
+  overrides: Partial<React.ComponentProps<typeof MessageList>> = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -73,6 +91,7 @@ function renderList(onSelect = vi.fn()) {
         selectedThreadId={null}
         onSelect={onSelect}
         virtualized={false}
+        {...overrides}
       />
     </QueryClientProvider>,
   );
@@ -159,6 +178,37 @@ describe("MessageList", () => {
     expect(patchCall).toBeTruthy();
     const [, init] = patchCall as [RequestInfo | URL, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
+  });
+
+  it("renders up to 2 label chips for a row with user keywords", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailLabeled] });
+    renderList();
+
+    const chip = await screen.findByText("important");
+    expect(chip).toHaveClass("rounded-full");
+    expect(chip).toHaveStyle({ color: labelColor("important"), background: labelBackground("important") });
+  });
+
+  it("calls onLabels with the union of user labels once messages load", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailLabeled] });
+    const onLabels = vi.fn();
+    renderList(vi.fn(), { onLabels });
+
+    await screen.findByText("Labeled email");
+    await vi.waitFor(() => {
+      expect(onLabels).toHaveBeenCalledWith(["important"]);
+    });
+  });
+
+  it("shows the active label chip in the header with a clear button", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailLabeled] });
+    const onClearLabel = vi.fn();
+    renderList(vi.fn(), { title: "Inbox", activeLabel: "important", onClearLabel });
+
+    expect(await screen.findByText("important")).toBeInTheDocument();
+    const clearButton = screen.getByRole("button", { name: i18n.t("mail.clearLabel") });
+    fireEvent.click(clearButton);
+    expect(onClearLabel).toHaveBeenCalled();
   });
 
   it("clicking the unstar button on a starred email toggles $flagged to false", async () => {

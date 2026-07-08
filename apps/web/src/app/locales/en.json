@@ -138,7 +138,9 @@
     "archive": "Archive",
     "star": "Star",
     "unstar": "Unstar",
-    "archived": "Email archived"
+    "archived": "Email archived",
+    "labels": "Labels",
+    "clearLabel": "Clear label filter"
   },
   "modules": {
     "title": "Modules",
