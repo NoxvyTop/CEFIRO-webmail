@@ -17,6 +17,7 @@
 - Selectors: prefer role + accessible name (the app is a11y-first) and visible i18n text; never brittle CSS/nth-child.
 - DATABASE_URL from env (dev fallback `postgres://webmail:webmail@localhost:5434/webmail`, CI `:5432`).
 - Commit e2e artifacts to `.gitignore` (`e2e/.auth`, `e2e/test-results`, `e2e/playwright-report`, `e2e/node_modules`).
+- Local test port default 8199 (host 8080 = Odoo, 8090 = dev-container API — both busy locally; 8199 is free and works in CI too).
 - Branch: `init-e2e-playwright`.
 
 ## Notes for implementers (verified facts)
@@ -83,7 +84,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.E2E_PORT ?? 8080);
+const PORT = Number(process.env.E2E_PORT ?? 8199);
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
