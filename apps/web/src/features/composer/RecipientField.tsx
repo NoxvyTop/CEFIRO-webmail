@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { EmailAddress } from "@webmail/shared";
+import { CloseIcon } from "../../app/ui/icons";
 
 interface RecipientFieldProps {
   label: string;
@@ -56,7 +57,7 @@ export function RecipientField({ label, value, onChange }: RecipientFieldProps) 
               onClick={() => handleRemove(address.email)}
               className="text-muted"
             >
-              ×
+              <CloseIcon size={12} />
             </button>
           </span>
         ))}

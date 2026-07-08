@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { settingsErrorKey } from "./errors";
 import { FilterRuleForm } from "./FilterRuleForm";
+import { ChevronDownIcon, ChevronUpIcon } from "../../app/ui/icons";
 
 const FILTERS_QUERY_KEY = ["mail", "filters"] as const;
 
@@ -171,7 +172,7 @@ export function FilterSettings() {
                 onClick={() => move(index, -1)}
                 className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
               >
-                ↑
+                <ChevronUpIcon size={14} />
               </button>
               <button
                 type="button"
@@ -180,7 +181,7 @@ export function FilterSettings() {
                 onClick={() => move(index, 1)}
                 className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
               >
-                ↓
+                <ChevronDownIcon size={14} />
               </button>
               <button
                 type="button"

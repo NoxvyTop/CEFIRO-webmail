@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
-import { Avatar } from "./ui/Avatar";
 import { CefiroLogo } from "./ui/CefiroLogo";
+import { UserMenu } from "./ui/UserMenu";
 import { useTheme } from "./ui/useTheme";
 
 async function fetchHealth() {
@@ -85,46 +85,20 @@ export function App() {
             <kbd aria-hidden="true" className="rounded border border-line px-1.5 text-[11px] text-muted">/</kbd>
           </div>
         </form>
-        {notificationPermission === "default" && (
-          <button
-            type="button"
-            onClick={() => void handleEnableNotifications()}
-            aria-label={t("mail.enableNotifications")}
-            className="shrink-0 rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
-          >
-            🔔
-          </button>
-        )}
         {health.data && health.data.status !== "ok" && (
           <p className="text-sm text-warn">{t("health.degraded")}</p>
         )}
-        {user?.role === "admin" && (
-          <Link to="/admin" className="shrink-0 rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
-            {t("admin.title")}
-          </Link>
-        )}
-        <Link to="/settings" className="shrink-0 rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
-          {t("settings.title")}
-        </Link>
-        <button
-          type="button"
-          onClick={toggleTheme}
-          aria-label={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
-          className="shrink-0 rounded-md border border-line px-2 py-1 text-sm hover:bg-hover"
-        >
-          {theme === "night" ? "☀" : "🌙"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void logout()}
-          className="shrink-0 rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
-        >
-          {t("auth.signOut")}
-        </button>
         {user && (
-          <span aria-label={t("auth.signedInAs", { email: user.email })} title={user.email} className="shrink-0">
-            <Avatar name={user.displayName ?? null} email={user.email} size={36} />
-          </span>
+          <div className="ml-auto shrink-0">
+            <UserMenu
+              user={user}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              onLogout={() => void logout()}
+              showNotifications={notificationPermission === "default"}
+              onEnableNotifications={() => void handleEnableNotifications()}
+            />
+          </div>
         )}
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">

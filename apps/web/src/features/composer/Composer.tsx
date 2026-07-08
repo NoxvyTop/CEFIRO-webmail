@@ -7,6 +7,7 @@ import { useComposer } from "./useComposer";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import type { ComposerDraft } from "./reply";
+import { CloseIcon } from "../../app/ui/icons";
 
 interface ComposerProps {
   initial: ComposerDraft;
@@ -160,7 +161,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
                     onClick={() => removeAttachment(attachment.blobId)}
                     className="text-muted"
                   >
-                    ×
+                    <CloseIcon size={14} />
                   </button>
                 </li>
               ))}

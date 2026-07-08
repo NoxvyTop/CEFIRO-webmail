@@ -5,6 +5,7 @@ import type { EmailAddress } from "@webmail/shared";
 import { fetchThread } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
+import { ArrowLeftIcon } from "../../app/ui/icons";
 import { EmailBody } from "./EmailBody";
 
 interface ThreadViewProps {
@@ -92,7 +93,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
           aria-label={t("mail.backToList")}
           className="flex h-8 items-center rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink lg:hidden"
         >
-          ←
+          <ArrowLeftIcon />
         </button>
         <button
           type="button"
