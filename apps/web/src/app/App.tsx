@@ -1,10 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
-import { MailPage } from "../features/mailbox/MailPage";
 import { Avatar } from "./ui/Avatar";
 import { CefiroLogo } from "./ui/CefiroLogo";
 import { useTheme } from "./ui/useTheme";
@@ -23,6 +22,8 @@ export function App() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
+  const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryParam = searchParams.get("q") ?? "";
   const [searchValue, setSearchValue] = useState(queryParam);
@@ -34,9 +35,13 @@ export function App() {
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const trimmed = searchValue.trim();
+    if (location.pathname !== "/") {
+      navigate(trimmed ? `/?q=${encodeURIComponent(trimmed)}` : "/");
+      return;
+    }
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      const trimmed = searchValue.trim();
       if (trimmed) {
         next.set("q", trimmed);
       } else {
@@ -122,7 +127,9 @@ export function App() {
           </span>
         )}
       </header>
-      <MailPage />
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <Outlet />
+      </div>
     </div>
   );
 }

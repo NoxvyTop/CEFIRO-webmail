@@ -59,4 +59,20 @@ describe("auth flow", () => {
     expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
     expect(await screen.findByText("Cerrar sesión")).toBeInTheDocument();
   });
+
+  it("redirects unknown routes to the home page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) {
+          return new Response(JSON.stringify(user));
+        }
+        return new Response(JSON.stringify({ status: "ok", checks: {} }));
+      }),
+    );
+    renderAt("/no-existe");
+    expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
+    expect(await screen.findByText("Cerrar sesión")).toBeInTheDocument();
+  });
 });

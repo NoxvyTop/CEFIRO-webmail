@@ -48,7 +48,7 @@ describe("RequireAdmin", () => {
   it("renders the admin page for an admin user", async () => {
     stubMe(adminUser);
     renderAt("/admin");
-    expect(await screen.findByText("Administración")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Administración" })).toBeInTheDocument();
   });
 
   it("shows a forbidden alert for a non-admin user", async () => {
