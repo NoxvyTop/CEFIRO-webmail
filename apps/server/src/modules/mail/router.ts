@@ -75,17 +75,22 @@ const MAX_LIMIT = 100;
 
 type JmapFilter = Record<string, unknown>;
 
+const KEYWORD_PATTERN = /^[A-Za-z0-9$_.-]{1,64}$/;
+
 function recipientMatch(address: string): JmapFilter {
   return { operator: "OR", conditions: [{ to: address }, { cc: address }] };
 }
 
 function buildMessagesFilter(input: {
-  mailboxId: string;
+  mailboxId?: string;
   query?: string;
   to?: string;
   excludeTo: string[];
+  hasKeywords: string[];
 }): JmapFilter {
-  const conditions: JmapFilter[] = [{ inMailbox: input.mailboxId }];
+  const conditions: JmapFilter[] = [];
+  if (input.mailboxId) conditions.push({ inMailbox: input.mailboxId });
+  for (const keyword of input.hasKeywords) conditions.push({ hasKeyword: keyword });
   if (input.query) conditions.push({ text: input.query });
   if (input.to) conditions.push(recipientMatch(input.to));
   if (input.excludeTo.length > 0) {
@@ -474,7 +479,19 @@ export function createMailRouter(deps: MailDeps) {
 
   router.get("/messages", requireMail(deps), async (c) => {
     const mailboxId = c.req.query("mailboxId");
-    if (!mailboxId) {
+    const hasKeywords =
+      c.req
+        .query("hasKeyword")
+        ?.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean) ?? [];
+    if (!mailboxId && hasKeywords.length === 0) {
+      return c.json(
+        { code: "invalid_query", message: "errors.invalid_query", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    if (hasKeywords.some((keyword) => !KEYWORD_PATTERN.test(keyword))) {
       return c.json(
         { code: "invalid_query", message: "errors.invalid_query", traceId: c.get("traceId") },
         400,
@@ -493,7 +510,7 @@ export function createMailRouter(deps: MailDeps) {
     const limit = Math.min(requestedLimit, MAX_LIMIT);
 
     const session = c.get("jmapSession");
-    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo });
+    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo, hasKeywords });
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
         "Email/query",
