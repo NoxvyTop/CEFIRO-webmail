@@ -20,7 +20,7 @@ const mailboxes = [
     sortOrder: 0, unreadEmails: 0, totalEmails: 0,
   },
   {
-    id: "mb-archive", name: "Archive", parentId: null, role: null,
+    id: "mb-archive", name: "Archive", parentId: null, role: "archive",
     sortOrder: 1, unreadEmails: 0, totalEmails: 0,
   },
 ];
@@ -79,6 +79,22 @@ describe("starred view", () => {
 
     const flaggedCall = calls.find((url) => url.includes("hasKeyword=%24flagged"));
     expect(flaggedCall).not.toContain("mailboxId=");
+  });
+
+  it("excludes the archive mailbox from the starred view query", async () => {
+    const { fetchMock } = renderAt("/?starred=1");
+
+    await screen.findAllByText("Inbox");
+
+    const flaggedCall = await vi.waitFor(() => {
+      const found = messagesCalls(fetchMock).find(
+        (url) => url.includes("hasKeyword=%24flagged") && url.includes("excludeMailboxId="),
+      );
+      expect(found).toBeDefined();
+      return found;
+    });
+
+    expect(flaggedCall).toContain("excludeMailboxId=mb-archive");
   });
 
   it("marks the starred entry as current and does not highlight any mailbox", async () => {

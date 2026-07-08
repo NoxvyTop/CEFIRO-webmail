@@ -308,6 +308,7 @@ export function MailPage() {
             onSelect={handleSelectMessage}
             to={messageListTo}
             excludeTo={messageListExcludeTo}
+            excludeMailboxId={starredParam ? archiveMailboxId ?? undefined : undefined}
             title={messageListTitle}
             onLabels={handleLabels}
             activeLabel={labelParam ?? undefined}

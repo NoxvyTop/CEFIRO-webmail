@@ -86,6 +86,7 @@ function buildMessagesFilter(input: {
   query?: string;
   to?: string;
   excludeTo: string[];
+  excludeMailboxId?: string;
   hasKeywords: string[];
 }): JmapFilter {
   const conditions: JmapFilter[] = [];
@@ -95,6 +96,9 @@ function buildMessagesFilter(input: {
   if (input.to) conditions.push(recipientMatch(input.to));
   if (input.excludeTo.length > 0) {
     conditions.push({ operator: "NOT", conditions: input.excludeTo.map(recipientMatch) });
+  }
+  if (input.excludeMailboxId) {
+    conditions.push({ operator: "NOT", conditions: [{ inMailbox: input.excludeMailboxId }] });
   }
   return conditions.length === 1 ? conditions[0]! : { operator: "AND", conditions };
 }
@@ -505,12 +509,13 @@ export function createMailRouter(deps: MailDeps) {
         ?.split(",")
         .map((s) => s.trim())
         .filter(Boolean) ?? [];
+    const excludeMailboxId = c.req.query("excludeMailboxId");
     const position = Number(c.req.query("position") ?? "0") || 0;
     const requestedLimit = Number(c.req.query("limit") ?? String(DEFAULT_LIMIT)) || DEFAULT_LIMIT;
     const limit = Math.min(requestedLimit, MAX_LIMIT);
 
     const session = c.get("jmapSession");
-    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo, hasKeywords });
+    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo, excludeMailboxId, hasKeywords });
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
         "Email/query",

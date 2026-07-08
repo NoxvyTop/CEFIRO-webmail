@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isPlainShortcut, isTypingTarget } from "./shortcuts";
+import { afterEach, describe, expect, it } from "vitest";
+import { isModalOpen, isPlainShortcut, isTypingTarget } from "./shortcuts";
 
 function keydownEvent(key: string, target: EventTarget, overrides: Partial<KeyboardEventInit> = {}): KeyboardEvent {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...overrides });
@@ -65,5 +65,33 @@ describe("isPlainShortcut", () => {
   it("returns false for a typing target", () => {
     const input = document.createElement("input");
     expect(isPlainShortcut(keydownEvent("j", input))).toBe(false);
+  });
+
+  it("returns false when a dialog is open in the DOM", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.appendChild(dialog);
+    try {
+      expect(isPlainShortcut(keydownEvent("j", document.body))).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+  });
+});
+
+describe("isModalOpen", () => {
+  afterEach(() => {
+    Array.from(document.querySelectorAll('[role="dialog"]')).forEach((el) => el.remove());
+  });
+
+  it("returns false when no dialog is present", () => {
+    expect(isModalOpen()).toBe(false);
+  });
+
+  it("returns true when a dialog element is appended to the DOM", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.appendChild(dialog);
+    expect(isModalOpen()).toBe(true);
   });
 });

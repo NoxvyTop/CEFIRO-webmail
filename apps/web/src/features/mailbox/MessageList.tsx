@@ -22,6 +22,7 @@ interface MessageListProps {
   virtualized?: boolean;
   to?: string;
   excludeTo?: string[];
+  excludeMailboxId?: string;
   title?: string;
   onLabels?: (labels: string[]) => void;
   activeLabel?: string;
@@ -41,7 +42,8 @@ function rowClassName(unread: boolean, selected: boolean) {
 }
 
 export function MessageList({
-  mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo, title,
+  mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
+  excludeMailboxId, title,
   onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived,
 }: MessageListProps) {
   const { t } = useTranslation();
@@ -53,8 +55,11 @@ export function MessageList({
 
   const queryKey = useMemo(
     () =>
-      ["mail", "messages", mailboxId ?? null, hasKeyword ?? null, query, to ?? null, (excludeTo ?? []).join(",")] as const,
-    [mailboxId, hasKeyword, query, to, excludeTo],
+      [
+        "mail", "messages", mailboxId ?? null, hasKeyword ?? null, query, to ?? null,
+        (excludeTo ?? []).join(","), excludeMailboxId ?? null,
+      ] as const,
+    [mailboxId, hasKeyword, query, to, excludeTo, excludeMailboxId],
   );
 
   const messagesQuery = useInfiniteQuery({
@@ -62,6 +67,7 @@ export function MessageList({
     queryFn: ({ pageParam }) =>
       fetchMessages({
         mailboxId, hasKeyword, position: pageParam, limit: PAGE_SIZE, query: query ?? undefined, to, excludeTo,
+        excludeMailboxId,
       }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
@@ -133,6 +139,7 @@ export function MessageList({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread"] });
+      queryClient.invalidateQueries({ queryKey });
     },
   });
 

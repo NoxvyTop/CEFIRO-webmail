@@ -29,7 +29,7 @@ export async function fetchMailboxes(): Promise<Mailbox[]> {
 
 export async function fetchMessages(input: {
   mailboxId?: string; hasKeyword?: string; position: number; limit: number; query?: string;
-  to?: string; excludeTo?: string[];
+  to?: string; excludeTo?: string[]; excludeMailboxId?: string;
 }): Promise<MessagesPage> {
   const params = new URLSearchParams({
     position: String(input.position),
@@ -40,6 +40,7 @@ export async function fetchMessages(input: {
   if (input.query) params.set("query", input.query);
   if (input.to) params.set("to", input.to);
   if (input.excludeTo && input.excludeTo.length > 0) params.set("excludeTo", input.excludeTo.join(","));
+  if (input.excludeMailboxId) params.set("excludeMailboxId", input.excludeMailboxId);
   const res = await fetch(`/api/mail/messages?${params}`);
   if (!res.ok) return parseError(res);
   return messagesPageSchema.parse(await res.json());

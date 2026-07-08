@@ -111,6 +111,22 @@ describe("GET /api/mail/messages — keyword filters", () => {
     });
   });
 
+  it("excludes a mailbox via excludeMailboxId combined with hasKeyword", async () => {
+    const res = await makeApp(stubJmap).request(
+      "/api/mail/messages?hasKeyword=%24flagged&excludeMailboxId=mb-archive",
+      { headers: { cookie: `session=${token}` } },
+    );
+    expect(res.status).toBe(200);
+    const [queryCall] = calls;
+    expect((queryCall?.[1] as { filter: unknown }).filter).toEqual({
+      operator: "AND",
+      conditions: [
+        { hasKeyword: "$flagged" },
+        { operator: "NOT", conditions: [{ inMailbox: "mb-archive" }] },
+      ],
+    });
+  });
+
   it("rejects a request with neither mailboxId nor hasKeyword", async () => {
     const res = await makeApp(stubJmap).request("/api/mail/messages", {
       headers: { cookie: `session=${token}` },

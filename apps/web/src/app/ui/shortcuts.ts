@@ -6,12 +6,17 @@ export function isTypingTarget(event: KeyboardEvent): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+export function isModalOpen(): boolean {
+  return document.querySelector('[role="dialog"]') !== null;
+}
+
 export function isPlainShortcut(event: KeyboardEvent): boolean {
   return (
     !event.defaultPrevented &&
     !event.ctrlKey &&
     !event.metaKey &&
     !event.altKey &&
-    !isTypingTarget(event)
+    !isTypingTarget(event) &&
+    !isModalOpen()
   );
 }
