@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
+import { ToastProvider } from "../../app/ui/toast";
 import { ThreadView } from "./ThreadView";
 
 const REMOTE_IMAGE_URL = "https://tracker.evil/pixel.png";
@@ -85,7 +86,9 @@ function renderThread(threadId = "t1", archiveMailboxId: string | null = null) {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <ThreadView threadId={threadId} archiveMailboxId={archiveMailboxId} />
+        <ToastProvider>
+          <ThreadView threadId={threadId} archiveMailboxId={archiveMailboxId} />
+        </ToastProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );

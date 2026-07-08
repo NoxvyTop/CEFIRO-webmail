@@ -8,6 +8,7 @@ import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import type { ComposerDraft } from "./reply";
 import { CloseIcon } from "../../app/ui/icons";
+import { useToast } from "../../app/ui/toast";
 
 interface ComposerProps {
   initial: ComposerDraft;
@@ -20,6 +21,7 @@ function formatSizeKb(size: number): string {
 
 export function Composer({ initial, onClose }: ComposerProps) {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const { state, setField, addFiles, removeAttachment, send } = useComposer(initial);
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
@@ -40,7 +42,10 @@ export function Composer({ initial, onClose }: ComposerProps) {
 
   async function handleSend() {
     const ok = await send();
-    if (ok) onClose();
+    if (ok) {
+      showToast(t("composer.sent"));
+      onClose();
+    }
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {

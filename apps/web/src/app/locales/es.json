@@ -139,6 +139,7 @@
     "star": "Destacar",
     "unstar": "Quitar destacado",
     "archived": "Correo archivado",
+    "archivedHint": "pulsa e para archivar más rápido",
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta"
   },
@@ -165,6 +166,7 @@
     "forward": "Reenviar",
     "attach": "Adjuntar",
     "send": "Enviar",
+    "sent": "Correo enviado",
     "cancel": "Cancelar",
     "sending": "Enviando…",
     "invalidEmail": "Correo inválido",

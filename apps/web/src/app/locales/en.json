@@ -139,6 +139,7 @@
     "star": "Star",
     "unstar": "Unstar",
     "archived": "Email archived",
+    "archivedHint": "press e to archive faster",
     "labels": "Labels",
     "clearLabel": "Clear label filter"
   },
@@ -165,6 +166,7 @@
     "forward": "Forward",
     "attach": "Attach",
     "send": "Send",
+    "sent": "Email sent",
     "cancel": "Cancel",
     "sending": "Sending…",
     "invalidEmail": "Invalid email",

@@ -5,6 +5,7 @@ import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { Identity, Signature } from "@webmail/shared";
 import type { ComposerDraft } from "./reply";
+import { ToastProvider } from "../../app/ui/toast";
 import { Composer } from "./Composer";
 
 const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment } = vi.hoisted(() => ({
@@ -35,7 +36,9 @@ function renderComposer(onClose = vi.fn(), initial: ComposerDraft = baseDraft())
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <Composer initial={initial} onClose={onClose} />
+      <ToastProvider>
+        <Composer initial={initial} onClose={onClose} />
+      </ToastProvider>
     </QueryClientProvider>,
   );
   return { onClose };

@@ -6,6 +6,7 @@ import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { ArchiveIcon, ArrowLeftIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import { useToast } from "../../app/ui/toast";
 import { EmailBody } from "./EmailBody";
 
 interface ThreadViewProps {
@@ -50,6 +51,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   const threadQuery = useQuery({
     queryKey: ["mail", "thread", threadId],
@@ -64,6 +66,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail"] });
+      showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
       backToList();
     },
   });
