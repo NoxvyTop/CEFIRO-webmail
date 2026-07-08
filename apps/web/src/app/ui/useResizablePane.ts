@@ -1,24 +1,27 @@
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
-const MIN_WIDTH = 280;
-const MAX_WIDTH = 560;
+export const PANE_MIN_WIDTH = 280;
+export const PANE_MAX_WIDTH = 560;
 const DEFAULT_WIDTH = 390;
 const STORAGE_KEY = "cefiro-list-width";
 
 function clamp(value: number): number {
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
+  return Math.min(PANE_MAX_WIDTH, Math.max(PANE_MIN_WIDTH, value));
 }
 
 function readWidth(): number {
   try {
     const stored = Number(localStorage.getItem(STORAGE_KEY));
-    if (Number.isFinite(stored) && stored >= MIN_WIDTH && stored <= MAX_WIDTH) return stored;
+    if (Number.isFinite(stored) && stored >= PANE_MIN_WIDTH && stored <= PANE_MAX_WIDTH) {
+      return stored;
+    }
   } catch {
     // storage unavailable — use the default
   }
@@ -36,6 +39,10 @@ function persist(width: number): void {
 export function useResizablePane() {
   const [width, setWidth] = useState(readWidth);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const detachDrag = useRef<(() => void) | null>(null);
+
+  // safety net: tear down window listeners if the component unmounts mid-drag
+  useEffect(() => () => detachDrag.current?.(), []);
 
   const startDrag = useCallback((event: ReactMouseEvent) => {
     event.preventDefault();
@@ -45,10 +52,14 @@ export function useResizablePane() {
       if (!dragState.current) return;
       setWidth(clamp(dragState.current.startWidth + move.clientX - dragState.current.startX));
     }
-    function handleUp() {
+    function detach() {
       dragState.current = null;
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
+      detachDrag.current = null;
+    }
+    function handleUp() {
+      detach();
       setWidth((current) => {
         persist(current);
         return current;
@@ -56,6 +67,7 @@ export function useResizablePane() {
     }
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
+    detachDrag.current = detach;
   }, [width]);
 
   const handleKeyDown = useCallback((event: ReactKeyboardEvent) => {

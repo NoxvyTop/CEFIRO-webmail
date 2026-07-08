@@ -15,7 +15,11 @@ import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { useAuth } from "../auth/useAuth";
-import { useResizablePane } from "../../app/ui/useResizablePane";
+import {
+  PANE_MAX_WIDTH,
+  PANE_MIN_WIDTH,
+  useResizablePane,
+} from "../../app/ui/useResizablePane";
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -213,6 +217,9 @@ export function MailPage() {
         role="separator"
         aria-orientation="vertical"
         aria-label={t("mail.resizeList")}
+        aria-valuemin={PANE_MIN_WIDTH}
+        aria-valuemax={PANE_MAX_WIDTH}
+        aria-valuenow={listWidth}
         tabIndex={0}
         onMouseDown={startDrag}
         onKeyDown={handleKeyDown}
