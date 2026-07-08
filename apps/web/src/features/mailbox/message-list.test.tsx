@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
+import { ToastProvider } from "../../app/ui/toast";
 import { labelBackground, labelColor } from "../../app/ui/labels";
 import { MessageList } from "./MessageList";
 
@@ -85,14 +86,17 @@ function renderList(
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <MessageList
-        mailboxId="mb-inbox"
-        query={null}
-        selectedThreadId={null}
-        onSelect={onSelect}
-        virtualized={false}
-        {...overrides}
-      />
+      <ToastProvider>
+        <MessageList
+          mailboxId="mb-inbox"
+          query={null}
+          selectedThreadId={null}
+          onSelect={onSelect}
+          virtualized={false}
+          archiveMailboxId={null}
+          {...overrides}
+        />
+      </ToastProvider>
     </QueryClientProvider>,
   );
   return { onSelect };
@@ -228,5 +232,64 @@ describe("MessageList", () => {
     expect(patchCall).toBeTruthy();
     const [, init] = patchCall as [RequestInfo | URL, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: false } });
+  });
+
+  it("pressing j with nothing selected opens the first email", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    const { onSelect } = renderList();
+
+    await screen.findByText("Hello there");
+    fireEvent.keyDown(window, { key: "j" });
+
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "e1" }));
+  });
+
+  it("pressing s toggles the star on the selected email", async () => {
+    const fetchMock = stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList(vi.fn(), { selectedThreadId: "t1" });
+
+    await screen.findByText("Hello there");
+    fireEvent.keyDown(window, { key: "s" });
+
+    const patchCall = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) => String(input) === "/api/mail/messages/e1" && (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(call).toBeTruthy();
+      return call;
+    });
+    const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
+  });
+
+  it("pressing e archives the selected email when an archive mailbox exists", async () => {
+    const fetchMock = stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList(vi.fn(), { selectedThreadId: "t1", archiveMailboxId: "arch1" });
+
+    await screen.findByText("Hello there");
+    fireEvent.keyDown(window, { key: "e" });
+
+    const patchCall = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) => String(input) === "/api/mail/messages/e1" && (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(call).toBeTruthy();
+      return call;
+    });
+    const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { arch1: true } });
+  });
+
+  it("ignores shortcut keys when the event target is an input", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    const { onSelect } = renderList();
+
+    await screen.findByText("Hello there");
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: "j" });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    document.body.removeChild(input);
   });
 });

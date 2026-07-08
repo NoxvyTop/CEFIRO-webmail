@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -14,6 +14,7 @@ import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
+import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useAuth } from "../auth/useAuth";
 import {
   PANE_MAX_WIDTH,
@@ -199,6 +200,30 @@ export function MailPage() {
     });
   }
 
+  function handleArchived(email: EmailSummary) {
+    if (email.threadId === threadParam) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("thread");
+        return next;
+      });
+    }
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isPlainShortcut(event)) return;
+      if (event.key === "c") {
+        event.preventDefault();
+        handleCompose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function removeComposeParam() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -287,6 +312,8 @@ export function MailPage() {
             onLabels={handleLabels}
             activeLabel={labelParam ?? undefined}
             onClearLabel={handleClearLabel}
+            archiveMailboxId={archiveMailboxId}
+            onArchived={handleArchived}
           />
         )}
       </section>

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -6,6 +7,7 @@ import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { ArchiveIcon, ArrowLeftIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { EmailBody } from "./EmailBody";
 
@@ -96,6 +98,24 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     });
   }
 
+  const emails = threadQuery.data?.emails ?? [];
+  const lastEmail = emails[emails.length - 1];
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isPlainShortcut(event)) return;
+      if (!lastEmail) return;
+      if (event.key === "r") {
+        event.preventDefault();
+        openCompose(`reply:${lastEmail.id}`);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastEmail]);
+
   if (threadQuery.isError) {
     return (
       <p role="alert" className="p-4 text-sm text-warn">
@@ -103,9 +123,6 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
       </p>
     );
   }
-
-  const emails = threadQuery.data?.emails ?? [];
-  const lastEmail = emails[emails.length - 1];
 
   if (!lastEmail) return null;
 

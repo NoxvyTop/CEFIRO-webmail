@@ -10,6 +10,8 @@ import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { isPlainShortcut } from "../../app/ui/shortcuts";
+import { useToast } from "../../app/ui/toast";
 
 interface MessageListProps {
   mailboxId?: string;
@@ -24,6 +26,8 @@ interface MessageListProps {
   onLabels?: (labels: string[]) => void;
   activeLabel?: string;
   onClearLabel?: () => void;
+  archiveMailboxId: string | null;
+  onArchived?: (email: EmailSummary) => void;
 }
 
 function rowClassName(unread: boolean, selected: boolean) {
@@ -38,10 +42,11 @@ function rowClassName(unread: boolean, selected: boolean) {
 
 export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo, title,
-  onLabels, activeLabel, onClearLabel,
+  onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived,
 }: MessageListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const parentRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const lastLabelsRef = useRef<string>("");
@@ -131,6 +136,19 @@ export function MessageList({
     },
   });
 
+  const archiveMutation = useMutation({
+    mutationFn: (email: EmailSummary) => {
+      if (!archiveMailboxId) throw new Error("no archive mailbox");
+      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
+    },
+    onSuccess: (_data, email) => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: ["mail", "thread"] });
+      showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
+      onArchived?.(email);
+    },
+  });
+
   function handleSelect(email: EmailSummary) {
     onSelect(email);
     if (!email.keywords.$seen) {
@@ -142,6 +160,48 @@ export function MessageList({
     event.stopPropagation();
     starMutation.mutate({ email, starred: !email.keywords.$flagged });
   }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isPlainShortcut(event)) return;
+      if (emails.length === 0) return;
+
+      if (event.key === "j") {
+        event.preventDefault();
+        const currentIndex = emails.findIndex((email) => email.threadId === selectedThreadId);
+        const nextEmail = currentIndex === -1 ? emails[0] : emails[currentIndex + 1];
+        if (nextEmail) handleSelect(nextEmail);
+        return;
+      }
+
+      if (event.key === "k") {
+        event.preventDefault();
+        const currentIndex = emails.findIndex((email) => email.threadId === selectedThreadId);
+        if (currentIndex <= 0) return;
+        const previousEmail = emails[currentIndex - 1];
+        if (previousEmail) handleSelect(previousEmail);
+        return;
+      }
+
+      const selectedEmail = emails.find((email) => email.threadId === selectedThreadId);
+      if (!selectedEmail) return;
+
+      if (event.key === "s") {
+        event.preventDefault();
+        starMutation.mutate({ email: selectedEmail, starred: !selectedEmail.keywords.$flagged });
+        return;
+      }
+
+      if (event.key === "e" && archiveMailboxId) {
+        event.preventDefault();
+        archiveMutation.mutate(selectedEmail);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emails, selectedThreadId, archiveMailboxId]);
 
   const rowVirtualizer = useVirtualizer({
     count: emails.length,
