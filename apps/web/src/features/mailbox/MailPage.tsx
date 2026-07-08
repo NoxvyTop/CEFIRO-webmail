@@ -35,6 +35,7 @@ export function MailPage() {
   const queryParam = searchParams.get("q");
   const composeParam = searchParams.get("compose");
   const groupParam = searchParams.get("group");
+  const starredParam = searchParams.get("starred") === "1";
   const composeMatch = composeParam?.match(/^(reply|reply-all|forward):(.+)$/) ?? null;
   const composeMode = composeMatch?.[1];
   const composeEmailId = composeMatch?.[2];
@@ -95,20 +96,32 @@ export function MailPage() {
     return inboxMailboxId;
   }, [mailboxParam, inboxMailboxId]);
 
-  const messageListMailboxId = groupParam ? inboxMailboxId : selectedMailboxId;
+  const messageListMailboxId =
+    starredParam ? undefined : (groupParam ? inboxMailboxId : selectedMailboxId) ?? undefined;
 
-  const messageListTo = groupParam ?? undefined;
+  const messageListTo = starredParam ? undefined : (groupParam ?? undefined);
 
-  const isMainInboxSelected = !groupParam && selectedMailboxId !== null && selectedMailboxId === inboxMailboxId;
+  const isMainInboxSelected =
+    !starredParam && !groupParam && selectedMailboxId !== null && selectedMailboxId === inboxMailboxId;
 
   const messageListExcludeTo =
     isMainInboxSelected && preferences?.groupMailInMainInbox === false && groupAddresses.length > 0
       ? groupAddresses
       : undefined;
 
-  const messageListTitle = groupParam
-    ? groupParam
-    : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+  const messageListHasKeyword = starredParam ? "$flagged" : undefined;
+
+  const messageListTitle = starredParam
+    ? t("mail.starredView")
+    : groupParam
+      ? groupParam
+      : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+
+  // The starred view is not tied to any single mailbox, so the sidebar must not
+  // highlight a mailbox row (e.g. Inbox) while it is active. `selectedMailboxId`
+  // itself keeps deriving from the URL/inbox fallback for query purposes; only
+  // the value handed to the Sidebar for its aria-current styling is nulled out.
+  const sidebarSelectedMailboxId = starredParam ? null : selectedMailboxId;
 
   function handleSelectMailbox(mailboxId: string) {
     setSearchParams((prev) => {
@@ -117,6 +130,7 @@ export function MailPage() {
       next.delete("thread");
       next.delete("q");
       next.delete("group");
+      next.delete("starred");
       return next;
     });
   }
@@ -126,6 +140,19 @@ export function MailPage() {
       const next = new URLSearchParams(prev);
       next.set("group", address);
       next.delete("thread");
+      next.delete("starred");
+      return next;
+    });
+  }
+
+  function handleSelectStarred() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("starred", "1");
+      next.delete("mailbox");
+      next.delete("thread");
+      next.delete("group");
+      next.delete("label");
       return next;
     });
   }
@@ -177,8 +204,10 @@ export function MailPage() {
     <div className="flex flex-1 overflow-hidden">
       <Sidebar
         mailboxes={mailboxes}
-        selectedMailboxId={selectedMailboxId}
+        selectedMailboxId={sidebarSelectedMailboxId}
         onSelectMailbox={handleSelectMailbox}
+        starredSelected={starredParam}
+        onSelectStarred={handleSelectStarred}
         groups={groups}
         selectedGroup={groupParam}
         onSelectGroup={handleSelectGroup}
@@ -196,7 +225,7 @@ export function MailPage() {
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
-        {groupAddresses.length > 0 && (
+        {!starredParam && groupAddresses.length > 0 && (
           <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">
             <input
               type="checkbox"
@@ -206,9 +235,10 @@ export function MailPage() {
             {t("groups.showInInbox")}
           </label>
         )}
-        {!mailboxesQuery.isError && messageListMailboxId && (
+        {!mailboxesQuery.isError && (starredParam || messageListMailboxId) && (
           <MessageList
             mailboxId={messageListMailboxId}
+            hasKeyword={messageListHasKeyword}
             query={queryParam}
             selectedThreadId={threadParam}
             onSelect={handleSelectMessage}

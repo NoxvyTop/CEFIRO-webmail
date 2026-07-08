@@ -73,4 +73,19 @@ describe("mailbox sidebar", () => {
     expect(await screen.findAllByText("Archive")).not.toHaveLength(0);
     expect(archive!.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
   });
+
+  it("renders the starred entry and marks it current when the starred param is set", async () => {
+    stubFetch();
+    renderAt("/?starred=1");
+
+    await screen.findAllByText("Inbox");
+    const starredEntries = await screen.findAllByText("Destacados");
+    const starredButton = starredEntries
+      .map((el) => el.closest("button"))
+      .find((button): button is HTMLButtonElement => button !== null);
+
+    expect(starredButton).toHaveAttribute("aria-current", "true");
+    const inbox = screen.getAllByText("Inbox")[0];
+    expect(inbox!.closest("button")).not.toHaveAttribute("aria-current");
+  });
 });

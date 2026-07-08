@@ -116,6 +116,7 @@
   "mail": {
     "listRegion": "Message list",
     "readerRegion": "Reading pane",
+    "starredView": "Starred",
     "unread": "{{count}} unread",
     "messageCount": "{{count}} messages",
     "searchPlaceholder": "Search mail",

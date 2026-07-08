@@ -1,10 +1,13 @@
 import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
+import { StarIcon } from "../../app/ui/icons";
 
 interface SidebarProps {
   mailboxes: Mailbox[];
   selectedMailboxId: string | null;
   onSelectMailbox: (mailboxId: string) => void;
+  starredSelected: boolean;
+  onSelectStarred: () => void;
   groups: Identity[];
   selectedGroup: string | null;
   onSelectGroup: (address: string) => void;
@@ -12,7 +15,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  mailboxes, selectedMailboxId, onSelectMailbox, groups, selectedGroup, onSelectGroup, onCompose,
+  mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
+  groups, selectedGroup, onSelectGroup, onCompose,
 }: SidebarProps) {
   const { t } = useTranslation();
 
@@ -54,6 +58,15 @@ export function Sidebar({
           );
         })}
       </ul>
+      <button
+        type="button"
+        aria-current={starredSelected ? "true" : undefined}
+        onClick={onSelectStarred}
+        className="flex h-[38px] w-full items-center gap-2 rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+      >
+        <StarIcon size={16} />
+        <span>{t("mail.starredView")}</span>
+      </button>
       {groups.length > 0 && (
         <nav aria-label={t("groups.title")} className="text-sm">
           <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">

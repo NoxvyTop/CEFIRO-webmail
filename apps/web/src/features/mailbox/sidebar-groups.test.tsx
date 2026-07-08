@@ -28,6 +28,8 @@ function renderSidebar(overrides: Partial<React.ComponentProps<typeof Sidebar>> 
         selectedGroup={null}
         onSelectGroup={() => {}}
         onCompose={() => {}}
+        starredSelected={false}
+        onSelectStarred={() => {}}
         {...overrides}
       />
     </QueryClientProvider>,
