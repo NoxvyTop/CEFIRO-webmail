@@ -133,7 +133,11 @@
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "generic": "No se pudo cargar el correo"
     },
-    "backToList": "Volver a la lista"
+    "backToList": "Volver a la lista",
+    "archive": "Archivar",
+    "star": "Destacar",
+    "unstar": "Quitar destacado",
+    "archived": "Correo archivado"
   },
   "modules": {
     "title": "Módulos",

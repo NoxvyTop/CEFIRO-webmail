@@ -118,4 +118,32 @@ describe("MessageList", () => {
     );
     expect(patchCall).toBeUndefined();
   });
+
+  it("shows a star button on each row with the not-starred label", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList();
+
+    await screen.findByText("Hello there");
+    const starButtons = screen.getAllByRole("button", { name: i18n.t("mail.star") });
+    expect(starButtons).toHaveLength(2);
+  });
+
+  it("clicking the star button toggles $flagged without selecting the row", async () => {
+    const fetchMock = stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    const { onSelect } = renderList();
+
+    await screen.findByText("Hello there");
+    const starButtons = screen.getAllByRole("button", { name: i18n.t("mail.star") });
+    fireEvent.click(starButtons[0]!);
+
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await screen.findByText("Hello there");
+    const patchCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input) === "/api/mail/messages/e1" && (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patchCall).toBeTruthy();
+    const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
+  });
 });

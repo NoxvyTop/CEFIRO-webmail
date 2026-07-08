@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import {
   useInfiniteQuery, useMutation, useQueryClient, type InfiniteData,
 } from "@tanstack/react-query";
@@ -8,9 +8,11 @@ import type { EmailSummary, MessagesPage } from "@webmail/shared";
 import { fetchMessages, updateMessage, PAGE_SIZE } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
+import { StarFilledIcon, StarIcon } from "../../app/ui/icons";
 
 interface MessageListProps {
-  mailboxId: string;
+  mailboxId?: string;
+  hasKeyword?: string;
   query: string | null;
   selectedThreadId: string | null;
   onSelect: (email: EmailSummary) => void;
@@ -31,7 +33,7 @@ function rowClassName(unread: boolean, selected: boolean) {
 }
 
 export function MessageList({
-  mailboxId, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo, title,
+  mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo, title,
 }: MessageListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -39,15 +41,16 @@ export function MessageList({
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const queryKey = useMemo(
-    () => ["mail", "messages", mailboxId, query, to ?? null, (excludeTo ?? []).join(",")] as const,
-    [mailboxId, query, to, excludeTo],
+    () =>
+      ["mail", "messages", mailboxId ?? null, hasKeyword ?? null, query, to ?? null, (excludeTo ?? []).join(",")] as const,
+    [mailboxId, hasKeyword, query, to, excludeTo],
   );
 
   const messagesQuery = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) =>
       fetchMessages({
-        mailboxId, position: pageParam, limit: PAGE_SIZE, query: query ?? undefined, to, excludeTo,
+        mailboxId, hasKeyword, position: pageParam, limit: PAGE_SIZE, query: query ?? undefined, to, excludeTo,
       }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
@@ -84,11 +87,37 @@ export function MessageList({
     },
   });
 
+  const starMutation = useMutation({
+    mutationFn: ({ email, starred }: { email: EmailSummary; starred: boolean }) =>
+      updateMessage(email.id, { keywords: { $flagged: starred } }),
+    onMutate: async ({ email, starred }) => {
+      queryClient.setQueryData<InfiniteData<MessagesPage>>(queryKey, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          pages: old.pages.map((page) => ({
+            ...page,
+            emails: page.emails.map((e) =>
+              e.id === email.id ? { ...e, keywords: { ...e.keywords, $flagged: starred } } : e),
+          })),
+        };
+      });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey });
+    },
+  });
+
   function handleSelect(email: EmailSummary) {
     onSelect(email);
     if (!email.keywords.$seen) {
       markSeenMutation.mutate(email);
     }
+  }
+
+  function handleToggleStar(event: MouseEvent, email: EmailSummary) {
+    event.stopPropagation();
+    starMutation.mutate({ email, starred: !email.keywords.$flagged });
   }
 
   const rowVirtualizer = useVirtualizer({
@@ -134,6 +163,7 @@ export function MessageList({
     const subjectLabel = email.subject || t("mail.noSubject");
     const date = new Date(email.receivedAt);
     const dateLabel = Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+    const starred = Boolean(email.keywords.$flagged);
 
     return (
       <div
@@ -159,6 +189,15 @@ export function MessageList({
           <div className="truncate text-[13.5px]">{subjectLabel}</div>
           <div className="truncate text-[12.5px] text-muted">{email.preview}</div>
         </div>
+        <button
+          type="button"
+          aria-label={t(starred ? "mail.unstar" : "mail.star")}
+          onClick={(event) => handleToggleStar(event, email)}
+          className={`flex h-6 w-6 shrink-0 items-center justify-center ${starred ? "" : "text-muted hover:text-ink"}`}
+          style={starred ? { color: "#E8C24A" } : undefined}
+        >
+          {starred ? <StarFilledIcon size={16} /> : <StarIcon size={16} />}
+        </button>
       </div>
     );
   }

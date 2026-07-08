@@ -133,7 +133,11 @@
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "generic": "Mail could not be loaded"
     },
-    "backToList": "Back to messages"
+    "backToList": "Back to messages",
+    "archive": "Archive",
+    "star": "Star",
+    "unstar": "Unstar",
+    "archived": "Email archived"
   },
   "modules": {
     "title": "Modules",

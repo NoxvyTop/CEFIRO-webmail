@@ -85,6 +85,11 @@ export function MailPage() {
     return (inbox ?? mailboxes[0])?.id ?? null;
   }, [mailboxes]);
 
+  const archiveMailboxId = useMemo(
+    () => mailboxes.find((mailbox) => mailbox.role === "archive")?.id ?? null,
+    [mailboxes],
+  );
+
   const selectedMailboxId = useMemo(() => {
     if (mailboxParam) return mailboxParam;
     return inboxMailboxId;
@@ -232,7 +237,7 @@ export function MailPage() {
         } min-w-0 flex-1 overflow-y-auto overflow-x-hidden`}
       >
         {threadParam ? (
-          <ThreadView threadId={threadParam} />
+          <ThreadView threadId={threadParam} archiveMailboxId={archiveMailboxId} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
             <CefiroLogo size={52} />

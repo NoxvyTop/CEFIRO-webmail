@@ -1,15 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import type { EmailAddress } from "@webmail/shared";
-import { fetchThread } from "../mailbox/api";
+import type { EmailAddress, EmailDetail } from "@webmail/shared";
+import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArrowLeftIcon } from "../../app/ui/icons";
+import { ArchiveIcon, ArrowLeftIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { EmailBody } from "./EmailBody";
 
 interface ThreadViewProps {
   threadId: string;
+  archiveMailboxId: string | null;
 }
 
 function addressLabel(address: EmailAddress | undefined) {
@@ -45,14 +46,35 @@ function blobUrl(blobId: string, name: string, type: string, download: boolean):
   return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
 }
 
-export function ThreadView({ threadId }: ThreadViewProps) {
+export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
 
   const threadQuery = useQuery({
     queryKey: ["mail", "thread", threadId],
     queryFn: () => fetchThread(threadId),
     retry: mailRetry,
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!archiveMailboxId) throw new Error("no archive mailbox");
+      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      backToList();
+    },
+  });
+
+  const starMutation = useMutation({
+    mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
+      updateMessage(email.id, { keywords: { $flagged: starred } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
+      queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
   });
 
   function openCompose(param: string) {
@@ -84,6 +106,13 @@ export function ThreadView({ threadId }: ThreadViewProps) {
 
   if (!lastEmail) return null;
 
+  const isOnlyInArchive =
+    archiveMailboxId !== null &&
+    lastEmail.mailboxIds.length === 1 &&
+    lastEmail.mailboxIds[0] === archiveMailboxId;
+  const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
+  const starred = Boolean(lastEmail.keywords.$flagged);
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-[52px] shrink-0 items-center gap-2 overflow-x-hidden border-b border-line px-4">
@@ -94,6 +123,25 @@ export function ThreadView({ threadId }: ThreadViewProps) {
           className="flex h-8 items-center rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink lg:hidden"
         >
           <ArrowLeftIcon />
+        </button>
+        {showArchive && (
+          <button
+            type="button"
+            onClick={() => archiveMutation.mutate(lastEmail)}
+            className="flex h-8 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink"
+          >
+            <ArchiveIcon size={16} />
+            {t("mail.archive")}
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label={t(starred ? "mail.unstar" : "mail.star")}
+          onClick={() => starMutation.mutate({ email: lastEmail, starred: !starred })}
+          className="flex h-8 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink"
+        >
+          {starred ? <StarFilledIcon size={16} /> : <StarIcon size={16} />}
+          {t(starred ? "mail.unstar" : "mail.star")}
         </button>
         <button
           type="button"
