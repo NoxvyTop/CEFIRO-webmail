@@ -127,6 +127,7 @@
     "emptyBody": "(sin contenido)",
     "newMailNotification": "Correo nuevo",
     "enableNotifications": "Activar notificaciones",
+    "resizeList": "Ajustar ancho de la lista",
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",

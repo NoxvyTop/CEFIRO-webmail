@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -15,12 +15,14 @@ import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { useAuth } from "../auth/useAuth";
+import { useResizablePane } from "../../app/ui/useResizablePane";
 
 export function MailPage() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { width: listWidth, startDrag, handleKeyDown } = useResizablePane();
 
   useMailEvents(true);
 
@@ -175,9 +177,10 @@ export function MailPage() {
       />
       <section
         aria-label={t("mail.listRegion")}
+        style={{ "--list-w": `${listWidth}px` } as CSSProperties}
         className={`${
           threadParam ? "hidden lg:flex" : "flex"
-        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel lg:flex-[0_1_390px]`}
+        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
         {mailboxesQuery.isError && (
           <p role="alert" className="p-4 text-sm text-warn">
@@ -206,6 +209,15 @@ export function MailPage() {
           />
         )}
       </section>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("mail.resizeList")}
+        tabIndex={0}
+        onMouseDown={startDrag}
+        onKeyDown={handleKeyDown}
+        className="hidden w-1 shrink-0 cursor-col-resize bg-line transition-colors hover:bg-accent focus-visible:bg-accent lg:block"
+      />
       <section
         aria-label={t("mail.readerRegion")}
         className={`${

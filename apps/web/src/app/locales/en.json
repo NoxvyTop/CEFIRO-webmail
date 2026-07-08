@@ -127,6 +127,7 @@
     "emptyBody": "(no content)",
     "newMailNotification": "New mail",
     "enableNotifications": "Enable notifications",
+    "resizeList": "Resize message list",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
