@@ -106,6 +106,9 @@ export function MessageList({
     onError: () => {
       queryClient.invalidateQueries({ queryKey });
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "thread"] });
+    },
   });
 
   function handleSelect(email: EmailSummary) {

@@ -33,6 +33,20 @@ const emailRead = {
   size: 200,
 };
 
+const emailStarred = {
+  id: "e3",
+  threadId: "t3",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Charlie", email: "charlie@example.com" }],
+  to: [],
+  subject: "Starred email",
+  receivedAt: "2026-07-01T08:00:00.000Z",
+  preview: "preview text three",
+  keywords: { $flagged: true },
+  hasAttachment: false,
+  size: 150,
+};
+
 function stubFetch(page: { total: number; position: number; emails: unknown[] }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -145,5 +159,24 @@ describe("MessageList", () => {
     expect(patchCall).toBeTruthy();
     const [, init] = patchCall as [RequestInfo | URL, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
+  });
+
+  it("clicking the unstar button on a starred email toggles $flagged to false", async () => {
+    const fetchMock = stubFetch({ total: 1, position: 0, emails: [emailStarred] });
+    const { onSelect } = renderList();
+
+    await screen.findByText("Starred email");
+    const unstarButton = screen.getByRole("button", { name: i18n.t("mail.unstar") });
+    fireEvent.click(unstarButton);
+
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await screen.findByText("Starred email");
+    const patchCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input) === "/api/mail/messages/e3" && (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patchCall).toBeTruthy();
+    const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: false } });
   });
 });

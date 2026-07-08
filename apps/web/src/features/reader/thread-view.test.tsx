@@ -196,4 +196,24 @@ describe("ThreadView", () => {
     const [, init] = patchCall as [RequestInfo | URL, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
   });
+
+  it("hides Archivar when the last email is already in the archive mailbox", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.mailboxIds = ["arch1"];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/mail/messages/") && method === "PATCH") {
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderThread("t1", "arch1");
+
+    await screen.findByRole("button", { name: i18n.t("mail.star") });
+    expect(screen.queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("mail.star") })).toBeInTheDocument();
+  });
 });
