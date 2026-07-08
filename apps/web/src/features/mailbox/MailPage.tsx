@@ -207,6 +207,16 @@ export function MailPage() {
     });
   }
 
+  function handleLabels(labels: string[]) {
+    setAvailableLabels((prev) => {
+      const merged = Array.from(new Set([...prev, ...labels])).sort();
+      if (merged.length === prev.length && merged.every((label, i) => label === prev[i])) {
+        return prev;
+      }
+      return merged;
+    });
+  }
+
   function resolveComposeDraft(): ComposerDraft | null {
     if (!composeParam) return null;
     const identities = identitiesQuery.data;
@@ -274,7 +284,7 @@ export function MailPage() {
             to={messageListTo}
             excludeTo={messageListExcludeTo}
             title={messageListTitle}
-            onLabels={setAvailableLabels}
+            onLabels={handleLabels}
             activeLabel={labelParam ?? undefined}
             onClearLabel={handleClearLabel}
           />

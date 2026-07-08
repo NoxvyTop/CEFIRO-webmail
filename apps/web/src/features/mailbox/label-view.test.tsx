@@ -39,6 +39,34 @@ const labeledEmail = {
   size: 100,
 };
 
+const urgentEmail = {
+  id: "e1",
+  threadId: "t1",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Alice", email: "alice@example.com" }],
+  to: [],
+  subject: "Project update",
+  receivedAt: "2026-07-01T10:00:00.000Z",
+  preview: "preview text",
+  keywords: { urgente: true, $seen: true },
+  hasAttachment: false,
+  size: 100,
+};
+
+const productoEmail = {
+  id: "e2",
+  threadId: "t2",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Bob", email: "bob@example.com" }],
+  to: [],
+  subject: "Feature request",
+  receivedAt: "2026-07-02T10:00:00.000Z",
+  preview: "feature preview",
+  keywords: { producto: true, $seen: true },
+  hasAttachment: false,
+  size: 150,
+};
+
 function stubFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -49,7 +77,15 @@ function stubFetch() {
       return new Response(JSON.stringify({ groupMailInMainInbox: false }));
     }
     if (url.includes("/api/mail/messages")) {
-      return new Response(JSON.stringify({ total: 1, position: 0, emails: [labeledEmail] }));
+      // Return filtered or all emails based on the query
+      if (url.includes("hasKeyword=important")) {
+        return new Response(JSON.stringify({ total: 1, position: 0, emails: [labeledEmail] }));
+      } else if (url.includes("hasKeyword=urgente")) {
+        return new Response(JSON.stringify({ total: 1, position: 0, emails: [urgentEmail] }));
+      } else {
+        // Unfiltered - return all emails with different labels
+        return new Response(JSON.stringify({ total: 3, position: 0, emails: [labeledEmail, urgentEmail, productoEmail] }));
+      }
     }
     return new Response(JSON.stringify({ status: "ok", checks: {} }));
   });
@@ -106,6 +142,35 @@ describe("label view filtering", () => {
       const last = found[found.length - 1];
       expect(last).toBeDefined();
       expect(last).not.toContain("hasKeyword");
+    });
+  });
+
+  it("label sidebar remains stable when a label filter is active", async () => {
+    const { fetchMock } = renderAt("/");
+
+    await screen.findAllByText("Inbox");
+    const labelsNav = await screen.findByRole("navigation", { name: i18n.t("mail.labels") });
+
+    // Both labels should be present initially
+    await vi.waitFor(() => {
+      expect(within(labelsNav).getByText("urgente")).toBeInTheDocument();
+      expect(within(labelsNav).getByText("producto")).toBeInTheDocument();
+    });
+
+    // Click the urgente label to filter
+    const urgenteLabel = within(labelsNav).getByText("urgente");
+    fireEvent.click(urgenteLabel);
+
+    // Wait for the filtered query to complete
+    await vi.waitFor(() => {
+      const calls = messagesCalls(fetchMock);
+      expect(calls.some((url) => url.includes("hasKeyword=urgente"))).toBe(true);
+    });
+
+    // Both labels should still be visible in the sidebar despite the filter
+    await vi.waitFor(() => {
+      expect(within(labelsNav).getByText("urgente")).toBeInTheDocument();
+      expect(within(labelsNav).getByText("producto")).toBeInTheDocument();
     });
   });
 });
