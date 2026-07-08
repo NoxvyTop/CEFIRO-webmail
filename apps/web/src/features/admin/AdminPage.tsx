@@ -65,7 +65,7 @@ export function AdminPage() {
     <main aria-label={t("admin.title")} className="flex flex-col gap-6 p-6">
       <h1 className="text-lg font-semibold">{t("admin.title")}</h1>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
         <h2 className="text-base font-medium">{t("admin.new.title")}</h2>
         <form onSubmit={handleCreateSubmit} className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-sm">
@@ -121,7 +121,7 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-3 overflow-x-auto rounded-[14px] border border-line bg-panel p-5">
         {usersQuery.isError && (
           <p role="alert" className="text-sm text-danger">
             {t("admin.errors.load")}
@@ -151,7 +151,7 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
         <h2 className="text-base font-medium">{t("admin.sso.title")}</h2>
 
         {sso && (

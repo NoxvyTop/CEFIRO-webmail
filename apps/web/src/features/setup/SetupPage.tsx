@@ -74,7 +74,7 @@ export function SetupPage() {
             event.preventDefault();
             void connect();
           }}
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5"
         >
           <label htmlFor="setup-token">{t("setup.tokenLabel")}</label>
           <input
@@ -107,7 +107,7 @@ export function SetupPage() {
               event.preventDefault();
               void saveSso();
             }}
-            className="flex flex-col gap-3"
+            className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5"
           >
             <h2 className="text-lg font-medium">{t("setup.ssoTitle")}</h2>
 
@@ -166,7 +166,7 @@ export function SetupPage() {
               event.preventDefault();
               void createUser();
             }}
-            className="flex flex-col gap-3"
+            className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5"
           >
             <h2 className="text-lg font-medium">{t("setup.userTitle")}</h2>
 
