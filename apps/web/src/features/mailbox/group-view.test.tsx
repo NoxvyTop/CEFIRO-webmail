@@ -81,12 +81,13 @@ describe("group view filtering", () => {
     });
 
     expect(calls.some((url) => url.includes("mailboxId=mb-inbox"))).toBe(true);
+    expect(screen.getByRole("separator", { name: i18n.t("mail.resizeList") })).toBeInTheDocument();
   });
 
   it("excludes group addresses from the main inbox when the toggle is off", async () => {
     const { fetchMock } = renderAt("/", { groupMailInMainInbox: false });
 
-    await screen.findByText("Inbox");
+    await screen.findAllByText("Inbox");
     await vi.waitFor(() => {
       const found = messagesCalls(fetchMock);
       expect(found.some((url) => url.includes("excludeTo=soporte%40x.com"))).toBe(true);

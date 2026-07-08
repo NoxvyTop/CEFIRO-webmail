@@ -59,10 +59,14 @@ export function SetupPage() {
   }
 
   return (
-    <main className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
+    <main className="mx-auto flex max-w-2xl flex-col gap-8 p-6 text-ink">
       <h1 className="text-2xl font-semibold">{t("setup.title")}</h1>
 
-      {phase === "disabled" && <p role="alert">{t("setup.disabled")}</p>}
+      {phase === "disabled" && (
+        <p role="alert" className="text-sm text-danger">
+          {t("setup.disabled")}
+        </p>
+      )}
 
       {phase === "token" && (
         <form
@@ -70,7 +74,7 @@ export function SetupPage() {
             event.preventDefault();
             void connect();
           }}
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5"
         >
           <label htmlFor="setup-token">{t("setup.tokenLabel")}</label>
           <input
@@ -78,14 +82,20 @@ export function SetupPage() {
             type="password"
             value={token}
             onChange={(event) => setToken(event.target.value)}
+            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           />
-          <button type="submit">{t("setup.connect")}</button>
+          <button
+            type="submit"
+            className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
+          >
+            {t("setup.connect")}
+          </button>
         </form>
       )}
 
       {phase === "connected" && status && (
         <>
-          <p>
+          <p className="text-xs text-muted">
             {t("setup.status", {
               sso: status.ssoConfigured ? "yes" : "no",
               count: status.userCount,
@@ -97,7 +107,7 @@ export function SetupPage() {
               event.preventDefault();
               void saveSso();
             }}
-            className="flex flex-col gap-3"
+            className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5"
           >
             <h2 className="text-lg font-medium">{t("setup.ssoTitle")}</h2>
 
@@ -107,6 +117,7 @@ export function SetupPage() {
               type="text"
               value={sso.issuer}
               onChange={(event) => setSso({ ...sso, issuer: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="sso-client-id">{t("setup.fields.clientId")}</label>
@@ -115,6 +126,7 @@ export function SetupPage() {
               type="text"
               value={sso.clientId}
               onChange={(event) => setSso({ ...sso, clientId: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="sso-client-secret">{t("setup.fields.clientSecret")}</label>
@@ -123,6 +135,7 @@ export function SetupPage() {
               type="password"
               value={sso.clientSecret}
               onChange={(event) => setSso({ ...sso, clientSecret: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="sso-scopes">{t("setup.fields.scopes")}</label>
@@ -131,11 +144,21 @@ export function SetupPage() {
               type="text"
               value={sso.scopes}
               onChange={(event) => setSso({ ...sso, scopes: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
-            <button type="submit">{t("setup.save")}</button>
-            {ssoResult === "saved" && <p>{t("setup.saved")}</p>}
-            {ssoResult === "error" && <p role="alert">{t("setup.error")}</p>}
+            <button
+              type="submit"
+              className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
+            >
+              {t("setup.save")}
+            </button>
+            {ssoResult === "saved" && <p className="text-sm text-accent">{t("setup.saved")}</p>}
+            {ssoResult === "error" && (
+              <p role="alert" className="text-sm text-danger">
+                {t("setup.error")}
+              </p>
+            )}
           </form>
 
           <form
@@ -143,7 +166,7 @@ export function SetupPage() {
               event.preventDefault();
               void createUser();
             }}
-            className="flex flex-col gap-3"
+            className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5"
           >
             <h2 className="text-lg font-medium">{t("setup.userTitle")}</h2>
 
@@ -153,6 +176,7 @@ export function SetupPage() {
               type="email"
               value={user.email}
               onChange={(event) => setUser({ ...user, email: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="user-display-name">{t("setup.fields.displayName")}</label>
@@ -161,6 +185,7 @@ export function SetupPage() {
               type="text"
               value={user.displayName}
               onChange={(event) => setUser({ ...user, displayName: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="user-role">{t("setup.fields.role")}</label>
@@ -170,6 +195,7 @@ export function SetupPage() {
               onChange={(event) =>
                 setUser({ ...user, role: event.target.value as "employee" | "admin" })
               }
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             >
               <option value="employee">employee</option>
               <option value="admin">admin</option>
@@ -180,6 +206,7 @@ export function SetupPage() {
               id="user-locale"
               value={user.locale}
               onChange={(event) => setUser({ ...user, locale: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             >
               <option value="es">es</option>
               <option value="en">en</option>
@@ -191,11 +218,21 @@ export function SetupPage() {
               type="password"
               value={user.mailPassword}
               onChange={(event) => setUser({ ...user, mailPassword: event.target.value })}
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
 
-            <button type="submit">{t("setup.create")}</button>
-            {userResult === "created" && <p>{t("setup.created")}</p>}
-            {userResult === "error" && <p role="alert">{t("setup.error")}</p>}
+            <button
+              type="submit"
+              className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
+            >
+              {t("setup.create")}
+            </button>
+            {userResult === "created" && <p className="text-sm text-accent">{t("setup.created")}</p>}
+            {userResult === "error" && (
+              <p role="alert" className="text-sm text-danger">
+                {t("setup.error")}
+              </p>
+            )}
           </form>
         </>
       )}

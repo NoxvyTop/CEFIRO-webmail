@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
@@ -56,7 +56,31 @@ describe("auth flow", () => {
       }),
     );
     renderAt("/");
-    expect(await screen.findByText("Correo NoxvyTop")).toBeInTheDocument();
+    expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
+    const avatarButton = await screen.findByRole("button", {
+      name: `Sesión iniciada como ${user.email}`,
+    });
+    fireEvent.click(avatarButton);
+    expect(await screen.findByText("Cerrar sesión")).toBeInTheDocument();
+  });
+
+  it("redirects unknown routes to the home page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) {
+          return new Response(JSON.stringify(user));
+        }
+        return new Response(JSON.stringify({ status: "ok", checks: {} }));
+      }),
+    );
+    renderAt("/no-existe");
+    expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
+    const avatarButton = await screen.findByRole("button", {
+      name: `Sesión iniciada como ${user.email}`,
+    });
+    fireEvent.click(avatarButton);
     expect(await screen.findByText("Cerrar sesión")).toBeInTheDocument();
   });
 });

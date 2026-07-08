@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -10,16 +10,23 @@ import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
+import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { useAuth } from "../auth/useAuth";
+import {
+  PANE_MAX_WIDTH,
+  PANE_MIN_WIDTH,
+  useResizablePane,
+} from "../../app/ui/useResizablePane";
 
 export function MailPage() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { width: listWidth, startDrag, handleKeyDown } = useResizablePane();
 
   useMailEvents(true);
 
@@ -94,6 +101,10 @@ export function MailPage() {
       ? groupAddresses
       : undefined;
 
+  const messageListTitle = groupParam
+    ? groupParam
+    : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+
   function handleSelectMailbox(mailboxId: string) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -118,6 +129,14 @@ export function MailPage() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set("thread", email.threadId);
+      return next;
+    });
+  }
+
+  function handleCompose() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("compose", "new");
       return next;
     });
   }
@@ -158,15 +177,22 @@ export function MailPage() {
         groups={groups}
         selectedGroup={groupParam}
         onSelectGroup={handleSelectGroup}
+        onCompose={handleCompose}
       />
-      <section aria-label={t("mail.listRegion")} className="flex-1 overflow-y-auto border-r">
+      <section
+        aria-label={t("mail.listRegion")}
+        style={{ "--list-w": `${listWidth}px` } as CSSProperties}
+        className={`${
+          threadParam ? "hidden lg:flex" : "flex"
+        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
+      >
         {mailboxesQuery.isError && (
-          <p role="alert" className="p-4 text-sm text-amber-700">
+          <p role="alert" className="p-4 text-sm text-warn">
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
         {groupAddresses.length > 0 && (
-          <label className="flex items-center gap-2 border-b p-2 text-sm">
+          <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">
             <input
               type="checkbox"
               checked={preferences?.groupMailInMainInbox ?? false}
@@ -183,14 +209,35 @@ export function MailPage() {
             onSelect={handleSelectMessage}
             to={messageListTo}
             excludeTo={messageListExcludeTo}
+            title={messageListTitle}
           />
         )}
       </section>
-      <section aria-label={t("mail.readerRegion")} className="flex-1 overflow-y-auto">
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("mail.resizeList")}
+        aria-valuemin={PANE_MIN_WIDTH}
+        aria-valuemax={PANE_MAX_WIDTH}
+        aria-valuenow={listWidth}
+        tabIndex={0}
+        onMouseDown={startDrag}
+        onKeyDown={handleKeyDown}
+        className="hidden w-1 shrink-0 cursor-col-resize bg-line transition-colors hover:bg-accent focus-visible:bg-accent lg:block"
+      />
+      <section
+        aria-label={t("mail.readerRegion")}
+        className={`${
+          threadParam ? "block" : "hidden lg:block"
+        } min-w-0 flex-1 overflow-y-auto overflow-x-hidden`}
+      >
         {threadParam ? (
           <ThreadView threadId={threadParam} />
         ) : (
-          <p className="p-4 text-sm text-gray-500">{t("mail.selectMessage")}</p>
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
+            <CefiroLogo size={52} />
+            <p className="text-sm">{t("mail.selectMessage")}</p>
+          </div>
         )}
       </section>
       {composeDraft && <Composer initial={composeDraft} onClose={removeComposeParam} />}

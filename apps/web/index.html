@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-theme="night">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NoxvyTop Mail</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Céfiro</title>
+    <script>
+      try {
+        var cefiroTheme = localStorage.getItem("cefiro-theme");
+        if (cefiroTheme !== "light" && cefiroTheme !== "night") {
+          cefiroTheme =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "night";
+        }
+        document.documentElement.dataset.theme = cefiroTheme;
+      } catch (e) {
+        /* keep the default */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

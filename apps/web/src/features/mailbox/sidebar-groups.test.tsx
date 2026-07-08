@@ -27,6 +27,7 @@ function renderSidebar(overrides: Partial<React.ComponentProps<typeof Sidebar>> 
         groups={[]}
         selectedGroup={null}
         onSelectGroup={() => {}}
+        onCompose={() => {}}
         {...overrides}
       />
     </QueryClientProvider>,

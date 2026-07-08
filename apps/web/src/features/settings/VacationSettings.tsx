@@ -89,7 +89,7 @@ export function VacationSettings() {
           value={form.subject}
           maxLength={200}
           onChange={(event) => update({ subject: event.target.value })}
-          className="rounded-md border p-1"
+          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
         />
       </label>
 
@@ -101,7 +101,7 @@ export function VacationSettings() {
           maxLength={5000}
           rows={4}
           onChange={(event) => update({ message: event.target.value })}
-          className="rounded-md border p-1"
+          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
         />
       </label>
 
@@ -113,7 +113,7 @@ export function VacationSettings() {
             type="date"
             value={form.startsAt ?? ""}
             onChange={(event) => update({ startsAt: event.target.value || null })}
-            className="rounded-md border p-1"
+            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           />
         </label>
 
@@ -124,7 +124,7 @@ export function VacationSettings() {
             type="date"
             value={form.endsAt ?? ""}
             onChange={(event) => update({ endsAt: event.target.value || null })}
-            className="rounded-md border p-1"
+            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           />
         </label>
 
@@ -140,22 +140,22 @@ export function VacationSettings() {
               const parsed = Number.parseInt(event.target.value, 10);
               update({ intervalDays: Number.isNaN(parsed) ? 7 : Math.min(60, Math.max(1, parsed)) });
             }}
-            className="w-24 rounded-md border p-1"
+            className="w-24 rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
           />
         </label>
       </div>
 
       {errorKey && (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-danger">
           {t(errorKey)}
         </p>
       )}
 
       <div className="flex items-center gap-3">
-        <button type="submit" className="self-start rounded-md bg-blue-600 px-3 py-1 text-sm text-white">
+        <button type="submit" className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
           {t("vacation.save")}
         </button>
-        {saved && <span className="text-sm text-green-700">{t("vacation.saved")}</span>}
+        {saved && <span className="text-sm text-accent">{t("vacation.saved")}</span>}
       </div>
     </form>
   );

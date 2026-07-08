@@ -1,5 +1,11 @@
 {
-  "app": { "title": "NoxvyTop Mail" },
+  "app": {
+    "tagline": "correo del ecosistema",
+    "themeLight": "Switch to light theme",
+    "themeNight": "Switch to night theme",
+    "sentWith": "Sent with",
+    "sealMotto": "the wind that moves your team"
+  },
   "admin": {
     "title": "Administration",
     "forbidden": "You do not have admin permissions",
@@ -60,11 +66,14 @@
       }
     }
   },
-  "health": { "ok": "Service running", "degraded": "Service degraded" },
+  "health": {
+    "degraded": "Service degraded"
+  },
   "auth": {
     "signIn": "Sign in with SSO",
     "signOut": "Sign out",
     "signedInAs": "Signed in as {{email}}",
+    "subtitle": "Sign in to your team's mail",
     "errors": {
       "state": "The sign-in attempt expired, try again",
       "unknown_user": "Your account is not registered in the mail system",
@@ -108,20 +117,23 @@
     "listRegion": "Message list",
     "readerRegion": "Reading pane",
     "unread": "{{count}} unread",
+    "messageCount": "{{count}} messages",
     "searchPlaceholder": "Search mail",
-    "empty": "No messages",
+    "empty": "No mail here.",
     "noSubject": "(no subject)",
-    "selectMessage": "Select a message",
+    "selectMessage": "Select an email",
     "loadImages": "Load images",
     "emailContent": "Email content",
     "emptyBody": "(no content)",
     "newMailNotification": "New mail",
     "enableNotifications": "Enable notifications",
+    "resizeList": "Resize message list",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "generic": "Mail could not be loaded"
-    }
+    },
+    "backToList": "Back to messages"
   },
   "modules": {
     "title": "Modules",

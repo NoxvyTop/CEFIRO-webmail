@@ -1,4 +1,4 @@
-import "@fontsource-variable/inter";
+import "@fontsource-variable/space-grotesk";
 import "./index.css";
 import "./app/i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

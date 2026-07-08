@@ -30,7 +30,7 @@ export function EmailBody({ bodyHtml, bodyText }: EmailBodyProps) {
           <button
             type="button"
             onClick={() => setAllowRemoteImages(true)}
-            className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800"
+            className="mb-2 rounded-md border border-warn/40 bg-soft px-2 py-1 text-xs text-warn"
           >
             {t("mail.loadImages")}
           </button>
@@ -39,15 +39,15 @@ export function EmailBody({ bodyHtml, bodyText }: EmailBodyProps) {
           sandbox=""
           srcDoc={wrapDocument(sanitized.html)}
           title={t("mail.emailContent")}
-          className="h-64 w-full rounded-md border"
+          className="h-64 w-full rounded-md border border-line bg-white"
         />
       </div>
     );
   }
 
   if (bodyText) {
-    return <pre className="whitespace-pre-wrap text-sm">{bodyText}</pre>;
+    return <pre className="whitespace-pre-wrap text-sm leading-[1.65]">{bodyText}</pre>;
   }
 
-  return <p className="text-sm text-gray-500">{t("mail.emptyBody")}</p>;
+  return <p className="text-sm text-muted">{t("mail.emptyBody")}</p>;
 }

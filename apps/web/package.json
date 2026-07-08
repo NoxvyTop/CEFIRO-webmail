@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fontsource-variable/inter": "^5.1.0",
+    "@fontsource-variable/space-grotesk": "^5.2.10",
     "@tanstack/react-query": "^5.60.0",
     "@tanstack/react-virtual": "^3.10.0",
     "@tiptap/extension-link": "^2.10.0",

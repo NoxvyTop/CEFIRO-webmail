@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    * { box-sizing: border-box; }
+    ::placeholder { color: inherit; opacity: 0.4; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes popIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+    @keyframes pulse { 0% { opacity: 0.35; } 50% { opacity: 1; } 100% { opacity: 0.35; } }
+    @keyframes logoSpin { to { transform: rotate(360deg); } }
+    @keyframes windFlow { to { stroke-dashoffset: -96; } }
+    @keyframes twinkle { 0%, 100% { opacity: 0.25; transform: scale(0.7); } 50% { opacity: 1; transform: scale(1.2); } }
+    ::-webkit-scrollbar { width: 10px; }
+    ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.25); border-radius: 8px; border: 3px solid transparent; background-clip: content-box; }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</helmet>
+
+<div data-screen-label="Webmail Céfiro" style="height:100vh; display:flex; flex-direction:column; font-family:'Space Grotesk', system-ui, sans-serif; background:var(--bg, #0A0B10); color:var(--ink, #ECEEF4); overflow:hidden; {{ themeVars }}">
+
+  <!-- ══════════ Barra superior ══════════ -->
+  <header style="height:60px; flex:none; display:flex; align-items:center; gap:20px; padding:0 20px; background:var(--panel, #12141C); border-bottom:1px solid var(--line, #232838);">
+    <div style="display:flex; align-items:center; gap:11px; min-width:210px;">
+      <!-- Logo animado: viento de Céfiro -->
+      <svg width="32" height="32" viewBox="0 0 40 40" fill="none" style="flex:none;">
+        <g style="transform-origin:center; transform-box:fill-box; animation:logoSpin 28s linear infinite;">
+          <circle cx="20" cy="20" r="18" stroke="var(--accent, #6FE3C1)" stroke-width="1.3" stroke-dasharray="3.5 6.5" opacity="0.45"></circle>
+        </g>
+        <path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" stroke="var(--accent, #6FE3C1)" stroke-width="2.3" stroke-linecap="round" stroke-dasharray="12 36" style="animation:windFlow 3.4s linear infinite;"></path>
+        <path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" stroke="var(--accent, #6FE3C1)" stroke-width="2.3" stroke-linecap="round" stroke-dasharray="12 36" style="animation:windFlow 3.4s linear infinite; animation-delay:-1.1s;"></path>
+        <path d="M9 27h10" stroke="var(--accent, #6FE3C1)" stroke-width="2.3" stroke-linecap="round" stroke-dasharray="10 38" style="animation:windFlow 3.4s linear infinite; animation-delay:-2.2s;"></path>
+        <circle cx="33" cy="8" r="1.6" fill="var(--accent, #6FE3C1)" style="transform-origin:center; transform-box:fill-box; animation:twinkle 2.4s ease-in-out infinite;"></circle>
+      </svg>
+      <div style="display:flex; flex-direction:column; gap:1px;">
+        <span style="font-size:15px; font-weight:700; letter-spacing:0.32em;">CÉFIRO</span>
+        <span style="font-size:10.5px; color:var(--muted, #8B90A2); letter-spacing:0.08em;">correo del ecosistema</span>
+      </div>
+    </div>
+    <div style="flex:1; max-width:560px; display:flex; align-items:center; gap:10px; height:40px; padding:0 14px; border-radius:10px; background:var(--soft, #171A24); border:1px solid var(--line, #232838);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.5; flex:none;"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+      <input ref="{{ searchRef }}" value="{{ query }}" onChange="{{ onQuery }}" placeholder="Buscar en el correo…" style="flex:1; border:none; outline:none; background:transparent; font:inherit; font-size:14px; color:inherit;">
+      <sc-if value="{{ showHints }}" hint-placeholder-val="{{ true }}">
+        <kbd style="font-family:inherit; font-size:11px; padding:2px 7px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--panel, #12141C); color:var(--muted, #8B90A2);">/</kbd>
+      </sc-if>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <sc-if value="{{ showHints }}" hint-placeholder-val="{{ true }}">
+        <button onClick="{{ toggleShortcuts }}" style="display:flex; align-items:center; gap:7px; height:34px; padding:0 12px; border-radius:8px; border:1px solid var(--line, #232838); background:transparent; color:var(--muted, #8B90A2); font:inherit; font-size:13px; cursor:pointer;" style-hover="background:var(--hover, #191D28); color:var(--ink, #ECEEF4);">
+          <kbd style="font-family:inherit; font-size:11px; padding:1px 6px; border-radius:4px; border:1px solid var(--line, #232838);">?</kbd>
+          Atajos
+        </button>
+      </sc-if>
+      <div style="width:36px; height:36px; border-radius:50%; background:var(--accent, #6FE3C1); color:var(--accent-ink, #07130F); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700;">SM</div>
+    </div>
+  </header>
+
+  <!-- ══════════ Cuerpo ══════════ -->
+  <div style="flex:1; display:flex; min-height:0;">
+
+    <!-- ── Columna 1: carpetas y etiquetas ── -->
+    <nav style="width:230px; flex:none; display:flex; flex-direction:column; gap:4px; padding:16px 12px; overflow-y:auto;">
+      <button onClick="{{ openCompose }}" style="display:flex; align-items:center; justify-content:center; gap:9px; height:44px; margin-bottom:12px; border:none; border-radius:11px; background:var(--accent, #6FE3C1); color:var(--accent-ink, #07130F); font:inherit; font-size:14px; font-weight:700; cursor:pointer; box-shadow:0 2px 14px rgba(111,227,193,0.25);" style-hover="filter:brightness(1.07);" style-active="transform:scale(0.98);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"></path></svg>
+        Redactar
+      </button>
+
+      <button onClick="{{ goInbox }}" style="display:flex; align-items:center; gap:11px; height:38px; padding:0 12px; border:none; border-radius:9px; background:{{ inboxBg }}; color:{{ inboxColor }}; font:inherit; font-size:14px; font-weight:{{ inboxWeight }}; cursor:pointer; text-align:left;" style-hover="background:var(--hover, #191D28);">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5.1L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.5-6.9A2 2 0 0016.7 4H7.3a2 2 0 00-1.8 1.1z"></path></svg>
+        <span style="flex:1;">Recibidos</span>
+        <span style="font-size:12px; font-weight:700; color:var(--accent, #6FE3C1);">{{ countInbox }}</span>
+      </button>
+      <button onClick="{{ goStarred }}" style="display:flex; align-items:center; gap:11px; height:38px; padding:0 12px; border:none; border-radius:9px; background:{{ starredBg }}; color:{{ starredColor }}; font:inherit; font-size:14px; font-weight:{{ starredWeight }}; cursor:pointer; text-align:left;" style-hover="background:var(--hover, #191D28);">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"></path></svg>
+        <span style="flex:1;">Destacados</span>
+      </button>
+      <button onClick="{{ goSent }}" style="display:flex; align-items:center; gap:11px; height:38px; padding:0 12px; border:none; border-radius:9px; background:{{ sentBg }}; color:{{ sentColor }}; font:inherit; font-size:14px; font-weight:{{ sentWeight }}; cursor:pointer; text-align:left;" style-hover="background:var(--hover, #191D28);">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4z"></path></svg>
+        <span style="flex:1;">Enviados</span>
+      </button>
+      <button onClick="{{ goArchive }}" style="display:flex; align-items:center; gap:11px; height:38px; padding:0 12px; border:none; border-radius:9px; background:{{ archiveBg }}; color:{{ archiveColor }}; font:inherit; font-size:14px; font-weight:{{ archiveWeight }}; cursor:pointer; text-align:left;" style-hover="background:var(--hover, #191D28);">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;"><path d="M21 8v13H3V8"></path><path d="M1 3h22v5H1z"></path><path d="M10 12h4"></path></svg>
+        <span style="flex:1;">Archivados</span>
+      </button>
+
+      <div style="margin:18px 12px 6px; font-size:11px; font-weight:700; letter-spacing:0.12em; color:var(--muted, #8B90A2);">ETIQUETAS</div>
+      <sc-for list="{{ labelRows }}" as="lb" hint-placeholder-count="4">
+        <button onClick="{{ lb.onClick }}" style="display:flex; align-items:center; gap:11px; height:34px; padding:0 12px; border:none; border-radius:9px; background:{{ lb.bg }}; color:var(--ink, #ECEEF4); font:inherit; font-size:13.5px; font-weight:{{ lb.weight }}; cursor:pointer; text-align:left; width:100%;" style-hover="background:var(--hover, #191D28);">
+          <span style="width:9px; height:9px; border-radius:3px; background:{{ lb.color }}; flex:none;"></span>
+          <span style="flex:1;">{{ lb.name }}</span>
+        </button>
+      </sc-for>
+    </nav>
+
+    <!-- ── Columna 2: lista de correos ── -->
+    <section style="flex:0 1 390px; width:390px; min-width:280px; display:flex; flex-direction:column; min-height:0; background:var(--panel, #12141C); border-left:1px solid var(--line, #232838); border-right:1px solid var(--line, #232838);">
+      <div style="flex:none; display:flex; align-items:center; gap:10px; height:52px; padding:0 18px; border-bottom:1px solid var(--line, #232838);">
+        <span style="font-size:15px; font-weight:650;">{{ folderTitle }}</span>
+        <sc-if value="{{ hasLabelFilter }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ clearLabel }}" style="display:flex; align-items:center; gap:6px; height:24px; padding:0 9px; border-radius:999px; border:none; background:{{ activeLabelBg }}; color:{{ activeLabelColor }}; font:inherit; font-size:12px; font-weight:600; cursor:pointer;">
+            {{ activeLabelName }}
+            <span style="opacity:0.7;">✕</span>
+          </button>
+        </sc-if>
+        <span style="flex:1;"></span>
+        <span style="font-size:12px; color:var(--muted, #8B90A2);">{{ listCountText }}</span>
+      </div>
+
+      <div style="flex:1; overflow-y:auto; overflow-x:hidden;">
+        <sc-for list="{{ filteredEmails }}" as="em" hint-placeholder-count="6">
+          <div onClick="{{ em.open }}" style="display:flex; gap:12px; padding:13px 16px 13px 14px; border-bottom:1px solid var(--line, #232838); background:{{ em.rowBg }}; cursor:pointer; border-left:3px solid {{ em.edge }};" style-hover="background:{{ em.hoverBg }};">
+            <div style="width:38px; height:38px; border-radius:50%; flex:none; background:{{ em.avatarBg }}; color:#F4FBF8; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; margin-top:2px;">{{ em.initials }}</div>
+            <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:7px; height:7px; border-radius:50%; background:{{ em.dotColor }}; flex:none;"></span>
+                <span style="flex:1; font-size:14px; font-weight:{{ em.nameWeight }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ em.from }}</span>
+                <span style="font-size:12px; color:var(--muted, #8B90A2); flex:none;">{{ em.time }}</span>
+              </div>
+              <div style="font-size:13.5px; font-weight:{{ em.subjWeight }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ em.subject }}</div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="flex:1; font-size:12.5px; color:var(--muted, #8B90A2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ em.preview }}</span>
+                <sc-if value="{{ em.hasAttach }}" hint-placeholder-val="{{ false }}">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--muted, #8B90A2)" stroke-width="2" style="flex:none;"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 01-2.82-2.83l8.49-8.48"></path></svg>
+                </sc-if>
+                <sc-if value="{{ em.hasChip }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:none; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:{{ em.chipBg }}; color:{{ em.chipColor }};">{{ em.chipName }}</span>
+                </sc-if>
+                <button onClick="{{ em.toggleStar }}" title="Destacar (s)" style="flex:none; border:none; background:transparent; cursor:pointer; font-size:15px; line-height:1; padding:0; color:{{ em.starColor }};" style-hover="transform:scale(1.2);">{{ em.starChar }}</button>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+        <sc-if value="{{ listEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:60px 30px; text-align:center; color:var(--muted, #8B90A2); font-size:13.5px; animation:fadeUp 0.3s ease;">
+            <div style="font-size:30px; margin-bottom:10px; opacity:0.5;">◌</div>
+            No hay correos aquí.
+          </div>
+        </sc-if>
+      </div>
+    </section>
+
+    <!-- ── Columna 3: lectura ── -->
+    <main style="flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;">
+      <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:none; display:flex; align-items:center; gap:6px; height:52px; padding:0 22px; border-bottom:1px solid var(--line, #232838); min-width:0; overflow:hidden;">
+          <button onClick="{{ archiveSel }}" title="Archivar (e)" style="display:flex; align-items:center; gap:7px; height:32px; padding:0 12px; border:none; border-radius:8px; background:transparent; color:var(--ink, #ECEEF4); font:inherit; font-size:13px; cursor:pointer;" style-hover="background:var(--hover, #191D28);">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8v13H3V8"></path><path d="M1 3h22v5H1z"></path><path d="M10 12h4"></path></svg>
+            Archivar
+          </button>
+          <button onClick="{{ toggleStarSel }}" title="Destacar (s)" style="display:flex; align-items:center; gap:7px; height:32px; padding:0 12px; border:none; border-radius:8px; background:transparent; color:var(--ink, #ECEEF4); font:inherit; font-size:13px; cursor:pointer;" style-hover="background:var(--hover, #191D28);">
+            <span style="font-size:15px; line-height:1; color:{{ selStarColor }};">{{ selStarChar }}</span>
+            {{ selStarLabel }}
+          </button>
+          <button onClick="{{ replySel }}" title="Responder (r)" style="display:flex; align-items:center; gap:7px; height:32px; padding:0 12px; border:none; border-radius:8px; background:transparent; color:var(--ink, #ECEEF4); font:inherit; font-size:13px; cursor:pointer;" style-hover="background:var(--hover, #191D28);">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17l-5-5 5-5"></path><path d="M20 18v-2a4 4 0 00-4-4H4"></path></svg>
+            Responder
+          </button>
+          <span style="flex:1;"></span>
+          <sc-if value="{{ showHints }}" hint-placeholder-val="{{ true }}">
+            <span style="font-size:12px; color:var(--muted, #8B90A2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; min-width:0;">j / k para moverte · e archiva · c redacta</span>
+          </sc-if>
+        </div>
+
+        <div style="flex:1; overflow-y:auto; overflow-x:hidden;">
+          <article style="max-width:780px; padding:30px 40px 60px; animation:fadeUp 0.25s ease;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+              <h1 style="margin:0; font-size:26px; font-weight:650; letter-spacing:-0.01em; line-height:1.25; text-wrap:pretty;">{{ selSubject }}</h1>
+              <sc-if value="{{ selHasChip }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:11.5px; font-weight:600; padding:3px 10px; border-radius:999px; background:{{ selChipBg }}; color:{{ selChipColor }};">{{ selChipName }}</span>
+              </sc-if>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px; padding-bottom:20px; border-bottom:1px solid var(--line, #232838); margin-bottom:22px;">
+              <div style="width:42px; height:42px; border-radius:50%; background:{{ selAvatarBg }}; color:#F4FBF8; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600;">{{ selInitials }}</div>
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:14.5px; font-weight:600;">{{ selFrom }}</div>
+                <div style="font-size:12.5px; color:var(--muted, #8B90A2);">{{ selEmail }} · para mí y el equipo</div>
+              </div>
+              <div style="font-size:12.5px; color:var(--muted, #8B90A2);">{{ selTime }}</div>
+            </div>
+
+            <!-- Resumen IA -->
+            <div style="border:1px solid var(--line, #232838); background:var(--soft, #171A24); border-radius:12px; padding:14px 18px; margin-bottom:26px;">
+              <sc-if value="{{ aiIdle }}" hint-placeholder-val="{{ true }}">
+                <button onClick="{{ onAiSummary }}" style="display:flex; align-items:center; gap:9px; border:none; background:transparent; font:inherit; font-size:13.5px; font-weight:600; color:var(--accent, #6FE3C1); cursor:pointer; padding:0;" style-hover="opacity:0.8;">
+                  <span style="font-size:15px;">✦</span> Resumir con IA
+                </button>
+              </sc-if>
+              <sc-if value="{{ aiLoading }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; align-items:center; gap:9px; font-size:13.5px; font-weight:600; color:var(--accent, #6FE3C1); animation:pulse 1.2s ease infinite;">
+                  <span style="font-size:15px;">✦</span> Analizando el mensaje…
+                </div>
+              </sc-if>
+              <sc-if value="{{ aiReady }}" hint-placeholder-val="{{ false }}">
+                <div style="animation:fadeUp 0.3s ease;">
+                  <div style="display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; letter-spacing:0.08em; color:var(--accent, #6FE3C1); margin-bottom:9px;">✦ RESUMEN IA</div>
+                  <ul style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:5px;">
+                    <sc-for list="{{ selAiBullets }}" as="b" hint-placeholder-count="3">
+                      <li style="font-size:13.5px; line-height:1.5;">{{ b }}</li>
+                    </sc-for>
+                  </ul>
+                </div>
+              </sc-if>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:16px; font-size:15px; line-height:1.65; text-wrap:pretty;">
+              <sc-for list="{{ selParas }}" as="p" hint-placeholder-count="3">
+                <p style="margin:0;">{{ p }}</p>
+              </sc-for>
+            </div>
+
+            <!-- Adjuntos -->
+            <sc-if value="{{ selHasAttachments }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:28px;">
+                <div style="display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; letter-spacing:0.08em; color:var(--muted, #8B90A2); margin-bottom:11px;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 01-2.82-2.83l8.49-8.48"></path></svg>
+                  {{ selAttachCount }}
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:10px;">
+                  <sc-for list="{{ selAttachments }}" as="at" hint-placeholder-count="2">
+                    <button onClick="{{ at.download }}" title="Descargar" style="display:flex; align-items:center; gap:11px; padding:10px 14px 10px 10px; border:1px solid var(--line, #232838); border-radius:11px; background:var(--soft, #171A24); font:inherit; color:var(--ink, #ECEEF4); cursor:pointer; text-align:left; max-width:260px;" style-hover="border-color:var(--accent, #6FE3C1); background:var(--hover, #191D28);">
+                      <span style="width:40px; height:40px; border-radius:9px; background:{{ at.bg }}; color:{{ at.color }}; display:flex; align-items:center; justify-content:center; font-size:10.5px; font-weight:700; letter-spacing:0.04em; flex:none;">{{ at.ext }}</span>
+                      <span style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+                        <span style="font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ at.name }}</span>
+                        <span style="font-size:11.5px; color:var(--muted, #8B90A2);">{{ at.size }}</span>
+                      </span>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted, #8B90A2)" stroke-width="2" style="flex:none; margin-left:2px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>
+                    </button>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- Pie de página del correo -->
+            <div style="margin-top:34px; padding-top:18px; border-top:1px solid var(--line, #232838);">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <svg width="38" height="38" viewBox="0 0 44 44" fill="none" style="flex:none;">
+                  <rect x="1" y="1" width="42" height="42" rx="11" stroke="var(--line, #232838)" stroke-width="1.5" fill="var(--soft, #171A24)"></rect>
+                  <path d="M13 17h13a3.2 3.2 0 1 0-3.2-5.6" stroke="var(--accent, #6FE3C1)" stroke-width="2.4" stroke-linecap="round"></path>
+                  <path d="M11 23h17a3.2 3.2 0 1 1 3.2 5.6" stroke="var(--accent, #6FE3C1)" stroke-width="2.4" stroke-linecap="round"></path>
+                  <path d="M13 29h9" stroke="var(--accent, #6FE3C1)" stroke-width="2.4" stroke-linecap="round"></path>
+                </svg>
+                <div style="min-width:0;">
+                  <div style="font-size:13.5px; font-weight:600;">{{ selFrom }}</div>
+                  <div style="font-size:12.5px; color:var(--muted, #8B90A2); margin-top:2px;">{{ selRole }} · Céfiro Labs</div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; margin-top:16px; font-size:11.5px; color:var(--muted, #8B90A2);">
+                <svg width="14" height="14" viewBox="0 0 40 40" fill="none" style="flex:none;"><path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" stroke="var(--accent, #6FE3C1)" stroke-width="3" stroke-linecap="round"></path><path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" stroke="var(--accent, #6FE3C1)" stroke-width="3" stroke-linecap="round"></path><path d="M9 27h10" stroke="var(--accent, #6FE3C1)" stroke-width="3" stroke-linecap="round"></path></svg>
+                Enviado con <span style="font-weight:700; letter-spacing:0.14em; color:var(--accent, #6FE3C1);">CÉFIRO</span> · el viento que mueve tu equipo
+              </div>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-top:26px;">
+              <button onClick="{{ replySel }}" style="display:flex; align-items:center; gap:8px; height:38px; padding:0 18px; border:1px solid var(--line, #232838); border-radius:10px; background:var(--panel, #12141C); color:var(--ink, #ECEEF4); font:inherit; font-size:13.5px; font-weight:600; cursor:pointer;" style-hover="background:var(--hover, #191D28);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17l-5-5 5-5"></path><path d="M20 18v-2a4 4 0 00-4-4H4"></path></svg>
+                Responder
+              </button>
+              <button onClick="{{ archiveSel }}" style="display:flex; align-items:center; gap:8px; height:38px; padding:0 18px; border:1px solid var(--line, #232838); border-radius:10px; background:var(--panel, #12141C); color:var(--ink, #ECEEF4); font:inherit; font-size:13.5px; font-weight:600; cursor:pointer;" style-hover="background:var(--hover, #191D28);">
+                Archivar
+              </button>
+            </div>
+          </article>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ noSelection }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--muted, #8B90A2);">
+          <svg width="52" height="52" viewBox="0 0 40 40" fill="none" style="opacity:0.6;">
+            <g style="transform-origin:center; transform-box:fill-box; animation:logoSpin 28s linear infinite;">
+              <circle cx="20" cy="20" r="18" stroke="var(--accent, #6FE3C1)" stroke-width="1.3" stroke-dasharray="3.5 6.5" opacity="0.45"></circle>
+            </g>
+            <path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" stroke="var(--accent, #6FE3C1)" stroke-width="2.3" stroke-linecap="round" stroke-dasharray="12 36" style="animation:windFlow 3.4s linear infinite;"></path>
+            <path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" stroke="var(--accent, #6FE3C1)" stroke-width="2.3" stroke-linecap="round" stroke-dasharray="12 36" style="animation:windFlow 3.4s linear infinite; animation-delay:-1.1s;"></path>
+            <path d="M9 27h10" stroke="var(--accent, #6FE3C1)" stroke-width="2.3" stroke-linecap="round" stroke-dasharray="10 38" style="animation:windFlow 3.4s linear infinite; animation-delay:-2.2s;"></path>
+          </svg>
+          <div style="font-size:15px; font-weight:600; color:var(--ink, #ECEEF4);">Selecciona un correo</div>
+          <sc-if value="{{ showHints }}" hint-placeholder-val="{{ true }}">
+            <div style="font-size:13px;">Usa <kbd style="font-family:inherit; font-size:11px; padding:1px 6px; border-radius:4px; border:1px solid var(--line, #232838);">j</kbd> y <kbd style="font-family:inherit; font-size:11px; padding:1px 6px; border-radius:4px; border:1px solid var(--line, #232838);">k</kbd> para moverte por la lista</div>
+          </sc-if>
+        </div>
+      </sc-if>
+    </main>
+  </div>
+
+  <!-- ══════════ Redactar ══════════ -->
+  <sc-if value="{{ composeOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed; inset:0; background:rgba(3,5,9,0.55); display:flex; align-items:flex-end; justify-content:flex-end; padding:0 28px 24px 0; z-index:50;">
+      <div style="width:640px; max-width:calc(100vw - 40px); background:var(--panel, #12141C); border:1px solid var(--line, #232838); border-radius:14px; box-shadow:0 24px 70px rgba(0,0,0,0.5); overflow:hidden; animation:popIn 0.18s ease;">
+        <div style="display:flex; align-items:center; gap:10px; height:48px; padding:0 18px; background:var(--soft, #171A24); border-bottom:1px solid var(--line, #232838);">
+          <span style="font-size:14px; font-weight:650;">Nuevo mensaje</span>
+          <span style="flex:1;"></span>
+          <button onClick="{{ closeCompose }}" title="Cerrar (Esc)" style="border:none; background:transparent; cursor:pointer; font-size:16px; color:var(--muted, #8B90A2); padding:4px 8px; border-radius:6px;" style-hover="background:var(--hover, #191D28); color:var(--ink, #ECEEF4);">✕</button>
+        </div>
+        <div style="padding:6px 20px 0;">
+          <input value="{{ composeTo }}" onChange="{{ onTo }}" placeholder="Para" style="width:100%; border:none; border-bottom:1px solid var(--line, #232838); outline:none; background:transparent; font:inherit; font-size:14px; color:inherit; padding:12px 2px;">
+          <input value="{{ composeSubject }}" onChange="{{ onSubject }}" placeholder="Asunto" style="width:100%; border:none; border-bottom:1px solid var(--line, #232838); outline:none; background:transparent; font:inherit; font-size:14px; font-weight:600; color:inherit; padding:12px 2px;">
+          <textarea value="{{ composeBody }}" onChange="{{ onBody }}" placeholder="Escribe tu mensaje… o pídeselo a la IA" style="width:100%; height:220px; border:none; outline:none; background:transparent; font:inherit; font-size:14.5px; line-height:1.6; color:inherit; padding:14px 2px; resize:none;"></textarea>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; padding:12px 20px 16px;">
+          <button onClick="{{ sendMail }}" style="display:flex; align-items:center; gap:8px; height:38px; padding:0 22px; border:none; border-radius:10px; background:var(--accent, #6FE3C1); color:var(--accent-ink, #07130F); font:inherit; font-size:14px; font-weight:700; cursor:pointer;" style-hover="filter:brightness(1.07);" style-active="transform:scale(0.98);">
+            Enviar
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4z"></path></svg>
+          </button>
+          <button onClick="{{ aiDraft }}" style="display:flex; align-items:center; gap:8px; height:38px; padding:0 16px; border:1px solid var(--line, #232838); border-radius:10px; background:transparent; color:var(--accent, #6FE3C1); font:inherit; font-size:13.5px; font-weight:600; cursor:pointer;" style-hover="background:var(--soft, #171A24);">
+            <span style="font-size:15px;">✦</span>
+            {{ aiDraftLabel }}
+          </button>
+          <span style="flex:1;"></span>
+          <button onClick="{{ closeCompose }}" style="border:none; background:transparent; font:inherit; font-size:13px; color:var(--muted, #8B90A2); cursor:pointer; padding:8px 10px; border-radius:8px;" style-hover="background:var(--hover, #191D28);">Descartar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ══════════ Atajos de teclado ══════════ -->
+  <sc-if value="{{ showShortcuts }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ toggleShortcuts }}" style="position:fixed; inset:0; background:rgba(3,5,9,0.55); display:flex; align-items:center; justify-content:center; z-index:60;">
+      <div style="width:400px; background:var(--panel, #12141C); border:1px solid var(--line, #232838); border-radius:14px; padding:24px 26px; box-shadow:0 24px 70px rgba(0,0,0,0.5); animation:popIn 0.18s ease;">
+        <div style="font-size:16px; font-weight:650; margin-bottom:16px;">Atajos de teclado</div>
+        <div style="display:grid; grid-template-columns:1fr auto; row-gap:11px; column-gap:20px; font-size:13.5px; align-items:center;">
+          <span>Moverse por la lista</span><span style="display:flex; gap:5px;"><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24);">j</kbd><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24);">k</kbd></span>
+          <span>Archivar correo</span><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24); justify-self:end;">e</kbd>
+          <span>Destacar correo</span><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24); justify-self:end;">s</kbd>
+          <span>Responder</span><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24); justify-self:end;">r</kbd>
+          <span>Redactar</span><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24); justify-self:end;">c</kbd>
+          <span>Buscar</span><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24); justify-self:end;">/</kbd>
+          <span>Cerrar / salir</span><kbd style="font-family:inherit; font-size:11.5px; padding:2px 8px; border-radius:5px; border:1px solid var(--line, #232838); background:var(--soft, #171A24); justify-self:end;">Esc</kbd>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ══════════ Toast ══════════ -->
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:var(--ink, #ECEEF4); color:var(--bg, #0A0B10); font-size:13.5px; font-weight:500; padding:11px 20px; border-radius:999px; box-shadow:0 10px 30px rgba(0,0,0,0.35); z-index:70; animation:fadeUp 0.22s ease;">{{ toastMsg }}</div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Noche&quot;,&quot;Claro&quot;],&quot;default&quot;:&quot;Claro&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Tema&quot;},&quot;mostrarAtajos&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Interfaz&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.searchRef = React.createRef();
+    this.LABELS = {
+      urgente:  { name: 'Urgente',  color: '#F26565', bg: 'rgba(242,101,101,0.14)' },
+      producto: { name: 'Producto', color: '#5B8DEF', bg: 'rgba(91,141,239,0.14)' },
+      diseno:   { name: 'Diseño',   color: '#E5A13D', bg: 'rgba(229,161,61,0.15)' },
+      finanzas: { name: 'Finanzas', color: '#34C79A', bg: 'rgba(52,199,154,0.14)' }
+    };
+    this.AVATARS = ['#3E8E7E', '#4E6E9E', '#6E5E9E', '#8E6E4E', '#4E8E5E', '#5E7E9E', '#9E5E6E', '#5E9E8E'];
+    this.state = {
+      folder: 'inbox', label: null, query: '', selectedId: 2,
+      composeOpen: false, composeTo: '', composeSubject: '', composeBody: '',
+      aiWriting: false, showShortcuts: false, toast: null,
+      aiDone: {}, aiLoadingId: null,
+      emails: [
+        { id: 1, from: 'Carla Bosch', email: 'carla@cefiro.top', role: 'Ingeniería de plataforma', folder: 'inbox', unread: true, starred: true, label: 'urgente', time: '10:12', ts: 100,
+          subject: 'Caída parcial del panel de clientes',
+          preview: 'Desde las 9:40 varios clientes reportan errores 502 al entrar al panel…',
+          paras: ['Desde las 9:40 varios clientes reportan errores 502 al entrar al panel. El equipo de infraestructura ya identificó el origen: un despliegue de la API de facturación que saturó la cola de tareas.', 'Estamos aplicando el rollback ahora mismo. Estimamos recuperación completa en 30 minutos. Mientras tanto, soporte está respondiendo con el mensaje acordado en el runbook.', '¿Puedes avisar al equipo comercial antes de sus llamadas de las 11:00? Prefiero que se enteren por nosotros.'],
+          ai: ['Errores 502 en el panel de clientes desde las 9:40; causa: despliegue de la API de facturación.', 'Rollback en curso, recuperación estimada en 30 minutos.', 'Acción para ti: avisar al equipo comercial antes de las 11:00.'] },
+        { id: 2, from: 'Lucía Ferrer', email: 'lucia@cefiro.top', role: 'Dirección de producto', folder: 'inbox', unread: true, starred: false, label: 'producto', time: '9:42', ts: 90,
+          subject: 'Revisión del sprint 24 — notas y próximos pasos',
+          preview: 'Gracias a todos por la demo de ayer. Dejo aquí las decisiones que tomamos…',
+          paras: ['Gracias a todos por la demo de ayer. Dejo aquí las decisiones que tomamos para que queden por escrito.', 'Priorizamos el nuevo flujo de invitaciones para el sprint 25 y movemos la migración de notificaciones a la siguiente quincena. El experimento de precios sigue pausado hasta tener los datos de junio.', 'Necesito que cada líder confirme la capacidad de su equipo antes del miércoles. Si algo no cuadra, escribidme directamente y lo ajustamos en la planificación del jueves.'],
+          ai: ['Sprint 25 prioriza el flujo de invitaciones; la migración de notificaciones se retrasa dos semanas.', 'El experimento de precios sigue pausado hasta los datos de junio.', 'Acción: confirmar la capacidad de tu equipo antes del miércoles.'] },
+        { id: 10, from: 'Nora Ibáñez', email: 'nora@cefiro.top', role: 'Operaciones y legal', folder: 'inbox', unread: true, starred: false, label: 'finanzas', time: '9:28', ts: 85,
+          subject: 'Contrato Nortec: versión final y anexos',
+          preview: 'Adjunto la versión final del contrato con los cambios acordados…',
+          attachments: [
+            { name: 'Contrato_Nortec_v4_final.pdf', ext: 'PDF', size: '1,8 MB' },
+            { name: 'Anexo_precios_2026.docx', ext: 'DOCX', size: '324 KB' },
+            { name: 'Firma_oficinas_BCN.jpg', ext: 'JPG', size: '2,1 MB' }
+          ],
+          paras: ['Adjunto la versión final del contrato con los cambios acordados en la llamada del lunes: plazo de renovación a 24 meses y la cláusula de datos actualizada según lo que pidió su equipo legal.', 'También va el anexo de precios de 2026 en editable, por si comercial quiere ajustar los volúmenes antes de firmar, y la foto de las oficinas que nos pidieron para el dossier.', 'Si os parece bien, lo envío a firma el jueves por la mañana. Cualquier cambio, decídmelo antes del miércoles a las 17:00.'],
+          ai: ['Contrato Nortec final: renovación a 24 meses y cláusula de datos actualizada.', 'Adjuntos: contrato (PDF), anexo de precios editable (DOCX) y foto para el dossier (JPG).', 'Acción: comunicar cambios antes del miércoles 17:00; firma prevista el jueves.'] },
+        { id: 3, from: 'Marc Vidal', email: 'marc@cefiro.top', role: 'Investigación de diseño', folder: 'inbox', unread: true, starred: false, label: 'diseno', time: '9:15', ts: 80,
+          subject: 'Feedback del cliente sobre el onboarding',
+          preview: 'Acabo de salir de la llamada con Nortec. En general muy positivo, pero…',
+          paras: ['Acabo de salir de la llamada con Nortec. En general muy positivo: el nuevo onboarding les parece mucho más claro que la versión anterior.', 'Dos fricciones concretas: el paso de conectar el dominio les resultó confuso (no sabían dónde encontrar los registros DNS) y echan de menos poder invitar al equipo antes de terminar la configuración.', 'Propongo dedicar la crítica de diseño del viernes a estos dos puntos. Subo la grabación de la llamada a la carpeta compartida esta tarde.'],
+          ai: ['Nortec valora bien el nuevo onboarding en general.', 'Fricciones: conexión de dominio confusa e imposibilidad de invitar al equipo antes de acabar.', 'Propuesta: tratar ambos puntos en la crítica de diseño del viernes.'] },
+        { id: 4, from: 'Elena Ruiz', email: 'elena@cefiro.top', role: 'Finanzas', folder: 'inbox', unread: false, starred: false, label: 'finanzas', time: '8:50', ts: 70,
+          subject: 'Cierre de gastos Q2: fecha límite viernes',
+          preview: 'Recordatorio: este viernes cerramos la contabilidad del trimestre…',
+          paras: ['Recordatorio: este viernes cerramos la contabilidad del trimestre. Todo gasto sin justificante después de esa fecha pasará al Q3 y afectará al presupuesto de vuestro equipo.', 'Faltan 14 tickets por subir, la mayoría de viajes de mayo. Podéis verlos en la sección de pendientes de la herramienta de gastos.', 'Si algún justificante se ha perdido, escribidme y lo resolvemos con una declaración responsable.'],
+          ai: ['El cierre contable del Q2 es este viernes; lo que falte pasa al Q3.', 'Quedan 14 tickets pendientes, sobre todo de viajes de mayo.', 'Si falta un justificante, se puede resolver con declaración responsable.'] },
+        { id: 5, from: 'Dani Ortega', email: 'dani@cefiro.top', role: 'Producto', folder: 'inbox', unread: false, starred: true, label: null, time: 'Ayer', ts: 60,
+          subject: '¿Comemos el jueves con el equipo nuevo?',
+          preview: 'Se incorporan Sara y Tomás la semana que viene y estaría bien…',
+          paras: ['Se incorporan Sara y Tomás la semana que viene y estaría bien hacer una comida de bienvenida el jueves con todo el equipo de producto.', 'He mirado el sitio de ramen de la calle Balmes: tienen mesa grande a las 13:30. Si os cuadra, reservo hoy mismo.', 'Confirmadme antes de las 18:00, que luego se llena.'],
+          ai: ['Comida de bienvenida propuesta para el jueves a las 13:30 (ramen en Balmes).', 'Motivo: incorporación de Sara y Tomás la próxima semana.', 'Acción: confirmar asistencia antes de las 18:00 de hoy.'] },
+        { id: 6, from: 'Despliegues Céfiro', email: 'ci@cefiro.top', role: 'Automatización · bot de despliegues', folder: 'inbox', unread: false, starred: false, label: 'producto', time: 'Ayer', ts: 50,
+          subject: 'Despliegue v2.14 completado en producción',
+          preview: 'El despliegue de la versión 2.14 terminó sin incidencias a las 18:22…',
+          paras: ['El despliegue de la versión 2.14 terminó sin incidencias a las 18:22. Duración total: 11 minutos, sin degradación de servicio.', 'Incluye: nuevo editor de plantillas, mejoras de rendimiento en la bandeja compartida y 9 correcciones de errores reportados por soporte.', 'Las métricas de error se mantienen estables desde el despliegue. Panel de observabilidad enlazado en el canal de ingeniería.'],
+          ai: ['La v2.14 se desplegó ayer a las 18:22 sin incidencias (11 minutos).', 'Novedades: editor de plantillas, rendimiento de bandeja compartida y 9 fixes.', 'Métricas de error estables tras el despliegue.'] },
+        { id: 7, from: 'Ana Sanz', email: 'ana@cefiro.top', role: 'Diseño visual', folder: 'inbox', unread: false, starred: false, label: 'diseno', time: 'Jue', ts: 40,
+          subject: 'Propuesta de paleta para el rediseño del panel',
+          preview: 'He preparado tres direcciones de color partiendo de la auditoría…',
+          paras: ['He preparado tres direcciones de color partiendo de la auditoría de accesibilidad: una neutra cálida, una fría de alto contraste y una intermedia.', 'Las tres cumplen AA en todos los pares de texto. La cálida es la que mejor convive con las ilustraciones actuales, pero la fría gana en densidad de datos.', 'Están en el archivo compartido, página «Paletas v3». Me gustaría cerrarlo en la crítica del viernes.'],
+          ai: ['Tres direcciones de paleta listas, todas cumplen contraste AA.', 'La cálida encaja con las ilustraciones; la fría rinde mejor en datos densos.', 'Objetivo: decidir en la crítica del viernes.'] },
+        { id: 8, from: 'Recursos Humanos', email: 'personas@cefiro.top', role: 'Personas y cultura', folder: 'inbox', unread: false, starred: false, label: null, time: 'Mié', ts: 30,
+          subject: 'Encuesta de clima laboral — cierra el día 15',
+          preview: 'Ya está disponible la encuesta semestral. Son 10 minutos y es anónima…',
+          paras: ['Ya está disponible la encuesta semestral de clima laboral. Son unos 10 minutos y es completamente anónima.', 'Los resultados agregados se comparten con toda la empresa en el all-hands de agosto, junto con el plan de acción por área.', 'El plazo termina el día 15. La participación del semestre pasado fue del 84%; el objetivo es superarla.'],
+          ai: ['Encuesta semestral de clima abierta, ~10 minutos, anónima.', 'Resultados y plan de acción se presentan en el all-hands de agosto.', 'Plazo: hasta el día 15.'] },
+        { id: 9, from: 'Tú', email: 'selene@cefiro.top', role: 'Producto', folder: 'sent', unread: false, starred: false, label: 'producto', time: 'Ayer', ts: 55,
+          subject: 'Agenda para la planificación del jueves',
+          preview: 'Os paso la agenda propuesta para la sesión de planificación…',
+          paras: ['Os paso la agenda propuesta para la sesión de planificación del jueves: 30 minutos de revisión de capacidad, 45 de priorización y 15 de riesgos.', 'Traed las estimaciones actualizadas. Si algún tema necesita más tiempo, avisadme y lo partimos en dos sesiones.'],
+          ai: ['Agenda del jueves: capacidad (30 min), priorización (45) y riesgos (15).', 'Se piden estimaciones actualizadas antes de la sesión.'] }
+      ]
+    };
+  }
+
+  themeVars() {
+    const t = this.props.theme ?? 'Noche';
+    if (t === 'Claro') return '--bg:#F1F4F4;--panel:#FFFFFF;--ink:#101318;--muted:#66707E;--line:#E2E7E9;--accent:#0FA383;--accent-ink:#FFFFFF;--soft:#EDF7F3;--hover:#F3F7F6;--sel:#DCF2EA;';
+    return '--bg:#0A0B10;--panel:#12141C;--ink:#ECEEF4;--muted:#8B90A2;--line:#232838;--accent:#6FE3C1;--accent-ink:#07130F;--soft:#171A24;--hover:#191D28;--sel:#15302B;';
+  }
+
+  getFiltered() {
+    const { emails, folder, label, query } = this.state;
+    const q = query.trim().toLowerCase();
+    return emails
+      .filter(e => folder === 'starred' ? (e.starred && e.folder !== 'archive') : e.folder === folder)
+      .filter(e => !label || e.label === label)
+      .filter(e => !q || (e.from + ' ' + e.subject + ' ' + e.preview).toLowerCase().includes(q))
+      .sort((a, b) => b.ts - a.ts);
+  }
+
+  openEmail(id) {
+    this.setState(s => ({ selectedId: id, emails: s.emails.map(e => e.id === id ? { ...e, unread: false } : e) }));
+  }
+
+  showToast(msg) {
+    clearTimeout(this._toastT);
+    this.setState({ toast: msg });
+    this._toastT = setTimeout(() => this.setState({ toast: null }), 2600);
+  }
+
+  archive(id) {
+    if (!id) return;
+    const list = this.getFiltered();
+    const idx = list.findIndex(e => e.id === id);
+    const next = list[idx + 1] || list[idx - 1] || null;
+    this.setState(s => ({
+      emails: s.emails.map(e => e.id === id ? { ...e, folder: 'archive' } : e),
+      selectedId: next ? next.id : null
+    }));
+    this.showToast('Correo archivado · pulsa e para archivar más rápido');
+  }
+
+  toggleStar(id) {
+    this.setState(s => ({ emails: s.emails.map(e => e.id === id ? { ...e, starred: !e.starred } : e) }));
+  }
+
+  reply(em) {
+    if (!em) return;
+    this.setState({ composeOpen: true, composeTo: em.email, composeSubject: 'Re: ' + em.subject, composeBody: '' });
+  }
+
+  componentDidMount() {
+    this._onKey = (ev) => {
+      const tag = (ev.target.tagName || '').toLowerCase();
+      const typing = tag === 'input' || tag === 'textarea' || ev.target.isContentEditable;
+      if (ev.key === 'Escape') {
+        if (this.state.composeOpen) { this.setState({ composeOpen: false }); return; }
+        if (this.state.showShortcuts) { this.setState({ showShortcuts: false }); return; }
+        if (typing && ev.target.blur) ev.target.blur();
+        return;
+      }
+      if (typing) return;
+      const list = this.getFiltered();
+      const idx = list.findIndex(e => e.id === this.state.selectedId);
+      if (ev.key === 'j' || ev.key === 'k') {
+        ev.preventDefault();
+        const ni = ev.key === 'j' ? Math.min(idx + 1, list.length - 1) : Math.max(idx - 1, 0);
+        if (list[ni]) this.openEmail(list[ni].id);
+      } else if (ev.key === 'e') {
+        this.archive(this.state.selectedId);
+      } else if (ev.key === 's') {
+        if (this.state.selectedId) this.toggleStar(this.state.selectedId);
+      } else if (ev.key === 'r') {
+        this.reply(this.state.emails.find(e => e.id === this.state.selectedId));
+      } else if (ev.key === 'c') {
+        ev.preventDefault();
+        this.setState({ composeOpen: true });
+      } else if (ev.key === '/') {
+        ev.preventDefault();
+        if (this.searchRef.current) this.searchRef.current.focus();
+      } else if (ev.key === '?') {
+        this.setState(s => ({ showShortcuts: !s.showShortcuts }));
+      }
+    };
+    window.addEventListener('keydown', this._onKey);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this._onKey);
+    clearTimeout(this._toastT);
+    clearTimeout(this._aiT);
+    clearTimeout(this._draftT);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const L = this.LABELS;
+    const filtered = this.getFiltered();
+    const sel = s.emails.find(e => e.id === s.selectedId && (filtered.some(f => f.id === e.id)));
+    const folderTitles = { inbox: 'Recibidos', starred: 'Destacados', sent: 'Enviados', archive: 'Archivados' };
+    const mkFolder = (key) => ({
+      bg: s.folder === key ? 'var(--sel)' : 'transparent',
+      color: 'var(--ink)',
+      weight: s.folder === key ? 650 : 480,
+      go: () => this.setState({ folder: key, label: null })
+    });
+    const fInbox = mkFolder('inbox'), fStar = mkFolder('starred'), fSent = mkFolder('sent'), fArch = mkFolder('archive');
+    const unreadInbox = s.emails.filter(e => e.folder === 'inbox' && e.unread).length;
+    const selChip = sel && sel.label ? L[sel.label] : null;
+    const aiLoading = sel && s.aiLoadingId === sel.id;
+    const aiReady = sel && !!s.aiDone[sel.id];
+
+    return {
+      themeVars: this.themeVars(),
+      showHints: this.props.mostrarAtajos ?? true,
+      searchRef: this.searchRef,
+      query: s.query,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+
+      goInbox: fInbox.go, inboxBg: fInbox.bg, inboxColor: fInbox.color, inboxWeight: fInbox.weight,
+      goStarred: fStar.go, starredBg: fStar.bg, starredColor: fStar.color, starredWeight: fStar.weight,
+      goSent: fSent.go, sentBg: fSent.bg, sentColor: fSent.color, sentWeight: fSent.weight,
+      goArchive: fArch.go, archiveBg: fArch.bg, archiveColor: fArch.color, archiveWeight: fArch.weight,
+      countInbox: unreadInbox > 0 ? String(unreadInbox) : '',
+
+      labelRows: Object.keys(L).map(key => ({
+        name: L[key].name, color: L[key].color,
+        bg: s.label === key ? 'var(--sel)' : 'transparent',
+        weight: s.label === key ? 650 : 480,
+        onClick: () => this.setState(st => ({ label: st.label === key ? null : key }))
+      })),
+
+      folderTitle: folderTitles[s.folder],
+      listCountText: filtered.length === 1 ? '1 correo' : filtered.length + ' correos',
+      hasLabelFilter: !!s.label,
+      activeLabelName: s.label ? L[s.label].name : '',
+      activeLabelColor: s.label ? L[s.label].color : '',
+      activeLabelBg: s.label ? L[s.label].bg : '',
+      clearLabel: () => this.setState({ label: null }),
+      listEmpty: filtered.length === 0,
+
+      filteredEmails: filtered.map((e) => {
+        const chip = e.label ? L[e.label] : null;
+        const isSel = sel && e.id === sel.id;
+        return {
+          from: e.from, subject: e.subject, preview: e.preview, time: e.time,
+          initials: e.from.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+          avatarBg: this.AVATARS[e.id % this.AVATARS.length],
+          rowBg: isSel ? 'var(--sel)' : 'transparent',
+          hoverBg: isSel ? 'var(--sel)' : 'var(--hover)',
+          edge: isSel ? 'var(--accent)' : 'transparent',
+          dotColor: e.unread ? 'var(--accent)' : 'transparent',
+          nameWeight: e.unread ? 700 : 500,
+          subjWeight: e.unread ? 650 : 420,
+          hasChip: !!chip,
+          chipName: chip ? chip.name : '', chipColor: chip ? chip.color : '', chipBg: chip ? chip.bg : '',
+          starChar: e.starred ? '★' : '☆',
+          starColor: e.starred ? '#E8C24A' : 'var(--muted)',
+          hasAttach: !!(e.attachments && e.attachments.length),
+          open: () => this.openEmail(e.id),
+          toggleStar: (ev) => { ev.stopPropagation(); this.toggleStar(e.id); }
+        };
+      }),
+
+      hasSelection: !!sel,
+      noSelection: !sel,
+      selSubject: sel ? sel.subject : '',
+      selFrom: sel ? sel.from : '',
+      selEmail: sel ? sel.email : '',
+      selRole: sel ? sel.role : '',
+      selTime: sel ? sel.time : '',
+      selInitials: sel ? sel.from.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '',
+      selAvatarBg: sel ? this.AVATARS[sel.id % this.AVATARS.length] : 'transparent',
+      selParas: sel ? sel.paras : [],
+      selHasAttachments: !!(sel && sel.attachments && sel.attachments.length),
+      selAttachCount: sel && sel.attachments ? (sel.attachments.length === 1 ? '1 adjunto' : sel.attachments.length + ' adjuntos') : '',
+      selAttachments: (sel && sel.attachments ? sel.attachments : []).map(a => {
+        const styles = {
+          PDF:  { color: '#F26565', bg: 'rgba(242,101,101,0.14)' },
+          DOCX: { color: '#5B8DEF', bg: 'rgba(91,141,239,0.14)' },
+          DOC:  { color: '#5B8DEF', bg: 'rgba(91,141,239,0.14)' },
+          JPG:  { color: '#E5A13D', bg: 'rgba(229,161,61,0.15)' },
+          PNG:  { color: '#E5A13D', bg: 'rgba(229,161,61,0.15)' },
+          XLSX: { color: '#34C79A', bg: 'rgba(52,199,154,0.14)' }
+        };
+        const st = styles[a.ext] || { color: 'var(--accent)', bg: 'var(--sel)' };
+        return { name: a.name, ext: a.ext, size: a.size, color: st.color, bg: st.bg,
+          download: () => this.showToast('Descargando ' + a.name + '…') };
+      }),
+      selHasChip: !!selChip,
+      selChipName: selChip ? selChip.name : '', selChipColor: selChip ? selChip.color : '', selChipBg: selChip ? selChip.bg : '',
+      selStarChar: sel && sel.starred ? '★' : '☆',
+      selStarColor: sel && sel.starred ? '#E8C24A' : 'var(--muted)',
+      selStarLabel: sel && sel.starred ? 'Destacado' : 'Destacar',
+      archiveSel: () => this.archive(s.selectedId),
+      toggleStarSel: () => { if (s.selectedId) this.toggleStar(s.selectedId); },
+      replySel: () => this.reply(sel),
+
+      aiIdle: !!sel && !aiLoading && !aiReady,
+      aiLoading: !!aiLoading,
+      aiReady: !!aiReady,
+      selAiBullets: aiReady ? sel.ai : [],
+      onAiSummary: () => {
+        if (!sel) return;
+        const id = sel.id;
+        this.setState({ aiLoadingId: id });
+        this._aiT = setTimeout(() => this.setState(st => ({ aiLoadingId: null, aiDone: { ...st.aiDone, [id]: true } })), 1100);
+      },
+
+      composeOpen: s.composeOpen,
+      openCompose: () => this.setState({ composeOpen: true, composeTo: '', composeSubject: '', composeBody: '' }),
+      closeCompose: () => this.setState({ composeOpen: false }),
+      composeTo: s.composeTo, composeSubject: s.composeSubject, composeBody: s.composeBody,
+      onTo: (e) => this.setState({ composeTo: e.target.value }),
+      onSubject: (e) => this.setState({ composeSubject: e.target.value }),
+      onBody: (e) => this.setState({ composeBody: e.target.value }),
+      aiDraftLabel: s.aiWriting ? 'Redactando…' : 'Redactar con IA',
+      aiDraft: () => {
+        if (!s.composeSubject.trim()) { this.showToast('Escribe primero un asunto para que la IA redacte'); return; }
+        this.setState({ aiWriting: true });
+        this._draftT = setTimeout(() => {
+          const subj = this.state.composeSubject.replace(/^re:\s*/i, '');
+          this.setState({
+            aiWriting: false,
+            composeBody: 'Hola:\n\nTe escribo en relación con «' + subj + '». He revisado el estado actual y creo que podemos avanzar esta misma semana.\n\nTe propongo lo siguiente: reviso los detalles pendientes hoy, te envío un resumen con los puntos clave mañana a primera hora y, si te encaja, lo cerramos en una llamada corta el jueves.\n\nDime si te funciona este plan o prefieres ajustar algo.\n\nUn saludo,\nSelene'
+          });
+          this.showToast('✦ Borrador generado por IA — revísalo antes de enviar');
+        }, 950);
+      },
+      sendMail: () => {
+        if (!s.composeTo.trim()) { this.showToast('Añade un destinatario'); return; }
+        const maxTs = Math.max(...s.emails.map(e => e.ts));
+        this.setState(st => ({
+          composeOpen: false,
+          emails: [...st.emails, {
+            id: Date.now(), from: 'Tú', email: 'selene@cefiro.top', role: 'Producto', folder: 'sent', unread: false, starred: false, label: null,
+            time: 'Ahora', ts: maxTs + 1,
+            subject: st.composeSubject || '(sin asunto)',
+            preview: st.composeBody.slice(0, 90),
+            paras: st.composeBody ? st.composeBody.split(/\n+/).filter(Boolean) : ['(mensaje vacío)'],
+            ai: ['Mensaje enviado por ti.']
+          }]
+        }));
+        this.showToast('Correo enviado');
+      },
+
+      showShortcuts: s.showShortcuts,
+      toggleShortcuts: () => this.setState(st => ({ showShortcuts: !st.showShortcuts })),
+      hasToast: !!s.toast,
+      toastMsg: s.toast || ''
+    };
+  }
+}
+</script>
+</body>
+</html>

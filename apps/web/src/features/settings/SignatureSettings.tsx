@@ -83,12 +83,12 @@ export function SignatureSettings() {
         {signatures.map((signature) => (
           <li
             key={signature.id}
-            className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm"
+            className="flex items-center justify-between gap-2 rounded-md border border-line p-2 text-sm"
           >
             <div className="flex items-center gap-2">
               <span>{signature.name}</span>
               {signature.isDefault && (
-                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+                <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent">
                   {t("settings.default")}
                 </span>
               )}
@@ -97,14 +97,14 @@ export function SignatureSettings() {
               <button
                 type="button"
                 onClick={() => startEdit(signature)}
-                className="rounded-md border px-2 py-1 text-xs"
+                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
               >
                 {t("settings.edit")}
               </button>
               <button
                 type="button"
                 onClick={() => deleteMutation.mutate(signature.id)}
-                className="rounded-md border px-2 py-1 text-xs"
+                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
               >
                 {t("settings.delete")}
               </button>
@@ -117,7 +117,7 @@ export function SignatureSettings() {
         <button
           type="button"
           onClick={startCreate}
-          className="self-start rounded-md border px-3 py-1 text-sm"
+          className="self-start rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
         >
           {t("settings.newSignature")}
         </button>
@@ -131,7 +131,7 @@ export function SignatureSettings() {
               id="signature-name"
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
-              className="rounded-md border p-1"
+              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
             />
           </label>
 
@@ -154,13 +154,13 @@ export function SignatureSettings() {
             <button
               type="button"
               onClick={resetForm}
-              className="rounded-md border px-3 py-1 text-sm"
+              className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
             >
               {t("composer.cancel")}
             </button>
             <button
               type="submit"
-              className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white"
+              className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
             >
               {t("settings.save")}
             </button>

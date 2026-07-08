@@ -97,7 +97,7 @@ describe("mail SSE live refresh and notifications", () => {
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
     renderAt("/", client);
 
-    await screen.findByText("Inbox");
+    await screen.findAllByText("Inbox");
 
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]?.url).toBe("/api/mail/events");
@@ -124,7 +124,7 @@ describe("mail SSE live refresh and notifications", () => {
     Object.defineProperty(document, "hidden", { value: true, configurable: true });
 
     renderAt("/", client);
-    await screen.findByText("Inbox");
+    await screen.findAllByText("Inbox");
 
     FakeEventSource.instances[0]?.emitMessage();
 
