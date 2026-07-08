@@ -341,6 +341,7 @@ export function MailPage() {
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
             <CefiroLogo size={52} />
             <p className="text-sm">{t("mail.selectMessage")}</p>
+            <p className="text-xs text-muted">{t("shortcuts.listHint")}</p>
           </div>
         )}
       </section>

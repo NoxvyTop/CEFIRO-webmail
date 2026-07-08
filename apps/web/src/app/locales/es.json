@@ -257,5 +257,17 @@
     "intervalDays": "Días entre respuestas al mismo remitente",
     "save": "Guardar",
     "saved": "Guardado"
+  },
+  "shortcuts": {
+    "title": "Atajos",
+    "move": "Moverse por la lista",
+    "archive": "Archivar correo",
+    "star": "Destacar correo",
+    "reply": "Responder",
+    "compose": "Redactar",
+    "search": "Buscar",
+    "close": "Cerrar / salir",
+    "hint": "j / k para moverte · e archiva · c redacta",
+    "listHint": "j / k para moverte"
   }
 }

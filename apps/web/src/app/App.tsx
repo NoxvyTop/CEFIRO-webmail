@@ -1,10 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { CefiroLogo } from "./ui/CefiroLogo";
+import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
+import { isPlainShortcut } from "./ui/shortcuts";
 import { ToastProvider } from "./ui/toast";
 import { UserMenu } from "./ui/UserMenu";
 import { useTheme } from "./ui/useTheme";
@@ -29,10 +31,28 @@ export function App() {
   const queryParam = searchParams.get("q") ?? "";
   const [searchValue, setSearchValue] = useState(queryParam);
   const [notificationPermission, setNotificationPermission] = useState(currentNotificationPermission);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setSearchValue(queryParam);
   }, [queryParam]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isPlainShortcut(event)) return;
+      if (event.key === "/") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (event.key === "?") {
+        event.preventDefault();
+        setShowShortcuts((current) => !current);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -78,6 +98,7 @@ export function App() {
                 <path d="m20 20-3.5-3.5" />
               </svg>
               <input
+                ref={searchInputRef}
                 type="search"
                 value={searchValue}
                 onChange={(event) => setSearchValue(event.target.value)}
@@ -92,7 +113,15 @@ export function App() {
             <p className="text-sm text-warn">{t("health.degraded")}</p>
           )}
           {user && (
-            <div className="ml-auto shrink-0">
+            <div className="ml-auto flex shrink-0 items-center gap-3">
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                onClick={() => setShowShortcuts((current) => !current)}
+                className="shrink-0 rounded-md border border-line px-3 py-1 text-sm text-muted hover:bg-hover"
+              >
+                {`? ${t("shortcuts.title")}`}
+              </button>
               <UserMenu
                 user={user}
                 theme={theme}
@@ -107,6 +136,7 @@ export function App() {
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <Outlet />
         </div>
+        <ShortcutsOverlay open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       </div>
     </ToastProvider>
   );

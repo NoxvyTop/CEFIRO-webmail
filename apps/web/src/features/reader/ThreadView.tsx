@@ -184,6 +184,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
         >
           {t("composer.forward")}
         </button>
+        <span className="ml-auto hidden truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[780px] px-5 pb-16 pt-8 md:px-10" style={{ animation: "fadeUp 0.25s ease-out" }}>

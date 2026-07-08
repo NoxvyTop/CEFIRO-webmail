@@ -257,5 +257,17 @@
     "intervalDays": "Days between replies to the same sender",
     "save": "Save",
     "saved": "Saved"
+  },
+  "shortcuts": {
+    "title": "Shortcuts",
+    "move": "Move through the list",
+    "archive": "Archive email",
+    "star": "Star email",
+    "reply": "Reply",
+    "compose": "Compose",
+    "search": "Search",
+    "close": "Close / dismiss",
+    "hint": "j / k to move · e archives · c composes",
+    "listHint": "j / k to move"
   }
 }
