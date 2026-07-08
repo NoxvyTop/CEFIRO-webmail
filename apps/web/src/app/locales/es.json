@@ -116,6 +116,7 @@
   "mail": {
     "listRegion": "Lista de mensajes",
     "readerRegion": "Lectura",
+    "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount": "{{count}} correos",
     "searchPlaceholder": "Buscar en el correo",
@@ -133,7 +134,14 @@
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "generic": "No se pudo cargar el correo"
     },
-    "backToList": "Volver a la lista"
+    "backToList": "Volver a la lista",
+    "archive": "Archivar",
+    "star": "Destacar",
+    "unstar": "Quitar destacado",
+    "archived": "Correo archivado",
+    "archivedHint": "pulsa e para archivar más rápido",
+    "labels": "Etiquetas",
+    "clearLabel": "Quitar filtro de etiqueta"
   },
   "modules": {
     "title": "Módulos",
@@ -158,6 +166,7 @@
     "forward": "Reenviar",
     "attach": "Adjuntar",
     "send": "Enviar",
+    "sent": "Correo enviado",
     "cancel": "Cancelar",
     "sending": "Enviando…",
     "invalidEmail": "Correo inválido",
@@ -248,5 +257,17 @@
     "intervalDays": "Días entre respuestas al mismo remitente",
     "save": "Guardar",
     "saved": "Guardado"
+  },
+  "shortcuts": {
+    "title": "Atajos",
+    "move": "Moverse por la lista",
+    "archive": "Archivar correo",
+    "star": "Destacar correo",
+    "reply": "Responder",
+    "compose": "Redactar",
+    "search": "Buscar",
+    "close": "Cerrar / salir",
+    "hint": "j / k para moverte · e archiva · c redacta",
+    "listHint": "j / k para moverte"
   }
 }

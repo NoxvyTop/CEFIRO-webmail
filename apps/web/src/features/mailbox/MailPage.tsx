@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -14,6 +14,7 @@ import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
+import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useAuth } from "../auth/useAuth";
 import {
   PANE_MAX_WIDTH,
@@ -35,9 +36,12 @@ export function MailPage() {
   const queryParam = searchParams.get("q");
   const composeParam = searchParams.get("compose");
   const groupParam = searchParams.get("group");
+  const starredParam = searchParams.get("starred") === "1";
+  const labelParam = searchParams.get("label");
   const composeMatch = composeParam?.match(/^(reply|reply-all|forward):(.+)$/) ?? null;
   const composeMode = composeMatch?.[1];
   const composeEmailId = composeMatch?.[2];
+  const [availableLabels, setAvailableLabels] = useState<string[]>([]);
 
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
@@ -85,25 +89,44 @@ export function MailPage() {
     return (inbox ?? mailboxes[0])?.id ?? null;
   }, [mailboxes]);
 
+  const archiveMailboxId = useMemo(
+    () => mailboxes.find((mailbox) => mailbox.role === "archive")?.id ?? null,
+    [mailboxes],
+  );
+
   const selectedMailboxId = useMemo(() => {
     if (mailboxParam) return mailboxParam;
     return inboxMailboxId;
   }, [mailboxParam, inboxMailboxId]);
 
-  const messageListMailboxId = groupParam ? inboxMailboxId : selectedMailboxId;
+  const messageListMailboxId =
+    starredParam ? undefined : (groupParam ? inboxMailboxId : selectedMailboxId) ?? undefined;
 
-  const messageListTo = groupParam ?? undefined;
+  const messageListTo = starredParam ? undefined : (groupParam ?? undefined);
 
-  const isMainInboxSelected = !groupParam && selectedMailboxId !== null && selectedMailboxId === inboxMailboxId;
+  const isMainInboxSelected =
+    !starredParam && !groupParam && selectedMailboxId !== null && selectedMailboxId === inboxMailboxId;
 
   const messageListExcludeTo =
     isMainInboxSelected && preferences?.groupMailInMainInbox === false && groupAddresses.length > 0
       ? groupAddresses
       : undefined;
 
-  const messageListTitle = groupParam
-    ? groupParam
-    : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+  const messageListHasKeyword = starredParam
+    ? (labelParam ? `$flagged,${labelParam}` : "$flagged")
+    : (labelParam ?? undefined);
+
+  const messageListTitle = starredParam
+    ? t("mail.starredView")
+    : groupParam
+      ? groupParam
+      : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+
+  // The starred view is not tied to any single mailbox, so the sidebar must not
+  // highlight a mailbox row (e.g. Inbox) while it is active. `selectedMailboxId`
+  // itself keeps deriving from the URL/inbox fallback for query purposes; only
+  // the value handed to the Sidebar for its aria-current styling is nulled out.
+  const sidebarSelectedMailboxId = starredParam ? null : selectedMailboxId;
 
   function handleSelectMailbox(mailboxId: string) {
     setSearchParams((prev) => {
@@ -112,6 +135,7 @@ export function MailPage() {
       next.delete("thread");
       next.delete("q");
       next.delete("group");
+      next.delete("starred");
       return next;
     });
   }
@@ -120,6 +144,41 @@ export function MailPage() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set("group", address);
+      next.delete("thread");
+      next.delete("starred");
+      return next;
+    });
+  }
+
+  function handleSelectStarred() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("starred", "1");
+      next.delete("mailbox");
+      next.delete("thread");
+      next.delete("group");
+      next.delete("label");
+      return next;
+    });
+  }
+
+  function handleSelectLabel(label: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (next.get("label") === label) {
+        next.delete("label");
+      } else {
+        next.set("label", label);
+      }
+      next.delete("thread");
+      return next;
+    });
+  }
+
+  function handleClearLabel() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("label");
       next.delete("thread");
       return next;
     });
@@ -141,11 +200,45 @@ export function MailPage() {
     });
   }
 
+  function handleArchived(email: EmailSummary) {
+    if (email.threadId === threadParam) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("thread");
+        return next;
+      });
+    }
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isPlainShortcut(event)) return;
+      if (event.key === "c") {
+        event.preventDefault();
+        handleCompose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function removeComposeParam() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete("compose");
       return next;
+    });
+  }
+
+  function handleLabels(labels: string[]) {
+    setAvailableLabels((prev) => {
+      const merged = Array.from(new Set([...prev, ...labels])).sort();
+      if (merged.length === prev.length && merged.every((label, i) => label === prev[i])) {
+        return prev;
+      }
+      return merged;
     });
   }
 
@@ -172,11 +265,16 @@ export function MailPage() {
     <div className="flex flex-1 overflow-hidden">
       <Sidebar
         mailboxes={mailboxes}
-        selectedMailboxId={selectedMailboxId}
+        selectedMailboxId={sidebarSelectedMailboxId}
         onSelectMailbox={handleSelectMailbox}
+        starredSelected={starredParam}
+        onSelectStarred={handleSelectStarred}
         groups={groups}
         selectedGroup={groupParam}
         onSelectGroup={handleSelectGroup}
+        labels={availableLabels}
+        selectedLabel={labelParam}
+        onSelectLabel={handleSelectLabel}
         onCompose={handleCompose}
       />
       <section
@@ -191,7 +289,7 @@ export function MailPage() {
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
-        {groupAddresses.length > 0 && (
+        {!starredParam && groupAddresses.length > 0 && (
           <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">
             <input
               type="checkbox"
@@ -201,15 +299,22 @@ export function MailPage() {
             {t("groups.showInInbox")}
           </label>
         )}
-        {!mailboxesQuery.isError && messageListMailboxId && (
+        {!mailboxesQuery.isError && (starredParam || messageListMailboxId) && (
           <MessageList
             mailboxId={messageListMailboxId}
+            hasKeyword={messageListHasKeyword}
             query={queryParam}
             selectedThreadId={threadParam}
             onSelect={handleSelectMessage}
             to={messageListTo}
             excludeTo={messageListExcludeTo}
+            excludeMailboxId={starredParam ? archiveMailboxId ?? undefined : undefined}
             title={messageListTitle}
+            onLabels={handleLabels}
+            activeLabel={labelParam ?? undefined}
+            onClearLabel={handleClearLabel}
+            archiveMailboxId={archiveMailboxId}
+            onArchived={handleArchived}
           />
         )}
       </section>
@@ -232,11 +337,12 @@ export function MailPage() {
         } min-w-0 flex-1 overflow-y-auto overflow-x-hidden`}
       >
         {threadParam ? (
-          <ThreadView threadId={threadParam} />
+          <ThreadView threadId={threadParam} archiveMailboxId={archiveMailboxId} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
             <CefiroLogo size={52} />
             <p className="text-sm">{t("mail.selectMessage")}</p>
+            <p className="text-xs text-muted">{t("shortcuts.listHint")}</p>
           </div>
         )}
       </section>

@@ -28,17 +28,19 @@ export async function fetchMailboxes(): Promise<Mailbox[]> {
 }
 
 export async function fetchMessages(input: {
-  mailboxId: string; position: number; limit: number; query?: string;
-  to?: string; excludeTo?: string[];
+  mailboxId?: string; hasKeyword?: string; position: number; limit: number; query?: string;
+  to?: string; excludeTo?: string[]; excludeMailboxId?: string;
 }): Promise<MessagesPage> {
   const params = new URLSearchParams({
-    mailboxId: input.mailboxId,
     position: String(input.position),
     limit: String(input.limit),
   });
+  if (input.mailboxId) params.set("mailboxId", input.mailboxId);
+  if (input.hasKeyword) params.set("hasKeyword", input.hasKeyword);
   if (input.query) params.set("query", input.query);
   if (input.to) params.set("to", input.to);
   if (input.excludeTo && input.excludeTo.length > 0) params.set("excludeTo", input.excludeTo.join(","));
+  if (input.excludeMailboxId) params.set("excludeMailboxId", input.excludeMailboxId);
   const res = await fetch(`/api/mail/messages?${params}`);
   if (!res.ok) return parseError(res);
   return messagesPageSchema.parse(await res.json());

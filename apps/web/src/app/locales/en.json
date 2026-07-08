@@ -116,6 +116,7 @@
   "mail": {
     "listRegion": "Message list",
     "readerRegion": "Reading pane",
+    "starredView": "Starred",
     "unread": "{{count}} unread",
     "messageCount": "{{count}} messages",
     "searchPlaceholder": "Search mail",
@@ -133,7 +134,14 @@
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "generic": "Mail could not be loaded"
     },
-    "backToList": "Back to messages"
+    "backToList": "Back to messages",
+    "archive": "Archive",
+    "star": "Star",
+    "unstar": "Unstar",
+    "archived": "Email archived",
+    "archivedHint": "press e to archive faster",
+    "labels": "Labels",
+    "clearLabel": "Clear label filter"
   },
   "modules": {
     "title": "Modules",
@@ -158,6 +166,7 @@
     "forward": "Forward",
     "attach": "Attach",
     "send": "Send",
+    "sent": "Email sent",
     "cancel": "Cancel",
     "sending": "Sending…",
     "invalidEmail": "Invalid email",
@@ -248,5 +257,17 @@
     "intervalDays": "Days between replies to the same sender",
     "save": "Save",
     "saved": "Saved"
+  },
+  "shortcuts": {
+    "title": "Shortcuts",
+    "move": "Move through the list",
+    "archive": "Archive email",
+    "star": "Star email",
+    "reply": "Reply",
+    "compose": "Compose",
+    "search": "Search",
+    "close": "Close / dismiss",
+    "hint": "j / k to move · e archives · c composes",
+    "listHint": "j / k to move"
   }
 }

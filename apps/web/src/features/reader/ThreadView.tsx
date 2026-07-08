@@ -1,15 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import type { EmailAddress } from "@webmail/shared";
-import { fetchThread } from "../mailbox/api";
+import type { EmailAddress, EmailDetail } from "@webmail/shared";
+import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArrowLeftIcon } from "../../app/ui/icons";
+import { ArchiveIcon, ArrowLeftIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import { isPlainShortcut } from "../../app/ui/shortcuts";
+import { useToast } from "../../app/ui/toast";
 import { EmailBody } from "./EmailBody";
 
 interface ThreadViewProps {
   threadId: string;
+  archiveMailboxId: string | null;
 }
 
 function addressLabel(address: EmailAddress | undefined) {
@@ -45,14 +49,37 @@ function blobUrl(blobId: string, name: string, type: string, download: boolean):
   return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
 }
 
-export function ThreadView({ threadId }: ThreadViewProps) {
+export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   const threadQuery = useQuery({
     queryKey: ["mail", "thread", threadId],
     queryFn: () => fetchThread(threadId),
     retry: mailRetry,
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!archiveMailboxId) throw new Error("no archive mailbox");
+      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
+      backToList();
+    },
+  });
+
+  const starMutation = useMutation({
+    mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
+      updateMessage(email.id, { keywords: { $flagged: starred } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
+      queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
   });
 
   function openCompose(param: string) {
@@ -71,6 +98,24 @@ export function ThreadView({ threadId }: ThreadViewProps) {
     });
   }
 
+  const emails = threadQuery.data?.emails ?? [];
+  const lastEmail = emails[emails.length - 1];
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isPlainShortcut(event)) return;
+      if (!lastEmail) return;
+      if (event.key === "r") {
+        event.preventDefault();
+        openCompose(`reply:${lastEmail.id}`);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastEmail]);
+
   if (threadQuery.isError) {
     return (
       <p role="alert" className="p-4 text-sm text-warn">
@@ -79,10 +124,14 @@ export function ThreadView({ threadId }: ThreadViewProps) {
     );
   }
 
-  const emails = threadQuery.data?.emails ?? [];
-  const lastEmail = emails[emails.length - 1];
-
   if (!lastEmail) return null;
+
+  const isOnlyInArchive =
+    archiveMailboxId !== null &&
+    lastEmail.mailboxIds.length === 1 &&
+    lastEmail.mailboxIds[0] === archiveMailboxId;
+  const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
+  const starred = Boolean(lastEmail.keywords.$flagged);
 
   return (
     <div className="flex h-full flex-col">
@@ -94,6 +143,25 @@ export function ThreadView({ threadId }: ThreadViewProps) {
           className="flex h-8 items-center rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink lg:hidden"
         >
           <ArrowLeftIcon />
+        </button>
+        {showArchive && (
+          <button
+            type="button"
+            onClick={() => archiveMutation.mutate(lastEmail)}
+            className="flex h-8 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink"
+          >
+            <ArchiveIcon size={16} />
+            {t("mail.archive")}
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label={t(starred ? "mail.unstar" : "mail.star")}
+          onClick={() => starMutation.mutate({ email: lastEmail, starred: !starred })}
+          className="flex h-8 items-center gap-1 rounded-md px-2 text-sm text-muted hover:bg-hover hover:text-ink"
+        >
+          {starred ? <StarFilledIcon size={16} /> : <StarIcon size={16} />}
+          {t(starred ? "mail.unstar" : "mail.star")}
         </button>
         <button
           type="button"
@@ -116,6 +184,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
         >
           {t("composer.forward")}
         </button>
+        <span className="ml-auto hidden truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[780px] px-5 pb-16 pt-8 md:px-10" style={{ animation: "fadeUp 0.25s ease-out" }}>

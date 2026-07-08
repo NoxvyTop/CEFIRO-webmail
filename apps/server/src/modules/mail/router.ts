@@ -75,21 +75,30 @@ const MAX_LIMIT = 100;
 
 type JmapFilter = Record<string, unknown>;
 
+const KEYWORD_PATTERN = /^[A-Za-z0-9$_.-]{1,64}$/;
+
 function recipientMatch(address: string): JmapFilter {
   return { operator: "OR", conditions: [{ to: address }, { cc: address }] };
 }
 
 function buildMessagesFilter(input: {
-  mailboxId: string;
+  mailboxId?: string;
   query?: string;
   to?: string;
   excludeTo: string[];
+  excludeMailboxId?: string;
+  hasKeywords: string[];
 }): JmapFilter {
-  const conditions: JmapFilter[] = [{ inMailbox: input.mailboxId }];
+  const conditions: JmapFilter[] = [];
+  if (input.mailboxId) conditions.push({ inMailbox: input.mailboxId });
+  for (const keyword of input.hasKeywords) conditions.push({ hasKeyword: keyword });
   if (input.query) conditions.push({ text: input.query });
   if (input.to) conditions.push(recipientMatch(input.to));
   if (input.excludeTo.length > 0) {
     conditions.push({ operator: "NOT", conditions: input.excludeTo.map(recipientMatch) });
+  }
+  if (input.excludeMailboxId) {
+    conditions.push({ operator: "NOT", conditions: [{ inMailbox: input.excludeMailboxId }] });
   }
   return conditions.length === 1 ? conditions[0]! : { operator: "AND", conditions };
 }
@@ -474,7 +483,19 @@ export function createMailRouter(deps: MailDeps) {
 
   router.get("/messages", requireMail(deps), async (c) => {
     const mailboxId = c.req.query("mailboxId");
-    if (!mailboxId) {
+    const hasKeywords =
+      c.req
+        .query("hasKeyword")
+        ?.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean) ?? [];
+    if (!mailboxId && hasKeywords.length === 0) {
+      return c.json(
+        { code: "invalid_query", message: "errors.invalid_query", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    if (hasKeywords.some((keyword) => !KEYWORD_PATTERN.test(keyword))) {
       return c.json(
         { code: "invalid_query", message: "errors.invalid_query", traceId: c.get("traceId") },
         400,
@@ -488,12 +509,13 @@ export function createMailRouter(deps: MailDeps) {
         ?.split(",")
         .map((s) => s.trim())
         .filter(Boolean) ?? [];
+    const excludeMailboxId = c.req.query("excludeMailboxId");
     const position = Number(c.req.query("position") ?? "0") || 0;
     const requestedLimit = Number(c.req.query("limit") ?? String(DEFAULT_LIMIT)) || DEFAULT_LIMIT;
     const limit = Math.min(requestedLimit, MAX_LIMIT);
 
     const session = c.get("jmapSession");
-    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo });
+    const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo, excludeMailboxId, hasKeywords });
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
         "Email/query",
