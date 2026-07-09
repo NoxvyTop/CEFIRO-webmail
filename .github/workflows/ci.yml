@@ -102,4 +102,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/noxvytop/webmail:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
+          tags: ghcr.io/noxvytop/cefiro-webmail:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
