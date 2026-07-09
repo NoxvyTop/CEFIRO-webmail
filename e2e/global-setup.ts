@@ -15,6 +15,7 @@ import { createMailCredentialsRepo } from "../apps/server/src/infra/repos/mail-c
 import { importMasterKey } from "../apps/server/src/modules/credentials/crypto";
 import { seedInbox } from "./smtp-seed";
 import { SEED_EMAILS } from "./fixtures/mail";
+import { ensureArchiveMailbox } from "./jmap-admin";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -104,6 +105,12 @@ export default async function globalSetup() {
       await createMailCredentialsRepo(sql, key).set(user.id, STALWART_ACCOUNT_PASSWORD);
 
       await seedInbox(STALWART_SMTP_HOST, STALWART_SMTP_PORT, SEED_EMAILS);
+
+      // The mail-actions spec needs an "Archivar" target mailbox, but this
+      // fixture's baked-in account has no archive-role mailbox by default —
+      // see jmap-admin.ts for why this is provisioned here via JMAP rather
+      // than expected to already exist.
+      await ensureArchiveMailbox(stalwartUrl, STALWART_ACCOUNT_EMAIL, STALWART_ACCOUNT_PASSWORD);
     }
 
     const state = {
