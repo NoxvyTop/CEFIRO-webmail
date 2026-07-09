@@ -1,0 +1,21 @@
+services:
+  stalwart:
+    build: ./e2e/stalwart
+    ports:
+      - "8096:8080"
+      - "8025:25"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/stalwart", "--version"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+# Postgres is intentionally NOT part of this stack. E2E runs reuse the
+# existing dev/CI Postgres (docker-compose.dev.yml, port 5434) instead of
+# spinning up a second Postgres instance on a different port. Running one
+# Postgres source avoids drift between "the DB local dev writes to" and
+# "the DB E2E tests read from," and keeps this compose file focused on the
+# one thing it uniquely provides: the pre-provisioned Stalwart fixture.
+# The Playwright E2E config should point DATABASE_URL at the same dev
+# Postgres (postgres://webmail:webmail@localhost:5434/webmail) rather than
+# expecting a second instance here.
