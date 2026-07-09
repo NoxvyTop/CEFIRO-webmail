@@ -69,14 +69,34 @@ export default async function globalSetup() {
     const { token } = await createSessionStore(sql).create(user.id, 24);
 
     if (stalwartUrl) {
-      try {
-        await fetch(`${stalwartUrl}/.well-known/jmap`);
-      } catch (error) {
+      // The Docker healthcheck only proves the Stalwart binary is running,
+      // not that its JMAP HTTP listener has finished binding — so a single
+      // unretried fetch here can flake immediately after `docker compose up`.
+      // Retry for a few seconds, accepting ANY HTTP response (even a 401 or
+      // 307) as proof the listener is up; only a connection failure on every
+      // attempt is a real problem.
+      const JMAP_CHECK_ATTEMPTS = 20;
+      const JMAP_CHECK_DELAY_MS = 750;
+      let reachable = false;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= JMAP_CHECK_ATTEMPTS; attempt += 1) {
+        try {
+          await fetch(`${stalwartUrl}/.well-known/jmap`);
+          reachable = true;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (attempt < JMAP_CHECK_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, JMAP_CHECK_DELAY_MS));
+          }
+        }
+      }
+      if (!reachable) {
         throw new Error(
-          `Stalwart is not reachable at ${stalwartUrl}/.well-known/jmap — bring up the mail fixture first:\n` +
+          `Stalwart is not reachable at ${stalwartUrl}/.well-known/jmap after ${JMAP_CHECK_ATTEMPTS} attempts — bring up the mail fixture first:\n` +
             `  export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'\n` +
             `  docker compose -f docker-compose.e2e.yml up -d --build\n` +
-            `Original error: ${String(error)}`,
+            `Original error: ${String(lastError)}`,
         );
       }
 

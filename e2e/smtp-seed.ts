@@ -116,6 +116,13 @@ function readResponse(socket: TLSSocket): Promise<SmtpResponse> {
 
     function onData(chunk: Buffer) {
       buffer += chunk.toString("utf8");
+      // Only treat the response as complete once the buffer ends with a full
+      // CRLF terminator AND the last complete line matches a final reply
+      // ("250 OK", not a continuation like "250-STARTTLS"). Matching against
+      // the last split segment alone (without requiring a trailing "\r\n")
+      // can false-positive on a partial, still-in-flight line that happens to
+      // start with "\d{3} " but hasn't actually been terminated yet.
+      if (!buffer.endsWith("\r\n")) return;
       const lines = buffer.split("\r\n").filter((line) => line.length > 0);
       const last = lines[lines.length - 1];
       if (last && /^\d{3} /.test(last)) {
