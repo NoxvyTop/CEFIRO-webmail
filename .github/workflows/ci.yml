@@ -56,10 +56,28 @@ jobs:
           bun-version: "1.3"
       - run: bun install --frozen-lockfile
       - run: cd e2e && bunx playwright install --with-deps chromium
+      # Brings up the pre-provisioned Stalwart fixture (docker-compose.e2e.yml)
+      # so tests/mail-connect.spec.ts has a real JMAP/SMTP backend to talk to.
+      # Postgres stays the `services:` container above, not part of this
+      # compose file (see docker-compose.e2e.yml's own comment on that).
+      - run: docker compose -f docker-compose.e2e.yml up -d --build
+      - name: Wait for Stalwart to be healthy
+        run: |
+          for i in $(seq 1 20); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose -f docker-compose.e2e.yml ps -q stalwart)" 2>/dev/null || true)
+            if [ "$status" = "healthy" ]; then exit 0; fi
+            sleep 3
+          done
+          echo "Stalwart did not become healthy in time" >&2
+          docker compose -f docker-compose.e2e.yml logs
+          exit 1
       - run: cd e2e && bunx playwright test
         env:
           DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
+          E2E_STALWART_URL: http://localhost:8096
           CI: "true"
+      - if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

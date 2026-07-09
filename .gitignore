@@ -23,6 +23,7 @@ apps/**/src/**/*.js
 
 # Logs and temp files
 *.log
+!e2e/stalwart/seed/**
 logs/
 tmp/
 temp/

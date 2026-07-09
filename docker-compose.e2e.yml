@@ -1,0 +1,35 @@
+services:
+  stalwart:
+    build: ./e2e/stalwart
+    ports:
+      - "8096:8080" # JMAP/HTTP
+      - "8025:25" # SMTP (plain, unauthenticated local delivery)
+      - "8465:465" # SMTPS (implicit TLS + AUTH — used by e2e/smtp-seed.ts so
+        # seeded mail lands in Inbox instead of being spam-classified; see
+        # smtp-seed.ts's file header for why)
+    environment:
+      # The baked fixture's internal config advertises "https://mail.cefiro.test/…"
+      # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set during the
+      # original setup wizard run — see e2e/stalwart/README.md). "mail.cefiro.test"
+      # doesn't resolve from the host/CI runner, so a client following that
+      # advertised apiUrl verbatim (as apps/server/src/infra/stalwart/jmap.ts
+      # does) cannot reach it. Stalwart reads STALWART_PUBLIC_URL at boot to
+      # override the advertised base URL (crates/store/src/registry/local.rs),
+      # so pointing it at the same published host:port fixes JMAP session URLs
+      # without touching the committed seed data or any app/server source.
+      STALWART_PUBLIC_URL: "http://localhost:8096"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/stalwart", "--version"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+# Postgres is intentionally NOT part of this stack. E2E runs reuse the
+# existing dev/CI Postgres (docker-compose.dev.yml, port 5434) instead of
+# spinning up a second Postgres instance on a different port. Running one
+# Postgres source avoids drift between "the DB local dev writes to" and
+# "the DB E2E tests read from," and keeps this compose file focused on the
+# one thing it uniquely provides: the pre-provisioned Stalwart fixture.
+# The Playwright E2E config should point DATABASE_URL at the same dev
+# Postgres (postgres://webmail:webmail@localhost:5434/webmail) rather than
+# expecting a second instance here.

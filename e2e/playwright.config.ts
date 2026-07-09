@@ -44,6 +44,16 @@ export default defineConfig({
           APP_URL: BASE_URL,
           PORT: String(PORT),
           BOOTSTRAP_MODE: "true",
+          // Only pass STALWART_URL through when E2E_STALWART_URL is actually
+          // set (no default here, mirroring global-setup.ts's raw env read).
+          // Enables the mail router (apps/server/src/index.ts only creates the
+          // JMAP client when config.stalwartUrl is set), so a default here
+          // would make the router non-null even for non-mail runs where no
+          // Stalwart fixture is running. Bring up the Stalwart fixture
+          // separately before running mail specs:
+          //   export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+          //   docker compose -f docker-compose.e2e.yml up -d --build
+          ...(process.env.E2E_STALWART_URL ? { STALWART_URL: process.env.E2E_STALWART_URL } : {}),
         },
       },
 });
