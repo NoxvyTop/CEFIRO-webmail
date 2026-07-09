@@ -1,0 +1,17 @@
+{
+  "name": "@webmail/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "@webmail/server": "workspace:*",
+    "@webmail/shared": "workspace:*",
+    "postgres": "^3.4.4",
+    "typescript": "^5.6.0"
+  }
+}
