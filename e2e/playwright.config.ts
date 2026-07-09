@@ -7,6 +7,7 @@ const PORT = Number(process.env.E2E_PORT ?? 8199);
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
+const STALWART_URL = process.env.E2E_STALWART_URL ?? "http://localhost:8096";
 
 export default defineConfig({
   testDir: "./tests",
@@ -44,6 +45,12 @@ export default defineConfig({
           APP_URL: BASE_URL,
           PORT: String(PORT),
           BOOTSTRAP_MODE: "true",
+          // Enables the mail router (apps/server/src/index.ts only creates the
+          // JMAP client when config.stalwartUrl is set). Bring up the Stalwart
+          // fixture separately before running mail specs:
+          //   export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+          //   docker compose -f docker-compose.e2e.yml up -d --build
+          STALWART_URL,
         },
       },
 });
