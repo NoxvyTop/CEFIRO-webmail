@@ -510,9 +510,9 @@ export function createMailRouter(deps: MailDeps) {
         .map((s) => s.trim())
         .filter(Boolean) ?? [];
     const excludeMailboxId = c.req.query("excludeMailboxId");
-    const position = Number(c.req.query("position") ?? "0") || 0;
+    const position = Math.max(0, Number(c.req.query("position") ?? "0") || 0);
     const requestedLimit = Number(c.req.query("limit") ?? String(DEFAULT_LIMIT)) || DEFAULT_LIMIT;
-    const limit = Math.min(requestedLimit, MAX_LIMIT);
+    const limit = Math.max(1, Math.min(requestedLimit, MAX_LIMIT));
 
     const session = c.get("jmapSession");
     const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo, excludeMailboxId, hasKeywords });

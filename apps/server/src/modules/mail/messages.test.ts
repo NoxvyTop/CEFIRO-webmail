@@ -157,4 +157,16 @@ describe("GET /api/mail/messages", () => {
     const [queryCall] = calls;
     expect((queryCall?.[1] as { limit: number }).limit).toBe(100);
   });
+
+  it("clamps negative position and limit to safe minimums", async () => {
+    const res = await makeApp(stubJmap).request(
+      "/api/mail/messages?mailboxId=mb1&position=-10&limit=-5",
+      { headers: { cookie: `session=${token}` } },
+    );
+    expect(res.status).toBe(200);
+    const [queryCall] = calls;
+    const params = queryCall?.[1] as { position: number; limit: number };
+    expect(params.position).toBe(0);
+    expect(params.limit).toBe(1);
+  });
 });
