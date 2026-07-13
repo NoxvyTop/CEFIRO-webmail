@@ -17,12 +17,11 @@ export type CreateAppOptions = {
   adminRouter?: Hono<any>;
 };
 
-// Default Content-Security-Policy for the self-hosted SPA. The theme
-// pre-paint inline script is intentionally not allowlisted: it is a
-// progressive enhancement wrapped in try/catch and the SPA re-applies the
-// persisted theme on mount, so blocking it under `script-src 'self'` does
-// not break the app. Email bodies render in a sandboxed srcdoc iframe and
-// opted-in remote images need `img-src ... https:`.
+// Default Content-Security-Policy for the self-hosted SPA. There are no
+// inline scripts: the theme init runs in the bundle before React mounts
+// (themeInit.ts, first import of main.tsx), so `script-src 'self'` needs no
+// allowlist. Email bodies render in a sandboxed srcdoc iframe and opted-in
+// remote images need `img-src ... https:`.
 const DEFAULT_CSP = [
   "default-src 'self'",
   "base-uri 'self'",

@@ -1,3 +1,4 @@
+import "./app/ui/themeInit";
 import "@fontsource-variable/space-grotesk";
 import "./index.css";
 import "./app/i18n";

@@ -13,7 +13,7 @@ function systemTheme(): Theme {
   }
 }
 
-function readTheme(): Theme {
+export function readTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === "light" || stored === "night") return stored;
