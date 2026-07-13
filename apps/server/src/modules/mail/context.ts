@@ -23,6 +23,15 @@ export type MailVariables = AuthVariables & {
 const SESSION_CACHE_TTL_MS = 5 * 60_000;
 const sessionCache = new Map<string, { session: JmapSession; fetchedAt: number }>();
 
+/**
+ * Drop the cached JMAP session for a user. Must be called whenever the user's
+ * mail credentials change or their access is revoked (logout, credential
+ * rotation, archive) so a stale session tied to old credentials is not reused.
+ */
+export function evictMailSession(userId: string): void {
+  sessionCache.delete(userId);
+}
+
 export function requireMail(
   deps: MailDeps,
 ): MiddlewareHandler<{ Variables: MailVariables }> {

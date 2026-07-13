@@ -40,6 +40,13 @@ export function createUsersRepo(sql: Db) {
       `;
       return rows[0] ? toRecord(rows[0]) : null;
     },
+    async findById(id: string): Promise<UserRecord | null> {
+      const rows = await sql<UserRow[]>`
+        select id, email, display_name, role, locale, active
+        from users where id = ${id}
+      `;
+      return rows[0] ? toRecord(rows[0]) : null;
+    },
     async create(input: {
       email: string;
       displayName: string;
@@ -76,6 +83,12 @@ export function createUsersRepo(sql: Db) {
     },
     async count(): Promise<number> {
       const rows = await sql<{ count: string }[]>`select count(*)::text as count from users`;
+      return Number(rows[0]!.count);
+    },
+    async countActiveAdmins(): Promise<number> {
+      const rows = await sql<{ count: string }[]>`
+        select count(*)::text as count from users where role = 'admin' and active = true
+      `;
       return Number(rows[0]!.count);
     },
   };

@@ -5,6 +5,7 @@ import type { AuditRepo } from "../../infra/repos/audit";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
 import type { Bootstrap } from "../setup/bootstrap";
+import { evictMailSession } from "../mail/context";
 import { SESSION_COOKIE, requireSession, type AuthVariables } from "./middleware";
 import {
   buildAuthUrl,
@@ -66,7 +67,11 @@ export function createAuthRouter(deps: AuthRouterDeps) {
 
   router.post("/logout", async (c) => {
     const token = getCookie(c, SESSION_COOKIE);
-    if (token) await deps.sessions.revoke(token);
+    if (token) {
+      const sessionUser = await deps.sessions.findUser(token);
+      if (sessionUser) evictMailSession(sessionUser.userId);
+      await deps.sessions.revoke(token);
+    }
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });

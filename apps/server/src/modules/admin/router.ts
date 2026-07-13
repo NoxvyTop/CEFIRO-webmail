@@ -14,6 +14,7 @@ import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UserRecord, UsersRepo } from "../../infra/repos/users";
 import type { AuthVariables } from "../auth/middleware";
 import type { SessionStore } from "../auth/sessions";
+import { evictMailSession } from "../mail/context";
 import { requireAdmin } from "./middleware";
 
 export type AdminDeps = {
@@ -102,6 +103,28 @@ export function createAdminRouter(deps: AdminDeps) {
       );
     }
     const id = c.req.param("id");
+    const target = await deps.users.findById(id);
+    if (!target) {
+      return c.json(
+        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+        404,
+      );
+    }
+    const isDemotion = target.role === "admin" && parsed.data.role !== "admin";
+    if (isDemotion) {
+      if (c.get("user").userId === id) {
+        return c.json(
+          { code: "self_demotion", message: "errors.self_demotion", traceId: c.get("traceId") },
+          409,
+        );
+      }
+      if (target.active && (await deps.users.countActiveAdmins()) <= 1) {
+        return c.json(
+          { code: "last_admin", message: "errors.last_admin", traceId: c.get("traceId") },
+          409,
+        );
+      }
+    }
     const updated = await deps.users.setRole(id, parsed.data.role);
     if (!updated) {
       return c.json(
@@ -127,7 +150,7 @@ export function createAdminRouter(deps: AdminDeps) {
       );
     }
     const id = c.req.param("id");
-    const target = (await deps.users.list()).find((u) => u.id === id);
+    const target = await deps.users.findById(id);
     if (!target) {
       return c.json(
         { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
@@ -135,6 +158,8 @@ export function createAdminRouter(deps: AdminDeps) {
       );
     }
     await deps.mailCredentials.set(id, parsed.data.mailPassword);
+    // Drop any cached JMAP session bound to the previous credentials.
+    evictMailSession(id);
     await deps.audit.record({
       actor: c.get("user").email,
       action: "user.credential_set",
@@ -152,6 +177,27 @@ export function createAdminRouter(deps: AdminDeps) {
       );
     }
     const id = c.req.param("id");
+    if (!parsed.data.active) {
+      const target = await deps.users.findById(id);
+      if (!target) {
+        return c.json(
+          { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+          404,
+        );
+      }
+      if (c.get("user").userId === id) {
+        return c.json(
+          { code: "self_archive", message: "errors.self_archive", traceId: c.get("traceId") },
+          409,
+        );
+      }
+      if (target.role === "admin" && target.active && (await deps.users.countActiveAdmins()) <= 1) {
+        return c.json(
+          { code: "last_admin", message: "errors.last_admin", traceId: c.get("traceId") },
+          409,
+        );
+      }
+    }
     const updated = await deps.users.setActive(id, parsed.data.active);
     if (!updated) {
       return c.json(
@@ -167,6 +213,8 @@ export function createAdminRouter(deps: AdminDeps) {
       });
     } else {
       const revokedSessions = await deps.sessions.revokeAllForUser(id);
+      // Drop the cached JMAP session so archived access cannot linger.
+      evictMailSession(id);
       await deps.audit.record({
         actor: c.get("user").email,
         action: "user.archive",

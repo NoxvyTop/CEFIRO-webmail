@@ -179,6 +179,59 @@ describe("admin users api", () => {
     expect(reactivatedBody.active).toBe(true);
   });
 
+  it("PUT /users/:id/role: blocks an admin from demoting themselves", async () => {
+    const admin = await createAdmin();
+
+    const res = await app.request(`/api/admin/users/${admin.user.id}/role`, {
+      method: "PUT",
+      headers: { cookie: `session=${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ role: "employee" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("self_demotion");
+
+    // Role must be unchanged.
+    const reload = await app.request("/api/admin/users", {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    const list = (await reload.json()) as Array<{ id: string; role: string }>;
+    expect(list.find((u) => u.id === admin.user.id)?.role).toBe("admin");
+  });
+
+  it("PUT /users/:id/role: demotes another admin when other admins remain", async () => {
+    const actor = await createAdmin();
+    const other = await createAdmin();
+
+    const res = await app.request(`/api/admin/users/${other.user.id}/role`, {
+      method: "PUT",
+      headers: { cookie: `session=${actor.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ role: "employee" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { role: string };
+    expect(body.role).toBe("employee");
+  });
+
+  it("PUT /users/:id/active: blocks an admin from archiving themselves", async () => {
+    const admin = await createAdmin();
+
+    const res = await app.request(`/api/admin/users/${admin.user.id}/active`, {
+      method: "PUT",
+      headers: { cookie: `session=${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ active: false }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("self_archive");
+
+    // Session must still be valid (not archived).
+    const me = await app.request("/api/auth/me", {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    expect(me.status).toBe(200);
+  });
+
   it("PUT /users/:id/credential: sets credential, 404 for missing id", async () => {
     const admin = await createAdmin();
     const target = await users.create({
