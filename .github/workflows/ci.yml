@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: ["init-**", preproduc, main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -85,7 +86,7 @@ jobs:
           path: e2e/playwright-report
 
   publish:
-    if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref_name == 'preproduc' || github.ref_name == 'main')
     needs: [test, e2e]
     runs-on: ubuntu-latest
     permissions:
@@ -102,4 +103,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/noxvytop/cefiro-webmail:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
+          tags: ghcr.io/noxvytop/cefiro-webmail:${{ github.ref_type == 'tag' && github.ref_name || (github.ref_name == 'main' && 'latest' || 'staging') }}
