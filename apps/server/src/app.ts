@@ -17,6 +17,33 @@ export type CreateAppOptions = {
   adminRouter?: Hono<any>;
 };
 
+// Default Content-Security-Policy for the self-hosted SPA. The theme
+// pre-paint inline script is intentionally not allowlisted: it is a
+// progressive enhancement wrapped in try/catch and the SPA re-applies the
+// persisted theme on mount, so blocking it under `script-src 'self'` does
+// not break the app. Email bodies render in a sandboxed srcdoc iframe and
+// opted-in remote images need `img-src ... https:`.
+const DEFAULT_CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+].join("; ");
+
+const SECURITY_HEADERS: Record<string, string> = {
+  "content-security-policy": DEFAULT_CSP,
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "strict-transport-security": "max-age=31536000; includeSubDomains",
+};
+
 export function createApp(options: CreateAppOptions = {}) {
   const checks = options.checks ?? {};
   const app = new Hono<Env>();
@@ -26,6 +53,12 @@ export function createApp(options: CreateAppOptions = {}) {
     c.set("traceId", traceId);
     c.header("x-trace-id", traceId);
     await next();
+    // Apply global security headers as defaults only: route-specific headers
+    // (e.g. the attachment proxy's `content-security-policy: sandbox`) are set
+    // during the handler and must not be clobbered here.
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      if (!c.res.headers.has(name)) c.res.headers.set(name, value);
+    }
   });
 
   app.get("/api/health", async (c) => {
