@@ -112,11 +112,17 @@ describe("id token verification", () => {
     });
 
     expect(
-      (await verify(await sign("webmail", { email: "e@noxvytop.com" }))).email,
+      (await verify(await sign("webmail", { email: "e@noxvytop.com", email_verified: true }))).email,
     ).toBe("e@noxvytop.com");
-    await expect(verify(await sign("other-app", { email: "e@x.com" }))).rejects.toThrow();
-    await expect(verify(await sign("webmail", {}))).rejects.toMatchObject({
+    await expect(verify(await sign("other-app", { email: "e@x.com", email_verified: true }))).rejects.toThrow();
+    await expect(verify(await sign("webmail", { email_verified: true }))).rejects.toMatchObject({
       code: "oidc_email_missing",
     });
+    await expect(
+      verify(await sign("webmail", { email: "e@noxvytop.com" })),
+    ).rejects.toMatchObject({ code: "oidc_email_unverified" });
+    await expect(
+      verify(await sign("webmail", { email: "e@noxvytop.com", email_verified: false })),
+    ).rejects.toMatchObject({ code: "oidc_email_unverified" });
   });
 });

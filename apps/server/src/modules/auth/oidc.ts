@@ -112,6 +112,13 @@ export function createIdTokenVerifier(input: {
     if (typeof payload.email !== "string" || payload.email.length === 0) {
       throw new DomainError("oidc_email_missing", 502, "errors.oidc_email_missing");
     }
+    if (payload.email_verified !== true) {
+      throw new DomainError(
+        "oidc_email_unverified",
+        403,
+        "errors.oidc_email_unverified",
+      );
+    }
     return { email: payload.email };
   };
 }
