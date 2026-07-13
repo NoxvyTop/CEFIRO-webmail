@@ -1,6 +1,18 @@
-# Local development tooling
+# AI assistant artifacts
 .atl/
 .claude/
+CLAUDE.md
+AGENTS.md
+.mcp.json
+.cursor/
+.cursorrules
+.aider*
+.windsurf/
+.codeium/
+.gemini/
+GEMINI.md
+openspec/
+docs/superpowers/
 *.local.md
 
 # Environment and secrets
