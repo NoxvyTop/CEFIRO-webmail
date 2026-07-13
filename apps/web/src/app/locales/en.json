@@ -1,0 +1,273 @@
+{
+  "app": {
+    "tagline": "correo del ecosistema",
+    "themeLight": "Switch to light theme",
+    "themeNight": "Switch to night theme",
+    "sentWith": "Sent with",
+    "sealMotto": "the wind that moves your team"
+  },
+  "admin": {
+    "title": "Administration",
+    "forbidden": "You do not have admin permissions",
+    "back": "Back",
+    "empty": "No users",
+    "mailbox": {
+      "linked": "Mailbox linked",
+      "unlinked": "Not linked"
+    },
+    "status": {
+      "active": "Active",
+      "archived": "Archived"
+    },
+    "columns": {
+      "email": "Email",
+      "name": "Name",
+      "role": "Role",
+      "mailbox": "Mailbox",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "roles": {
+      "employee": "Employee",
+      "admin": "Admin"
+    },
+    "actions": {
+      "linkMailbox": "Link mailbox",
+      "saveCredential": "Save",
+      "role": "Role",
+      "archive": "Archive",
+      "reactivate": "Reactivate",
+      "confirmArchive": "Confirm archive"
+    },
+    "new": {
+      "title": "New user",
+      "email": "Email",
+      "name": "Name",
+      "role": "Role",
+      "mailPassword": "Mailbox password (optional)",
+      "create": "Create"
+    },
+    "errors": {
+      "load": "Could not load users",
+      "action": "The action could not be completed"
+    },
+    "sso": {
+      "title": "SSO provider (OIDC)",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "save": "Save",
+      "saved": "Saved",
+      "error": "Could not save",
+      "fields": {
+        "issuer": "Issuer",
+        "clientId": "Client ID",
+        "clientSecret": "Client Secret",
+        "scopes": "Scopes"
+      }
+    }
+  },
+  "health": {
+    "degraded": "Service degraded"
+  },
+  "auth": {
+    "signIn": "Sign in with SSO",
+    "signOut": "Sign out",
+    "signedInAs": "Signed in as {{email}}",
+    "subtitle": "Sign in to your team's mail",
+    "errors": {
+      "state": "The sign-in attempt expired, try again",
+      "unknown_user": "Your account is not registered in the mail system",
+      "oidc": "Sign-in could not be completed"
+    },
+    "bootstrap": {
+      "title": "Emergency access",
+      "email": "User",
+      "password": "Password",
+      "submit": "Sign in",
+      "error": "Invalid credential",
+      "hint": "Only available in setup or recovery mode"
+    }
+  },
+  "setup": {
+    "title": "Initial setup",
+    "tokenLabel": "Temporary console password",
+    "connect": "Connect",
+    "disabled": "Setup mode is disabled",
+    "status": "SSO configured: {{sso}} — Users: {{count}}",
+    "ssoTitle": "SSO provider (OIDC)",
+    "userTitle": "New user",
+    "save": "Save",
+    "create": "Create",
+    "saved": "Saved",
+    "created": "User created",
+    "error": "Error: check the fields",
+    "fields": {
+      "issuer": "Issuer",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "scopes": "Scopes",
+      "email": "Email",
+      "displayName": "Name",
+      "role": "Role",
+      "locale": "Language",
+      "mailPassword": "Mailbox password"
+    }
+  },
+  "mail": {
+    "listRegion": "Message list",
+    "readerRegion": "Reading pane",
+    "starredView": "Starred",
+    "unread": "{{count}} unread",
+    "messageCount": "{{count}} messages",
+    "searchPlaceholder": "Search mail",
+    "empty": "No mail here.",
+    "noSubject": "(no subject)",
+    "selectMessage": "Select an email",
+    "loadImages": "Load images",
+    "emailContent": "Email content",
+    "emptyBody": "(no content)",
+    "newMailNotification": "New mail",
+    "enableNotifications": "Enable notifications",
+    "resizeList": "Resize message list",
+    "errors": {
+      "mail_not_configured": "The mail server is not configured",
+      "mail_credentials_missing": "Your mailbox is not linked yet",
+      "generic": "Mail could not be loaded"
+    },
+    "backToList": "Back to messages",
+    "archive": "Archive",
+    "star": "Star",
+    "unstar": "Unstar",
+    "archived": "Email archived",
+    "archivedHint": "press e to archive faster",
+    "labels": "Labels",
+    "clearLabel": "Clear label filter"
+  },
+  "modules": {
+    "title": "Modules",
+    "mail": "Mail"
+  },
+  "groups": {
+    "title": "Groups",
+    "showInInbox": "Show in main inbox"
+  },
+  "composer": {
+    "title": "Compose",
+    "from": "From",
+    "to": "To",
+    "cc": "Cc",
+    "bcc": "Bcc",
+    "addCcBcc": "Cc/Bcc",
+    "subject": "Subject",
+    "body": "Message",
+    "signature": "Signature",
+    "reply": "Reply",
+    "replyAll": "Reply all",
+    "forward": "Forward",
+    "attach": "Attach",
+    "send": "Send",
+    "sent": "Email sent",
+    "cancel": "Cancel",
+    "sending": "Sending…",
+    "invalidEmail": "Invalid email",
+    "invalidLink": "Invalid or unsafe URL",
+    "bold": "Bold",
+    "italic": "Italic",
+    "bulletList": "Bulleted list",
+    "link": "Link",
+    "linkUrl": "Link URL",
+    "removeRecipient": "Remove {{email}}",
+    "removeAttachment": "Remove {{name}}",
+    "errors": {
+      "noRecipients": "Add at least one recipient",
+      "invalid_identity": "Invalid identity",
+      "send_failed": "Could not send",
+      "generic": "Something went wrong"
+    }
+  },
+  "attachments": {
+    "download": "Download",
+    "view": "View"
+  },
+  "settings": {
+    "title": "Settings",
+    "signatures": "Signatures",
+    "back": "Back",
+    "newSignature": "New signature",
+    "name": "Name",
+    "default": "Default",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "errors": {
+      "invalid_body": "The data is not valid",
+      "invalid_order": "The rule order is out of date — reload and try again",
+      "not_found": "Not found",
+      "sieve_invalid": "The generated filter script was rejected — contact your administrator",
+      "sieve_sync_failed": "Saved, but not applied to the mail server yet",
+      "vacationMessageRequired": "Write a message for the automatic reply",
+      "vacationDateOrder": "The end date must not be before the start date",
+      "generic": "Something went wrong"
+    }
+  },
+  "filters": {
+    "title": "Filters",
+    "newRule": "New rule",
+    "name": "Name",
+    "matchType": "Match",
+    "matchAll": "All conditions",
+    "matchAny": "Any condition",
+    "conditions": "Conditions",
+    "actions": "Actions",
+    "field": "Field",
+    "op": "Operator",
+    "value": "Value",
+    "action": "Action",
+    "addCondition": "Add condition",
+    "addAction": "Add action",
+    "remove": "Remove",
+    "field_from": "From",
+    "field_to": "To or Cc",
+    "field_subject": "Subject",
+    "field_body": "Body",
+    "op_contains": "contains",
+    "op_is": "is exactly",
+    "action_fileinto": "Move to folder",
+    "action_seen": "Mark as read",
+    "action_flag": "Add label",
+    "action_delete": "Move to trash",
+    "action_stop": "Stop applying rules",
+    "keyword": "Label",
+    "folder": "Folder",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "reapply": "Reapply filters",
+    "reapplied": "Filters applied",
+    "empty": "No rules yet"
+  },
+  "vacation": {
+    "title": "Automatic replies",
+    "enabled": "Enable automatic replies",
+    "subject": "Subject (optional)",
+    "message": "Message",
+    "startsAt": "Start date (optional)",
+    "endsAt": "End date (optional)",
+    "intervalDays": "Days between replies to the same sender",
+    "save": "Save",
+    "saved": "Saved"
+  },
+  "shortcuts": {
+    "title": "Shortcuts",
+    "move": "Move through the list",
+    "archive": "Archive email",
+    "star": "Star email",
+    "reply": "Reply",
+    "compose": "Compose",
+    "search": "Search",
+    "close": "Close / dismiss",
+    "hint": "j / k to move · e archives · c composes",
+    "listHint": "j / k to move"
+  }
+}

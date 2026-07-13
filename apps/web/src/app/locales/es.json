@@ -1,0 +1,273 @@
+{
+  "app": {
+    "tagline": "correo del ecosistema",
+    "themeLight": "Cambiar a tema claro",
+    "themeNight": "Cambiar a tema noche",
+    "sentWith": "Enviado con",
+    "sealMotto": "el viento que mueve tu equipo"
+  },
+  "admin": {
+    "title": "Administración",
+    "forbidden": "No tenés permisos de administrador",
+    "back": "Volver",
+    "empty": "No hay usuarios",
+    "mailbox": {
+      "linked": "Buzón vinculado",
+      "unlinked": "Sin vincular"
+    },
+    "status": {
+      "active": "Activo",
+      "archived": "Archivado"
+    },
+    "columns": {
+      "email": "Correo",
+      "name": "Nombre",
+      "role": "Rol",
+      "mailbox": "Buzón",
+      "status": "Estado",
+      "actions": "Acciones"
+    },
+    "roles": {
+      "employee": "Empleado",
+      "admin": "Administrador"
+    },
+    "actions": {
+      "linkMailbox": "Vincular buzón",
+      "saveCredential": "Guardar",
+      "role": "Rol",
+      "archive": "Archivar",
+      "reactivate": "Reactivar",
+      "confirmArchive": "Confirmar archivado"
+    },
+    "new": {
+      "title": "Nuevo usuario",
+      "email": "Correo",
+      "name": "Nombre",
+      "role": "Rol",
+      "mailPassword": "Contraseña del buzón (opcional)",
+      "create": "Crear"
+    },
+    "errors": {
+      "load": "No se pudieron cargar los usuarios",
+      "action": "No se pudo completar la acción"
+    },
+    "sso": {
+      "title": "Proveedor SSO (OIDC)",
+      "configured": "Configurado",
+      "notConfigured": "Sin configurar",
+      "save": "Guardar",
+      "saved": "Guardado",
+      "error": "No se pudo guardar",
+      "fields": {
+        "issuer": "Issuer",
+        "clientId": "Client ID",
+        "clientSecret": "Client Secret",
+        "scopes": "Scopes"
+      }
+    }
+  },
+  "health": {
+    "degraded": "Servicio degradado"
+  },
+  "auth": {
+    "signIn": "Iniciar sesión con SSO",
+    "signOut": "Cerrar sesión",
+    "signedInAs": "Sesión iniciada como {{email}}",
+    "subtitle": "Inicia sesión en el correo de tu equipo",
+    "errors": {
+      "state": "La sesión de inicio expiró, inténtalo de nuevo",
+      "unknown_user": "Tu cuenta no está registrada en el correo",
+      "oidc": "No se pudo completar el inicio de sesión"
+    },
+    "bootstrap": {
+      "title": "Acceso de emergencia",
+      "email": "Usuario",
+      "password": "Contraseña",
+      "submit": "Entrar",
+      "error": "Credencial inválida",
+      "hint": "Solo disponible en modo de configuración o recuperación"
+    }
+  },
+  "setup": {
+    "title": "Configuración inicial",
+    "tokenLabel": "Contraseña temporal de consola",
+    "connect": "Conectar",
+    "disabled": "El modo de configuración está desactivado",
+    "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
+    "ssoTitle": "Proveedor SSO (OIDC)",
+    "userTitle": "Nuevo usuario",
+    "save": "Guardar",
+    "create": "Crear",
+    "saved": "Guardado",
+    "created": "Usuario creado",
+    "error": "Error: revisa los datos",
+    "fields": {
+      "issuer": "Issuer",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "scopes": "Scopes",
+      "email": "Correo",
+      "displayName": "Nombre",
+      "role": "Rol",
+      "locale": "Idioma",
+      "mailPassword": "Contraseña del buzón"
+    }
+  },
+  "mail": {
+    "listRegion": "Lista de mensajes",
+    "readerRegion": "Lectura",
+    "starredView": "Destacados",
+    "unread": "{{count}} sin leer",
+    "messageCount": "{{count}} correos",
+    "searchPlaceholder": "Buscar en el correo",
+    "empty": "No hay correos aquí.",
+    "noSubject": "(sin asunto)",
+    "selectMessage": "Selecciona un correo",
+    "loadImages": "Cargar imágenes",
+    "emailContent": "Contenido del correo",
+    "emptyBody": "(sin contenido)",
+    "newMailNotification": "Correo nuevo",
+    "enableNotifications": "Activar notificaciones",
+    "resizeList": "Ajustar ancho de la lista",
+    "errors": {
+      "mail_not_configured": "El servidor de correo no está configurado",
+      "mail_credentials_missing": "Tu buzón no está vinculado todavía",
+      "generic": "No se pudo cargar el correo"
+    },
+    "backToList": "Volver a la lista",
+    "archive": "Archivar",
+    "star": "Destacar",
+    "unstar": "Quitar destacado",
+    "archived": "Correo archivado",
+    "archivedHint": "pulsa e para archivar más rápido",
+    "labels": "Etiquetas",
+    "clearLabel": "Quitar filtro de etiqueta"
+  },
+  "modules": {
+    "title": "Módulos",
+    "mail": "Correo"
+  },
+  "groups": {
+    "title": "Grupos",
+    "showInInbox": "Mostrar en bandeja principal"
+  },
+  "composer": {
+    "title": "Redactar",
+    "from": "De",
+    "to": "Para",
+    "cc": "Cc",
+    "bcc": "Cco",
+    "addCcBcc": "Cc/Cco",
+    "subject": "Asunto",
+    "body": "Mensaje",
+    "signature": "Firma",
+    "reply": "Responder",
+    "replyAll": "Responder a todos",
+    "forward": "Reenviar",
+    "attach": "Adjuntar",
+    "send": "Enviar",
+    "sent": "Correo enviado",
+    "cancel": "Cancelar",
+    "sending": "Enviando…",
+    "invalidEmail": "Correo inválido",
+    "invalidLink": "URL inválida o no segura",
+    "bold": "Negrita",
+    "italic": "Cursiva",
+    "bulletList": "Lista con viñetas",
+    "link": "Enlace",
+    "linkUrl": "URL del enlace",
+    "removeRecipient": "Quitar {{email}}",
+    "removeAttachment": "Quitar {{name}}",
+    "errors": {
+      "noRecipients": "Agrega al menos un destinatario",
+      "invalid_identity": "Identidad inválida",
+      "send_failed": "No se pudo enviar",
+      "generic": "Ocurrió un error"
+    }
+  },
+  "attachments": {
+    "download": "Descargar",
+    "view": "Ver"
+  },
+  "settings": {
+    "title": "Ajustes",
+    "signatures": "Firmas",
+    "back": "Volver",
+    "newSignature": "Nueva firma",
+    "name": "Nombre",
+    "default": "Predeterminada",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "errors": {
+      "invalid_body": "Los datos no son válidos",
+      "invalid_order": "El orden de las reglas está desactualizado; recarga e inténtalo de nuevo",
+      "not_found": "No encontrado",
+      "sieve_invalid": "El script de filtros generado fue rechazado; contacta con tu administrador",
+      "sieve_sync_failed": "Guardado, pero aún no aplicado en el servidor de correo",
+      "vacationMessageRequired": "Escribe un mensaje para la respuesta automática",
+      "vacationDateOrder": "La fecha de fin no puede ser anterior a la de inicio",
+      "generic": "Algo salió mal"
+    }
+  },
+  "filters": {
+    "title": "Filtros",
+    "newRule": "Nueva regla",
+    "name": "Nombre",
+    "matchType": "Coincidencia",
+    "matchAll": "Todas las condiciones",
+    "matchAny": "Cualquier condición",
+    "conditions": "Condiciones",
+    "actions": "Acciones",
+    "field": "Campo",
+    "op": "Operador",
+    "value": "Valor",
+    "action": "Acción",
+    "addCondition": "Añadir condición",
+    "addAction": "Añadir acción",
+    "remove": "Quitar",
+    "field_from": "De",
+    "field_to": "Para o Cc",
+    "field_subject": "Asunto",
+    "field_body": "Cuerpo",
+    "op_contains": "contiene",
+    "op_is": "es exactamente",
+    "action_fileinto": "Mover a carpeta",
+    "action_seen": "Marcar como leído",
+    "action_flag": "Añadir etiqueta",
+    "action_delete": "Mover a la papelera",
+    "action_stop": "No aplicar más reglas",
+    "keyword": "Etiqueta",
+    "folder": "Carpeta",
+    "enabled": "Activada",
+    "disabled": "Desactivada",
+    "moveUp": "Subir",
+    "moveDown": "Bajar",
+    "reapply": "Reaplicar filtros",
+    "reapplied": "Filtros aplicados",
+    "empty": "Aún no hay reglas"
+  },
+  "vacation": {
+    "title": "Respuestas automáticas",
+    "enabled": "Activar respuestas automáticas",
+    "subject": "Asunto (opcional)",
+    "message": "Mensaje",
+    "startsAt": "Fecha de inicio (opcional)",
+    "endsAt": "Fecha de fin (opcional)",
+    "intervalDays": "Días entre respuestas al mismo remitente",
+    "save": "Guardar",
+    "saved": "Guardado"
+  },
+  "shortcuts": {
+    "title": "Atajos",
+    "move": "Moverse por la lista",
+    "archive": "Archivar correo",
+    "star": "Destacar correo",
+    "reply": "Responder",
+    "compose": "Redactar",
+    "search": "Buscar",
+    "close": "Cerrar / salir",
+    "hint": "j / k para moverte · e archiva · c redacta",
+    "listHint": "j / k para moverte"
+  }
+}

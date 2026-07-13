@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+.git
+docs
+coverage
+.env
+# Keep tests out of the build context so they never reach the runtime image.
+**/*.test.ts
+**/*.test.tsx

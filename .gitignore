@@ -1,6 +1,18 @@
-# Local development tooling
+# AI assistant artifacts
 .atl/
 .claude/
+CLAUDE.md
+AGENTS.md
+.mcp.json
+.cursor/
+.cursorrules
+.aider*
+.windsurf/
+.codeium/
+.gemini/
+GEMINI.md
+openspec/
+docs/superpowers/
 *.local.md
 
 # Environment and secrets
@@ -16,9 +28,14 @@ vendor/
 dist/
 build/
 out/
+coverage/
+*.tsbuildinfo
+apps/**/src/**/*.js
+.vite/
 
 # Logs and temp files
 *.log
+!e2e/stalwart/seed/**
 logs/
 tmp/
 temp/
@@ -28,3 +45,10 @@ temp/
 .idea/
 .DS_Store
 Thumbs.db
+.superpowers/
+
+# e2e artifacts
+e2e/.auth/
+e2e/test-results/
+e2e/playwright-report/
+e2e/node_modules/
