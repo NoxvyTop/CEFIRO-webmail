@@ -36,6 +36,9 @@ export function createSessionStore(sql: Db) {
       const token = randomToken();
       const id = await hashToken(token);
       const expiresAt = new Date(Date.now() + ttlHours * 3_600_000);
+      // Opportunistically purge expired rows so the table does not grow
+      // unbounded; piggybacked on session creation to avoid extra infra.
+      await sql`delete from sessions where expires_at < now()`;
       await sql`
         insert into sessions (id, user_id, expires_at)
         values (${id}, ${userId}, ${expiresAt})
