@@ -10,6 +10,7 @@
     "migrate": "bun run scripts/migrate.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
     "@webmail/shared": "workspace:*",
     "hono": "^4.6.0",
     "jose": "^5.9.0",

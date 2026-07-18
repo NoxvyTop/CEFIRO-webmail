@@ -23,6 +23,9 @@ import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
+import { createAiRouter } from "./modules/ai/router";
+import { createAnthropicAiClient } from "./infra/ai/anthropic";
+import type { AiClient } from "./core/ai";
 
 let config;
 try {
@@ -50,6 +53,17 @@ const jmap = config.stalwartUrl ? createJmapClient({ baseUrl: config.stalwartUrl
 
 log("info", "mail proxy", { configured: jmap !== null });
 
+// Software-level default-safe gate: AI features are inert unless explicitly
+// enabled AND an API key is configured. See docs/ARCHITECTURE.md ("IA —
+// funciones opt-in") — any further network-level restriction is a
+// deployment-specific choice outside this software's contract.
+const aiClient: AiClient | null =
+  config.aiEnabled && config.aiApiKey
+    ? createAnthropicAiClient({ apiKey: config.aiApiKey, model: config.aiModel })
+    : null;
+
+log("info", "ai features", { enabled: aiClient !== null, provider: config.aiProvider });
+
 if (bootstrap.enabled) {
   log("warn", "bootstrap mode active", {
     user: "bootstrap-admin",
@@ -73,6 +87,7 @@ const app = createApp({
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap }),
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
+  aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
 });
 
 if (process.env.NODE_ENV === "production") {
