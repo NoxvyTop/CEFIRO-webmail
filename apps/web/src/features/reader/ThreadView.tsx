@@ -9,6 +9,7 @@ import { Avatar } from "../../app/ui/Avatar";
 import { ArchiveIcon, ArrowLeftIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
+import { AiSummaryCard } from "./AiSummaryCard";
 import { EmailBody } from "./EmailBody";
 
 interface ThreadViewProps {
@@ -207,6 +208,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     {toCcLabel && <div className="truncate text-xs text-muted">{toCcLabel}</div>}
                   </div>
                 </div>
+                {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
                 {email.attachments.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {email.attachments.map((attachment) => {
