@@ -8,6 +8,7 @@ import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { AiSummaryCard } from "./AiSummaryCard";
@@ -21,11 +22,6 @@ interface ThreadViewProps {
 function addressLabel(address: EmailAddress | undefined) {
   if (!address) return "";
   return address.name || address.email;
-}
-
-function formatDate(receivedAt: string) {
-  const date = new Date(receivedAt);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
 }
 
 function formatSizeKb(size: number) {
@@ -52,7 +48,7 @@ function blobUrl(blobId: string, name: string, type: string, download: boolean):
 }
 
 export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -227,7 +223,9 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                       </div>
                     )}
                   </div>
-                  <span className="shrink-0 text-[12.5px] text-muted">{formatDate(email.receivedAt)}</span>
+                  <span className="shrink-0 text-[12.5px] text-muted">
+                    {formatRelativeTime(email.receivedAt, { yesterdayLabel: t("mail.yesterday"), locale: i18n.language })}
+                  </span>
                 </div>
                 {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
                 {email.attachments.length > 0 && (

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
@@ -291,5 +291,35 @@ describe("MessageList", () => {
 
     expect(onSelect).not.toHaveBeenCalled();
     document.body.removeChild(input);
+  });
+
+  describe("relative time display", () => {
+    beforeEach(() => {
+      // shouldAdvanceTime keeps setTimeout-based polling (RTL's findBy*, React
+      // Query's internals) moving in real time while Date.now() stays pinned
+      // to the faked instant below.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date(2026, 6, 21, 14, 0, 0));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows a same-day email as a local time instead of an absolute date", async () => {
+      const today = { ...emailUnread, receivedAt: new Date(2026, 6, 21, 10, 12, 0).toISOString() };
+      stubFetch({ total: 1, position: 0, emails: [today] });
+      renderList();
+
+      expect(await screen.findByText("10:12")).toBeInTheDocument();
+    });
+
+    it("shows the localized yesterday label for a prior-day email", async () => {
+      const yesterday = { ...emailUnread, receivedAt: new Date(2026, 6, 20, 9, 0, 0).toISOString() };
+      stubFetch({ total: 1, position: 0, emails: [yesterday] });
+      renderList();
+
+      expect(await screen.findByText(i18n.t("mail.yesterday"))).toBeInTheDocument();
+    });
   });
 });

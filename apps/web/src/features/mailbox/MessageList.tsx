@@ -10,6 +10,7 @@ import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 
@@ -46,7 +47,7 @@ export function MessageList({
   excludeMailboxId, title,
   onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived,
 }: MessageListProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -251,8 +252,10 @@ export function MessageList({
     const selected = email.threadId === selectedThreadId;
     const fromLabel = email.from[0]?.name || email.from[0]?.email || "";
     const subjectLabel = email.subject || t("mail.noSubject");
-    const date = new Date(email.receivedAt);
-    const dateLabel = Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+    const dateLabel = formatRelativeTime(email.receivedAt, {
+      yesterdayLabel: t("mail.yesterday"),
+      locale: i18n.language,
+    });
     const starred = Boolean(email.keywords.$flagged);
     const rowLabels = userLabels(email.keywords).slice(0, 2);
 

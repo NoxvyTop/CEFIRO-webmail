@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -227,6 +227,33 @@ describe("ThreadView", () => {
     renderThread();
 
     expect(await screen.findByText("producto")).toBeInTheDocument();
+  });
+
+  describe("relative time in the sender block", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date(2026, 6, 21, 14, 0, 0));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows a same-day email as a local time instead of an absolute date/time string", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.receivedAt = new Date(2026, 6, 21, 11, 5, 0).toISOString();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      expect(await screen.findByText("11:05")).toBeInTheDocument();
+    });
   });
 
   it("hides Archivar when the last email is already in the archive mailbox", async () => {
