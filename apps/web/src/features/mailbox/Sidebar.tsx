@@ -1,8 +1,18 @@
+import type { ComponentType } from "react";
 import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
-import { StarIcon } from "../../app/ui/icons";
+import { ArchiveIcon, InboxIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
 import { labelColor } from "../../app/ui/labels";
+
+// Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
+// four primary rows carry an icon. Secondary folders (trash/junk/drafts)
+// aren't in the hi-fi and stay text-only.
+const FOLDER_ICONS: Partial<Record<string, ComponentType<{ size?: number }>>> = {
+  inbox: InboxIcon,
+  sent: SendIcon,
+  archive: ArchiveIcon,
+};
 
 interface SidebarProps {
   mailboxes: Mailbox[];
@@ -38,19 +48,21 @@ export function Sidebar({
     const selected = mailbox.id === selectedMailboxId;
     // Spec: the accent unread counter is only ever shown on Recibidos.
     const showUnreadBadge = mailbox.role === "inbox" && mailbox.unreadEmails > 0;
+    const Icon = mailbox.role ? FOLDER_ICONS[mailbox.role] : undefined;
     return (
       <li key={mailbox.id}>
         <button
           type="button"
           aria-current={selected ? "true" : undefined}
           onClick={() => onSelectMailbox(mailbox.id)}
-          className="flex h-[38px] w-full items-center justify-between rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+          className="flex h-[38px] w-full items-center gap-[11px] rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
         >
-          <span>{folderName(mailbox, t)}</span>
+          {Icon && <Icon size={17} />}
+          <span className="flex-1">{folderName(mailbox, t)}</span>
           {showUnreadBadge && (
             <span
               aria-label={t("mail.unread", { count: mailbox.unreadEmails })}
-              className="text-xs font-semibold text-accent"
+              className="text-xs font-bold text-accent"
             >
               {mailbox.unreadEmails}
             </span>
@@ -65,7 +77,7 @@ export function Sidebar({
       <button
         type="button"
         onClick={onCompose}
-        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
           <path d="M12 20h9" />
@@ -80,9 +92,9 @@ export function Sidebar({
             type="button"
             aria-current={starredSelected ? "true" : undefined}
             onClick={onSelectStarred}
-            className="flex h-[38px] w-full items-center gap-2 rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+            className="flex h-[38px] w-full items-center gap-[11px] rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
           >
-            <StarIcon size={16} />
+            <StarIcon size={17} />
             <span>{t("mail.starredView")}</span>
           </button>
         </li>
@@ -102,7 +114,7 @@ export function Sidebar({
                     type="button"
                     aria-current={selected ? "true" : undefined}
                     onClick={() => onSelectLabel(label)}
-                    className="flex h-[34px] w-full items-center gap-2 truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+                    className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
                   >
                     <span
                       aria-hidden="true"

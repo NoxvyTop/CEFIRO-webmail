@@ -103,17 +103,16 @@ function renderList(
 }
 
 describe("MessageList", () => {
-  it("renders rows from a page, marking the unread one as bold", async () => {
+  it("renders rows from a page, marking the unread sender bold and the read one medium", async () => {
     stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
     renderList();
 
-    const unreadSubject = await screen.findByText("Hello there");
-    const unreadRow = unreadSubject.closest('[role="option"]');
-    expect(unreadRow).toHaveClass("font-semibold");
+    const unreadSender = await screen.findByText("Alice");
+    expect(unreadSender).toHaveClass("font-bold");
 
-    const readSubject = await screen.findByText(i18n.t("mail.noSubject"));
-    const readRow = readSubject.closest('[role="option"]');
-    expect(readRow).not.toHaveClass("font-semibold");
+    const readSender = await screen.findByText("bob@example.com");
+    expect(readSender).toHaveClass("font-medium");
+    expect(readSender).not.toHaveClass("font-bold");
   });
 
   it("shows the empty state when there are no messages", async () => {
