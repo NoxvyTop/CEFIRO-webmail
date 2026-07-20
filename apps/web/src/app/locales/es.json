@@ -71,9 +71,12 @@
   },
   "auth": {
     "signIn": "Iniciar sesión con SSO",
+    "connecting": "Conectando…",
+    "redirecting": "Redirigiendo a tu proveedor de identidad…",
     "signOut": "Cerrar sesión",
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
+    "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
     "errors": {
       "state": "La sesión de inicio expiró, inténtalo de nuevo",
       "unknown_user": "Tu cuenta no está registrada en el correo",
@@ -85,7 +88,11 @@
       "password": "Contraseña",
       "submit": "Entrar",
       "error": "Credencial inválida",
-      "hint": "Solo disponible en modo de configuración o recuperación"
+      "hint": "Solo disponible en modo de configuración o recuperación",
+      "errors": {
+        "invalidEmail": "Introduce un correo válido.",
+        "emptyPassword": "Introduce tu contraseña."
+      }
     }
   },
   "setup": {
