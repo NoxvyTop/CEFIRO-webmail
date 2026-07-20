@@ -4,32 +4,17 @@ export type Theme = "night" | "light";
 
 const STORAGE_KEY = "cefiro-theme";
 
-function systemTheme(): Theme {
-  try {
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "night";
-  } catch {
-    // matchMedia unavailable — use the brand default
-    return "night";
-  }
-}
-
 export function readTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === "light" || stored === "night") return stored;
   } catch {
-    // storage unavailable — fall through to the system preference
+    // storage unavailable — fall through to the brand default
   }
-  return systemTheme();
-}
-
-function hasStoredTheme(): boolean {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored === "light" || stored === "night";
-  } catch {
-    return false;
-  }
+  // No explicit user choice: night is the brand default (docs/design/cefiro/README.md).
+  // The system color scheme is never consulted here — following it would require
+  // an explicit "system" preference, which does not exist today.
+  return "night";
 }
 
 export function useTheme(): { theme: Theme; toggleTheme: () => void } {
@@ -38,21 +23,6 @@ export function useTheme(): { theme: Theme; toggleTheme: () => void } {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
-
-  useEffect(() => {
-    let media: MediaQueryList;
-    try {
-      media = window.matchMedia("(prefers-color-scheme: light)");
-    } catch {
-      return;
-    }
-    function handleChange(event: MediaQueryListEvent) {
-      if (hasStoredTheme()) return;
-      setTheme(event.matches ? "light" : "night");
-    }
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, []);
 
   function toggleTheme() {
     setTheme((current) => {
