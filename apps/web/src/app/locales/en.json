@@ -146,7 +146,15 @@
     "archived": "Email archived",
     "archivedHint": "press e to archive faster",
     "labels": "Labels",
-    "clearLabel": "Clear label filter"
+    "clearLabel": "Clear label filter",
+    "folders": {
+      "inbox": "Inbox",
+      "sent": "Sent",
+      "archive": "Archive",
+      "trash": "Trash",
+      "junk": "Spam",
+      "drafts": "Drafts"
+    }
   },
   "modules": {
     "title": "Modules",
@@ -170,6 +178,8 @@
     "replyAll": "Reply all",
     "forward": "Forward",
     "attach": "Attach",
+    "attachFiles": "Attach files",
+    "close": "Close",
     "send": "Send",
     "sent": "Email sent",
     "cancel": "Cancel",

@@ -146,7 +146,15 @@
     "archived": "Correo archivado",
     "archivedHint": "pulsa e para archivar más rápido",
     "labels": "Etiquetas",
-    "clearLabel": "Quitar filtro de etiqueta"
+    "clearLabel": "Quitar filtro de etiqueta",
+    "folders": {
+      "inbox": "Recibidos",
+      "sent": "Enviados",
+      "archive": "Archivados",
+      "trash": "Papelera",
+      "junk": "Spam",
+      "drafts": "Borradores"
+    }
   },
   "modules": {
     "title": "Módulos",
@@ -170,6 +178,8 @@
     "replyAll": "Responder a todos",
     "forward": "Reenviar",
     "attach": "Adjuntar",
+    "attachFiles": "Adjuntar archivos",
+    "close": "Cerrar",
     "send": "Enviar",
     "sent": "Correo enviado",
     "cancel": "Cancelar",

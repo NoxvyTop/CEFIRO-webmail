@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
@@ -25,6 +25,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
   const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(initial);
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const identitiesQuery = useQuery({ queryKey: ["mail", "identities"], queryFn: fetchIdentities });
   const signaturesQuery = useQuery({ queryKey: ["mail", "signatures"], queryFn: fetchSignatures });
@@ -61,7 +62,17 @@ export function Composer({ initial, onClose }: ComposerProps) {
       className="fixed inset-0 z-50 flex items-end justify-end bg-[rgba(3,5,9,0.55)] p-6"
     >
       <div className="flex max-h-full w-full max-w-[640px] flex-col gap-3 overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-pop">
-        <h2 className="-mx-4 -mt-4 flex h-12 items-center rounded-t-[14px] bg-soft px-4 text-sm font-semibold">{t("composer.title")}</h2>
+        <div className="-mx-4 -mt-4 flex h-12 items-center justify-between rounded-t-[14px] bg-soft px-4">
+          <h2 className="text-sm font-semibold">{t("composer.title")}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("composer.close")}
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-hover hover:text-ink"
+          >
+            <CloseIcon size={14} />
+          </button>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm">
           {t("composer.from")}
@@ -143,16 +154,23 @@ export function Composer({ initial, onClose }: ComposerProps) {
         />
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm">
-            {t("composer.attach")}
+          <div>
             <input
+              ref={fileInputRef}
               type="file"
               multiple
               aria-label={t("composer.attach")}
               onChange={handleFileChange}
-              className="mt-1 block text-sm"
+              className="sr-only"
             />
-          </label>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+            >
+              {t("composer.attachFiles")}
+            </button>
+          </div>
           {(state.attachments.length > 0 || state.uploads.length > 0) && (
             <ul className="flex flex-col gap-1">
               {state.attachments.map((attachment) => (

@@ -11,6 +11,7 @@ import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
+import { folderName } from "../../app/ui/folders";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -116,11 +117,12 @@ export function MailPage() {
     ? (labelParam ? `$flagged,${labelParam}` : "$flagged")
     : (labelParam ?? undefined);
 
+  const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === selectedMailboxId);
   const messageListTitle = starredParam
     ? t("mail.starredView")
     : groupParam
       ? groupParam
-      : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+      : (selectedMailbox ? folderName(selectedMailbox, t) : undefined);
 
   // The starred view is not tied to any single mailbox, so the sidebar must not
   // highlight a mailbox row (e.g. Inbox) while it is active. `selectedMailboxId`

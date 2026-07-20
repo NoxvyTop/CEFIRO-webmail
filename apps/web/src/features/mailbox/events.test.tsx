@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
+import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
 
 const user = {
@@ -97,7 +98,7 @@ describe("mail SSE live refresh and notifications", () => {
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
     renderAt("/", client);
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
 
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]?.url).toBe("/api/mail/events");
@@ -124,7 +125,7 @@ describe("mail SSE live refresh and notifications", () => {
     Object.defineProperty(document, "hidden", { value: true, configurable: true });
 
     renderAt("/", client);
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
 
     FakeEventSource.instances[0]?.emitMessage();
 

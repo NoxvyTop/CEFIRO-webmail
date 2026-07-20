@@ -37,6 +37,49 @@ describe("labelBackground", () => {
   });
 });
 
+describe("fixed spec label palette (docs/design/cefiro/README.md)", () => {
+  it("maps 'urgente' to the spec color and 0.14 alpha background", () => {
+    expect(labelColor("urgente")).toBe("#F26565");
+    expect(labelBackground("urgente")).toBe("rgba(242, 101, 101, 0.14)");
+  });
+
+  it("maps 'producto' to the spec color and 0.14 alpha background", () => {
+    expect(labelColor("producto")).toBe("#5B8DEF");
+    expect(labelBackground("producto")).toBe("rgba(91, 141, 239, 0.14)");
+  });
+
+  it("maps 'diseño' to the spec color and 0.15 alpha background (spec's one-off alpha)", () => {
+    expect(labelColor("diseño")).toBe("#E5A13D");
+    expect(labelBackground("diseño")).toBe("rgba(229, 161, 61, 0.15)");
+    expect(labelColor("diseno")).toBe("#E5A13D");
+    expect(labelBackground("diseno")).toBe("rgba(229, 161, 61, 0.15)");
+  });
+
+  it("maps 'finanzas' to the spec color and 0.14 alpha background", () => {
+    expect(labelColor("finanzas")).toBe("#34C79A");
+    expect(labelBackground("finanzas")).toBe("rgba(52, 199, 154, 0.14)");
+  });
+
+  it("matches the fixed mapping case-insensitively", () => {
+    expect(labelColor("URGENTE")).toBe("#F26565");
+    expect(labelColor("Producto")).toBe("#5B8DEF");
+    expect(labelColor("DISEÑO")).toBe("#E5A13D");
+    expect(labelColor("Finanzas")).toBe("#34C79A");
+  });
+
+  it("does not collide: each spec label keeps its own color", () => {
+    const colors = new Set(["urgente", "producto", "diseño", "finanzas"].map(labelColor));
+    expect(colors.size).toBe(4);
+  });
+
+  it("uses the hash-based fallback only for labels outside the spec", () => {
+    // "important" is not part of the fixed spec map, so it must still resolve
+    // through the deterministic hash fallback with the shared 0.14 alpha.
+    expect(labelColor("important")).not.toBe(undefined);
+    expect(labelBackground("important")).toMatch(/^rgba\(\d+, \d+, \d+, 0\.14\)$/);
+  });
+});
+
 describe("userLabels", () => {
   it("returns keys whose value is true", () => {
     expect(userLabels({ important: true, urgent: false })).toEqual(["important"]);

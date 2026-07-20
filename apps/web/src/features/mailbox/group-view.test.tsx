@@ -73,7 +73,7 @@ describe("group view filtering", () => {
   it("requests messages with to=<group address> and the inbox mailbox id in group view", async () => {
     const { fetchMock } = renderAt("/?group=soporte@x.com", { groupMailInMainInbox: false });
 
-    await screen.findByText("Inbox");
+    await screen.findByText(i18n.t("mail.folders.inbox"));
     const calls = await vi.waitFor(() => {
       const found = messagesCalls(fetchMock);
       expect(found.some((url) => url.includes("to=soporte%40x.com"))).toBe(true);
@@ -87,7 +87,7 @@ describe("group view filtering", () => {
   it("excludes group addresses from the main inbox when the toggle is off", async () => {
     const { fetchMock } = renderAt("/", { groupMailInMainInbox: false });
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     await vi.waitFor(() => {
       const found = messagesCalls(fetchMock);
       expect(found.some((url) => url.includes("excludeTo=soporte%40x.com"))).toBe(true);
