@@ -115,7 +115,7 @@ describe("label view filtering", () => {
   it("clicking a label in the sidebar requests hasKeyword=<label> while keeping the mailboxId", async () => {
     const { fetchMock } = renderAt("/");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     const labelRow = await screen.findByText("important");
     fireEvent.click(labelRow);
 
@@ -132,7 +132,7 @@ describe("label view filtering", () => {
   it("clicking the same label again clears the filter", async () => {
     const { fetchMock } = renderAt("/?label=important");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     const labelsNav = await screen.findByRole("navigation", { name: i18n.t("mail.labels") });
     const labelRow = within(labelsNav).getByText("important");
     fireEvent.click(labelRow);
@@ -148,7 +148,7 @@ describe("label view filtering", () => {
   it("label sidebar remains stable when a label filter is active", async () => {
     const { fetchMock } = renderAt("/");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     const labelsNav = await screen.findByRole("navigation", { name: i18n.t("mail.labels") });
 
     // Both labels should be present initially

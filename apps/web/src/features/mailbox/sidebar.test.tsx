@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
+import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
 
 const user = {
@@ -49,24 +50,41 @@ function stubFetch() {
   );
 }
 
+const inboxName = i18n.t("mail.folders.inbox");
+
 describe("mailbox sidebar", () => {
-  it("selects the inbox by role by default and unread badge is visible", async () => {
+  it("selects the inbox by role by default, shows its localized name, and the unread badge is visible", async () => {
     stubFetch();
     renderAt("/");
 
     // The mailbox name is also echoed in the message-list header, so scope to
     // the sidebar entry (rendered first) rather than asserting a single match.
-    const [inbox] = await screen.findAllByText("Inbox");
+    const [inbox] = await screen.findAllByText(inboxName);
     expect(await screen.findAllByText("Archive")).not.toHaveLength(0);
     expect(await screen.findByText("3")).toBeInTheDocument();
     expect(inbox!.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
+  });
+
+  it("orders the primary nav Recibidos, Destacados, Enviados, Archivados", async () => {
+    stubFetch();
+    renderAt("/");
+
+    await screen.findAllByText(inboxName);
+    const nav = screen.getAllByRole("button").map((button) => button.textContent);
+    const inboxIndex = nav.findIndex((text) => text?.includes(inboxName));
+    const starredIndex = nav.findIndex((text) => text?.includes(i18n.t("mail.starredView")));
+    const archiveIndex = nav.findIndex((text) => text?.includes("Archive"));
+
+    expect(inboxIndex).toBeGreaterThanOrEqual(0);
+    expect(starredIndex).toBeGreaterThan(inboxIndex);
+    expect(archiveIndex).toBeGreaterThan(starredIndex);
   });
 
   it("selects the clicked mailbox via the URL", async () => {
     stubFetch();
     renderAt("/");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(inboxName);
     const [archive] = await screen.findAllByText("Archive");
     fireEvent.click(archive!);
 
@@ -78,14 +96,14 @@ describe("mailbox sidebar", () => {
     stubFetch();
     renderAt("/?starred=1");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(inboxName);
     const starredEntries = await screen.findAllByText("Destacados");
     const starredButton = starredEntries
       .map((el) => el.closest("button"))
       .find((button): button is HTMLButtonElement => button !== null);
 
     expect(starredButton).toHaveAttribute("aria-current", "true");
-    const inbox = screen.getAllByText("Inbox")[0];
+    const inbox = screen.getAllByText(inboxName)[0];
     expect(inbox!.closest("button")).not.toHaveAttribute("aria-current");
   });
 });

@@ -1,6 +1,7 @@
 import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { StarIcon } from "../../app/ui/icons";
+import { folderName, orderedMailboxes } from "../../app/ui/folders";
 import { labelColor } from "../../app/ui/labels";
 
 interface SidebarProps {
@@ -24,6 +25,41 @@ export function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation();
 
+  // Fixed nav order (docs/design/cefiro/README.md): Recibidos, Destacados,
+  // Enviados, Archivados, then secondary folders grouped after. Destacados is
+  // a filtered view rather than a mailbox, so it is spliced in right after
+  // the inbox row instead of coming from `mailboxes`.
+  const ordered = orderedMailboxes(mailboxes);
+  const inboxIndex = ordered.findIndex((mailbox) => mailbox.role === "inbox");
+  const beforeStarred = inboxIndex === -1 ? [] : ordered.slice(0, inboxIndex + 1);
+  const afterStarred = inboxIndex === -1 ? ordered : ordered.slice(inboxIndex + 1);
+
+  function renderMailboxRow(mailbox: Mailbox) {
+    const selected = mailbox.id === selectedMailboxId;
+    // Spec: the accent unread counter is only ever shown on Recibidos.
+    const showUnreadBadge = mailbox.role === "inbox" && mailbox.unreadEmails > 0;
+    return (
+      <li key={mailbox.id}>
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={() => onSelectMailbox(mailbox.id)}
+          className="flex h-[38px] w-full items-center justify-between rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+        >
+          <span>{folderName(mailbox, t)}</span>
+          {showUnreadBadge && (
+            <span
+              aria-label={t("mail.unread", { count: mailbox.unreadEmails })}
+              className="text-xs font-semibold text-accent"
+            >
+              {mailbox.unreadEmails}
+            </span>
+          )}
+        </button>
+      </li>
+    );
+  }
+
   return (
     <aside className="flex w-[230px] shrink-0 overflow-y-auto flex-col gap-4 border-r border-line p-3">
       <button
@@ -38,39 +74,20 @@ export function Sidebar({
         {t("composer.title")}
       </button>
       <ul className="flex flex-col gap-1">
-        {mailboxes.map((mailbox) => {
-          const selected = mailbox.id === selectedMailboxId;
-          return (
-            <li key={mailbox.id}>
-              <button
-                type="button"
-                aria-current={selected ? "true" : undefined}
-                onClick={() => onSelectMailbox(mailbox.id)}
-                className="flex h-[38px] w-full items-center justify-between rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
-              >
-                <span>{mailbox.name}</span>
-                {mailbox.unreadEmails > 0 && (
-                  <span
-                    aria-label={t("mail.unread", { count: mailbox.unreadEmails })}
-                    className="text-xs font-semibold text-accent"
-                  >
-                    {mailbox.unreadEmails}
-                  </span>
-                )}
-              </button>
-            </li>
-          );
-        })}
+        {beforeStarred.map(renderMailboxRow)}
+        <li>
+          <button
+            type="button"
+            aria-current={starredSelected ? "true" : undefined}
+            onClick={onSelectStarred}
+            className="flex h-[38px] w-full items-center gap-2 rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+          >
+            <StarIcon size={16} />
+            <span>{t("mail.starredView")}</span>
+          </button>
+        </li>
+        {afterStarred.map(renderMailboxRow)}
       </ul>
-      <button
-        type="button"
-        aria-current={starredSelected ? "true" : undefined}
-        onClick={onSelectStarred}
-        className="flex h-[38px] w-full items-center gap-2 rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
-      >
-        <StarIcon size={16} />
-        <span>{t("mail.starredView")}</span>
-      </button>
       {labels.length > 0 && (
         <nav aria-label={t("mail.labels")} className="text-sm">
           <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
