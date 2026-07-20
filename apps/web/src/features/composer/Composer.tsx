@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
@@ -25,6 +25,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
   const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(initial);
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const identitiesQuery = useQuery({ queryKey: ["mail", "identities"], queryFn: fetchIdentities });
   const signaturesQuery = useQuery({ queryKey: ["mail", "signatures"], queryFn: fetchSignatures });
@@ -143,16 +144,23 @@ export function Composer({ initial, onClose }: ComposerProps) {
         />
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm">
-            {t("composer.attach")}
+          <div>
             <input
+              ref={fileInputRef}
               type="file"
               multiple
               aria-label={t("composer.attach")}
               onChange={handleFileChange}
-              className="mt-1 block text-sm"
+              className="sr-only"
             />
-          </label>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+            >
+              {t("composer.attachFiles")}
+            </button>
+          </div>
           {(state.attachments.length > 0 || state.uploads.length > 0) && (
             <ul className="flex flex-col gap-1">
               {state.attachments.map((attachment) => (
