@@ -34,6 +34,28 @@ describe("jmap client", () => {
     );
   });
 
+  it("rewrites advertised URLs to the connection origin, keeping path and query", async () => {
+    const fetchFn = fetchReturning({
+      apiUrl: "https://internal.mail.test:8080/jmap/",
+      eventSourceUrl:
+        "https://internal.mail.test:8080/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+      uploadUrl: "https://internal.mail.test:8080/jmap/upload/{accountId}/",
+      downloadUrl:
+        "https://internal.mail.test:8080/jmap/download/{accountId}/{blobId}/{name}?type={type}",
+      primaryAccounts: { "urn:ietf:params:jmap:mail": "acc-1" },
+    });
+    const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+    const session = await client.getSession(auth);
+    expect(session.apiUrl).toBe("https://mail.test/jmap/");
+    expect(session.uploadUrl).toBe("https://mail.test/jmap/upload/{accountId}/");
+    expect(session.downloadUrl).toBe(
+      "https://mail.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
+    );
+    expect(session.eventSourceUrl).toBe(
+      "https://mail.test/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+    );
+  });
+
   it("maps 401 to mail_auth_failed", async () => {
     const client = createJmapClient({
       baseUrl: "https://mail.test",

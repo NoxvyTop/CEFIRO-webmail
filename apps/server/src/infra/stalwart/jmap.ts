@@ -22,6 +22,16 @@ function toDomainError(status: number): DomainError {
   return new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
 }
 
+// Some reverse-proxied Stalwart deployments advertise an internal/unreachable
+// origin in the session's apiUrl/uploadUrl/downloadUrl/eventSourceUrl (the
+// server's own configured hostname, not the one the client actually reached).
+// Rewriting to the connection's origin keeps these servers reachable without
+// touching the raw string via the URL API, which percent-encodes the `{...}`
+// JMAP placeholders (e.g. `{accountId}`) found in path segments.
+function rewriteToConnectionOrigin(url: string, connectionOrigin: string): string {
+  return url.replace(/^https?:\/\/[^/]+/i, connectionOrigin);
+}
+
 export function createJmapClient(input: {
   baseUrl: string;
   fetchFn?: typeof fetch;
@@ -46,12 +56,13 @@ export function createJmapClient(input: {
       if (!body.apiUrl || !accountId) {
         throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
       }
+      const connectionOrigin = new URL(baseUrl).origin;
       return {
-        apiUrl: body.apiUrl,
+        apiUrl: rewriteToConnectionOrigin(body.apiUrl, connectionOrigin),
         accountId,
-        eventSourceUrl: body.eventSourceUrl ?? "",
-        uploadUrl: body.uploadUrl ?? "",
-        downloadUrl: body.downloadUrl ?? "",
+        eventSourceUrl: rewriteToConnectionOrigin(body.eventSourceUrl ?? "", connectionOrigin),
+        uploadUrl: rewriteToConnectionOrigin(body.uploadUrl ?? "", connectionOrigin),
+        downloadUrl: rewriteToConnectionOrigin(body.downloadUrl ?? "", connectionOrigin),
       };
     },
 
