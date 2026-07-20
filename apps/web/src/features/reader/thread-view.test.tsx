@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import "../../app/i18n";
@@ -164,22 +164,26 @@ describe("ThreadView", () => {
     stubFetch();
     renderThread("t1", "arch1");
 
-    expect(await screen.findByRole("button", { name: i18n.t("mail.archive") })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: i18n.t("mail.star") })).toBeInTheDocument();
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    expect(within(actionsBar).getByRole("button", { name: i18n.t("mail.archive") })).toBeInTheDocument();
+    expect(within(actionsBar).getByRole("button", { name: i18n.t("mail.star") })).toBeInTheDocument();
   });
 
   it("clicking Archivar moves the last email to the archive mailbox", async () => {
     const fetchMock = stubFetch();
     renderThread("t1", "arch1");
 
-    const archiveButton = await screen.findByRole("button", { name: i18n.t("mail.archive") });
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    const archiveButton = within(actionsBar).getByRole("button", { name: i18n.t("mail.archive") });
     fireEvent.click(archiveButton);
 
-    await screen.findByRole("button", { name: i18n.t("mail.archive") });
-    const patchCall = fetchMock.mock.calls.find(
-      ([input, init]) => String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "PATCH",
-    );
-    expect(patchCall).toBeTruthy();
+    const patchCall = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) => String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(call).toBeTruthy();
+      return call;
+    });
     const [, init] = patchCall as [RequestInfo | URL, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { arch1: true } });
   });
@@ -198,6 +202,31 @@ describe("ThreadView", () => {
     expect(patchCall).toBeTruthy();
     const [, init] = patchCall as [RequestInfo | URL, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
+  });
+
+  it("shows Responder and Archivar buttons at the foot of the article", async () => {
+    stubFetch();
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    expect(within(footer).getByRole("button", { name: i18n.t("composer.reply") })).toBeInTheDocument();
+    expect(within(footer).getByRole("button", { name: i18n.t("mail.archive") })).toBeInTheDocument();
+  });
+
+  it("shows the sender's label chips next to the title", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.keywords = { producto: true };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    expect(await screen.findByText("producto")).toBeInTheDocument();
   });
 
   it("hides Archivar when the last email is already in the archive mailbox", async () => {

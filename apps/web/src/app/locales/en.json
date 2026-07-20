@@ -147,6 +147,8 @@
     "archivedHint": "press e to archive faster",
     "labels": "Labels",
     "clearLabel": "Clear label filter",
+    "toMeAndTeam": "me and the team",
+    "yesterday": "Yesterday",
     "folders": {
       "inbox": "Inbox",
       "sent": "Sent",
@@ -292,6 +294,8 @@
     "search": "Search",
     "close": "Close / dismiss",
     "hint": "j / k to move · e archives · c composes",
-    "listHint": "j / k to move"
+    "listHintPrefix": "Use",
+    "listHintMid": "and",
+    "listHintSuffix": "to move through the list"
   }
 }

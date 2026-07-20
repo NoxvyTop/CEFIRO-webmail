@@ -342,9 +342,17 @@ export function MailPage() {
           <ThreadView threadId={threadParam} archiveMailboxId={archiveMailboxId} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
-            <CefiroLogo size={52} />
-            <p className="text-sm">{t("mail.selectMessage")}</p>
-            <p className="text-xs text-muted">{t("shortcuts.listHint")}</p>
+            <div className="opacity-60">
+              <CefiroLogo size={52} />
+            </div>
+            <p className="text-[15px] font-semibold text-ink">{t("mail.selectMessage")}</p>
+            <p className="text-[13px] text-muted">
+              {t("shortcuts.listHintPrefix")}{" "}
+              <kbd className="rounded border border-line px-1.5 text-[11px]">j</kbd>{" "}
+              {t("shortcuts.listHintMid")}{" "}
+              <kbd className="rounded border border-line px-1.5 text-[11px]">k</kbd>{" "}
+              {t("shortcuts.listHintSuffix")}
+            </p>
           </div>
         )}
       </section>
