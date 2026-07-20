@@ -56,6 +56,38 @@ describe("RichTextEditor fallback sanitization", () => {
   });
 });
 
+describe("RichTextEditor placeholder", () => {
+  it("shows the placeholder when the body is empty", async () => {
+    render(<RichTextEditor html="" onChange={() => {}} ariaLabel="Message" />);
+
+    expect(
+      await screen.findByText(i18n.t("composer.bodyPlaceholder")),
+    ).toBeInTheDocument();
+  });
+
+  // TipTap/ProseMirror manages its contentEditable DOM outside of React's
+  // event system, so simulating a keystroke via fireEvent.input doesn't
+  // reliably flow through its update pipeline in this test environment
+  // (see the "updates the body" case in composer.test.tsx for the same
+  // caveat). The prop round-trip below is what actually happens in the real
+  // Composer: onUpdate calls onChange, the parent re-renders with the new
+  // `html`, and that prop change is what this test drives directly.
+  it("hides the placeholder once the html prop reflects typed content", () => {
+    const { rerender } = render(<RichTextEditor html="" onChange={() => {}} ariaLabel="Message" />);
+    expect(screen.getByText(i18n.t("composer.bodyPlaceholder"))).toBeInTheDocument();
+
+    rerender(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    expect(screen.queryByText(i18n.t("composer.bodyPlaceholder"))).not.toBeInTheDocument();
+  });
+
+  it("does not show the placeholder when the body already has content", () => {
+    render(<RichTextEditor html="<p>Existing draft</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    expect(screen.queryByText(i18n.t("composer.bodyPlaceholder"))).not.toBeInTheDocument();
+  });
+});
+
 describe("RichTextEditor link toolbar", () => {
   it("does not insert a link when the entered URL is javascript:alert(1)", async () => {
     render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);

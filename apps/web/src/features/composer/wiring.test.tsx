@@ -80,19 +80,19 @@ describe("composer wiring", () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=new");
 
-    expect(await screen.findByRole("dialog", { name: i18n.t("composer.title") })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
 
     const cancelButton = screen.getByRole("button", { name: i18n.t("composer.cancel") });
     fireEvent.click(cancelButton);
 
-    expect(screen.queryByRole("dialog", { name: i18n.t("composer.title") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") })).not.toBeInTheDocument();
   });
 
   it("opens the composer at compose=reply:e1 with the from address chip in To", async () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=reply:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.title") });
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
     expect(within(dialog).getByText("a@x.com")).toBeInTheDocument();
   });
 
@@ -100,7 +100,7 @@ describe("composer wiring", () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=forward:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.title") });
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
     const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
     expect((subject as HTMLInputElement).value).toMatch(/^Fwd: /);
     expect(within(dialog).getByText(/doc\.pdf/)).toBeInTheDocument();

@@ -71,9 +71,12 @@
   },
   "auth": {
     "signIn": "Sign in with SSO",
+    "connecting": "Connecting…",
+    "redirecting": "Redirecting to your identity provider…",
     "signOut": "Sign out",
     "signedInAs": "Signed in as {{email}}",
     "subtitle": "Sign in to your team's mail",
+    "credentialsDisabled": "Credential-based sign-in is disabled. Available only in recovery mode.",
     "errors": {
       "state": "The sign-in attempt expired, try again",
       "unknown_user": "Your account is not registered in the mail system",
@@ -85,7 +88,11 @@
       "password": "Password",
       "submit": "Sign in",
       "error": "Invalid credential",
-      "hint": "Only available in setup or recovery mode"
+      "hint": "Only available in setup or recovery mode",
+      "errors": {
+        "invalidEmail": "Enter a valid email address.",
+        "emptyPassword": "Enter your password."
+      }
     }
   },
   "setup": {
@@ -147,6 +154,8 @@
     "archivedHint": "press e to archive faster",
     "labels": "Labels",
     "clearLabel": "Clear label filter",
+    "toMeAndTeam": "me and the team",
+    "yesterday": "Yesterday",
     "folders": {
       "inbox": "Inbox",
       "sent": "Sent",
@@ -166,6 +175,7 @@
   },
   "composer": {
     "title": "Compose",
+    "newMessage": "New message",
     "from": "From",
     "to": "To",
     "cc": "Cc",
@@ -173,6 +183,7 @@
     "addCcBcc": "Cc/Bcc",
     "subject": "Subject",
     "body": "Message",
+    "bodyPlaceholder": "Write your message… or ask the AI",
     "signature": "Signature",
     "reply": "Reply",
     "replyAll": "Reply all",
@@ -182,7 +193,7 @@
     "close": "Close",
     "send": "Send",
     "sent": "Email sent",
-    "cancel": "Cancel",
+    "cancel": "Discard",
     "sending": "Sending…",
     "invalidEmail": "Invalid email",
     "invalidLink": "Invalid or unsafe URL",
@@ -290,6 +301,8 @@
     "search": "Search",
     "close": "Close / dismiss",
     "hint": "j / k to move · e archives · c composes",
-    "listHint": "j / k to move"
+    "listHintPrefix": "Use",
+    "listHintMid": "and",
+    "listHintSuffix": "to move through the list"
   }
 }

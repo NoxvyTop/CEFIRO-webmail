@@ -5,6 +5,7 @@ import { CloseIcon } from "../../app/ui/icons";
 
 interface RecipientFieldProps {
   label: string;
+  placeholder?: string;
   value: EmailAddress[];
   onChange(value: EmailAddress[]): void;
 }
@@ -14,7 +15,7 @@ function isValidEmailShape(candidate: string): boolean {
   return at > 0 && at < candidate.length - 1;
 }
 
-export function RecipientField({ label, value, onChange }: RecipientFieldProps) {
+export function RecipientField({ label, placeholder = label, value, onChange }: RecipientFieldProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState("");
   const [invalid, setInvalid] = useState(false);
@@ -44,7 +45,7 @@ export function RecipientField({ label, value, onChange }: RecipientFieldProps) 
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-soft p-1 focus-within:border-accent">
+      <div className="flex flex-wrap items-center gap-1.5 border-0 border-b border-line bg-transparent py-3 focus-within:border-accent">
         {value.map((address) => (
           <span
             key={address.email}
@@ -63,16 +64,17 @@ export function RecipientField({ label, value, onChange }: RecipientFieldProps) 
         ))}
         <input
           aria-label={label}
+          placeholder={value.length === 0 ? placeholder : undefined}
           value={inputValue}
           onChange={(event) => {
             setInputValue(event.target.value);
             setInvalid(false);
           }}
           onKeyDown={handleKeyDown}
-          className="min-w-24 flex-1 border-none bg-transparent text-sm text-ink outline-none placeholder:text-muted"
+          className="min-w-24 flex-1 border-none bg-transparent px-0.5 text-[14px] text-ink outline-none placeholder:text-muted"
         />
       </div>
-      {invalid && <p className="text-xs text-warn">{t("composer.invalidEmail")}</p>}
+      {invalid && <p className="text-[12.5px] text-danger">{t("composer.invalidEmail")}</p>}
     </div>
   );
 }

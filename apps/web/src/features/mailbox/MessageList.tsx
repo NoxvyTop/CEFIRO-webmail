@@ -10,6 +10,7 @@ import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 
@@ -31,14 +32,15 @@ interface MessageListProps {
   onArchived?: (email: EmailSummary) => void;
 }
 
-function rowClassName(unread: boolean, selected: boolean) {
+function rowClassName(selected: boolean) {
   const base =
-    "flex cursor-pointer items-start gap-2 border-b border-line p-3 text-sm transition-colors hover:bg-hover";
-  const weight = unread ? "font-semibold" : "font-normal";
+    "flex cursor-pointer items-start gap-3 border-b border-line py-[13px] pr-4 text-sm transition-colors hover:bg-hover";
+  // The 3px selection border sits outside the padding box (border-l + pl-[14px]
+  // both apply), so the row content lands 17px from the row's left edge either way.
   const highlight = selected
-    ? "bg-sel border-l-[3px] border-l-accent pl-[9px]"
-    : "border-l-[3px] border-l-transparent pl-[9px]";
-  return [base, weight, highlight].join(" ");
+    ? "bg-sel border-l-[3px] border-l-accent pl-[14px]"
+    : "border-l-[3px] border-l-transparent pl-[14px]";
+  return [base, highlight].join(" ");
 }
 
 export function MessageList({
@@ -46,7 +48,7 @@ export function MessageList({
   excludeMailboxId, title,
   onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived,
 }: MessageListProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -251,8 +253,10 @@ export function MessageList({
     const selected = email.threadId === selectedThreadId;
     const fromLabel = email.from[0]?.name || email.from[0]?.email || "";
     const subjectLabel = email.subject || t("mail.noSubject");
-    const date = new Date(email.receivedAt);
-    const dateLabel = Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+    const dateLabel = formatRelativeTime(email.receivedAt, {
+      yesterdayLabel: t("mail.yesterday"),
+      locale: i18n.language,
+    });
     const starred = Boolean(email.keywords.$flagged);
     const rowLabels = userLabels(email.keywords).slice(0, 2);
 
@@ -266,25 +270,28 @@ export function MessageList({
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") handleSelect(email);
         }}
-        className={rowClassName(unread, selected)}
+        className={rowClassName(selected)}
       >
-        {unread && (
-          <span aria-hidden="true" className="mt-4 h-[7px] w-[7px] shrink-0 rounded-full bg-accent" />
-        )}
         <Avatar name={email.from[0]?.name ?? null} email={email.from[0]?.email ?? "?"} size={38} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="truncate text-[14px]">{fromLabel}</span>
+          <div className="flex items-baseline gap-2">
+            <span
+              aria-hidden="true"
+              className={`h-[7px] w-[7px] shrink-0 rounded-full ${unread ? "bg-accent" : "bg-transparent"}`}
+            />
+            <span className={`min-w-0 flex-1 truncate text-[14px] ${unread ? "font-bold" : "font-medium"}`}>
+              {fromLabel}
+            </span>
             <span className="shrink-0 text-xs text-muted">{dateLabel}</span>
           </div>
-          <div className="truncate text-[13.5px]">{subjectLabel}</div>
+          <div className={`truncate text-[13.5px] ${unread ? "font-[650]" : "font-[420]"}`}>{subjectLabel}</div>
           <div className="truncate text-[12.5px] text-muted">{email.preview}</div>
           {rowLabels.length > 0 && (
             <div className="mt-1 flex gap-1">
               {rowLabels.map((label) => (
                 <span
                   key={label}
-                  className="rounded-full px-2 text-[11px]"
+                  className="rounded-full px-2 py-[2px] text-[11px] font-semibold"
                   style={{ color: labelColor(label), background: labelBackground(label) }}
                 >
                   {label}
@@ -354,12 +361,12 @@ export function MessageList({
   return (
     <div className="flex h-full flex-col">
       {title && (
-        <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 className="truncate text-sm font-semibold">{title}</h2>
+        <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-[18px]">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h2 className="truncate text-[15px] font-[650]">{title}</h2>
             {activeLabel && (
               <span
-                className="flex shrink-0 items-center gap-1 rounded-full px-2 text-[11px]"
+                className="flex h-6 shrink-0 items-center gap-1.5 rounded-full px-[9px] text-xs font-semibold"
                 style={{ color: labelColor(activeLabel), background: labelBackground(activeLabel) }}
               >
                 {activeLabel}
@@ -367,7 +374,7 @@ export function MessageList({
                   type="button"
                   aria-label={t("mail.clearLabel")}
                   onClick={onClearLabel}
-                  className="flex h-3.5 w-3.5 items-center justify-center"
+                  className="flex h-3.5 w-3.5 items-center justify-center opacity-70"
                 >
                   <CloseIcon size={10} />
                 </button>
