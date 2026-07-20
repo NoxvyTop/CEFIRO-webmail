@@ -35,9 +35,11 @@ function rewriteToConnectionOrigin(url: string, connectionOrigin: string): strin
 export function createJmapClient(input: {
   baseUrl: string;
   fetchFn?: typeof fetch;
+  forceBase?: boolean;
 }) {
   const fetchFn = input.fetchFn ?? fetch;
   const baseUrl = input.baseUrl.replace(/\/$/, "");
+  const forceBase = input.forceBase ?? false;
 
   return {
     async getSession(auth: JmapAuth): Promise<JmapSession> {
@@ -55,6 +57,15 @@ export function createJmapClient(input: {
       const accountId = body.primaryAccounts?.["urn:ietf:params:jmap:mail"];
       if (!body.apiUrl || !accountId) {
         throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+      }
+      if (!forceBase) {
+        return {
+          apiUrl: body.apiUrl,
+          accountId,
+          eventSourceUrl: body.eventSourceUrl ?? "",
+          uploadUrl: body.uploadUrl ?? "",
+          downloadUrl: body.downloadUrl ?? "",
+        };
       }
       const connectionOrigin = new URL(baseUrl).origin;
       return {

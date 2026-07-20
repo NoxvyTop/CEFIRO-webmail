@@ -34,17 +34,31 @@ describe("jmap client", () => {
     );
   });
 
-  it("rewrites advertised URLs to the connection origin, keeping path and query", async () => {
-    const fetchFn = fetchReturning({
-      apiUrl: "https://internal.mail.test:8080/jmap/",
-      eventSourceUrl:
-        "https://internal.mail.test:8080/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
-      uploadUrl: "https://internal.mail.test:8080/jmap/upload/{accountId}/",
-      downloadUrl:
-        "https://internal.mail.test:8080/jmap/download/{accountId}/{blobId}/{name}?type={type}",
-      primaryAccounts: { "urn:ietf:params:jmap:mail": "acc-1" },
+  const advertisedElsewhere = {
+    apiUrl: "https://internal.mail.test:8080/jmap/",
+    eventSourceUrl:
+      "https://internal.mail.test:8080/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+    uploadUrl: "https://internal.mail.test:8080/jmap/upload/{accountId}/",
+    downloadUrl:
+      "https://internal.mail.test:8080/jmap/download/{accountId}/{blobId}/{name}?type={type}",
+    primaryAccounts: { "urn:ietf:params:jmap:mail": "acc-1" },
+  };
+
+  it("trusts the server-advertised origin verbatim when forceBase is off (default)", async () => {
+    const client = createJmapClient({
+      baseUrl: "https://mail.test",
+      fetchFn: fetchReturning(advertisedElsewhere),
     });
-    const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+    const session = await client.getSession(auth);
+    expect(session.apiUrl).toBe("https://internal.mail.test:8080/jmap/");
+    expect(session.uploadUrl).toBe(
+      "https://internal.mail.test:8080/jmap/upload/{accountId}/",
+    );
+  });
+
+  it("rewrites advertised URLs to the connection origin when forceBase is on, keeping path and query", async () => {
+    const fetchFn = fetchReturning(advertisedElsewhere);
+    const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn, forceBase: true });
     const session = await client.getSession(auth);
     expect(session.apiUrl).toBe("https://mail.test/jmap/");
     expect(session.uploadUrl).toBe("https://mail.test/jmap/upload/{accountId}/");

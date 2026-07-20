@@ -52,6 +52,24 @@ describe("loadConfig", () => {
     ).toBe("https://mail.noxvytop.com");
   });
 
+  describe("JMAP_FORCE_BASE (off by default)", () => {
+    it("defaults jmapForceBase to false when JMAP_FORCE_BASE is absent", () => {
+      expect(loadConfig(validEnv).jmapForceBase).toBe(false);
+    });
+
+    it("parses JMAP_FORCE_BASE=true the same way BOOTSTRAP_MODE is parsed", () => {
+      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "true" }).jmapForceBase).toBe(true);
+    });
+
+    it("parses JMAP_FORCE_BASE=1 as true", () => {
+      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "1" }).jmapForceBase).toBe(true);
+    });
+
+    it("treats any other JMAP_FORCE_BASE value as false", () => {
+      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "yes" }).jmapForceBase).toBe(false);
+    });
+  });
+
   describe("AI feature gate (off by default)", () => {
     it("defaults aiEnabled to false when AI_ENABLED is absent", () => {
       expect(loadConfig(validEnv).aiEnabled).toBe(false);

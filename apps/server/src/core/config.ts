@@ -8,6 +8,11 @@ const configSchema = z.object({
   bootstrapMode: z.boolean(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
   stalwartUrl: z.string().url().optional(),
+  // Some reverse-proxied Stalwart deployments advertise an internal or
+  // security-restricted origin in the JMAP session (apiUrl/uploadUrl/etc.)
+  // that differs from the reachable base URL. Off by default: existing
+  // Stalwart setups that advertise a correct, reachable origin see no change.
+  jmapForceBase: z.boolean().default(false),
   // AI features (summarize / draft-with-AI) are software-level off by default:
   // aiEnabled defaults to false and any call must also have an aiApiKey, or the
   // domain layer fails fast with `ai_disabled` before attempting any network call.
@@ -32,6 +37,7 @@ export function loadConfig(
     bootstrapMode: env.BOOTSTRAP_MODE === "true" || env.BOOTSTRAP_MODE === "1",
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
     stalwartUrl: env.STALWART_URL || undefined,
+    jmapForceBase: env.JMAP_FORCE_BASE === "true" || env.JMAP_FORCE_BASE === "1",
     aiEnabled: env.AI_ENABLED === "true" || env.AI_ENABLED === "1",
     aiProvider: env.AI_PROVIDER || undefined,
     aiApiKey: env.AI_API_KEY || undefined,
