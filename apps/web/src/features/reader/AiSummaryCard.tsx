@@ -67,7 +67,7 @@ export function AiSummaryCard({ messageId }: AiSummaryCardProps) {
       )}
       {ready && (
         <div role="region" aria-label={t("mail.aiSummaryTitle")} style={{ animation: "fadeUp 0.3s ease" }}>
-          <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold tracking-[0.08em] text-accent">
+          <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-accent">
             <span aria-hidden="true">✦</span> {t("mail.aiSummaryTitle")}
           </h3>
           <ul className="flex list-disc flex-col gap-[5px] pl-[18px] text-[13.5px] leading-[1.5]">
