@@ -128,6 +128,15 @@ describe("Composer", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("calls onClose when the header close button is clicked", async () => {
+    const { onClose } = renderComposer();
+
+    const closeButton = await screen.findByRole("button", { name: i18n.t("composer.close") });
+    fireEvent.click(closeButton);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   describe("attachment control", () => {
     it("hides the native file input and exposes a styled attach button instead", async () => {
       renderComposer();

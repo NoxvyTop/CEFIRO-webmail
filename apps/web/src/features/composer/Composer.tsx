@@ -62,7 +62,17 @@ export function Composer({ initial, onClose }: ComposerProps) {
       className="fixed inset-0 z-50 flex items-end justify-end bg-[rgba(3,5,9,0.55)] p-6"
     >
       <div className="flex max-h-full w-full max-w-[640px] flex-col gap-3 overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-pop">
-        <h2 className="-mx-4 -mt-4 flex h-12 items-center rounded-t-[14px] bg-soft px-4 text-sm font-semibold">{t("composer.title")}</h2>
+        <div className="-mx-4 -mt-4 flex h-12 items-center justify-between rounded-t-[14px] bg-soft px-4">
+          <h2 className="text-sm font-semibold">{t("composer.title")}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("composer.close")}
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-hover hover:text-ink"
+          >
+            <CloseIcon size={14} />
+          </button>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm">
           {t("composer.from")}

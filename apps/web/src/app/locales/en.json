@@ -179,6 +179,7 @@
     "forward": "Forward",
     "attach": "Attach",
     "attachFiles": "Attach files",
+    "close": "Close",
     "send": "Send",
     "sent": "Email sent",
     "cancel": "Cancel",
