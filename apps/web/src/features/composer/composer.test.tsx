@@ -1,21 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { Identity, Signature } from "@webmail/shared";
 import type { ComposerDraft } from "./reply";
 import { ToastProvider } from "../../app/ui/toast";
+import { MailApiError } from "../mailbox/api";
 import { Composer } from "./Composer";
 
-const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment } = vi.hoisted(() => ({
+const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft } = vi.hoisted(() => ({
   fetchIdentities: vi.fn(),
   fetchSignatures: vi.fn(),
   sendEmail: vi.fn(),
   uploadAttachment: vi.fn(),
+  fetchAiDraft: vi.fn(),
 }));
 
 vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment }));
+vi.mock("./aiApi", () => ({ fetchAiDraft }));
 
 const identities: Identity[] = [
   { id: "id1", name: "Alice", email: "alice@example.com" },
@@ -45,6 +48,10 @@ function renderComposer(onClose = vi.fn(), initial: ComposerDraft = baseDraft())
 }
 
 describe("Composer", () => {
+  beforeEach(() => {
+    fetchAiDraft.mockReset();
+  });
+
   it("renders a dialog with identities in the From select", async () => {
     renderComposer();
 
@@ -119,5 +126,40 @@ describe("Composer", () => {
     fireEvent.click(cancelButton);
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("Redactar con IA", () => {
+    it("fills the body and shows the review notice on success", async () => {
+      fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador solicitado.");
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Reunión de mañana" });
+
+      const draftButton = await screen.findByRole("button", { name: i18n.t("composer.draftWithAi") });
+      fireEvent.click(draftButton);
+
+      expect(await screen.findByText(i18n.t("composer.aiDraftNotice"))).toBeInTheDocument();
+      expect(fetchAiDraft).toHaveBeenCalledWith("Reunión de mañana");
+    });
+
+    it("shows an inline error without calling the endpoint when subject is empty", async () => {
+      renderComposer();
+
+      const draftButton = await screen.findByRole("button", { name: i18n.t("composer.draftWithAi") });
+      fireEvent.click(draftButton);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("composer.aiDraftNeedsSubject"));
+      expect(fetchAiDraft).not.toHaveBeenCalled();
+    });
+
+    it("hides the button entirely once the backend reports ai_disabled", async () => {
+      fetchAiDraft.mockRejectedValueOnce(new MailApiError(501, "ai_disabled"));
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Reunión de mañana" });
+
+      const draftButton = await screen.findByRole("button", { name: i18n.t("composer.draftWithAi") });
+      fireEvent.click(draftButton);
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: i18n.t("composer.draftWithAi") })).not.toBeInTheDocument(),
+      );
+    });
   });
 });

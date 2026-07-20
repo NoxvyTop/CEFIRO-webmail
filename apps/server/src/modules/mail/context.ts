@@ -15,6 +15,15 @@ export type MailDeps = {
   fetchFn?: typeof fetch;
 };
 
+// Narrow slice of MailDeps that requireMail actually needs. Extracted so other
+// modules (e.g. modules/ai) that also proxy JMAP calls behind a session can
+// reuse requireMail without having to fabricate unrelated deps (signatures,
+// userPreferences) just to satisfy the type.
+export type JmapAccessDeps = {
+  jmap: JmapClient | null;
+  mailCredentials: MailCredentialsRepo;
+};
+
 export type MailVariables = AuthVariables & {
   jmapAuth: JmapAuth;
   jmapSession: JmapSession;
@@ -33,7 +42,7 @@ export function evictMailSession(userId: string): void {
 }
 
 export function requireMail(
-  deps: MailDeps,
+  deps: JmapAccessDeps,
 ): MiddlewareHandler<{ Variables: MailVariables }> {
   return async (c, next) => {
     if (!deps.jmap) {

@@ -51,4 +51,47 @@ describe("loadConfig", () => {
       loadConfig({ ...validEnv, STALWART_URL: "https://mail.noxvytop.com" }).stalwartUrl,
     ).toBe("https://mail.noxvytop.com");
   });
+
+  describe("AI feature gate (off by default)", () => {
+    it("defaults aiEnabled to false when AI_ENABLED is absent", () => {
+      expect(loadConfig(validEnv).aiEnabled).toBe(false);
+    });
+
+    it("defaults aiProvider to anthropic when AI_PROVIDER is absent", () => {
+      expect(loadConfig(validEnv).aiProvider).toBe("anthropic");
+    });
+
+    it("defaults aiModel to claude-opus-4-8 when AI_MODEL is absent", () => {
+      expect(loadConfig(validEnv).aiModel).toBe("claude-opus-4-8");
+    });
+
+    it("leaves aiApiKey undefined when AI_API_KEY is absent", () => {
+      expect(loadConfig(validEnv).aiApiKey).toBeUndefined();
+    });
+
+    it("parses AI_ENABLED=true the same way BOOTSTRAP_MODE is parsed", () => {
+      expect(loadConfig({ ...validEnv, AI_ENABLED: "true" }).aiEnabled).toBe(true);
+    });
+
+    it("parses AI_ENABLED=1 as true", () => {
+      expect(loadConfig({ ...validEnv, AI_ENABLED: "1" }).aiEnabled).toBe(true);
+    });
+
+    it("treats any other AI_ENABLED value as false", () => {
+      expect(loadConfig({ ...validEnv, AI_ENABLED: "yes" }).aiEnabled).toBe(false);
+    });
+
+    it("reads AI_PROVIDER, AI_API_KEY and AI_MODEL overrides from env", () => {
+      const config = loadConfig({
+        ...validEnv,
+        AI_ENABLED: "true",
+        AI_PROVIDER: "anthropic",
+        AI_API_KEY: "sk-ant-secret",
+        AI_MODEL: "claude-custom-model",
+      });
+      expect(config.aiProvider).toBe("anthropic");
+      expect(config.aiApiKey).toBe("sk-ant-secret");
+      expect(config.aiModel).toBe("claude-custom-model");
+    });
+  });
 });

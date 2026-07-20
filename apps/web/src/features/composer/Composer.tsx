@@ -22,7 +22,7 @@ function formatSizeKb(size: number): string {
 export function Composer({ initial, onClose }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send } = useComposer(initial);
+  const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(initial);
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
 
@@ -192,10 +192,29 @@ export function Composer({ initial, onClose }: ComposerProps) {
           </p>
         )}
 
+        {state.aiDraftError && (
+          <p role="alert" className="text-sm text-warn">
+            {t(state.aiDraftError)}
+          </p>
+        )}
+        {state.aiDraftNotice && (
+          <p className="text-xs text-muted">{t("composer.aiDraftNotice")}</p>
+        )}
+
         <div className="mt-2 flex items-center justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
             {t("composer.cancel")}
           </button>
+          {!state.aiUnavailable && (
+            <button
+              type="button"
+              onClick={() => void draftWithAi()}
+              disabled={state.aiDrafting}
+              className="rounded-[11px] border border-accent px-3 py-1.5 text-sm font-semibold text-accent transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            >
+              {state.aiDrafting ? t("composer.draftingWithAi") : t("composer.draftWithAi")}
+            </button>
+          )}
           <button
             type="button"
             onClick={handleSend}

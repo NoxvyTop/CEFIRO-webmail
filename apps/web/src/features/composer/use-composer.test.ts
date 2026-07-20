@@ -4,12 +4,14 @@ import { MailApiError } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
 import { useComposer } from "./useComposer";
 
-const { uploadAttachment, sendEmail } = vi.hoisted(() => ({
+const { uploadAttachment, sendEmail, fetchAiDraft } = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
   sendEmail: vi.fn(),
+  fetchAiDraft: vi.fn(),
 }));
 
 vi.mock("./api", () => ({ uploadAttachment, sendEmail }));
+vi.mock("./aiApi", () => ({ fetchAiDraft }));
 
 function baseDraft(): ComposerDraft {
   return {
@@ -110,5 +112,59 @@ describe("useComposer", () => {
     expect(sent).toBe(false);
     expect(result.current.state.sending).toBe(false);
     expect(result.current.state.sendError).toBe("composer.errors.mail_not_configured");
+  });
+
+  describe("draftWithAi", () => {
+    it("does not call the endpoint and sets a needs-subject error when subject is blank", async () => {
+      const draft: ComposerDraft = { ...baseDraft(), subject: "  " };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      expect(fetchAiDraft).not.toHaveBeenCalled();
+      expect(result.current.state.aiDraftError).toBe("composer.aiDraftNeedsSubject");
+    });
+
+    it("happy path fills the body and shows the review notice", async () => {
+      fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador.");
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      expect(fetchAiDraft).toHaveBeenCalledWith("Hi");
+      expect(result.current.state.aiDrafting).toBe(false);
+      expect(result.current.state.aiDraftError).toBeNull();
+      expect(result.current.state.aiDraftNotice).toBe(true);
+      expect(result.current.state.draft.bodyHtml).toContain("Estimado equipo, este es el borrador.");
+    });
+
+    it("hides the feature (aiUnavailable) without an inline error when the backend reports ai_disabled", async () => {
+      fetchAiDraft.mockRejectedValueOnce(new MailApiError(501, "ai_disabled"));
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      expect(result.current.state.aiUnavailable).toBe(true);
+      expect(result.current.state.aiDraftError).toBeNull();
+      expect(result.current.state.aiDrafting).toBe(false);
+    });
+
+    it("maps other provider failures to a namespaced inline error", async () => {
+      fetchAiDraft.mockRejectedValueOnce(new MailApiError(502, "ai_provider_error"));
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      expect(result.current.state.aiUnavailable).toBe(false);
+      expect(result.current.state.aiDraftError).toBe("composer.errors.ai_provider_error");
+    });
   });
 });

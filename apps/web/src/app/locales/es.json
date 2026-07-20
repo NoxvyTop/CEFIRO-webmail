@@ -132,8 +132,13 @@
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
+      "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
+      "ai_provider_error": "No se pudo generar el resumen con IA",
       "generic": "No se pudo cargar el correo"
     },
+    "summarizeWithAi": "✦ Resumir con IA",
+    "aiSummaryTitle": "Resumen IA",
+    "aiSummaryLoading": "Analizando el mensaje…",
     "backToList": "Volver a la lista",
     "archive": "Archivar",
     "star": "Destacar",
@@ -182,8 +187,15 @@
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
       "send_failed": "No se pudo enviar",
+      "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
+      "ai_provider_error": "No se pudo generar el borrador con IA",
+      "invalid_body": "Escribe un asunto antes de redactar con IA",
       "generic": "Ocurrió un error"
-    }
+    },
+    "draftWithAi": "✦ Redactar con IA",
+    "draftingWithAi": "Redactando…",
+    "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
+    "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA"
   },
   "attachments": {
     "download": "Descargar",

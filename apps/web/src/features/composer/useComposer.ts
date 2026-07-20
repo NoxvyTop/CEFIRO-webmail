@@ -1,6 +1,7 @@
 import type { SendEmailInput } from "@webmail/shared";
 import { useReducer } from "react";
 import { sendEmail, uploadAttachment } from "./api";
+import { fetchAiDraft } from "./aiApi";
 import { MailApiError } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
 
@@ -13,6 +14,10 @@ export type ComposerState = {
   uploads: PendingUpload[];
   sending: boolean;
   sendError: string | null;
+  aiDrafting: boolean;
+  aiDraftError: string | null;
+  aiDraftNotice: boolean;
+  aiUnavailable: boolean;
 };
 
 type Action =
@@ -24,7 +29,11 @@ type Action =
   | { type: "removeAttachment"; blobId: string }
   | { type: "sendStart" }
   | { type: "sendFailed"; error: string }
-  | { type: "sendSucceeded" };
+  | { type: "sendSucceeded" }
+  | { type: "aiDraftStart" }
+  | { type: "aiDraftNeedsSubject" }
+  | { type: "aiDraftSucceeded"; bodyHtml: string }
+  | { type: "aiDraftFailed"; error: string | null; unavailable: boolean };
 
 function reducer(state: ComposerState, action: Action): ComposerState {
   switch (action.type) {
@@ -63,6 +72,20 @@ function reducer(state: ComposerState, action: Action): ComposerState {
       return { ...state, sending: false, sendError: action.error };
     case "sendSucceeded":
       return { ...state, sending: false, sendError: null };
+    case "aiDraftStart":
+      return { ...state, aiDrafting: true, aiDraftError: null, aiDraftNotice: false };
+    case "aiDraftNeedsSubject":
+      return { ...state, aiDraftError: "composer.aiDraftNeedsSubject" };
+    case "aiDraftSucceeded":
+      return {
+        ...state,
+        aiDrafting: false,
+        aiDraftError: null,
+        aiDraftNotice: true,
+        draft: { ...state.draft, bodyHtml: action.bodyHtml },
+      };
+    case "aiDraftFailed":
+      return { ...state, aiDrafting: false, aiDraftError: action.error, aiUnavailable: action.unavailable };
     default:
       return state;
   }
@@ -75,6 +98,10 @@ function initState(draft: ComposerDraft): ComposerState {
     uploads: [],
     sending: false,
     sendError: null,
+    aiDrafting: false,
+    aiDraftError: null,
+    aiDraftNotice: false,
+    aiUnavailable: false,
   };
 }
 
@@ -92,6 +119,7 @@ export function useComposer(initial: ComposerDraft): {
   addFiles(files: File[]): void;
   removeAttachment(blobId: string): void;
   send(): Promise<boolean>;
+  draftWithAi(): Promise<void>;
 } {
   const [state, dispatch] = useReducer(reducer, initial, initState);
 
@@ -158,5 +186,28 @@ export function useComposer(initial: ComposerDraft): {
     }
   }
 
-  return { state, setField, addFiles, removeAttachment, send };
+  // Requires a subject before hitting the endpoint at all — matches the design
+  // spec ("requiere asunto, si no, aviso") and avoids a pointless network call.
+  async function draftWithAi(): Promise<void> {
+    if (!state.draft.subject.trim()) {
+      dispatch({ type: "aiDraftNeedsSubject" });
+      return;
+    }
+    dispatch({ type: "aiDraftStart" });
+    try {
+      const body = await fetchAiDraft(state.draft.subject);
+      dispatch({ type: "aiDraftSucceeded", bodyHtml: `<p>${body}</p>` });
+    } catch (err) {
+      if (err instanceof MailApiError && err.code === "ai_disabled") {
+        // Software-level gate is off — hide the feature rather than showing
+        // a broken/error button (see docs/ARCHITECTURE.md, AI opt-in gate).
+        dispatch({ type: "aiDraftFailed", error: null, unavailable: true });
+        return;
+      }
+      const code = err instanceof MailApiError ? err.code || "generic" : "generic";
+      dispatch({ type: "aiDraftFailed", error: `composer.errors.${code}`, unavailable: false });
+    }
+  }
+
+  return { state, setField, addFiles, removeAttachment, send, draftWithAi };
 }

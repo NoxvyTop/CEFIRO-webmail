@@ -370,6 +370,32 @@ permitida es hacia GitHub/GHCR (repos e imágenes propios).
   empleado (no el servidor) y se bloquean por defecto con botón
   "cargar imágenes" (anti-tracking).
 
+### IA — funciones opt-in (resumen y redacción asistida)
+
+Las funciones de IA (resumen de correos, "Redactar con IA") están **apagadas
+por defecto e inertes sin configuración explícita**. Esto es lo único que el
+software de CEFIRO-webmail asume o promete al respecto:
+
+- `AI_ENABLED` (booleano, por defecto `false`) y `AI_API_KEY` (secreto) deben
+  estar ambos presentes para que el proveedor se active; si falta cualquiera
+  de los dos, cualquier llamada a resumir/redactar falla rápido con un error
+  de dominio (`ai_disabled`) **sin intentar ninguna petición de red**, ni al
+  proveedor de IA ni a Stalwart.
+- `AI_PROVIDER` (por defecto `anthropic`) y `AI_MODEL` (por defecto
+  `claude-opus-4-8`) son configurables por variable de entorno — no hay
+  modelo ni proveedor hardcodeado.
+- El contenido del correo nunca se registra en logs. Solo se envía al
+  proveedor el mínimo contenido necesario para la llamada (cuerpo del mensaje
+  para resumir; asunto y contexto opcional para redactar) — nunca el buzón
+  completo ni datos no relacionados.
+
+Cualquier restricción adicional a nivel de red (por ejemplo, limitar el
+egress del contenedor hacia el proveedor de IA) es una decisión de
+**despliegue**, específica de cada instalación — no algo que esta aplicación
+imponga o de lo que dependa. Ese tipo de defensa en profundidad vive en el
+repositorio de despliegue de quien autoaloja el software, fuera del contrato
+de esta base de código.
+
 ## Fases de entrega
 
 | Fase | Alcance | Estado |
