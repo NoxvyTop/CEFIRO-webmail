@@ -27,16 +27,23 @@ describe("AiSummaryCard", () => {
 
     const button = await screen.findByRole("button", { name: i18n.t("mail.summarizeWithAi") });
     expect(fetchMock).not.toHaveBeenCalled();
+    // The idle trigger is always wrapped in the full-width card (border-line/bg-soft),
+    // not a standalone compact pill — the card frame is present before any click.
+    expect(button.closest(".bg-soft")).toBeInTheDocument();
 
     fireEvent.click(button);
 
-    expect(await screen.findByText(i18n.t("mail.aiSummaryLoading"))).toBeInTheDocument();
+    const loading = await screen.findByText(i18n.t("mail.aiSummaryLoading"));
+    expect(loading).toBeInTheDocument();
+    expect(loading.closest("p")).toHaveClass("text-accent");
+    expect(screen.queryByRole("region", { name: i18n.t("mail.aiSummaryTitle") })).not.toBeInTheDocument();
 
     resolveFetch(new Response(JSON.stringify({ bullets: ["a", "b", "c"] })));
 
     expect(await screen.findByText("a")).toBeInTheDocument();
     expect(screen.getByText("b")).toBeInTheDocument();
     expect(screen.getByText("c")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: i18n.t("mail.aiSummaryTitle") })).toBeInTheDocument();
   });
 
   it("hides itself entirely when the backend reports ai_disabled", async () => {

@@ -37,41 +37,45 @@ export function AiSummaryCard({ messageId }: AiSummaryCardProps) {
     const key = aiErrorKey(query.error);
     if (key === null) return null;
     return (
-      <p role="alert" className="mt-4 text-sm text-warn">
-        {t(key)}
-      </p>
+      <div className="mt-[26px] w-full rounded-xl border border-line bg-soft px-[18px] py-3.5">
+        <p role="alert" className="text-sm text-warn">
+          {t(key)}
+        </p>
+      </div>
     );
   }
 
-  if (!query.isFetched && !query.isFetching) {
-    return (
-      <button
-        type="button"
-        onClick={() => query.refetch()}
-        className="mt-4 self-start rounded-[11px] border border-line bg-soft px-3 py-1.5 text-sm font-semibold text-accent transition hover:brightness-[1.07] active:scale-[0.98]"
-      >
-        {t("mail.summarizeWithAi")}
-      </button>
-    );
-  }
+  const idle = !query.isFetched && !query.isFetching;
+  const ready = query.isFetched && !query.isFetching;
 
   return (
-    <div
-      role="region"
-      aria-label={t("mail.aiSummaryTitle")}
-      className="mt-4 rounded-xl border border-line bg-soft p-4"
-    >
-      <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-accent">
-        {t("mail.aiSummaryTitle")}
-      </h3>
-      {query.isFetching ? (
-        <p className="mt-2 animate-pulse text-sm text-muted">{t("mail.aiSummaryLoading")}</p>
-      ) : (
-        <ul className="mt-2 list-disc space-y-1 pl-4 text-sm">
-          {(query.data ?? []).map((bullet, index) => (
-            <li key={index}>{bullet}</li>
-          ))}
-        </ul>
+    <div className="mt-[26px] w-full rounded-xl border border-line bg-soft px-[18px] py-3.5">
+      {idle && (
+        <button
+          type="button"
+          onClick={() => query.refetch()}
+          className="flex items-center gap-2 bg-transparent text-[13.5px] font-semibold text-accent transition hover:opacity-80"
+        >
+          <span aria-hidden="true" className="text-[15px]">✦</span>
+          {t("mail.summarizeWithAi")}
+        </button>
+      )}
+      {query.isFetching && (
+        <p className="flex animate-pulse items-center gap-2 text-[13.5px] font-semibold text-accent">
+          <span aria-hidden="true">✦</span> {t("mail.aiSummaryLoading")}
+        </p>
+      )}
+      {ready && (
+        <div role="region" aria-label={t("mail.aiSummaryTitle")} style={{ animation: "fadeUp 0.3s ease" }}>
+          <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold tracking-[0.08em] text-accent">
+            <span aria-hidden="true">✦</span> {t("mail.aiSummaryTitle")}
+          </h3>
+          <ul className="flex list-disc flex-col gap-[5px] pl-[18px] text-[13.5px] leading-[1.5]">
+            {(query.data ?? []).map((bullet, index) => (
+              <li key={index}>{bullet}</li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
