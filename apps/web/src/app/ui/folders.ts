@@ -25,16 +25,21 @@ export function folderName(mailbox: Mailbox, t: TFunction): string {
 /**
  * Orders mailboxes by fixed role instead of server sortOrder: primary roles
  * (inbox, sent, archive) first, then secondary roles (trash, junk, drafts),
- * then any remaining roleless/unknown-role folders.
+ * then any remaining folders. Only one mailbox can occupy a given role's
+ * fixed nav slot (the last one wins, matching Map.set's overwrite
+ * semantics), but a server sending two mailboxes with the same role is an
+ * edge case, not a reason to drop one — the non-chosen duplicate still
+ * appears in `rest` under its own server name, alongside roleless and
+ * unknown-role folders.
  */
 export function orderedMailboxes(mailboxes: Mailbox[]): Mailbox[] {
   const byRole = new Map<string, Mailbox>();
   for (const mailbox of mailboxes) {
     if (mailbox.role) byRole.set(mailbox.role, mailbox);
   }
-  const knownRoles = new Set<string>([...PRIMARY_ROLES, ...SECONDARY_ROLES]);
   const primary = PRIMARY_ROLES.map((role) => byRole.get(role)).filter((m): m is Mailbox => Boolean(m));
   const secondary = SECONDARY_ROLES.map((role) => byRole.get(role)).filter((m): m is Mailbox => Boolean(m));
-  const rest = mailboxes.filter((mailbox) => !mailbox.role || !knownRoles.has(mailbox.role));
+  const chosenIds = new Set([...primary, ...secondary].map((mailbox) => mailbox.id));
+  const rest = mailboxes.filter((mailbox) => !chosenIds.has(mailbox.id));
   return [...primary, ...secondary, ...rest];
 }

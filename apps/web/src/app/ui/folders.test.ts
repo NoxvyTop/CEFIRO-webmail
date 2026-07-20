@@ -62,4 +62,24 @@ describe("orderedMailboxes", () => {
 
     expect(orderedMailboxes([archive, inbox]).map((m) => m.id)).toEqual(["i", "a"]);
   });
+
+  it("keeps a duplicate-role mailbox visible in rest instead of silently dropping it", () => {
+    // Two mailboxes both claim role "archive" — a malformed/edge-case server
+    // response. Only one can occupy the fixed "archive" nav slot, but the
+    // other must not vanish from the sidebar entirely.
+    const archiveOne = mailbox({ id: "a1", role: "archive", name: "Archive One" });
+    const archiveTwo = mailbox({ id: "a2", role: "archive", name: "Archive Two" });
+    const inbox = mailbox({ id: "i", role: "inbox" });
+
+    const result = orderedMailboxes([archiveOne, archiveTwo, inbox]);
+    const ids = result.map((m) => m.id);
+
+    expect(ids).toHaveLength(3);
+    expect(ids).toContain("a1");
+    expect(ids).toContain("a2");
+    // The last mailbox with a given role wins the fixed "archive" slot
+    // (matches the existing Map.set last-wins behavior for the
+    // representative); the earlier duplicate is appended in rest.
+    expect(ids).toEqual(["i", "a2", "a1"]);
+  });
 });
