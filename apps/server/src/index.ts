@@ -49,7 +49,9 @@ const userPreferences = createUserPreferencesRepo(db);
 const filterRules = createFilterRulesRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
-const jmap = config.stalwartUrl ? createJmapClient({ baseUrl: config.stalwartUrl }) : null;
+const jmap = config.stalwartUrl
+  ? createJmapClient({ baseUrl: config.stalwartUrl, forceBase: config.jmapForceBase })
+  : null;
 
 log("info", "mail proxy", { configured: jmap !== null });
 
