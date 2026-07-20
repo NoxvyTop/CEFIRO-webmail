@@ -55,7 +55,7 @@ describe("Composer", () => {
   it("renders a dialog with identities in the From select", async () => {
     renderComposer();
 
-    expect(await screen.findByRole("dialog", { name: i18n.t("composer.title") })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
 
     const fromSelect = screen.getByRole("combobox", { name: i18n.t("composer.from") });
     await waitFor(() => expect(fromSelect.querySelectorAll("option")).toHaveLength(2));
