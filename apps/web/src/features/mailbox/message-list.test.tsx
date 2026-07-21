@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
@@ -103,17 +103,16 @@ function renderList(
 }
 
 describe("MessageList", () => {
-  it("renders rows from a page, marking the unread one as bold", async () => {
+  it("renders rows from a page, marking the unread sender bold and the read one medium", async () => {
     stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
     renderList();
 
-    const unreadSubject = await screen.findByText("Hello there");
-    const unreadRow = unreadSubject.closest('[role="option"]');
-    expect(unreadRow).toHaveClass("font-semibold");
+    const unreadSender = await screen.findByText("Alice");
+    expect(unreadSender).toHaveClass("font-bold");
 
-    const readSubject = await screen.findByText(i18n.t("mail.noSubject"));
-    const readRow = readSubject.closest('[role="option"]');
-    expect(readRow).not.toHaveClass("font-semibold");
+    const readSender = await screen.findByText("bob@example.com");
+    expect(readSender).toHaveClass("font-medium");
+    expect(readSender).not.toHaveClass("font-bold");
   });
 
   it("shows the empty state when there are no messages", async () => {
@@ -291,5 +290,35 @@ describe("MessageList", () => {
 
     expect(onSelect).not.toHaveBeenCalled();
     document.body.removeChild(input);
+  });
+
+  describe("relative time display", () => {
+    beforeEach(() => {
+      // shouldAdvanceTime keeps setTimeout-based polling (RTL's findBy*, React
+      // Query's internals) moving in real time while Date.now() stays pinned
+      // to the faked instant below.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date(2026, 6, 21, 14, 0, 0));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows a same-day email as a local time instead of an absolute date", async () => {
+      const today = { ...emailUnread, receivedAt: new Date(2026, 6, 21, 10, 12, 0).toISOString() };
+      stubFetch({ total: 1, position: 0, emails: [today] });
+      renderList();
+
+      expect(await screen.findByText("10:12")).toBeInTheDocument();
+    });
+
+    it("shows the localized yesterday label for a prior-day email", async () => {
+      const yesterday = { ...emailUnread, receivedAt: new Date(2026, 6, 20, 9, 0, 0).toISOString() };
+      stubFetch({ total: 1, position: 0, emails: [yesterday] });
+      renderList();
+
+      expect(await screen.findByText(i18n.t("mail.yesterday"))).toBeInTheDocument();
+    });
   });
 });

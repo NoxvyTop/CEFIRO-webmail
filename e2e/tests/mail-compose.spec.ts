@@ -12,7 +12,7 @@ test("compose and send a self-addressed email, then find it in Sent", async ({ p
 
   await page.getByRole("button", { name: "Redactar" }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Redactar" });
+  const dialog = page.getByRole("dialog", { name: "Nuevo mensaje" });
   await expect(dialog).toBeVisible();
 
   // The From identity is real: the seeded admin@cefiro.test account's own
@@ -42,6 +42,6 @@ test("compose and send a self-addressed email, then find it in Sent", async ({ p
   // the sender's own copy always lands in Sent regardless of how Stalwart
   // chooses to handle the inbound leg, which is the deterministic mailbox to
   // assert on here.
-  await page.getByRole("button", { name: "Sent Items" }).click();
+  await page.getByRole("button", { name: "Enviados" }).click();
   await expect(page.getByRole("option", { name: new RegExp(subject) }).first()).toBeVisible();
 });

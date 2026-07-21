@@ -37,7 +37,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {message && (
         <div
           role="status"
-          className="fixed bottom-[26px] left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-sm text-canvas shadow-pop"
+          className="fixed bottom-[26px] left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-5 py-[11px] text-[13.5px] font-medium text-canvas shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
           style={{ animation: "fadeUp 0.22s ease-out" }}
         >
           {message}

@@ -117,7 +117,7 @@ export function SetupPage() {
               type="text"
               value={sso.issuer}
               onChange={(event) => setSso({ ...sso, issuer: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="sso-client-id">{t("setup.fields.clientId")}</label>
@@ -126,7 +126,7 @@ export function SetupPage() {
               type="text"
               value={sso.clientId}
               onChange={(event) => setSso({ ...sso, clientId: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="sso-client-secret">{t("setup.fields.clientSecret")}</label>
@@ -135,7 +135,7 @@ export function SetupPage() {
               type="password"
               value={sso.clientSecret}
               onChange={(event) => setSso({ ...sso, clientSecret: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="sso-scopes">{t("setup.fields.scopes")}</label>
@@ -144,12 +144,12 @@ export function SetupPage() {
               type="text"
               value={sso.scopes}
               onChange={(event) => setSso({ ...sso, scopes: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <button
               type="submit"
-              className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
+              className="h-11 self-start rounded-[11px] bg-accent px-4 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
             >
               {t("setup.save")}
             </button>
@@ -176,7 +176,7 @@ export function SetupPage() {
               type="email"
               value={user.email}
               onChange={(event) => setUser({ ...user, email: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="user-display-name">{t("setup.fields.displayName")}</label>
@@ -185,7 +185,7 @@ export function SetupPage() {
               type="text"
               value={user.displayName}
               onChange={(event) => setUser({ ...user, displayName: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <label htmlFor="user-role">{t("setup.fields.role")}</label>
@@ -195,7 +195,7 @@ export function SetupPage() {
               onChange={(event) =>
                 setUser({ ...user, role: event.target.value as "employee" | "admin" })
               }
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             >
               <option value="employee">employee</option>
               <option value="admin">admin</option>
@@ -206,7 +206,7 @@ export function SetupPage() {
               id="user-locale"
               value={user.locale}
               onChange={(event) => setUser({ ...user, locale: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             >
               <option value="es">es</option>
               <option value="en">en</option>
@@ -218,12 +218,12 @@ export function SetupPage() {
               type="password"
               value={user.mailPassword}
               onChange={(event) => setUser({ ...user, mailPassword: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
             />
 
             <button
               type="submit"
-              className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
+              className="h-11 self-start rounded-[11px] bg-accent px-4 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
             >
               {t("setup.create")}
             </button>

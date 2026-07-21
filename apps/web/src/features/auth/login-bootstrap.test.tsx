@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
+import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
 
 function renderAt(path: string) {
@@ -46,7 +47,7 @@ describe("login screen bootstrap form", () => {
     expect(screen.queryByText("Iniciar sesión con SSO")).not.toBeInTheDocument();
   });
 
-  it("shows only the SSO action when bootstrapMode is false", async () => {
+  it("shows the SSO action and the disabled-credentials notice when bootstrapMode is false", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
@@ -57,6 +58,100 @@ describe("login screen bootstrap form", () => {
     expect(screen.queryByLabelText("Contraseña")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Usuario")).not.toBeInTheDocument();
     expect(screen.queryByText("Acceso de emergencia")).not.toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("auth.credentialsDisabled"))).toBeInTheDocument();
+  });
+
+  it("does not flash the disabled-credentials notice while the mode is still loading", async () => {
+    let resolveMode: (response: Response) => void = () => {};
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) return new Response("{}", { status: 401 });
+        if (path.includes("/api/auth/mode")) {
+          return new Promise<Response>((resolve) => {
+            resolveMode = resolve;
+          });
+        }
+        throw new Error(`Unhandled fetch: ${path}`);
+      }),
+    );
+    renderAt("/");
+
+    // SSO renders immediately (mode undefined !== true), but the notice must
+    // wait for an explicit bootstrapMode: false — never shown speculatively.
+    expect(await screen.findByText("Iniciar sesión con SSO")).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("auth.credentialsDisabled"))).not.toBeInTheDocument();
+
+    resolveMode(new Response(JSON.stringify({ bootstrapMode: false })));
+    expect(await screen.findByText(i18n.t("auth.credentialsDisabled"))).toBeInTheDocument();
+  });
+
+  it("shows a Conectando… state and the redirecting hint after clicking SSO, then redirects", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const originalLocation = window.location;
+    // jsdom throws "Not implemented: navigation" on a real href assignment;
+    // swap in a plain writable object so the delayed redirect can be observed.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, href: "" },
+    });
+
+    try {
+      stubFetch({
+        "/api/auth/me": () => new Response("{}", { status: 401 }),
+        "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
+      });
+      renderAt("/");
+
+      const ssoLink = await screen.findByText("Iniciar sesión con SSO");
+      fireEvent.click(ssoLink);
+
+      expect(await screen.findByText(i18n.t("auth.connecting"))).toBeInTheDocument();
+      expect(await screen.findByText(i18n.t("auth.redirecting"))).toBeInTheDocument();
+      expect(window.location.href).toBe("");
+
+      await vi.advanceTimersByTimeAsync(1400);
+
+      expect(window.location.href).toBe("/api/auth/login");
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+      vi.useRealTimers();
+    }
+  });
+
+  it("validates the emergency form inline before submitting", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    const emailInput = await screen.findByLabelText("Usuario");
+    const passwordInput = screen.getByLabelText("Contraseña");
+    fireEvent.change(emailInput, { target: { value: "not-an-email" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByText(i18n.t("auth.bootstrap.errors.invalidEmail"))).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("auth.bootstrap.errors.emptyPassword"))).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/auth/bootstrap"))).toBe(false);
+
+    fireEvent.change(emailInput, { target: { value: "admin@noxvytop.com" } });
+    fireEvent.change(passwordInput, { target: { value: "s3cret" } });
+
+    expect(screen.queryByText(i18n.t("auth.bootstrap.errors.invalidEmail"))).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("auth.bootstrap.errors.emptyPassword"))).not.toBeInTheDocument();
   });
 
   it("submits the emergency form to /api/auth/bootstrap", async () => {

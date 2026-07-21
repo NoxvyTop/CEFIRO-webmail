@@ -8,7 +8,7 @@
   },
   "admin": {
     "title": "Administración",
-    "forbidden": "No tenés permisos de administrador",
+    "forbidden": "No tienes permisos de administrador",
     "back": "Volver",
     "empty": "No hay usuarios",
     "mailbox": {
@@ -71,9 +71,12 @@
   },
   "auth": {
     "signIn": "Iniciar sesión con SSO",
+    "connecting": "Conectando…",
+    "redirecting": "Redirigiendo a tu proveedor de identidad…",
     "signOut": "Cerrar sesión",
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
+    "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
     "errors": {
       "state": "La sesión de inicio expiró, inténtalo de nuevo",
       "unknown_user": "Tu cuenta no está registrada en el correo",
@@ -85,7 +88,11 @@
       "password": "Contraseña",
       "submit": "Entrar",
       "error": "Credencial inválida",
-      "hint": "Solo disponible en modo de configuración o recuperación"
+      "hint": "Solo disponible en modo de configuración o recuperación",
+      "errors": {
+        "invalidEmail": "Introduce un correo válido.",
+        "emptyPassword": "Introduce tu contraseña."
+      }
     }
   },
   "setup": {
@@ -119,7 +126,7 @@
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount": "{{count}} correos",
-    "searchPlaceholder": "Buscar en el correo",
+    "searchPlaceholder": "Buscar en el correo…",
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un correo",
@@ -146,7 +153,17 @@
     "archived": "Correo archivado",
     "archivedHint": "pulsa e para archivar más rápido",
     "labels": "Etiquetas",
-    "clearLabel": "Quitar filtro de etiqueta"
+    "clearLabel": "Quitar filtro de etiqueta",
+    "toMeAndTeam": "para mí y el equipo",
+    "yesterday": "Ayer",
+    "folders": {
+      "inbox": "Recibidos",
+      "sent": "Enviados",
+      "archive": "Archivados",
+      "trash": "Papelera",
+      "junk": "Spam",
+      "drafts": "Borradores"
+    }
   },
   "modules": {
     "title": "Módulos",
@@ -158,6 +175,7 @@
   },
   "composer": {
     "title": "Redactar",
+    "newMessage": "Nuevo mensaje",
     "from": "De",
     "to": "Para",
     "cc": "Cc",
@@ -165,14 +183,17 @@
     "addCcBcc": "Cc/Cco",
     "subject": "Asunto",
     "body": "Mensaje",
+    "bodyPlaceholder": "Escribe tu mensaje… o pídeselo a la IA",
     "signature": "Firma",
     "reply": "Responder",
     "replyAll": "Responder a todos",
     "forward": "Reenviar",
     "attach": "Adjuntar",
+    "attachFiles": "Adjuntar archivos",
+    "close": "Cerrar",
     "send": "Enviar",
     "sent": "Correo enviado",
-    "cancel": "Cancelar",
+    "cancel": "Descartar",
     "sending": "Enviando…",
     "invalidEmail": "Correo inválido",
     "invalidLink": "URL inválida o no segura",
@@ -272,6 +293,7 @@
   },
   "shortcuts": {
     "title": "Atajos",
+    "overlayTitle": "Atajos de teclado",
     "move": "Moverse por la lista",
     "archive": "Archivar correo",
     "star": "Destacar correo",
@@ -280,6 +302,8 @@
     "search": "Buscar",
     "close": "Cerrar / salir",
     "hint": "j / k para moverte · e archiva · c redacta",
-    "listHint": "j / k para moverte"
+    "listHintPrefix": "Usa",
+    "listHintMid": "y",
+    "listHintSuffix": "para moverte por la lista"
   }
 }

@@ -11,6 +11,7 @@ import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
+import { folderName } from "../../app/ui/folders";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -116,11 +117,12 @@ export function MailPage() {
     ? (labelParam ? `$flagged,${labelParam}` : "$flagged")
     : (labelParam ?? undefined);
 
+  const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === selectedMailboxId);
   const messageListTitle = starredParam
     ? t("mail.starredView")
     : groupParam
       ? groupParam
-      : (mailboxes.find((mailbox) => mailbox.id === selectedMailboxId)?.name ?? undefined);
+      : (selectedMailbox ? folderName(selectedMailbox, t) : undefined);
 
   // The starred view is not tied to any single mailbox, so the sidebar must not
   // highlight a mailbox row (e.g. Inbox) while it is active. `selectedMailboxId`
@@ -340,9 +342,17 @@ export function MailPage() {
           <ThreadView threadId={threadParam} archiveMailboxId={archiveMailboxId} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
-            <CefiroLogo size={52} />
-            <p className="text-sm">{t("mail.selectMessage")}</p>
-            <p className="text-xs text-muted">{t("shortcuts.listHint")}</p>
+            <div className="opacity-60">
+              <CefiroLogo size={52} />
+            </div>
+            <p className="text-[15px] font-semibold text-ink">{t("mail.selectMessage")}</p>
+            <p className="text-[13px] text-muted">
+              {t("shortcuts.listHintPrefix")}{" "}
+              <kbd className="rounded border border-line px-1.5 text-[11px]">j</kbd>{" "}
+              {t("shortcuts.listHintMid")}{" "}
+              <kbd className="rounded border border-line px-1.5 text-[11px]">k</kbd>{" "}
+              {t("shortcuts.listHintSuffix")}
+            </p>
           </div>
         )}
       </section>

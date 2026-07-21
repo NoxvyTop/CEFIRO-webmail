@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -55,7 +55,7 @@ describe("Composer", () => {
   it("renders a dialog with identities in the From select", async () => {
     renderComposer();
 
-    expect(await screen.findByRole("dialog", { name: i18n.t("composer.title") })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
 
     const fromSelect = screen.getByRole("combobox", { name: i18n.t("composer.from") });
     await waitFor(() => expect(fromSelect.querySelectorAll("option")).toHaveLength(2));
@@ -126,6 +126,57 @@ describe("Composer", () => {
     fireEvent.click(cancelButton);
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onClose when the header close button is clicked", async () => {
+    const { onClose } = renderComposer();
+
+    const closeButton = await screen.findByRole("button", { name: i18n.t("composer.close") });
+    fireEvent.click(closeButton);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("attachment control", () => {
+    it("hides the native file input and exposes a styled attach button instead", async () => {
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      expect(fileInput.type).toBe("file");
+      expect(fileInput.className).toContain("sr-only");
+
+      expect(
+        await screen.findByRole("button", { name: i18n.t("composer.attachFiles") }),
+      ).toBeInTheDocument();
+    });
+
+    it("clicking the styled attach button opens the hidden file picker", async () => {
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const clickSpy = vi.spyOn(fileInput, "click");
+
+      const attachButton = await screen.findByRole("button", { name: i18n.t("composer.attachFiles") });
+      fireEvent.click(attachButton);
+
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("still uploads a file selected through the hidden input", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "text/plain", size: 5 });
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hola"], "note.txt", { type: "text/plain" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      // The upload promise resolves in a microtask outside of fireEvent's act()
+      // scope, so flush it explicitly before asserting on the settled state.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(await screen.findByText(/note\.txt/)).toBeInTheDocument();
+    });
   });
 
   describe("Redactar con IA", () => {

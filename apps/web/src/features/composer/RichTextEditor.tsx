@@ -37,6 +37,12 @@ export function isSafeLinkUrl(url: string): boolean {
   return SAFE_LINK_PROTOCOLS.has(scheme);
 }
 
+// Treats a doc with only whitespace/empty tags (e.g. "", "<p></p>", "<p><br></p>")
+// as empty, so the placeholder shows until the user actually types content.
+function isHtmlEmpty(html: string): boolean {
+  return html.replace(/<[^>]*>/g, "").trim().length === 0;
+}
+
 interface ErrorBoundaryProps {
   fallback: ReactNode;
   children: ReactNode;
@@ -63,29 +69,43 @@ class EditorErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
 }
 
 function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorProps) {
+  const { t } = useTranslation();
   // Sanitize initial HTML seed only once to prevent rendering remote/active content.
   // Do not re-sanitize on every render to avoid resetting contentEditable cursor position.
   const safeHtml = useMemo(
     () => sanitizeEmailHtml(html, { allowRemoteImages: false }).html,
     [], // Empty dependency array: capture initial html value only
   );
+  // Tracked locally (not derived from the `html` prop on every render) so the
+  // placeholder reacts to live typing even when the caller doesn't round-trip
+  // onChange back into a new `html` prop on every keystroke.
+  const [isEmpty, setIsEmpty] = useState(() => isHtmlEmpty(html));
 
   function handleInput(event: FormEvent<HTMLDivElement>) {
-    onChange(event.currentTarget.innerHTML);
+    const nextHtml = event.currentTarget.innerHTML;
+    onChange(nextHtml);
+    setIsEmpty(isHtmlEmpty(nextHtml));
   }
 
   return (
-    <div
-      role="textbox"
-      aria-label={ariaLabel}
-      aria-multiline="true"
-      contentEditable
-      suppressContentEditableWarning
-      className="min-h-32 rounded-md border border-line p-2 text-sm"
-      // eslint-disable-next-line react/no-danger -- initial content only; sanitized seed + ongoing edits through onInput
-      dangerouslySetInnerHTML={{ __html: safeHtml }}
-      onInput={handleInput}
-    />
+    <div className="relative">
+      {isEmpty && (
+        <p className="pointer-events-none absolute left-0.5 top-3.5 text-[14.5px] leading-[1.6] text-muted">
+          {t("composer.bodyPlaceholder")}
+        </p>
+      )}
+      <div
+        role="textbox"
+        aria-label={ariaLabel}
+        aria-multiline="true"
+        contentEditable
+        suppressContentEditableWarning
+        className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6]"
+        // eslint-disable-next-line react/no-danger -- initial content only; sanitized seed + ongoing edits through onInput
+        dangerouslySetInnerHTML={{ __html: safeHtml }}
+        onInput={handleInput}
+      />
+    </div>
   );
 }
 
@@ -105,6 +125,10 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [linkInvalid, setLinkInvalid] = useState(false);
+  // Tracked via TipTap's own editor.isEmpty on every update (not derived from
+  // the `html` prop) so the placeholder reacts to live typing immediately,
+  // instead of waiting for the caller to round-trip onChange into a new prop.
+  const [isEmpty, setIsEmpty] = useState(() => isHtmlEmpty(html));
 
   const editor = useEditor({
     extensions: [StarterKit, configuredLink],
@@ -117,13 +141,17 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
         "aria-multiline": "true",
       },
     },
-    onUpdate: ({ editor: current }) => onChange(current.getHTML()),
+    onUpdate: ({ editor: current }) => {
+      onChange(current.getHTML());
+      setIsEmpty(current.isEmpty);
+    },
   });
 
   useEffect(() => {
     if (!editor) return;
     if (html !== editor.getHTML()) {
       editor.commands.setContent(html, false);
+      setIsEmpty(isHtmlEmpty(html));
     }
   }, [editor, html]);
 
@@ -149,8 +177,8 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   }
 
   return (
-    <div className="rounded-md border border-line">
-      <div role="toolbar" className="flex items-center gap-1 border-b border-line bg-soft p-1">
+    <div className="flex flex-col">
+      <div role="toolbar" className="flex items-center gap-1 border-b border-line pb-1.5">
         <button
           type="button"
           aria-label={t("composer.bold")}
@@ -197,12 +225,19 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
                 applyLink();
               }
             }}
-            className="ml-1 rounded border border-line bg-panel px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
+            className="ml-1 rounded-input border border-line bg-panel px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
           />
         )}
         {linkInvalid && <p className="text-xs text-warn">{t("composer.invalidLink")}</p>}
       </div>
-      <EditorContent editor={editor} className="min-h-32 p-2 text-sm" />
+      <div className="relative">
+        {isEmpty && (
+          <p className="pointer-events-none absolute left-0.5 top-3.5 text-[14.5px] leading-[1.6] text-muted">
+            {t("composer.bodyPlaceholder")}
+          </p>
+        )}
+        <EditorContent editor={editor} className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6]" />
+      </div>
     </div>
   );
 }

@@ -7,10 +7,27 @@ import { bootstrapLogin } from "./useAuth";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 
 const KNOWN_ERRORS = new Set(["state", "unknown_user", "oidc"]);
+const SSO_LOGIN_URL = "/api/auth/login";
+// Purely a visual beat before the real redirect (spec: "~1.4s") — the actual
+// navigation still happens via window.location, just delayed so the
+// "Conectando…"/pulse state has time to be seen.
+const SSO_REDIRECT_DELAY_MS = 1400;
 
 async function fetchMode(): Promise<AuthMode> {
   const res = await fetch("/api/auth/mode");
   return authModeSchema.parse(await res.json());
+}
+
+// Mirrors the prototype's own check (Login Céfiro.dc.html:139): a non-empty
+// value containing "@" is enough — this is a UX nicety catching obvious
+// typos, not the server's authoritative validation.
+function looksLikeEmail(value: string): boolean {
+  return value.trim().length > 0 && value.includes("@");
+}
+
+interface BootstrapFieldErrors {
+  email?: string;
+  password?: string;
 }
 
 export function LoginPage() {
@@ -23,9 +40,20 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [bootstrapError, setBootstrapError] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<BootstrapFieldErrors>({});
+  const [ssoConnecting, setSsoConnecting] = useState(false);
+
+  function validateBootstrapFields(): boolean {
+    const errors: BootstrapFieldErrors = {};
+    if (!looksLikeEmail(email)) errors.email = t("auth.bootstrap.errors.invalidEmail");
+    if (!password) errors.password = t("auth.bootstrap.errors.emptyPassword");
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
 
   async function handleBootstrapSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!validateBootstrapFields()) return;
     const ok = await bootstrapLogin(email, password);
     if (ok) {
       setBootstrapError(false);
@@ -36,79 +64,120 @@ export function LoginPage() {
     }
   }
 
+  function handleSsoClick(event: React.MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (ssoConnecting) return;
+    setSsoConnecting(true);
+    window.setTimeout(() => {
+      window.location.href = SSO_LOGIN_URL;
+    }, SSO_REDIRECT_DELAY_MS);
+  }
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-canvas px-4">
-      <div className="flex flex-col items-center gap-3">
-        <CefiroLogo size={72} />
-        <h1 className="text-[19px] font-bold tracking-[0.32em] text-ink">CÉFIRO</h1>
-        <p className="text-sm text-muted">{t("auth.subtitle")}</p>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4">
+      <div className="flex flex-col items-center">
+        <div className="mb-5">
+          <CefiroLogo size={72} />
+        </div>
+        <h1 className="mb-1.5 text-[19px] font-bold tracking-[0.32em] text-ink">CÉFIRO</h1>
+        <p className="mb-8 text-[13.5px] text-muted">{t("auth.subtitle")}</p>
       </div>
       {error && KNOWN_ERRORS.has(error) && (
-        <p className="text-sm text-danger">{t(`auth.errors.${error}`)}</p>
+        <p className="mb-4 text-sm text-danger">{t(`auth.errors.${error}`)}</p>
       )}
-      <div className="flex w-full max-w-[400px] flex-col gap-5 rounded-2xl border border-line bg-panel p-7 shadow-card">
+      <div className="flex w-full max-w-[400px] flex-col rounded-2xl border border-line bg-panel p-7 shadow-card">
         {mode?.bootstrapMode !== true && (
-          <a
-            href="/api/auth/login"
-            className="flex h-[46px] items-center justify-center gap-2 rounded-[11px] bg-accent px-4 font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <rect x="4" y="10" width="16" height="10" rx="2" />
-              <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-            </svg>
-            {t("auth.signIn")}
-          </a>
+          <>
+            <a
+              href={SSO_LOGIN_URL}
+              onClick={handleSsoClick}
+              aria-disabled={ssoConnecting}
+              className="flex h-[46px] items-center justify-center gap-2.5 rounded-[11px] bg-accent px-4 text-[14.5px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" aria-hidden="true">
+                <rect x="4" y="10" width="16" height="10" rx="2" />
+                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+              </svg>
+              {ssoConnecting ? t("auth.connecting") : t("auth.signIn")}
+            </a>
+            {ssoConnecting && (
+              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent">
+                {t("auth.redirecting")}
+              </p>
+            )}
+            {mode?.bootstrapMode === false && (
+              <div className="mt-[18px] rounded-[10px] border border-line bg-soft px-3.5 py-3 text-center text-xs leading-[1.55] text-muted">
+                {t("auth.credentialsDisabled")}
+              </div>
+            )}
+          </>
         )}
         {mode?.bootstrapMode === true && (
           <>
             <h2 className="text-center text-sm font-semibold text-ink">
               {t("auth.bootstrap.title")}
             </h2>
+            <div className="my-[18px] flex items-center gap-3">
+              <span className="h-px flex-1 bg-line" />
+              <span className="text-[11.5px] tracking-[0.05em] text-muted">{t("auth.bootstrap.hint")}</span>
+              <span className="h-px flex-1 bg-line" />
+            </div>
             <form
               onSubmit={handleBootstrapSubmit}
               aria-label={t("auth.bootstrap.title")}
               className="flex flex-col gap-3"
             >
-              <div className="flex flex-col gap-1 text-sm">
-                <label htmlFor="bootstrap-email" className="text-muted">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="bootstrap-email" className="text-[12.5px] font-semibold text-muted">
                   {t("auth.bootstrap.email")}
                 </label>
                 <input
                   id="bootstrap-email"
                   type="text"
                   value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                    setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                  }}
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
                 />
+                {fieldErrors.email && (
+                  <p className="text-[12.5px] text-danger">{fieldErrors.email}</p>
+                )}
               </div>
-              <div className="flex flex-col gap-1 text-sm">
-                <label htmlFor="bootstrap-password" className="text-muted">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="bootstrap-password" className="text-[12.5px] font-semibold text-muted">
                   {t("auth.bootstrap.password")}
                 </label>
                 <input
                   id="bootstrap-password"
                   type="password"
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+                  onChange={(event) => {
+                    setPassword(event.target.value);
+                    setFieldErrors((prev) => ({ ...prev, password: undefined }));
+                  }}
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
                 />
+                {fieldErrors.password && (
+                  <p className="text-[12.5px] text-danger">{fieldErrors.password}</p>
+                )}
               </div>
               <button
                 type="submit"
-                className="h-11 rounded-[11px] border border-line text-ink transition hover:border-accent"
+                className="mt-0.5 h-11 rounded-[11px] border border-line text-[14px] font-semibold text-ink transition hover:border-accent hover:bg-hover"
               >
                 {t("auth.bootstrap.submit")}
               </button>
               {bootstrapError && (
-                <p className="text-sm text-danger">{t("auth.bootstrap.error")}</p>
+                <p className="text-[12.5px] text-danger">{t("auth.bootstrap.error")}</p>
               )}
-              <p className="text-xs text-muted">{t("auth.bootstrap.hint")}</p>
             </form>
           </>
         )}
       </div>
-      <p className="text-[11.5px] tracking-[0.14em] text-muted">
-        <span className="font-bold text-accent">CÉFIRO</span> · {t("app.tagline")}
+      <p className="mt-[22px] flex items-center gap-2 text-[11.5px] text-muted">
+        <span className="font-bold tracking-[0.14em] text-accent">CÉFIRO</span> · {t("app.sealMotto")}
       </p>
     </main>
   );
