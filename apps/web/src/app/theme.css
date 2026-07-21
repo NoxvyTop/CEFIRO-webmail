@@ -10,8 +10,17 @@
   --ink: #eceef4;
   --muted: #8b90a2;
   --line: #232838;
+  /* Interactive-boundary variant of --line, used where an outline/ghost
+     button needs stronger affordance than a plain hairline divider (CLARO-04).
+     Night's hairline already reads fine against the dark panel, so this
+     reuses --line unchanged — only light gets a dedicated stronger value. */
+  --line-strong: #232838;
   --accent: #6fe3c1;
   --accent-ink: #07130f;
+  /* Text-safe accent variant (CLARO-02). Night's --accent already clears AA
+     as small text on dark surfaces (11.76:1 on --panel, 12.58:1 on --bg), so
+     this reuses --accent unchanged — only light needs a darker stand-in. */
+  --accent-text: #6fe3c1;
   --soft: #171a24;
   --hover: #191d28;
   --sel: #15302b;
@@ -31,13 +40,59 @@
   --ink: #101318;
   --muted: #66707e;
   --line: #e2e7e9;
+  /* CLARO-04: same hue/sat as --line (197°, 14%), darkened to L=55% — 3.23:1
+     on #ffffff, clearing the 3:1 non-text/UI-boundary threshold (WCAG 1.4.11)
+     for outline-button borders that need to read as clickable on white. */
+  --line-strong: #7c939c;
   --accent: #0fa383;
   --accent-ink: #ffffff;
+  /* CLARO-02: same hue/sat as --accent (167°, 83%), darkened to L=24.4% —
+     retuned against the DARKEST surface this token sits on in practice,
+     --sel (#cdece1 below, used for badge pills and the selected-row
+     background), not just #ffffff: 4.67:1 on --sel, 5.88:1 on #ffffff,
+     5.37:1 on --soft. Clears WCAG AA (4.5:1) for small text everywhere
+     it's used while staying recognizably the same mint/teal hue. Reserved
+     for accent used AS TEXT (badges, links, idle labels); solid accent
+     fills keep #0fa383. */
+  --accent-text: #0a725c;
   --soft: #edf7f3;
-  --hover: #f3f7f6;
-  --sel: #dcf2ea;
+  /* CLARO-03 + hierarchy fix: --hover must be perceptible against BOTH
+     #ffffff panels and the #f1f4f4 canvas, AND strictly less prominent
+     than --sel on both (rows carry hover:bg-hover together with
+     aria-[current]:bg-sel, so an unselected hover must never out-contrast
+     a selected row). Same hue family as the original #f3f7f6 (166°, 20%),
+     darkened to L=92%: 1.23:1 on #ffffff, 1.11:1 on #f1f4f4 — both below
+     --sel's 1.26:1 / 1.14:1 below. (A first pass at #cbdcd8, 1.42:1/1.29:1,
+     was DARKER than --sel and inverted the hierarchy — flagged in review
+     and corrected here.) */
+  --hover: #e1eae8;
+  /* Same hue/sat as the original #dcf2ea (158°, 46%), darkened from L=90.6%
+     to L=86.6% to create headroom below solid accent fills and above the
+     new --hover: 1.26:1 on #ffffff, 1.14:1 on #f1f4f4 (was 1.17:1 / 1.06:1
+     — nearly identical to --hover's old, broken value). --accent-text
+     (#0a725c) on this darker --sel is 4.67:1, still clearing AA (4.5:1)
+     with margin. Still far lighter/less saturated than solid #0fa383
+     fills, so the selected state stays subtler than accent CTAs. */
+  --sel: #cdece1;
   --danger: #f26565;
-  --warn: #e5a13d;
+  /* OM-3: same hue/sat as --warn (36°, 76%), darkened to L=34% — 5.08:1 on
+     #ffffff, clearing WCAG AA (4.5:1) for warn used as text (e.g. the
+     unlinked-mailbox notice). Night's --warn is unchanged (already high
+     contrast as a light color on dark panels). */
+  --warn: #986314;
+  /* CLARO-11: light previously fell through to the shared :root value
+     (#e8c24a, 1.71:1 on white — fails even the 3:1 non-text bar). Same
+     hue/sat, darkened to L=37% — 3.53:1 on #ffffff, clearing the ≥3:1 target
+     for the star icon while staying in the amber/gold family. Also covers
+     the one spot (ThreadView's Destacar/Quitar destacado label) where this
+     token colors adjacent text, not just the icon. */
+  --star: #a78415;
+  /* OM-4: light previously fell through to the shared :root value (a near-
+     black night scrim, rgba(3,5,9,0.55)). Not a text token, so no WCAG
+     ratio applies — this is a scrim opacity choice, not a contrast fix.
+     Tuned to light's own --ink (#101318) at a slightly lower alpha than
+     night's so the pastel canvas dims intentionally without muddying. */
+  --overlay: rgba(16, 19, 24, 0.45);
   --elev-card: 0 10px 28px rgba(16, 19, 24, 0.1);
   --elev-pop: 0 14px 36px rgba(16, 19, 24, 0.16);
   --elev-cta: 0 1px 8px rgba(15, 163, 131, 0.2);
@@ -49,8 +104,10 @@
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
+  --color-accent-text: var(--accent-text);
   --color-soft: var(--soft);
   --color-hover: var(--hover);
   --color-sel: var(--sel);

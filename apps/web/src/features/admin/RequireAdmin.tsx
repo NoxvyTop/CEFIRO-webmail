@@ -16,7 +16,7 @@ export function RequireAdmin({ children }: { children: ReactNode }) {
         <p role="alert" className="text-sm text-danger">
           {t("admin.forbidden")}
         </p>
-        <Link to="/" className="text-sm text-accent underline">
+        <Link to="/" className="text-sm text-accent-text underline">
           {t("admin.back")}
         </Link>
       </div>

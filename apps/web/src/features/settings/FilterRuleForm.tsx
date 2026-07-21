@@ -261,7 +261,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
       </label>
 
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover">
+        <button type="button" onClick={onCancel} className="rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover">
           {t("composer.cancel")}
         </button>
         <button

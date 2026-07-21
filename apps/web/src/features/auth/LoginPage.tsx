@@ -114,7 +114,7 @@ export function LoginPage() {
               {ssoConnecting ? t("auth.connecting") : t("auth.signIn")}
             </a>
             {ssoConnecting && (
-              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent">
+              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent-text">
                 {t("auth.redirecting")}
               </p>
             )}
@@ -152,7 +152,7 @@ export function LoginPage() {
                     setEmail(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, email: undefined }));
                   }}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
                 />
                 {fieldErrors.email && (
                   <p className="text-[12.5px] text-danger">{fieldErrors.email}</p>
@@ -170,7 +170,7 @@ export function LoginPage() {
                     setPassword(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, password: undefined }));
                   }}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
                 />
                 {fieldErrors.password && (
                   <p className="text-[12.5px] text-danger">{fieldErrors.password}</p>
@@ -190,7 +190,7 @@ export function LoginPage() {
         )}
       </div>
       <p className="mt-[22px] flex items-center gap-2 text-[11.5px] text-muted">
-        <span className="font-bold tracking-[0.14em] text-accent">CÉFIRO</span> · {t("app.sealMotto")}
+        <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> · {t("app.sealMotto")}
       </p>
     </main>
   );

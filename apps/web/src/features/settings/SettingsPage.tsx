@@ -11,7 +11,7 @@ export function SettingsPage() {
     <main role="main" className="mx-auto flex min-h-full max-w-3xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
-        <Link to="/" className="text-sm text-accent underline">
+        <Link to="/" className="text-sm text-accent-text underline">
           {t("settings.back")}
         </Link>
       </div>

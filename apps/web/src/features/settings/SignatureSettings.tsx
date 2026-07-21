@@ -88,7 +88,7 @@ export function SignatureSettings() {
             <div className="flex items-center gap-2">
               <span>{signature.name}</span>
               {signature.isDefault && (
-                <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent">
+                <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent-text">
                   {t("settings.default")}
                 </span>
               )}
@@ -117,7 +117,7 @@ export function SignatureSettings() {
         <button
           type="button"
           onClick={startCreate}
-          className="self-start rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+          className="self-start rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
         >
           {t("settings.newSignature")}
         </button>
@@ -154,7 +154,7 @@ export function SignatureSettings() {
             <button
               type="button"
               onClick={resetForm}
-              className="rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+              className="rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
             >
               {t("composer.cancel")}
             </button>

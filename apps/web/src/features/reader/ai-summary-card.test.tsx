@@ -35,7 +35,9 @@ describe("AiSummaryCard", () => {
 
     const loading = await screen.findByText(i18n.t("mail.aiSummaryLoading"));
     expect(loading).toBeInTheDocument();
-    expect(loading.closest("p")).toHaveClass("text-accent");
+    // CLARO-02: accent used as small text needs the AA-safe --accent-text
+    // token in light theme, not the raw --accent fill color.
+    expect(loading.closest("p")).toHaveClass("text-accent-text");
     expect(screen.queryByRole("region", { name: i18n.t("mail.aiSummaryTitle") })).not.toBeInTheDocument();
 
     resolveFetch(new Response(JSON.stringify({ bullets: ["a", "b", "c"] })));
