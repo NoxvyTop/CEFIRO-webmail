@@ -292,7 +292,7 @@ export function MailPage() {
           </p>
         )}
         {!starredParam && groupAddresses.length > 0 && (
-          <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">
+          <label className="flex h-[38px] w-full items-center gap-[11px] border-b border-line px-3 text-sm text-muted transition hover:bg-hover">
             <input
               type="checkbox"
               checked={preferences?.groupMailInMainInbox ?? false}

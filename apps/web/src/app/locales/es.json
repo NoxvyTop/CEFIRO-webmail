@@ -51,6 +51,15 @@
       "load": "No se pudieron cargar los usuarios",
       "action": "No se pudo completar la acción"
     },
+    "search": {
+      "placeholder": "Buscar por nombre o correo…",
+      "noResults": "Ningún usuario coincide con tu búsqueda"
+    },
+    "pagination": {
+      "prev": "Anterior",
+      "next": "Siguiente",
+      "range": "{{from}}–{{to}} de {{total}}"
+    },
     "sso": {
       "title": "Proveedor SSO (OIDC)",
       "configured": "Configurado",

@@ -51,6 +51,15 @@
       "load": "Could not load users",
       "action": "The action could not be completed"
     },
+    "search": {
+      "placeholder": "Search by name or email…",
+      "noResults": "No users match your search"
+    },
+    "pagination": {
+      "prev": "Previous",
+      "next": "Next",
+      "range": "{{from}}–{{to}} of {{total}}"
+    },
     "sso": {
       "title": "SSO provider (OIDC)",
       "configured": "Configured",

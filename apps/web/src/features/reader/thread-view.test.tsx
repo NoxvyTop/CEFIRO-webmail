@@ -256,6 +256,23 @@ describe("ThreadView", () => {
     });
   });
 
+  it("keeps action buttons from wrapping and lets the hint shrink so it truncates as a unit", async () => {
+    stubFetch();
+    renderThread("t1", "arch1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    const replyAllButton = within(actionsBar).getByRole("button", { name: i18n.t("composer.replyAll") });
+    expect(replyAllButton.className).toContain("whitespace-nowrap");
+    expect(replyAllButton.className).toContain("shrink-0");
+    const forwardButton = within(actionsBar).getByRole("button", { name: i18n.t("composer.forward") });
+    expect(forwardButton.className).toContain("whitespace-nowrap");
+    expect(forwardButton.className).toContain("shrink-0");
+
+    const hint = within(actionsBar).getByText(i18n.t("shortcuts.hint"));
+    expect(hint.className).toContain("min-w-0");
+    expect(hint.className).toContain("truncate");
+  });
+
   it("hides Archivar when the last email is already in the archive mailbox", async () => {
     const state = structuredClone(thread);
     state.emails[1]!.mailboxIds = ["arch1"];
