@@ -40,36 +40,43 @@ describe("EmailBody", () => {
     expect(iframe.className).not.toMatch(/h-64/);
   });
 
-  it("injects the night theme ink color, a transparent background, and 15px/1.65 typography", () => {
+  it("injects the night theme ink color, panel background, dark color-scheme, and 15px/1.65 typography", () => {
     document.documentElement.dataset.theme = "night";
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
     const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
 
     expect(srcDoc).toContain("#eceef4");
-    expect(srcDoc).toContain("background:transparent");
+    expect(srcDoc).toContain("color-scheme:dark");
+    expect(srcDoc).toContain("background:#12141c");
     expect(srcDoc).toContain("font-size:15px");
     expect(srcDoc).toContain("line-height:1.65");
     expect(srcDoc).not.toContain("color:#111");
     expect(srcDoc).not.toMatch(/font-family:\s*sans-serif/);
   });
 
-  it("injects the light theme ink color when data-theme is light", () => {
+  it("injects the light theme ink color, panel background, and light color-scheme", () => {
     document.documentElement.dataset.theme = "light";
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
     const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
 
     expect(srcDoc).toContain("#101318");
+    expect(srcDoc).toContain("color-scheme:light");
+    expect(srcDoc).toContain("background:#ffffff");
   });
 
-  it("re-injects the current theme's ink color when data-theme changes after mount", async () => {
+  it("re-injects the current theme's ink, background, and color-scheme when data-theme changes after mount", async () => {
     document.documentElement.dataset.theme = "night";
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
     expect(getIframe().getAttribute("srcdoc") ?? "").toContain("#eceef4");
+    expect(getIframe().getAttribute("srcdoc") ?? "").toContain("color-scheme:dark");
 
     document.documentElement.dataset.theme = "light";
 
     await waitFor(() => {
-      expect(getIframe().getAttribute("srcdoc") ?? "").toContain("#101318");
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("#101318");
+      expect(srcDoc).toContain("color-scheme:light");
+      expect(srcDoc).toContain("background:#ffffff");
     });
   });
 
@@ -85,13 +92,17 @@ describe("EmailBody", () => {
     });
   });
 
-  it("falls back to a default height without throwing when contentDocument is unreachable (real sandboxed browsers)", () => {
+  it("falls back to a generous, viewport-proportional height without throwing when contentDocument is unreachable (real sandboxed browsers)", () => {
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
     const iframe = getIframe();
     stubContentDocument(iframe, null);
 
     expect(() => fireEvent.load(iframe)).not.toThrow();
-    expect(iframe.style.height).toMatch(/^\d+px$/);
+    // Regression guard for OSCURO-04: the old fallback was a squat 200px
+    // fixed box. The new fallback scales with the viewport instead of a
+    // small fixed constant.
+    expect(iframe.style.height).not.toBe("200px");
+    expect(iframe.style.height).toContain("vh");
   });
 
   it("raises the plain-text fallback to 15px", () => {
@@ -100,5 +111,18 @@ describe("EmailBody", () => {
     expect(pre.tagName).toBe("PRE");
     expect(pre.className).toContain("text-[15px]");
     expect(pre.className).not.toContain("text-sm");
+  });
+
+  it("keeps the plain-text fallback theme-correct by inheriting page color/background instead of hardcoding its own", () => {
+    // Unlike the iframe path, plain text renders directly in the app's own
+    // DOM (see index.css `body { color: var(--ink); background: var(--bg) }`),
+    // so it must NOT set its own color/background — doing so would re-create
+    // the OSCURO-01-style theme mismatch outside the iframe.
+    render(<EmailBody bodyHtml={null} bodyText="Plain text body" />);
+    const pre = screen.getByText("Plain text body");
+    expect(pre.style.color).toBe("");
+    expect(pre.style.background).toBe("");
+    expect(pre.className).not.toMatch(/\btext-(ink|muted|white|black)\b/);
+    expect(pre.className).not.toMatch(/\bbg-/);
   });
 });
