@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type { EmailSummary } from "@webmail/shared";
 import { fetchMailboxes, fetchThread } from "./api";
 import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
-import { mailErrorKey, mailRetry } from "./queryErrors";
+import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
@@ -29,6 +29,7 @@ export function MailPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { width: listWidth, startDrag, handleKeyDown } = useResizablePane();
+  const isAdmin = user?.role === "admin";
 
   useMailEvents(true);
 
@@ -54,6 +55,12 @@ export function MailPage() {
     queryKey: ["mail", "identities"],
     queryFn: fetchIdentities,
   });
+
+  // CLARO-07/OSCURO-05: mail_credentials_missing is onboarding, not a server
+  // error — everything else (mail_not_configured, network failures, etc.)
+  // keeps the generic alert treatment.
+  const unlinkedMailbox = mailboxesQuery.isError && isUnlinkedMailboxError(mailboxesQuery.error);
+  const otherMailboxError = mailboxesQuery.isError && !unlinkedMailbox;
 
   const preferencesQuery = useQuery({
     queryKey: ["mail", "preferences"],
@@ -286,10 +293,31 @@ export function MailPage() {
           threadParam ? "hidden lg:flex" : "flex"
         } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
-        {mailboxesQuery.isError && (
+        {otherMailboxError && (
           <p role="alert" className="p-4 text-sm text-warn">
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
+        )}
+        {unlinkedMailbox && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted">
+            <div className="opacity-60">
+              <CefiroLogo size={52} />
+            </div>
+            <p className="text-[15px] font-semibold text-ink">{t("mail.unlinked.title")}</p>
+            <p className="max-w-[260px] text-[13px] text-muted">
+              {t(isAdmin ? "mail.unlinked.descriptionAdmin" : "mail.unlinked.descriptionEmployee")}
+            </p>
+            {isAdmin ? (
+              <Link
+                to="/admin"
+                className="mt-1 flex h-9 items-center justify-center rounded-[10px] bg-accent px-4 text-[13px] font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+              >
+                {t("mail.unlinked.cta")}
+              </Link>
+            ) : (
+              <p className="text-[12px] text-muted">{t("mail.unlinked.hint")}</p>
+            )}
+          </div>
         )}
         {!starredParam && groupAddresses.length > 0 && (
           <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">

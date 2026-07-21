@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MailApiError } from "./api";
-import { mailErrorKey, mailRetry } from "./queryErrors";
+import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
 
 describe("mailErrorKey", () => {
   it("returns the known key for a MailApiError with a known code", () => {
@@ -31,5 +31,19 @@ describe("mailRetry", () => {
     expect(mailRetry(0, new Error("network down"))).toBe(true);
     expect(mailRetry(2, new Error("network down"))).toBe(true);
     expect(mailRetry(3, new Error("network down"))).toBe(false);
+  });
+});
+
+describe("isUnlinkedMailboxError", () => {
+  it("returns true for a mail_credentials_missing MailApiError", () => {
+    expect(isUnlinkedMailboxError(new MailApiError(503, "mail_credentials_missing"))).toBe(true);
+  });
+
+  it("returns false for mail_not_configured (a real server misconfiguration, not onboarding)", () => {
+    expect(isUnlinkedMailboxError(new MailApiError(503, "mail_not_configured"))).toBe(false);
+  });
+
+  it("returns false for a plain Error", () => {
+    expect(isUnlinkedMailboxError(new Error("network down"))).toBe(false);
   });
 });
