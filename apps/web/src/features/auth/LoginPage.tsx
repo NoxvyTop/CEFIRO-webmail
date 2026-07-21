@@ -166,7 +166,7 @@ export function LoginPage() {
               </div>
               <button
                 type="submit"
-                className="mt-0.5 h-11 rounded-[11px] border border-line text-[14px] font-semibold text-ink transition hover:border-accent hover:bg-hover"
+                className="mt-0.5 h-11 rounded-[11px] bg-accent text-[14.5px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
               >
                 {t("auth.bootstrap.submit")}
               </button>
