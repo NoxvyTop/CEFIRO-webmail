@@ -61,11 +61,9 @@
   --font-sans: "Space Grotesk Variable", system-ui, sans-serif;
 }
 
-/* Dash-pattern flow instead of a transform rotation: a rotating dashed ring
-   promotes a GPU layer whose bounds render as a faint box around the logo. */
-@keyframes ringFlow {
+@keyframes logoSpin {
   to {
-    stroke-dashoffset: -100;
+    transform: rotate(360deg);
   }
 }
 
@@ -79,9 +77,11 @@
   0%,
   100% {
     opacity: 0.25;
+    transform: scale(0.7);
   }
   50% {
     opacity: 1;
+    transform: scale(1.2);
   }
 }
 
