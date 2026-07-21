@@ -143,7 +143,7 @@ export function Sidebar({
                     type="button"
                     aria-current={selected ? "true" : undefined}
                     onClick={() => onSelectGroup(group.email)}
-                    className="flex h-[34px] w-full items-center justify-between truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-semibold"
+                    className="flex h-[34px] w-full items-center justify-between truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
                   >
                     <span className="truncate">{group.email}</span>
                   </button>
