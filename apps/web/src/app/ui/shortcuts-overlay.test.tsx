@@ -13,8 +13,8 @@ describe("ShortcutsOverlay", () => {
     render(<ShortcutsOverlay open={true} onClose={vi.fn()} />);
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByText("Atajos")).toBeInTheDocument();
-    const keys = ["j / k", "e", "s", "r", "c", "/", "Esc"];
+    expect(screen.getByText("Atajos de teclado")).toBeInTheDocument();
+    const keys = ["j", "k", "e", "s", "r", "c", "/", "Esc"];
     for (const key of keys) {
       expect(screen.getByText(key)).toBeInTheDocument();
     }

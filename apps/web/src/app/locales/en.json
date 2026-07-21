@@ -126,7 +126,7 @@
     "starredView": "Starred",
     "unread": "{{count}} unread",
     "messageCount": "{{count}} messages",
-    "searchPlaceholder": "Search mail",
+    "searchPlaceholder": "Search mail…",
     "empty": "No mail here.",
     "noSubject": "(no subject)",
     "selectMessage": "Select an email",
@@ -293,6 +293,7 @@
   },
   "shortcuts": {
     "title": "Shortcuts",
+    "overlayTitle": "Keyboard shortcuts",
     "move": "Move through the list",
     "archive": "Archive email",
     "star": "Star email",
