@@ -223,7 +223,8 @@
     "draftWithAi": "✦ Redactar con IA",
     "draftingWithAi": "Redactando…",
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
-    "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA"
+    "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
+    "noIdentitiesHint": "Vinculá tu buzón para poder redactar correos"
   },
   "attachments": {
     "download": "Descargar",

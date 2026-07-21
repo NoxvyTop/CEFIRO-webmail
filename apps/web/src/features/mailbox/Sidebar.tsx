@@ -27,11 +27,15 @@ interface SidebarProps {
   selectedLabel: string | null;
   onSelectLabel: (label: string) => void;
   onCompose: () => void;
+  // CLARO-10: honest disabled state when there are no identities to compose
+  // from (e.g. mailbox not linked yet) instead of a silent no-op click.
+  composeDisabled?: boolean;
 }
 
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
   groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
+  composeDisabled = false,
 }: SidebarProps) {
   const { t } = useTranslation();
   const displayLabels = mergeLabels(labels);
@@ -78,7 +82,10 @@ export function Sidebar({
       <button
         type="button"
         onClick={onCompose}
-        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+        disabled={composeDisabled}
+        title={composeDisabled ? t("composer.noIdentitiesHint") : undefined}
+        aria-disabled={composeDisabled}
+        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100 disabled:active:scale-100"
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
           <path d="M12 20h9" />

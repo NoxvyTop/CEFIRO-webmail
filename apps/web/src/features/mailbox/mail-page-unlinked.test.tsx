@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
@@ -15,10 +15,11 @@ function jsonError(code: string, status = 503) {
 }
 
 function stubFetch({
-  role, mailboxesError,
+  role, mailboxesError, identitiesError,
 }: {
   role: "admin" | "employee";
   mailboxesError?: string;
+  identitiesError?: string;
 }) {
   const user = {
     userId: "u1", email: "u1@noxvytop.com", displayName: "U1", role, locale: "es",
@@ -33,7 +34,9 @@ function stubFetch({
       return mailboxesError ? jsonError(mailboxesError) : new Response(JSON.stringify(mailboxes));
     }
     if (url.includes("/api/mail/identities")) {
-      return new Response(JSON.stringify([{ id: "id1", name: "U1", email: "u1@noxvytop.com" }]));
+      return identitiesError
+        ? jsonError(identitiesError)
+        : new Response(JSON.stringify([{ id: "id1", name: "U1", email: "u1@noxvytop.com" }]));
     }
     if (url.includes("/api/mail/preferences")) {
       return new Response(JSON.stringify({ groupMailInMainInbox: false }));
@@ -92,5 +95,40 @@ describe("unlinked mailbox empty state", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(i18n.t("mail.errors.mail_not_configured"));
     expect(screen.queryByText(i18n.t("mail.unlinked.title"))).not.toBeInTheDocument();
+  });
+});
+
+describe("CLARO-10: Redactar without identities", () => {
+  it("disables the Redactar button when there are no identities", async () => {
+    stubFetch({ role: "employee", mailboxesError: "mail_credentials_missing", identitiesError: "mail_credentials_missing" });
+    renderAt("/");
+
+    const composeButton = await screen.findByRole("button", { name: i18n.t("composer.title") });
+    expect(composeButton).toBeDisabled();
+  });
+
+  it("shows a toast hint instead of opening the composer when pressing 'c' with no identities", async () => {
+    stubFetch({ role: "employee", mailboxesError: "mail_credentials_missing", identitiesError: "mail_credentials_missing" });
+    renderAt("/");
+
+    await screen.findByText(i18n.t("mail.unlinked.title"));
+    fireEvent.keyDown(window, { key: "c" });
+
+    expect(await screen.findByRole("status")).toHaveTextContent(i18n.t("composer.noIdentitiesHint"));
+    expect(screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") })).not.toBeInTheDocument();
+  });
+
+  it("keeps Redactar enabled and 'c' opens the composer when identities are present", async () => {
+    stubFetch({ role: "employee" });
+    renderAt("/");
+
+    const composeButton = await screen.findByRole("button", { name: i18n.t("composer.title") });
+    // The button starts disabled while identities are still loading — wait
+    // for the identities query to resolve before asserting the enabled state.
+    await vi.waitFor(() => expect(composeButton).not.toBeDisabled());
+
+    fireEvent.keyDown(window, { key: "c" });
+
+    expect(await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
   });
 });

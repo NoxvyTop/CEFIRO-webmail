@@ -12,6 +12,7 @@ import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { folderName } from "../../app/ui/folders";
+import { useToast } from "../../app/ui/toast";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -28,6 +29,7 @@ export function MailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const { width: listWidth, startDrag, handleKeyDown } = useResizablePane();
   const isAdmin = user?.role === "admin";
 
@@ -55,6 +57,10 @@ export function MailPage() {
     queryKey: ["mail", "identities"],
     queryFn: fetchIdentities,
   });
+  // CLARO-10: gates both the Redactar button's disabled state and the "c"
+  // shortcut — without at least one identity, composing has nothing to send
+  // from (most commonly: the mailbox isn't linked yet).
+  const hasIdentities = Boolean(identitiesQuery.data && identitiesQuery.data.length > 0);
 
   // CLARO-07/OSCURO-05: mail_credentials_missing is onboarding, not a server
   // error — everything else (mail_not_configured, network failures, etc.)
@@ -224,6 +230,13 @@ export function MailPage() {
       if (!isPlainShortcut(event)) return;
       if (event.key === "c") {
         event.preventDefault();
+        // CLARO-10: without identities the composer can't resolve a draft
+        // (resolveComposeDraft returns null), so "c" silently did nothing —
+        // now it surfaces the same hint the disabled Redactar button shows.
+        if (!hasIdentities) {
+          showToast(t("composer.noIdentitiesHint"));
+          return;
+        }
         handleCompose();
       }
     }
@@ -231,7 +244,7 @@ export function MailPage() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hasIdentities]);
 
   function removeComposeParam() {
     setSearchParams((prev) => {
@@ -285,6 +298,7 @@ export function MailPage() {
         selectedLabel={labelParam}
         onSelectLabel={handleSelectLabel}
         onCompose={handleCompose}
+        composeDisabled={!hasIdentities}
       />
       <section
         aria-label={t("mail.listRegion")}

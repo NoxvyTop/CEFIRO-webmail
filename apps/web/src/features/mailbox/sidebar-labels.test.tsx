@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { labelColor } from "../../app/ui/labels";
@@ -114,5 +114,31 @@ describe("sidebar labels zone", () => {
     const row = screen.getByText("important").closest("button")!;
     const dot = row.querySelector("span[aria-hidden='true']");
     expect(dot).toHaveStyle({ background: labelColor("important") });
+  });
+});
+
+describe("sidebar compose button (CLARO-10: honest disabled state without identities)", () => {
+  it("is enabled by default (composeDisabled defaults to false)", () => {
+    renderSidebar();
+
+    const composeButton = screen.getByRole("button", { name: i18n.t("composer.title") });
+    expect(composeButton).not.toBeDisabled();
+  });
+
+  it("is disabled with an explanatory title when composeDisabled is true", () => {
+    renderSidebar({ composeDisabled: true });
+
+    const composeButton = screen.getByRole("button", { name: i18n.t("composer.title") });
+    expect(composeButton).toBeDisabled();
+    expect(composeButton).toHaveAttribute("title", i18n.t("composer.noIdentitiesHint"));
+  });
+
+  it("does not call onCompose when clicked while disabled", () => {
+    const onCompose = vi.fn();
+    renderSidebar({ composeDisabled: true, onCompose });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("composer.title") }));
+
+    expect(onCompose).not.toHaveBeenCalled();
   });
 });
