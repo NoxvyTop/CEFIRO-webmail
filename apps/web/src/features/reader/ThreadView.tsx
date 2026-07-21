@@ -132,7 +132,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const starred = Boolean(lastEmail.keywords.$flagged);
 
   const actionButtonBaseClass =
-    "flex h-8 items-center gap-[7px] rounded-lg px-3 text-[13px] transition hover:bg-hover";
+    "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
   const actionButtonClass = `${actionButtonBaseClass} text-ink`;
 
   return (
@@ -190,7 +190,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
         >
           {t("composer.forward")}
         </button>
-        <span className="ml-auto hidden truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
+        <span className="ml-auto hidden min-w-0 truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[780px] px-5 pb-[60px] pt-[30px] md:px-10" style={{ animation: "fadeUp 0.25s ease-out" }}>
