@@ -210,15 +210,15 @@ describe("login screen bootstrap form", () => {
 
     await screen.findByLabelText("Usuario");
 
-    // No stored preference: useTheme's brand default is "night", so the
-    // toggle's accessible name offers switching to light.
-    const toggle = await screen.findByRole("button", { name: i18n.t("app.themeLight") });
-    expect(document.documentElement.dataset.theme).toBe("night");
+    // No stored preference and no matchMedia in jsdom: useTheme resolves the
+    // brand default "light", so the toggle's accessible name offers night.
+    const toggle = await screen.findByRole("button", { name: i18n.t("app.themeNight") });
+    expect(document.documentElement.dataset.theme).toBe("light");
 
     fireEvent.click(toggle);
 
-    expect(document.documentElement.dataset.theme).toBe("light");
-    expect(localStorage.getItem("cefiro-theme")).toBe("light");
-    expect(await screen.findByRole("button", { name: i18n.t("app.themeNight") })).toBeInTheDocument();
+    expect(document.documentElement.dataset.theme).toBe("night");
+    expect(localStorage.getItem("cefiro-theme")).toBe("night");
+    expect(await screen.findByRole("button", { name: i18n.t("app.themeLight") })).toBeInTheDocument();
   });
 });
