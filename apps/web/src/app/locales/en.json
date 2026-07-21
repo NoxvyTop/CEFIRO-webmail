@@ -90,7 +90,7 @@
       "error": "Invalid credential",
       "hint": "Only available in setup or recovery mode",
       "errors": {
-        "invalidEmail": "Enter a valid email address.",
+        "emptyUser": "Enter your username.",
         "emptyPassword": "Enter your password."
       }
     }

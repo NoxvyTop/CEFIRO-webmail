@@ -18,11 +18,12 @@ async function fetchMode(): Promise<AuthMode> {
   return authModeSchema.parse(await res.json());
 }
 
-// Mirrors the prototype's own check (Login Céfiro.dc.html:139): a non-empty
-// value containing "@" is enough — this is a UX nicety catching obvious
-// typos, not the server's authoritative validation.
-function looksLikeEmail(value: string): boolean {
-  return value.trim().length > 0 && value.includes("@");
+// Bootstrap mode has no notion of an email address — the field is labeled
+// "Usuario" and the server (bootstrapLoginSchema) only requires a non-empty
+// string; it authenticates purely on the password. Email-format validation
+// belongs to a future credentials-mode form, not to this one.
+function isNonEmpty(value: string): boolean {
+  return value.trim().length > 0;
 }
 
 interface BootstrapFieldErrors {
@@ -45,7 +46,7 @@ export function LoginPage() {
 
   function validateBootstrapFields(): boolean {
     const errors: BootstrapFieldErrors = {};
-    if (!looksLikeEmail(email)) errors.email = t("auth.bootstrap.errors.invalidEmail");
+    if (!isNonEmpty(email)) errors.email = t("auth.bootstrap.errors.emptyUser");
     if (!password) errors.password = t("auth.bootstrap.errors.emptyPassword");
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
