@@ -55,7 +55,7 @@ describe("RequireAdmin", () => {
     stubMe(employeeUser);
     renderAt("/admin");
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("No tenés permisos de administrador");
+    expect(alert).toHaveTextContent("No tienes permisos de administrador");
     expect(screen.queryByText("Administración")).not.toBeInTheDocument();
   });
 

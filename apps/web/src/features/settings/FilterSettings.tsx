@@ -170,7 +170,7 @@ export function FilterSettings() {
                 aria-label={t("filters.moveUp")}
                 disabled={index === 0}
                 onClick={() => move(index, -1)}
-                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
+                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover disabled:opacity-50"
               >
                 <ChevronUpIcon size={14} />
               </button>
@@ -179,7 +179,7 @@ export function FilterSettings() {
                 aria-label={t("filters.moveDown")}
                 disabled={index === rules.length - 1}
                 onClick={() => move(index, 1)}
-                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
+                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover disabled:opacity-50"
               >
                 <ChevronDownIcon size={14} />
               </button>
@@ -194,8 +194,8 @@ export function FilterSettings() {
                 }
                 className={
                   rule.enabled
-                    ? "rounded-md border border-accent/40 bg-sel px-2 py-1 text-xs text-accent"
-                    : "rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-hover"
+                    ? "rounded-full border border-accent/40 bg-sel px-2 py-0.5 text-xs text-accent"
+                    : "rounded-full border border-line px-2 py-0.5 text-xs text-muted transition hover:bg-hover"
                 }
               >
                 {rule.enabled ? t("filters.enabled") : t("filters.disabled")}
@@ -206,14 +206,14 @@ export function FilterSettings() {
                   setEditingId(rule.id);
                   setFormOpen(true);
                 }}
-                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
+                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
               >
                 {t("settings.edit")}
               </button>
               <button
                 type="button"
                 onClick={() => deleteMutation.mutate(rule.id)}
-                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
+                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
               >
                 {t("settings.delete")}
               </button>
@@ -229,7 +229,7 @@ export function FilterSettings() {
             setEditingId(null);
             setFormOpen(true);
           }}
-          className="self-start rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+          className="self-start rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
         >
           {t("filters.newRule")}
         </button>

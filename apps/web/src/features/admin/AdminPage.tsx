@@ -1,9 +1,13 @@
 import { type FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import type { CreateUserInput } from "@webmail/shared";
 import { createAdminUser, fetchAdminSso, fetchAdminUsers, updateAdminSso } from "./api";
 import { UserRow } from "./UserRow";
+
+const inputClass =
+  "h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent";
 
 const USERS_QUERY_KEY = ["admin", "users"] as const;
 const SSO_QUERY_KEY = ["admin", "sso"] as const;
@@ -62,11 +66,16 @@ export function AdminPage() {
   const sso = ssoQuery.data;
 
   return (
-    <main aria-label={t("admin.title")} className="flex flex-col gap-6 p-6">
-      <h1 className="text-lg font-semibold">{t("admin.title")}</h1>
+    <main aria-label={t("admin.title")} className="mx-auto flex min-h-full max-w-3xl flex-col gap-6 p-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">{t("admin.title")}</h1>
+        <Link to="/" className="text-sm text-accent underline">
+          {t("admin.back")}
+        </Link>
+      </div>
 
       <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-        <h2 className="text-base font-medium">{t("admin.new.title")}</h2>
+        <h2 className="text-lg font-medium">{t("admin.new.title")}</h2>
         <form onSubmit={handleCreateSubmit} className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-sm">
             {t("admin.new.email")}
@@ -75,7 +84,7 @@ export function AdminPage() {
               required
               value={newUser.email}
               onChange={(event) => setNewUser({ ...newUser, email: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -84,7 +93,7 @@ export function AdminPage() {
               required
               value={newUser.displayName}
               onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -94,7 +103,7 @@ export function AdminPage() {
               onChange={(event) =>
                 setNewUser({ ...newUser, role: event.target.value as "employee" | "admin" })
               }
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             >
               <option value="employee">{t("admin.roles.employee")}</option>
               <option value="admin">{t("admin.roles.admin")}</option>
@@ -107,10 +116,10 @@ export function AdminPage() {
               minLength={8}
               value={newUser.mailPassword}
               onChange={(event) => setNewUser({ ...newUser, mailPassword: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
-          <button type="submit" className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
+          <button type="submit" className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]">
             {t("admin.new.create")}
           </button>
         </form>
@@ -134,12 +143,12 @@ export function AdminPage() {
           <table className="w-full text-sm">
             <thead>
               <tr>
-                <th className="p-2 text-left">{t("admin.columns.email")}</th>
-                <th className="p-2 text-left">{t("admin.columns.name")}</th>
-                <th className="p-2 text-left">{t("admin.columns.role")}</th>
-                <th className="p-2 text-left">{t("admin.columns.mailbox")}</th>
-                <th className="p-2 text-left">{t("admin.columns.status")}</th>
-                <th className="p-2 text-left">{t("admin.columns.actions")}</th>
+                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.email")}</th>
+                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.name")}</th>
+                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.role")}</th>
+                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.mailbox")}</th>
+                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.status")}</th>
+                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -152,7 +161,7 @@ export function AdminPage() {
       </section>
 
       <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-        <h2 className="text-base font-medium">{t("admin.sso.title")}</h2>
+        <h2 className="text-lg font-medium">{t("admin.sso.title")}</h2>
 
         {sso && (
           <div className="flex flex-col gap-1 text-sm">
@@ -188,7 +197,7 @@ export function AdminPage() {
             <input
               value={ssoForm.issuer}
               onChange={(event) => setSsoForm({ ...ssoForm, issuer: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -196,7 +205,7 @@ export function AdminPage() {
             <input
               value={ssoForm.clientId}
               onChange={(event) => setSsoForm({ ...ssoForm, clientId: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -205,7 +214,7 @@ export function AdminPage() {
               type="password"
               value={ssoForm.clientSecret}
               onChange={(event) => setSsoForm({ ...ssoForm, clientSecret: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
@@ -213,10 +222,10 @@ export function AdminPage() {
             <input
               value={ssoForm.scopes}
               onChange={(event) => setSsoForm({ ...ssoForm, scopes: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className={inputClass}
             />
           </label>
-          <button type="submit" className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
+          <button type="submit" className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]">
             {t("admin.sso.save")}
           </button>
         </form>

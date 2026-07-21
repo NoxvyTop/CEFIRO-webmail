@@ -8,7 +8,7 @@
   },
   "admin": {
     "title": "Administración",
-    "forbidden": "No tenés permisos de administrador",
+    "forbidden": "No tienes permisos de administrador",
     "back": "Volver",
     "empty": "No hay usuarios",
     "mailbox": {

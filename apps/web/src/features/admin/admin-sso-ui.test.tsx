@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import type { AdminSsoView } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -35,7 +36,9 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <AdminPage />
+      <MemoryRouter>
+        <AdminPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return client;
