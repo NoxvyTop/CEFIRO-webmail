@@ -3,7 +3,7 @@ import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { ArchiveIcon, InboxIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
-import { labelColor } from "../../app/ui/labels";
+import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
 
 // Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
 // four primary rows carry an icon. Secondary folders (trash/junk/drafts)
@@ -27,13 +27,18 @@ interface SidebarProps {
   selectedLabel: string | null;
   onSelectLabel: (label: string) => void;
   onCompose: () => void;
+  // CLARO-10: honest disabled state when there are no identities to compose
+  // from (e.g. mailbox not linked yet) instead of a silent no-op click.
+  composeDisabled?: boolean;
 }
 
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
   groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
+  composeDisabled = false,
 }: SidebarProps) {
   const { t } = useTranslation();
+  const displayLabels = mergeLabels(labels);
 
   // Fixed nav order (docs/design/cefiro/README.md): Recibidos, Destacados,
   // Enviados, Archivados, then secondary folders grouped after. Destacados is
@@ -77,7 +82,10 @@ export function Sidebar({
       <button
         type="button"
         onClick={onCompose}
-        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+        disabled={composeDisabled}
+        title={composeDisabled ? t("composer.noIdentitiesHint") : undefined}
+        aria-disabled={composeDisabled}
+        className="flex h-11 items-center justify-center gap-2 rounded-[11px] bg-accent font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100 disabled:active:scale-100"
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
           <path d="M12 20h9" />
@@ -100,35 +108,42 @@ export function Sidebar({
         </li>
         {afterStarred.map(renderMailboxRow)}
       </ul>
-      {labels.length > 0 && (
-        <nav aria-label={t("mail.labels")} className="text-sm">
-          <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
-            {t("mail.labels")}
-          </p>
-          <ul className="flex flex-col gap-1">
-            {labels.map((label) => {
-              const selected = label === selectedLabel;
-              return (
-                <li key={label}>
-                  <button
-                    type="button"
-                    aria-current={selected ? "true" : undefined}
-                    onClick={() => onSelectLabel(label)}
-                    className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
-                      style={{ background: labelColor(label) }}
-                    />
-                    <span className="truncate">{label}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-      )}
+      {/* CLARO-08/OSCURO-07: always render the ETIQUETAS rail — the 4 canonical
+          spec labels scaffold the taxonomy even on a fresh mailbox with no
+          keywords yet, with any real labels merged in after them. */}
+      <nav aria-label={t("mail.labels")} className="text-sm">
+        <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+          {t("mail.labels")}
+        </p>
+        <ul className="flex flex-col gap-1">
+          {displayLabels.map((label) => {
+            const selected = label === selectedLabel;
+            return (
+              <li key={label}>
+                <button
+                  type="button"
+                  aria-current={selected ? "true" : undefined}
+                  onClick={() => onSelectLabel(label)}
+                  className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                    style={{ background: labelColor(label) }}
+                  />
+                  {/* labelDisplayName only swaps text for the few canonical
+                      labels whose spec spelling needs a diacritic CSS can't
+                      add (e.g. "diseno" -> "Diseño"); the `label` value
+                      itself — used for onSelectLabel/filtering, dedup and
+                      color lookup — is untouched. `capitalize` handles plain
+                      casing for everything else. */}
+                  <span className="truncate capitalize">{labelDisplayName(label)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
       {groups.length > 0 && (
         <nav aria-label={t("groups.title")} className="text-sm">
           <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
