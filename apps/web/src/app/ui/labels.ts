@@ -48,3 +48,17 @@ export function userLabels(keywords: Record<string, boolean>): string[] {
     .filter((key) => keywords[key] && !key.startsWith("$"))
     .sort();
 }
+
+// CLARO-08/OSCURO-07: the ETIQUETAS rail must never disappear on a fresh
+// mailbox — it always shows the product's 4-label taxonomy (spec order),
+// regardless of what's actually present in the loaded messages.
+export const CANONICAL_LABELS = ["urgente", "producto", "diseño", "finanzas"];
+
+// Merges the canonical taxonomy with whatever real labels were found in the
+// loaded messages: canonical labels always come first in spec order, real
+// labels not already covered (case-insensitively) are appended after.
+export function mergeLabels(realLabels: string[]): string[] {
+  const canonicalLower = new Set(CANONICAL_LABELS.map((label) => label.toLowerCase()));
+  const extras = realLabels.filter((label) => !canonicalLower.has(label.toLowerCase()));
+  return [...CANONICAL_LABELS, ...extras];
+}

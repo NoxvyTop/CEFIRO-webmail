@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { labelBackground, labelColor, userLabels } from "./labels";
+import { CANONICAL_LABELS, labelBackground, labelColor, mergeLabels, userLabels } from "./labels";
 
 describe("labelColor", () => {
   it("is deterministic for the same label", () => {
@@ -99,5 +99,30 @@ describe("userLabels", () => {
 
   it("returns an empty array when there are no user keywords", () => {
     expect(userLabels({ $seen: true, $flagged: false })).toEqual([]);
+  });
+});
+
+describe("mergeLabels (CLARO-08/OSCURO-07: ETIQUETAS always shows the taxonomy)", () => {
+  it("returns just the 4 canonical labels, in spec order, when there are no real labels", () => {
+    expect(mergeLabels([])).toEqual(CANONICAL_LABELS);
+    expect(CANONICAL_LABELS).toEqual(["urgente", "producto", "diseño", "finanzas"]);
+  });
+
+  it("appends real labels not covered by the canonical set after the canonical ones", () => {
+    expect(mergeLabels(["important", "urgent"])).toEqual([
+      "urgente", "producto", "diseño", "finanzas", "important", "urgent",
+    ]);
+  });
+
+  it("dedupes case-insensitively so a real label matching a canonical one isn't repeated", () => {
+    expect(mergeLabels(["Urgente", "PRODUCTO"])).toEqual(["urgente", "producto", "diseño", "finanzas"]);
+  });
+
+  it("keeps canonical labels first and preserves the caller's order for extras", () => {
+    // Callers (MailPage) already hand mergeLabels a sorted list of real
+    // labels, so this only guards that mergeLabels itself doesn't reorder.
+    expect(mergeLabels(["zeta", "alpha"])).toEqual([
+      "urgente", "producto", "diseño", "finanzas", "zeta", "alpha",
+    ]);
   });
 });

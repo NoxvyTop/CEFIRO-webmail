@@ -3,7 +3,7 @@ import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { ArchiveIcon, InboxIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
-import { labelColor } from "../../app/ui/labels";
+import { labelColor, mergeLabels } from "../../app/ui/labels";
 
 // Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
 // four primary rows carry an icon. Secondary folders (trash/junk/drafts)
@@ -34,6 +34,7 @@ export function Sidebar({
   groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
 }: SidebarProps) {
   const { t } = useTranslation();
+  const displayLabels = mergeLabels(labels);
 
   // Fixed nav order (docs/design/cefiro/README.md): Recibidos, Destacados,
   // Enviados, Archivados, then secondary folders grouped after. Destacados is
@@ -100,35 +101,38 @@ export function Sidebar({
         </li>
         {afterStarred.map(renderMailboxRow)}
       </ul>
-      {labels.length > 0 && (
-        <nav aria-label={t("mail.labels")} className="text-sm">
-          <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
-            {t("mail.labels")}
-          </p>
-          <ul className="flex flex-col gap-1">
-            {labels.map((label) => {
-              const selected = label === selectedLabel;
-              return (
-                <li key={label}>
-                  <button
-                    type="button"
-                    aria-current={selected ? "true" : undefined}
-                    onClick={() => onSelectLabel(label)}
-                    className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
-                      style={{ background: labelColor(label) }}
-                    />
-                    <span className="truncate">{label}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-      )}
+      {/* CLARO-08/OSCURO-07: always render the ETIQUETAS rail — the 4 canonical
+          spec labels scaffold the taxonomy even on a fresh mailbox with no
+          keywords yet, with any real labels merged in after them. */}
+      <nav aria-label={t("mail.labels")} className="text-sm">
+        <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+          {t("mail.labels")}
+        </p>
+        <ul className="flex flex-col gap-1">
+          {displayLabels.map((label) => {
+            const selected = label === selectedLabel;
+            return (
+              <li key={label}>
+                <button
+                  type="button"
+                  aria-current={selected ? "true" : undefined}
+                  onClick={() => onSelectLabel(label)}
+                  className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                    style={{ background: labelColor(label) }}
+                  />
+                  {/* text-transform only — the underlying label value (used for
+                      filtering/dedup/color lookup) keeps its original casing. */}
+                  <span className="truncate capitalize">{label}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
       {groups.length > 0 && (
         <nav aria-label={t("groups.title")} className="text-sm">
           <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
