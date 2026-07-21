@@ -32,8 +32,11 @@ export function formatRelativeTime(input: string | Date, options: RelativeTimeOp
 
   // dayDiff <= 0 covers both "today" and any future timestamp (clock skew
   // between client/server) — both read most sensibly as a plain time.
+  // Formatted by hand instead of toLocaleTimeString: ICU builds disagree on
+  // zero-padding "numeric" hours across platforms, and the design fixes the
+  // shape to H:mm regardless of locale.
   if (dayDiff <= 0) {
-    return date.toLocaleTimeString(options.locale, { hour: "numeric", minute: "2-digit", hour12: false });
+    return `${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
   }
   if (dayDiff === 1) {
     return options.yesterdayLabel;
