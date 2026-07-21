@@ -90,7 +90,7 @@
       "error": "Credencial inválida",
       "hint": "Solo disponible en modo de configuración o recuperación",
       "errors": {
-        "invalidEmail": "Introduce un correo válido.",
+        "emptyUser": "Introduce tu usuario.",
         "emptyPassword": "Introduce tu contraseña."
       }
     }
