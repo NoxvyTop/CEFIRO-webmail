@@ -304,8 +304,7 @@ export function MessageList({
           type="button"
           aria-label={t(starred ? "mail.unstar" : "mail.star")}
           onClick={(event) => handleToggleStar(event, email)}
-          className={`flex h-6 w-6 shrink-0 items-center justify-center ${starred ? "" : "text-muted hover:text-ink"}`}
-          style={starred ? { color: "#E8C24A" } : undefined}
+          className={`flex h-6 w-6 shrink-0 items-center justify-center ${starred ? "text-star" : "text-muted hover:text-ink"}`}
         >
           {starred ? <StarFilledIcon size={16} /> : <StarIcon size={16} />}
         </button>

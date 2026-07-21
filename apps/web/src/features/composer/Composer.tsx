@@ -59,7 +59,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
     <div
       role="dialog"
       aria-label={t("composer.newMessage")}
-      className="fixed inset-0 z-50 flex items-end justify-end bg-[rgba(3,5,9,0.55)] p-6"
+      className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6"
     >
       <div className="flex max-h-full w-full max-w-[640px] flex-col overflow-y-auto rounded-[14px] border border-line bg-panel shadow-pop">
         <div className="flex h-12 shrink-0 items-center gap-2.5 rounded-t-[14px] border-b border-line bg-soft px-[18px]">
