@@ -3,7 +3,7 @@ import type { Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { ArchiveIcon, InboxIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
-import { labelColor, mergeLabels } from "../../app/ui/labels";
+import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
 
 // Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
 // four primary rows carry an icon. Secondary folders (trash/junk/drafts)
@@ -131,9 +131,13 @@ export function Sidebar({
                     className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
                     style={{ background: labelColor(label) }}
                   />
-                  {/* text-transform only — the underlying label value (used for
-                      filtering/dedup/color lookup) keeps its original casing. */}
-                  <span className="truncate capitalize">{label}</span>
+                  {/* labelDisplayName only swaps text for the few canonical
+                      labels whose spec spelling needs a diacritic CSS can't
+                      add (e.g. "diseno" -> "Diseño"); the `label` value
+                      itself — used for onSelectLabel/filtering, dedup and
+                      color lookup — is untouched. `capitalize` handles plain
+                      casing for everything else. */}
+                  <span className="truncate capitalize">{labelDisplayName(label)}</span>
                 </button>
               </li>
             );

@@ -74,7 +74,9 @@ describe("sidebar labels zone", () => {
     expect(region).toBeInTheDocument();
     expect(within(region).getByText("urgente")).toBeInTheDocument();
     expect(within(region).getByText("producto")).toBeInTheDocument();
-    expect(within(region).getByText("diseño")).toBeInTheDocument();
+    // Rendered as "Diseño" (its spec display name), not the stored slug
+    // "diseno" — see the labelDisplayName override tests below.
+    expect(within(region).getByText("Diseño")).toBeInTheDocument();
     expect(within(region).getByText("finanzas")).toBeInTheDocument();
   });
 
@@ -89,7 +91,7 @@ describe("sidebar labels zone", () => {
     expect(buttons.filter((text) => text?.toLowerCase() === "urgente")).toHaveLength(1);
     expect(buttons).toContain("important");
     // Canonical labels keep spec order ahead of the extra real label.
-    expect(buttons.indexOf("diseño")).toBeLessThan(buttons.indexOf("important")!);
+    expect(buttons.indexOf("Diseño")).toBeLessThan(buttons.indexOf("important")!);
   });
 
   it("display-cases label text visually via CSS without changing the underlying value used for selection", () => {
@@ -106,6 +108,29 @@ describe("sidebar labels zone", () => {
     fireEvent.click(screen.getByText("finanzas"));
 
     expect(selected).toBe("finanzas");
+  });
+
+  // Fresh-review MAJOR: canonical "diseño" used to be stored/filtered
+  // accented, so clicking it sent hasKeyword=diseño while real mail is
+  // tagged with the unaccented JMAP slug "diseno" — a dead filter that
+  // always matched zero messages. The displayed text is the accented
+  // "Diseño", but the value handed to onSelectLabel (and from there, the
+  // hasKeyword query param) must be the real slug "diseno".
+  it("clicking the canonical 'Diseño' chip filters by its JMAP slug 'diseno', not the accented display text", () => {
+    let selected: string | null = null;
+    renderSidebar({ labels: [], onSelectLabel: (label) => { selected = label; } });
+
+    fireEvent.click(screen.getByText("Diseño"));
+
+    expect(selected).toBe("diseno");
+  });
+
+  it("dedupes a real 'diseno'-tagged label into the single canonical chip instead of showing a duplicate", () => {
+    renderSidebar({ labels: ["diseno"] });
+
+    const region = screen.getByRole("navigation", { name: i18n.t("mail.labels") });
+    expect(within(region).getAllByText("Diseño")).toHaveLength(1);
+    expect(within(region).queryByText("diseno")).not.toBeInTheDocument();
   });
 
   it("renders a color dot matching the deterministic labelColor", () => {
