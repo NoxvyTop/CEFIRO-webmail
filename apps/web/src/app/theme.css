@@ -48,21 +48,32 @@
   --accent-ink: #ffffff;
   /* CLARO-02: same hue/sat as --accent (167°, 83%), darkened to L=24.4% —
      retuned against the DARKEST surface this token sits on in practice,
-     --sel (#dcf2ea, used for badge pills and the selected-row background),
-     not just #ffffff: 5.02:1 on --sel, 5.88:1 on #ffffff, 5.37:1 on --soft.
-     Clears WCAG AA (4.5:1) for small text everywhere it's used while
-     staying recognizably the same mint/teal hue. Reserved for accent used
-     AS TEXT (badges, links, idle labels); solid accent fills keep #0fa383. */
+     --sel (#cdece1 below, used for badge pills and the selected-row
+     background), not just #ffffff: 4.67:1 on --sel, 5.88:1 on #ffffff,
+     5.37:1 on --soft. Clears WCAG AA (4.5:1) for small text everywhere
+     it's used while staying recognizably the same mint/teal hue. Reserved
+     for accent used AS TEXT (badges, links, idle labels); solid accent
+     fills keep #0fa383. */
   --accent-text: #0a725c;
   --soft: #edf7f3;
-  /* CLARO-03: darkened from #f3f7f6 (1.08:1 on panel / 1.02:1 on canvas —
-     imperceptible) to a visible step on BOTH surfaces: 1.42:1 on #ffffff
-     panels, 1.29:1 on the #f1f4f4 canvas. Hover has no WCAG contrast SC of
-     its own; this is a perceptibility fix verified against both surfaces
-     per the finding, kept clearly lighter than --sel so the two states
-     stay visually distinct. */
-  --hover: #cbdcd8;
-  --sel: #dcf2ea;
+  /* CLARO-03 + hierarchy fix: --hover must be perceptible against BOTH
+     #ffffff panels and the #f1f4f4 canvas, AND strictly less prominent
+     than --sel on both (rows carry hover:bg-hover together with
+     aria-[current]:bg-sel, so an unselected hover must never out-contrast
+     a selected row). Same hue family as the original #f3f7f6 (166°, 20%),
+     darkened to L=92%: 1.23:1 on #ffffff, 1.11:1 on #f1f4f4 — both below
+     --sel's 1.26:1 / 1.14:1 below. (A first pass at #cbdcd8, 1.42:1/1.29:1,
+     was DARKER than --sel and inverted the hierarchy — flagged in review
+     and corrected here.) */
+  --hover: #e1eae8;
+  /* Same hue/sat as the original #dcf2ea (158°, 46%), darkened from L=90.6%
+     to L=86.6% to create headroom below solid accent fills and above the
+     new --hover: 1.26:1 on #ffffff, 1.14:1 on #f1f4f4 (was 1.17:1 / 1.06:1
+     — nearly identical to --hover's old, broken value). --accent-text
+     (#0a725c) on this darker --sel is 4.67:1, still clearing AA (4.5:1)
+     with margin. Still far lighter/less saturated than solid #0fa383
+     fills, so the selected state stays subtler than accent CTAs. */
+  --sel: #cdece1;
   --danger: #f26565;
   /* OM-3: same hue/sat as --warn (36°, 76%), darkened to L=34% — 5.08:1 on
      #ffffff, clearing WCAG AA (4.5:1) for warn used as text (e.g. the
