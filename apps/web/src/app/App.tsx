@@ -92,7 +92,7 @@ export function App() {
             </div>
           </div>
           <form onSubmit={handleSearchSubmit} className="min-w-0 max-w-[560px] flex-1">
-            <div className="flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5">
+            <div className="flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 opacity-50">
                 <circle cx="11" cy="11" r="7" />
                 <path d="m20 20-3.5-3.5" />
