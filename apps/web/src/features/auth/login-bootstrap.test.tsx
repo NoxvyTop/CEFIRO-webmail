@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -28,6 +28,11 @@ function stubFetch(handlers: Record<string, () => Response>) {
     }),
   );
 }
+
+beforeEach(() => {
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -194,5 +199,26 @@ describe("login screen bootstrap form", () => {
         password: "s3cret",
       });
     });
+  });
+
+  it("renders a discreet theme toggle and switches themes when clicked", async () => {
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
+    });
+    renderAt("/");
+
+    await screen.findByLabelText("Usuario");
+
+    // No stored preference: useTheme's brand default is "night", so the
+    // toggle's accessible name offers switching to light.
+    const toggle = await screen.findByRole("button", { name: i18n.t("app.themeLight") });
+    expect(document.documentElement.dataset.theme).toBe("night");
+
+    fireEvent.click(toggle);
+
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(localStorage.getItem("cefiro-theme")).toBe("light");
+    expect(await screen.findByRole("button", { name: i18n.t("app.themeNight") })).toBeInTheDocument();
   });
 });

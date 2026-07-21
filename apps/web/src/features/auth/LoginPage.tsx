@@ -5,6 +5,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { authModeSchema, type AuthMode } from "@webmail/shared";
 import { bootstrapLogin } from "./useAuth";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
+import { MoonIcon, SunIcon } from "../../app/ui/icons";
+import { useTheme } from "../../app/ui/useTheme";
 
 const KNOWN_ERRORS = new Set(["state", "unknown_user", "oidc"]);
 const SSO_LOGIN_URL = "/api/auth/login";
@@ -38,6 +40,7 @@ export function LoginPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: mode } = useQuery({ queryKey: ["auth", "mode"], queryFn: fetchMode });
+  const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [bootstrapError, setBootstrapError] = useState(false);
@@ -75,7 +78,16 @@ export function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4">
+    <main className="relative flex min-h-screen flex-col items-center justify-center bg-canvas px-4">
+      <button
+        type="button"
+        onClick={toggleTheme}
+        aria-label={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
+        title={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
+        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full border border-line text-muted transition hover:bg-hover hover:text-ink"
+      >
+        {theme === "night" ? <SunIcon /> : <MoonIcon />}
+      </button>
       <div className="flex flex-col items-center">
         <div className="mb-5">
           <CefiroLogo size={72} />
