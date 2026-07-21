@@ -83,17 +83,17 @@ export function App() {
     <ToastProvider>
       <div className="flex h-screen flex-col">
         {/* no overflow clipping here: it would cut off the absolutely-positioned user menu */}
-        <header className="flex h-[60px] shrink-0 items-center gap-4 border-b border-line bg-panel px-4 text-ink">
-          <div className="flex shrink-0 items-center gap-3 md:min-w-[210px]">
+        <header className="flex h-[60px] shrink-0 items-center gap-5 border-b border-line bg-panel px-5 text-ink">
+          <div className="flex shrink-0 items-center gap-[11px] md:min-w-[210px]">
             <CefiroLogo size={32} />
             <div className="hidden flex-col md:flex">
               <span className="text-[15px] font-bold tracking-[0.32em]">CÉFIRO</span>
-              <span className="text-[10.5px] text-muted">{t("app.tagline")}</span>
+              <span className="text-[10.5px] tracking-[0.08em] text-muted">{t("app.tagline")}</span>
             </div>
           </div>
           <form onSubmit={handleSearchSubmit} className="min-w-0 max-w-[560px] flex-1">
-            <div className="flex h-10 items-center gap-2 rounded-[10px] border border-line bg-soft px-3">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 text-muted">
+            <div className="flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 opacity-50">
                 <circle cx="11" cy="11" r="7" />
                 <path d="m20 20-3.5-3.5" />
               </svg>
@@ -106,7 +106,7 @@ export function App() {
                 aria-label={t("mail.searchPlaceholder")}
                 className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted"
               />
-              <kbd aria-hidden="true" className="rounded border border-line px-1.5 text-[11px] text-muted">/</kbd>
+              <kbd aria-hidden="true" className="rounded-[5px] border border-line bg-panel px-[7px] py-[2px] text-[11px] text-muted">/</kbd>
             </div>
           </form>
           {health.data && health.data.status !== "ok" && (
@@ -118,9 +118,10 @@ export function App() {
                 type="button"
                 aria-haspopup="dialog"
                 onClick={() => setShowShortcuts((current) => !current)}
-                className="shrink-0 rounded-md border border-line px-3 py-1 text-sm text-muted hover:bg-hover"
+                className="flex h-[34px] shrink-0 items-center gap-[7px] rounded-[8px] border border-line px-3 text-[13px] text-muted transition hover:bg-hover hover:text-ink"
               >
-                {`? ${t("shortcuts.title")}`}
+                <kbd aria-hidden="true" className="rounded border border-line px-[6px] py-[1px] text-[11px]">?</kbd>
+                {t("shortcuts.title")}
               </button>
               <UserMenu
                 user={user}

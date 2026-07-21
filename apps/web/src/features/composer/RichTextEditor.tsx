@@ -225,7 +225,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
                 applyLink();
               }
             }}
-            className="ml-1 rounded border border-line bg-panel px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
+            className="ml-1 rounded-input border border-line bg-panel px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
           />
         )}
         {linkInvalid && <p className="text-xs text-warn">{t("composer.invalidLink")}</p>}

@@ -97,14 +97,14 @@ export function SignatureSettings() {
               <button
                 type="button"
                 onClick={() => startEdit(signature)}
-                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
+                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
               >
                 {t("settings.edit")}
               </button>
               <button
                 type="button"
                 onClick={() => deleteMutation.mutate(signature.id)}
-                className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
+                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
               >
                 {t("settings.delete")}
               </button>
@@ -117,7 +117,7 @@ export function SignatureSettings() {
         <button
           type="button"
           onClick={startCreate}
-          className="self-start rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+          className="self-start rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
         >
           {t("settings.newSignature")}
         </button>
@@ -131,7 +131,7 @@ export function SignatureSettings() {
               id="signature-name"
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
-              className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
             />
           </label>
 
@@ -154,13 +154,13 @@ export function SignatureSettings() {
             <button
               type="button"
               onClick={resetForm}
-              className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+              className="rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
             >
               {t("composer.cancel")}
             </button>
             <button
               type="submit"
-              className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]"
+              className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
             >
               {t("settings.save")}
             </button>

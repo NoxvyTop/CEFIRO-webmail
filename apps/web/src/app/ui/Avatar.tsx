@@ -29,19 +29,24 @@ export function initials(name: string | null, email: string): string {
   return (first + second).toUpperCase();
 }
 
-type AvatarProps = { name: string | null; email: string; size?: number };
+type AvatarProps = { name: string | null; email: string; size?: number; tone?: "palette" | "accent" };
 
-export function Avatar({ name, email, size = 38 }: AvatarProps) {
+// "accent" is a distinct visual role from the rotating sender palette: the
+// header's own user avatar (spec: 36px circular, fixed accent background),
+// not another entry in the deterministic per-sender color rotation.
+export function Avatar({ name, email, size = 38, tone = "palette" }: AvatarProps) {
+  const isAccent = tone === "accent";
   return (
     <span
       aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-full font-semibold"
+      className={`flex shrink-0 items-center justify-center rounded-full ${
+        isAccent ? "bg-accent font-bold text-accent-ink" : "font-semibold"
+      }`}
       style={{
         width: size,
         height: size,
-        background: avatarColor(email),
-        color: "#F4FBF8",
         fontSize: Math.round(size * 0.37),
+        ...(isAccent ? {} : { background: avatarColor(email), color: "#F4FBF8" }),
       }}
     >
       {initials(name, email)}

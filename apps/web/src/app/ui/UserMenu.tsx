@@ -62,7 +62,7 @@ export function UserMenu({
         aria-expanded={open}
         title={user.email}
       >
-        <Avatar name={user.displayName ?? null} email={user.email} size={36} />
+        <Avatar name={user.displayName ?? null} email={user.email} size={36} tone="accent" />
       </button>
       {open && (
         <div

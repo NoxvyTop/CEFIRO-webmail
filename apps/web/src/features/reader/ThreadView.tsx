@@ -131,8 +131,9 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
   const starred = Boolean(lastEmail.keywords.$flagged);
 
-  const actionButtonClass =
-    "flex h-8 items-center gap-[7px] rounded-lg px-3 text-[13px] text-ink transition hover:bg-hover";
+  const actionButtonBaseClass =
+    "flex h-8 items-center gap-[7px] rounded-lg px-3 text-[13px] transition hover:bg-hover";
+  const actionButtonClass = `${actionButtonBaseClass} text-ink`;
 
   return (
     <div className="flex h-full flex-col">
@@ -162,7 +163,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           type="button"
           aria-label={t(starred ? "mail.unstar" : "mail.star")}
           onClick={() => starMutation.mutate({ email: lastEmail, starred: !starred })}
-          className={actionButtonClass}
+          className={`${actionButtonBaseClass} ${starred ? "text-star" : "text-ink"}`}
         >
           {starred ? <StarFilledIcon size={15} /> : <StarIcon size={15} />}
           {t(starred ? "mail.unstar" : "mail.star")}

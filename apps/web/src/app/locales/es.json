@@ -8,7 +8,7 @@
   },
   "admin": {
     "title": "Administración",
-    "forbidden": "No tenés permisos de administrador",
+    "forbidden": "No tienes permisos de administrador",
     "back": "Volver",
     "empty": "No hay usuarios",
     "mailbox": {
@@ -126,7 +126,7 @@
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount": "{{count}} correos",
-    "searchPlaceholder": "Buscar en el correo",
+    "searchPlaceholder": "Buscar en el correo…",
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un correo",
@@ -293,6 +293,7 @@
   },
   "shortcuts": {
     "title": "Atajos",
+    "overlayTitle": "Atajos de teclado",
     "move": "Moverse por la lista",
     "archive": "Archivar correo",
     "star": "Destacar correo",

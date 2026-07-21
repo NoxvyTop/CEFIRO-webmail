@@ -64,8 +64,10 @@ export function UserRow({ user }: { user: AdminUser }) {
       ? t("admin.actions.archive")
       : t("admin.actions.reactivate");
 
+  const ghostButtonClass = "rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover disabled:opacity-50";
+
   return (
-    <tr className="border-t border-line">
+    <tr className="border-t border-line transition hover:bg-hover">
       <td className="p-2">{user.email}</td>
       <td className="p-2">{user.displayName}</td>
       <td className="p-2">
@@ -73,7 +75,7 @@ export function UserRow({ user }: { user: AdminUser }) {
           aria-label={t("admin.actions.role")}
           value={user.role}
           onChange={(event) => roleMutation.mutate(event.target.value as "employee" | "admin")}
-          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+          className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
         >
           <option value="employee">{t("admin.roles.employee")}</option>
           <option value="admin">{t("admin.roles.admin")}</option>
@@ -82,11 +84,19 @@ export function UserRow({ user }: { user: AdminUser }) {
       <td className="p-2">
         {user.mailboxLinked ? t("admin.mailbox.linked") : t("admin.mailbox.unlinked")}
       </td>
-      <td className="p-2">{user.active ? t("admin.status.active") : t("admin.status.archived")}</td>
+      <td className="p-2">
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs ${
+            user.active ? "bg-sel text-accent" : "border border-line text-muted"
+          }`}
+        >
+          {user.active ? t("admin.status.active") : t("admin.status.archived")}
+        </span>
+      </td>
       <td className="p-2">
         <div className="flex flex-col items-start gap-1">
           {!credentialOpen && (
-            <button type="button" onClick={() => setCredentialOpen(true)} className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover">
+            <button type="button" onClick={() => setCredentialOpen(true)} className={ghostButtonClass}>
               {t("admin.actions.linkMailbox")}
             </button>
           )}
@@ -99,14 +109,14 @@ export function UserRow({ user }: { user: AdminUser }) {
                 required
                 value={mailPassword}
                 onChange={(event) => setMailPassword(event.target.value)}
-                className="rounded-md border border-line bg-soft p-1 text-xs text-ink outline-none focus:border-accent"
+                className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
               />
-              <button type="submit" className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover">
+              <button type="submit" className={ghostButtonClass}>
                 {t("admin.actions.saveCredential")}
               </button>
             </form>
           )}
-          <button type="button" onClick={handleArchiveClick} className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover">
+          <button type="button" onClick={handleArchiveClick} className={ghostButtonClass}>
             {archiveLabel}
           </button>
           {hasError && (
