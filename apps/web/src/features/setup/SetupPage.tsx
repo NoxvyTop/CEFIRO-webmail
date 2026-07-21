@@ -153,7 +153,7 @@ export function SetupPage() {
             >
               {t("setup.save")}
             </button>
-            {ssoResult === "saved" && <p className="text-sm text-accent">{t("setup.saved")}</p>}
+            {ssoResult === "saved" && <p className="text-sm text-accent-text">{t("setup.saved")}</p>}
             {ssoResult === "error" && (
               <p role="alert" className="text-sm text-danger">
                 {t("setup.error")}
@@ -227,7 +227,7 @@ export function SetupPage() {
             >
               {t("setup.create")}
             </button>
-            {userResult === "created" && <p className="text-sm text-accent">{t("setup.created")}</p>}
+            {userResult === "created" && <p className="text-sm text-accent-text">{t("setup.created")}</p>}
             {userResult === "error" && (
               <p role="alert" className="text-sm text-danger">
                 {t("setup.error")}

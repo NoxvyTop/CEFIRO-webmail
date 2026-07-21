@@ -88,7 +88,7 @@ export function SignatureSettings() {
             <div className="flex items-center gap-2">
               <span>{signature.name}</span>
               {signature.isDefault && (
-                <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent">
+                <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent-text">
                   {t("settings.default")}
                 </span>
               )}

@@ -46,11 +46,14 @@
   --line-strong: #7c939c;
   --accent: #0fa383;
   --accent-ink: #ffffff;
-  /* CLARO-02: same hue/sat as --accent (167°, 83%), darkened to L=27% —
-     5.01:1 on #ffffff, clearing WCAG AA (4.5:1) for small text while staying
-     recognizably the same mint/teal hue. Reserved for accent used AS TEXT
-     (badges, links, idle labels); solid accent fills keep #0fa383. */
-  --accent-text: #0c7e65;
+  /* CLARO-02: same hue/sat as --accent (167°, 83%), darkened to L=24.4% —
+     retuned against the DARKEST surface this token sits on in practice,
+     --sel (#dcf2ea, used for badge pills and the selected-row background),
+     not just #ffffff: 5.02:1 on --sel, 5.88:1 on #ffffff, 5.37:1 on --soft.
+     Clears WCAG AA (4.5:1) for small text everywhere it's used while
+     staying recognizably the same mint/teal hue. Reserved for accent used
+     AS TEXT (badges, links, idle labels); solid accent fills keep #0fa383. */
+  --accent-text: #0a725c;
   --soft: #edf7f3;
   /* CLARO-03: darkened from #f3f7f6 (1.08:1 on panel / 1.02:1 on canvas —
      imperceptible) to a visible step on BOTH surfaces: 1.42:1 on #ffffff

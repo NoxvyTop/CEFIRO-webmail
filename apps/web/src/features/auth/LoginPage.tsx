@@ -114,7 +114,7 @@ export function LoginPage() {
               {ssoConnecting ? t("auth.connecting") : t("auth.signIn")}
             </a>
             {ssoConnecting && (
-              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent">
+              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent-text">
                 {t("auth.redirecting")}
               </p>
             )}

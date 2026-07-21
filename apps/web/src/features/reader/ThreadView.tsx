@@ -243,7 +243,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                           </span>
                           <a
                             href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
-                            className="text-accent underline"
+                            className="text-accent-text underline"
                           >
                             {t("attachments.download")}
                           </a>
@@ -252,7 +252,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                               href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-accent underline"
+                              className="text-accent-text underline"
                             >
                               {t("attachments.view")}
                             </a>
