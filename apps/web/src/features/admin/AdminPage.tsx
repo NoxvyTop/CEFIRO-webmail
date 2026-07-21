@@ -98,7 +98,7 @@ export function AdminPage() {
     <main aria-label={t("admin.title")} className="mx-auto flex min-h-full max-w-5xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t("admin.title")}</h1>
-        <Link to="/" className="text-sm text-accent underline">
+        <Link to="/" className="text-sm text-accent-text underline">
           {t("admin.back")}
         </Link>
       </div>

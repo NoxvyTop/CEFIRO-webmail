@@ -229,7 +229,7 @@ export function FilterSettings() {
             setEditingId(null);
             setFormOpen(true);
           }}
-          className="self-start rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+          className="self-start rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
         >
           {t("filters.newRule")}
         </button>

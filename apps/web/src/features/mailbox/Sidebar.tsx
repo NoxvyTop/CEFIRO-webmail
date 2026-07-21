@@ -62,7 +62,7 @@ export function Sidebar({
           {showUnreadBadge && (
             <span
               aria-label={t("mail.unread", { count: mailbox.unreadEmails })}
-              className="text-xs font-bold text-accent"
+              className="text-xs font-bold text-accent-text"
             >
               {mailbox.unreadEmails}
             </span>

@@ -117,7 +117,7 @@ export function SignatureSettings() {
         <button
           type="button"
           onClick={startCreate}
-          className="self-start rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+          className="self-start rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
         >
           {t("settings.newSignature")}
         </button>
@@ -154,7 +154,7 @@ export function SignatureSettings() {
             <button
               type="button"
               onClick={resetForm}
-              className="rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+              className="rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
             >
               {t("composer.cancel")}
             </button>

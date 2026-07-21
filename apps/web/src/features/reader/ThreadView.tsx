@@ -277,7 +277,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                         </svg>
                         <span>
                           {t("app.sentWith")}{" "}
-                          <span className="font-bold tracking-[0.14em] text-accent">CÉFIRO</span> ·{" "}
+                          <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> ·{" "}
                           {t("app.sealMotto")}
                         </span>
                       </p>

@@ -190,7 +190,7 @@ export function LoginPage() {
         )}
       </div>
       <p className="mt-[22px] flex items-center gap-2 text-[11.5px] text-muted">
-        <span className="font-bold tracking-[0.14em] text-accent">CÉFIRO</span> · {t("app.sealMotto")}
+        <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> · {t("app.sealMotto")}
       </p>
     </main>
   );
