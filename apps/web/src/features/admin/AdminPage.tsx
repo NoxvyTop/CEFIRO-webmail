@@ -212,7 +212,7 @@ export function AdminPage() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setUserPage((page) => Math.max(0, page - 1))}
+                      onClick={() => setUserPage(Math.max(0, currentPage - 1))}
                       disabled={currentPage === 0}
                       className={paginationButtonClass}
                     >
@@ -220,7 +220,7 @@ export function AdminPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setUserPage((page) => Math.min(pageCount - 1, page + 1))}
+                      onClick={() => setUserPage(Math.min(pageCount - 1, currentPage + 1))}
                       disabled={currentPage >= pageCount - 1}
                       className={paginationButtonClass}
                     >
