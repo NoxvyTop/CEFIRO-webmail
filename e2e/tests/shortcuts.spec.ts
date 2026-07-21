@@ -38,7 +38,7 @@ test("clicking the backdrop closes the Atajos dialog", async ({ page }) => {
 test("the header ? Atajos button also opens the dialog", async ({ page }) => {
   await page.goto("/");
 
-  await page.getByRole("button", { name: "? Atajos" }).click();
+  await page.getByRole("button", { name: "Atajos", exact: true }).click();
 
   await expect(page.getByRole("dialog", { name: "Atajos" })).toBeVisible();
 });
