@@ -119,4 +119,13 @@ describe("group view filtering", () => {
       expect(last).not.toContain("excludeTo");
     });
   });
+
+  it("styles the group toggle row like a Sidebar row (fixed height, hover feedback) instead of a bare native checkbox row", async () => {
+    await renderAt("/", { groupMailInMainInbox: false });
+
+    const toggle = await screen.findByRole("checkbox", { name: i18n.t("groups.showInInbox") });
+    const row = toggle.closest("label") as HTMLElement;
+    expect(row.className).toContain("h-[38px]");
+    expect(row.className).toContain("hover:bg-hover");
+  });
 });
