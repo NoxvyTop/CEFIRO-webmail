@@ -153,11 +153,11 @@
       "generic": "No se pudo cargar el correo"
     },
     "unlinked": {
-      "title": "Vinculá tu buzón",
-      "descriptionAdmin": "Conectá tu casilla de correo para empezar a recibir mensajes.",
+      "title": "Vincula tu buzón",
+      "descriptionAdmin": "Conecta tu casilla de correo para empezar a recibir mensajes.",
       "descriptionEmployee": "Tu buzón todavía no está vinculado a una casilla de correo.",
       "cta": "Vincular buzón",
-      "hint": "Pedile a un administrador que lo vincule."
+      "hint": "Pide a un administrador que lo vincule."
     },
     "summarizeWithAi": "✦ Resumir con IA",
     "aiSummaryTitle": "Resumen IA",
@@ -233,7 +233,7 @@
     "draftingWithAi": "Redactando…",
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
     "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
-    "noIdentitiesHint": "Vinculá tu buzón para poder redactar correos"
+    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos"
   },
   "attachments": {
     "download": "Descargar",
