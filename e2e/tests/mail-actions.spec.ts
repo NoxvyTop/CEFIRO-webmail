@@ -47,16 +47,16 @@ test("star a message into Destacados, then archive it out of the inbox into Arch
 
   // Open it from Destacados and archive it from the reader.
   await page.getByRole("option", { name: new RegExp(SUBJECT) }).click();
-  await page.getByRole("button", { name: "Archivar" }).click();
+  await page.getByTestId("thread-actions-bar").getByRole("button", { name: "Archivar" }).click();
 
   await expect(page.getByRole("status")).toHaveText(/Correo archivado/);
 
   // Left the inbox...
-  await page.getByRole("button", { name: "Inbox" }).click();
+  await page.getByRole("button", { name: "Recibidos" }).click();
   await expect(page.getByRole("option", { name: new RegExp(SUBJECT) })).toHaveCount(0);
 
   // ...and shows up in Archive.
-  await page.getByRole("button", { name: "Archive" }).click();
+  await page.getByRole("button", { name: "Archivados" }).click();
   await expect(page.getByRole("option", { name: new RegExp(SUBJECT) })).toBeVisible();
 });
 
