@@ -48,7 +48,10 @@ async function fetchAsDataUrl(blobId: string, name: string | null, type: string)
   const response = await fetch(blobFetchUrl(blobId, name, type), { credentials: "include" });
   if (!response.ok) throw new Error(`blob fetch failed: ${response.status}`);
   const buffer = await response.arrayBuffer();
-  return `data:${type};base64,${arrayBufferToBase64(buffer)}`;
+  // Anchor the data: prefix to the vetted base type (this is only reached for
+  // allowlisted image types), never the raw sender-controlled type string.
+  const baseType = type.split(";")[0]!.trim().toLowerCase();
+  return `data:${baseType};base64,${arrayBufferToBase64(buffer)}`;
 }
 
 /**
