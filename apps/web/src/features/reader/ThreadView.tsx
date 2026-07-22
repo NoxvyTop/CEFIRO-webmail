@@ -294,6 +294,30 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           {starred ? <StarFilledIcon size={15} /> : <StarIcon size={15} />}
           {t(starred ? "mail.unstar" : "mail.star")}
         </button>
+        <button
+          type="button"
+          onClick={() => openCompose(`reply:${lastEmail.id}`)}
+          className={actionButtonClass}
+        >
+          <ReplyIcon size={15} />
+          {t("composer.reply")}
+        </button>
+        {showReplyAll && (
+          <button
+            type="button"
+            onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
+            className={actionButtonClass}
+          >
+            {t("composer.replyAll")}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => openCompose(`forward:${lastEmail.id}`)}
+          className={actionButtonClass}
+        >
+          {t("composer.forward")}
+        </button>
         <div ref={labelMenuRef} className="relative shrink-0">
           <button
             type="button"
@@ -338,30 +362,6 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => openCompose(`reply:${lastEmail.id}`)}
-          className={actionButtonClass}
-        >
-          <ReplyIcon size={15} />
-          {t("composer.reply")}
-        </button>
-        {showReplyAll && (
-          <button
-            type="button"
-            onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-            className={actionButtonClass}
-          >
-            {t("composer.replyAll")}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => openCompose(`forward:${lastEmail.id}`)}
-          className={actionButtonClass}
-        >
-          {t("composer.forward")}
-        </button>
         <span className="ml-auto hidden min-w-0 truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">

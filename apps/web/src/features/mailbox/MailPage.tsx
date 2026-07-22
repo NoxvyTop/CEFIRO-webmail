@@ -378,6 +378,7 @@ export function MailPage() {
             onClearLabel={handleClearLabel}
             archiveMailboxId={archiveMailboxId}
             onArchived={handleArchived}
+            customLabels={customLabels}
           />
         )}
       </section>

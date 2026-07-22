@@ -4,12 +4,12 @@ import {
 } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
-import type { EmailSummary, MessagesPage } from "@webmail/shared";
+import type { CustomLabel, EmailSummary, MessagesPage } from "@webmail/shared";
 import { fetchMessages, updateMessage, PAGE_SIZE } from "./api";
 import { mailErrorKey, mailRetry } from "./queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
-import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -30,6 +30,10 @@ interface MessageListProps {
   onClearLabel?: () => void;
   archiveMailboxId: string | null;
   onArchived?: (email: EmailSummary) => void;
+  // Same userPreferences-sourced list the Sidebar uses, so custom label chips
+  // resolve their stored color/display name instead of falling back to the
+  // deterministic hash color and raw JMAP slug.
+  customLabels?: CustomLabel[];
 }
 
 function rowClassName(selected: boolean) {
@@ -46,7 +50,7 @@ function rowClassName(selected: boolean) {
 export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
-  onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived,
+  onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived, customLabels = [],
 }: MessageListProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -292,9 +296,9 @@ export function MessageList({
                 <span
                   key={label}
                   className="rounded-full px-2 py-[2px] text-[11px] font-semibold"
-                  style={{ color: labelColor(label), background: labelBackground(label) }}
+                  style={{ color: labelColor(label, customLabels), background: labelBackground(label, customLabels) }}
                 >
-                  {label}
+                  {labelDisplayName(label, customLabels)}
                 </span>
               ))}
             </div>
@@ -366,9 +370,12 @@ export function MessageList({
             {activeLabel && (
               <span
                 className="flex h-6 shrink-0 items-center gap-1.5 rounded-full px-[9px] text-xs font-semibold"
-                style={{ color: labelColor(activeLabel), background: labelBackground(activeLabel) }}
+                style={{
+                  color: labelColor(activeLabel, customLabels),
+                  background: labelBackground(activeLabel, customLabels),
+                }}
               >
-                {activeLabel}
+                {labelDisplayName(activeLabel, customLabels)}
                 <button
                   type="button"
                   aria-label={t("mail.clearLabel")}
