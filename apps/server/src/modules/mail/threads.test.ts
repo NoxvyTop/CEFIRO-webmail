@@ -78,7 +78,8 @@ const stubJmap: JmapClient = {
                 "3": { value: "plain content" },
               },
               attachments: [
-                { blobId: "blob1", name: "file.pdf", type: "application/pdf", size: 100 },
+                { blobId: "blob1", name: "file.pdf", type: "application/pdf", size: 100, cid: "logo123" },
+                { blobId: "blob2", name: "image.png", type: "image/png", size: 50 },
               ],
             },
           ],
@@ -143,7 +144,8 @@ describe("GET /api/mail/threads/:threadId", () => {
     expect(e1?.bodyHtml).toBeNull();
     expect(e1?.bodyText).toBe("plain content");
     expect(e1?.attachments).toEqual([
-      { blobId: "blob1", name: "file.pdf", type: "application/pdf", size: 100 },
+      { blobId: "blob1", name: "file.pdf", type: "application/pdf", size: 100, cid: "logo123" },
+      { blobId: "blob2", name: "image.png", type: "image/png", size: 50, cid: null },
     ]);
     expect(e1?.cc).toEqual([]);
     expect(e1?.replyTo).toEqual([]);

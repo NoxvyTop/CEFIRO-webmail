@@ -26,6 +26,7 @@ import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { EmailBody } from "./EmailBody";
+import { extractReferencedCids } from "./sanitize";
 
 interface ThreadViewProps {
   threadId: string;
@@ -274,6 +275,17 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
               sender && identities.some((identity) => identity.email.toLowerCase() === sender.email.toLowerCase()),
             );
 
+            // Attachments referenced inline via <img src="cid:..."> in the body
+            // render inside EmailBody itself (see the cidMap it builds from
+            // `attachments`) — they'd be a duplicate if also shown as a
+            // downloadable chip below, so they're hidden from the chip list
+            // here (Gmail behavior). Attachments not referenced by any cid:
+            // image — including images sent as real attachments — stay visible.
+            const referencedCids = extractReferencedCids(email.bodyHtml);
+            const visibleAttachments = email.attachments.filter(
+              (attachment) => !(attachment.cid && referencedCids.has(attachment.cid)),
+            );
+
             return (
               <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
                 <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
@@ -292,15 +304,15 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                 </div>
                 {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
                 <div className="mt-3 text-[15px] leading-[1.65]">
-                  <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} />
+                  <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} attachments={email.attachments} />
                 </div>
-                {email.attachments.length > 0 && (
+                {visibleAttachments.length > 0 && (
                   <div className="mt-5">
                     <p className="mb-2 text-[12.5px] font-semibold text-muted">
-                      {t("attachments.count", { count: email.attachments.length })}
+                      {t("attachments.count", { count: visibleAttachments.length })}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      {email.attachments.map((attachment) => {
+                      {visibleAttachments.map((attachment) => {
                         const attachmentName = attachment.name ?? "attachment";
                         const AttachmentIcon = attachmentIconFor(attachment.type);
                         return (

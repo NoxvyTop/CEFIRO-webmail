@@ -42,7 +42,7 @@ const thread = {
       replyTo: [],
       bodyHtml: "<p>Hi</p>",
       bodyText: null,
-      attachments: [{ blobId: "b1", name: "doc.pdf", type: "application/pdf", size: 2048 }],
+      attachments: [{ blobId: "b1", name: "doc.pdf", type: "application/pdf", size: 2048, cid: null }],
     },
   ],
 };

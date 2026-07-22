@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import type { ThreadDetail } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
@@ -9,7 +10,12 @@ import { ThreadView } from "./ThreadView";
 
 const REMOTE_IMAGE_URL = "https://tracker.evil/pixel.png";
 
-const thread = {
+// Typed explicitly (not just inferred) so `cid: null` widens to `string |
+// null` instead of narrowing to the `null` literal type — otherwise
+// `structuredClone(thread)` copies keep the narrow inferred type, and tests
+// that assign a string cid (e.g. inline cid attachment tests below) would
+// fail to typecheck.
+const thread: ThreadDetail = {
   id: "t1",
   emails: [
     {
@@ -28,7 +34,7 @@ const thread = {
       replyTo: [],
       bodyHtml: `<p>Here is the report.</p><img src="${REMOTE_IMAGE_URL}">`,
       bodyText: null,
-      attachments: [{ blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 }],
+      attachments: [{ blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null }],
     },
     {
       id: "e2",
@@ -314,8 +320,8 @@ describe("ThreadView", () => {
     it("shows a pluralized 'N adjuntos' header above the attachment pills", async () => {
       const state = structuredClone(thread);
       state.emails[0]!.attachments = [
-        { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
-        { blobId: "b2", name: "logo.png", type: "image/png", size: 1024 },
+        { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null },
+        { blobId: "b2", name: "logo.png", type: "image/png", size: 1024, cid: null },
       ];
       vi.stubGlobal(
         "fetch",
@@ -340,6 +346,78 @@ describe("ThreadView", () => {
       // its direct parent is the pill that also holds the icon and the links.
       const chip = attachmentText.parentElement;
       expect(chip?.querySelector("svg")).toBeTruthy();
+    });
+
+    describe("inline cid attachments", () => {
+      it("hides an attachment from the chip list when its cid is referenced by a cid: image in the body, but keeps non-referenced attachments (Gmail behavior)", async () => {
+        const state = structuredClone(thread);
+        state.emails[0]!.bodyHtml = `<p>See the logo below.</p><img src="cid:logo123">`;
+        state.emails[0]!.attachments = [
+          { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null },
+          { blobId: "logo-blob", name: "logo.png", type: "image/png", size: 512, cid: "logo123" },
+        ];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+            if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }),
+        );
+        renderThread();
+
+        // Only the non-inline attachment remains in the chip count/list.
+        expect(await screen.findByText(i18n.t("attachments.count", { count: 1 }))).toBeInTheDocument();
+        expect(screen.getByText(/report\.pdf/)).toBeInTheDocument();
+        expect(screen.queryByText(/logo\.png/)).not.toBeInTheDocument();
+      });
+
+      it("keeps a real image attachment (sent as an actual attachment, not embedded via cid:) in the chip list", async () => {
+        const state = structuredClone(thread);
+        state.emails[0]!.attachments = [
+          { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null },
+          { blobId: "photo-blob", name: "photo.png", type: "image/png", size: 900, cid: "photo123" },
+        ];
+        // The body never references cid:photo123, so it isn't an inline embed
+        // in this email — it stays a regular downloadable attachment.
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+            if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }),
+        );
+        renderThread();
+
+        expect(await screen.findByText(i18n.t("attachments.count", { count: 2 }))).toBeInTheDocument();
+        expect(screen.getByText(/photo\.png/)).toBeInTheDocument();
+      });
+
+      it("passes the email's attachments to EmailBody so the inline cid: image itself resolves to the blob URL", async () => {
+        const state = structuredClone(thread);
+        state.emails[0]!.bodyHtml = `<p>See the logo below.</p><img src="cid:logo123">`;
+        state.emails[0]!.attachments = [
+          { blobId: "logo-blob", name: "logo.png", type: "image/png", size: 512, cid: "logo123" },
+        ];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+            if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }),
+        );
+        renderThread();
+
+        const iframes = await screen.findAllByTitle(i18n.t("mail.emailContent"));
+        const srcDocs = iframes.map((iframe) => iframe.getAttribute("srcdoc") ?? "");
+        expect(srcDocs.some((doc) => doc.includes("/api/mail/blobs/logo-blob"))).toBe(true);
+        expect(srcDocs.some((doc) => doc.includes("cid:logo123"))).toBe(false);
+      });
     });
   });
 

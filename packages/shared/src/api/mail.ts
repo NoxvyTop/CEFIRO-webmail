@@ -44,6 +44,10 @@ export const attachmentMetaSchema = z.object({
   name: z.string().nullable(),
   type: z.string(),
   size: z.number(),
+  // Content-ID (without angle brackets) for attachments referenced inline in
+  // the body via <img src="cid:...">, e.g. embedded logos/signatures. Null
+  // for regular (non-inline) attachments.
+  cid: z.string().nullable(),
 });
 export type AttachmentMeta = z.infer<typeof attachmentMetaSchema>;
 

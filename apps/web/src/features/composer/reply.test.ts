@@ -154,9 +154,9 @@ describe("forwardDraft", () => {
   it("reuses the original attachments by blobId with a name fallback", () => {
     const email = makeEmail({
       attachments: [
-        { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
-        { blobId: "b2", name: null, type: "image/png", size: 512 },
-        { blobId: "b3", name: "  ", type: "text/plain", size: 10 },
+        { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null },
+        { blobId: "b2", name: null, type: "image/png", size: 512, cid: null },
+        { blobId: "b3", name: "  ", type: "text/plain", size: 10, cid: null },
       ],
     });
     const draft = forwardDraft(email, identities);
