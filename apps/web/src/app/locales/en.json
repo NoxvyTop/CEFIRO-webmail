@@ -237,7 +237,9 @@
   },
   "attachments": {
     "download": "Download",
-    "view": "View"
+    "view": "View",
+    "count_one": "{{count}} attachment",
+    "count_other": "{{count}} attachments"
   },
   "settings": {
     "title": "Settings",

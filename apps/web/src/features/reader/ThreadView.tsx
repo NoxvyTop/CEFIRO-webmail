@@ -6,7 +6,19 @@ import type { EmailAddress, EmailDetail } from "@webmail/shared";
 import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import {
+  ArchiveIcon,
+  ArrowLeftIcon,
+  FileArchiveIcon,
+  FileCalendarIcon,
+  FileDocumentIcon,
+  FileGenericIcon,
+  FileImageIcon,
+  FileSpreadsheetIcon,
+  ReplyIcon,
+  StarFilledIcon,
+  StarIcon,
+} from "../../app/ui/icons";
 import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
@@ -40,6 +52,39 @@ const PREVIEWABLE_CONTENT_TYPES = new Set([
 
 function isPreviewable(type: string): boolean {
   return PREVIEWABLE_CONTENT_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
+}
+
+const WORD_TYPES = new Set([
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+const SHEET_TYPES = new Set([
+  "text/csv",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+const ARCHIVE_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+]);
+const CALENDAR_TYPES = new Set(["text/calendar", "application/ics"]);
+
+// Maps an attachment's content-type to the icon that best represents it in
+// the attachment pill — pdf/word share the document icon, spreadsheets get
+// a grid, archives a zipper mark; anything unrecognized (including plain
+// text/JSON) falls back to the generic file icon.
+function attachmentIconFor(type: string) {
+  const normalized = type.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (normalized.startsWith("image/")) return FileImageIcon;
+  if (normalized === "application/pdf" || WORD_TYPES.has(normalized)) return FileDocumentIcon;
+  if (SHEET_TYPES.has(normalized)) return FileSpreadsheetIcon;
+  if (ARCHIVE_TYPES.has(normalized)) return FileArchiveIcon;
+  if (CALENDAR_TYPES.has(normalized)) return FileCalendarIcon;
+  return FileGenericIcon;
 }
 
 function blobUrl(blobId: string, name: string, type: string, download: boolean): string {
@@ -229,42 +274,49 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                   </span>
                 </div>
                 {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
-                {email.attachments.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {email.attachments.map((attachment) => {
-                      const attachmentName = attachment.name ?? "attachment";
-                      return (
-                        <span
-                          key={attachment.blobId}
-                          className="flex items-center gap-1 rounded-full bg-soft px-2 py-1 text-xs"
-                        >
-                          <span>
-                            {attachmentName} ({formatSizeKb(attachment.size)})
-                          </span>
-                          <a
-                            href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
-                            className="text-accent-text underline"
-                          >
-                            {t("attachments.download")}
-                          </a>
-                          {isPreviewable(attachment.type) && (
-                            <a
-                              href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-accent-text underline"
-                            >
-                              {t("attachments.view")}
-                            </a>
-                          )}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
                   <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} />
                 </div>
+                {email.attachments.length > 0 && (
+                  <div className="mt-5">
+                    <p className="mb-2 text-[12.5px] font-semibold text-muted">
+                      {t("attachments.count", { count: email.attachments.length })}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {email.attachments.map((attachment) => {
+                        const attachmentName = attachment.name ?? "attachment";
+                        const AttachmentIcon = attachmentIconFor(attachment.type);
+                        return (
+                          <span
+                            key={attachment.blobId}
+                            className="flex items-center gap-1.5 rounded-full bg-soft px-2 py-1 text-xs"
+                          >
+                            <AttachmentIcon size={15} />
+                            <span>
+                              {attachmentName} ({formatSizeKb(attachment.size)})
+                            </span>
+                            <a
+                              href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
+                              className="text-accent-text underline"
+                            >
+                              {t("attachments.download")}
+                            </a>
+                            {isPreviewable(attachment.type) && (
+                              <a
+                                href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-accent-text underline"
+                              >
+                                {t("attachments.view")}
+                              </a>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {email.id === lastEmail.id && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">

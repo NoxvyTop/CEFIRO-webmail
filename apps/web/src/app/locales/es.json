@@ -237,7 +237,9 @@
   },
   "attachments": {
     "download": "Descargar",
-    "view": "Ver"
+    "view": "Ver",
+    "count_one": "{{count}} adjunto",
+    "count_other": "{{count}} adjuntos"
   },
   "settings": {
     "title": "Ajustes",
