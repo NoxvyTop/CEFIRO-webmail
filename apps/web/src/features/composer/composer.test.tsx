@@ -269,6 +269,47 @@ describe("Composer", () => {
 
       await waitFor(() => expect(body.textContent).not.toContain("Thanks"));
     });
+
+    // KNOWN LIMITATION: marker stripped by TipTap on edit → replace regresses
+    // to append; fixed in the RichTextEditor marker-persistence PR.
+    //
+    // applySignature's find/replace/remove logic depends on the
+    // data-cefiro-signature wrapper surviving in state.draft.bodyHtml.
+    // RichTextEditor's TipTap instance (StarterKit schema) has no node
+    // definition for that custom div, so the moment the user actually types
+    // (TipTap's onUpdate fires and calls onChange with the schema-serialized
+    // HTML) the wrapper — and its data attribute — is silently stripped, and
+    // the old signature's content is left behind as plain unmarked
+    // paragraphs. The next signature switch then finds no existing wrapper
+    // to replace and inserts a fresh one, so the old (now-unmarked) content
+    // and the new signature both end up in the body — a regression of the
+    // original stacking bug this PR fixes for the untouched-body path.
+    // Deferred to the upcoming signature-logo PR, which already needs to
+    // extend RichTextEditor's TipTap schema and can add persistence for
+    // these markers as part of that same change.
+    it("KNOWN LIMITATION: typing before switching loses the marker and the switch stacks instead of replacing", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      // Simulate real typing: TipTap's onUpdate fires and re-serializes via
+      // its schema, dropping the signature marker div/attribute.
+      fireEvent.input(body, { target: { innerHTML: `${body.innerHTML}<p>my reply text</p>` } });
+      await waitFor(() => expect(body.textContent).toContain("my reply text"));
+
+      fireEvent.change(signatureSelect, { target: { value: "sig2" } });
+
+      // Pins the CURRENT (regressed) behavior: both the old, now-unmarked
+      // "Thanks" content and the new "Alt sig content" are present — this
+      // assertion should flip to "not.toContain('Thanks')" once the marker
+      // survives edits (RichTextEditor marker-persistence PR).
+      await waitFor(() => expect(body.textContent).toContain("Alt sig content"));
+      expect(body.textContent).toContain("Thanks");
+    });
   });
 
   describe("Redactar con IA", () => {

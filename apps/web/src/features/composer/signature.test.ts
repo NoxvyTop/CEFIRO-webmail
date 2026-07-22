@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applySignature, QUOTE_MARKER_ATTR, SIGNATURE_MARKER_ATTR } from "./signature";
+import {
+  applySignature,
+  QUOTE_MARKER_ATTR,
+  SIGNATURE_MARKER_ATTR,
+  stripSignatureMarkers,
+} from "./signature";
 
 function sig(contentHtml: string) {
   return { contentHtml };
@@ -69,5 +74,36 @@ describe("applySignature", () => {
 
     expect(twice).toBe(once);
     expect(thrice).toBe(once);
+  });
+});
+
+describe("stripSignatureMarkers", () => {
+  it("unwraps the signature marker, keeping its content", () => {
+    const body = `<p>Hi</p><div ${SIGNATURE_MARKER_ATTR}="true"><p>Thanks, Alice</p></div>`;
+    expect(stripSignatureMarkers(body)).toBe("<p>Hi</p><p>Thanks, Alice</p>");
+  });
+
+  it("unwraps the quote marker, keeping its content", () => {
+    const body = `<div ${QUOTE_MARKER_ATTR}="true"><br><blockquote><p>Original</p></blockquote></div>`;
+    expect(stripSignatureMarkers(body)).toBe("<br><blockquote><p>Original</p></blockquote>");
+  });
+
+  it("unwraps both markers in one pass, preserving document order", () => {
+    const body =
+      `<p>My reply</p>` +
+      `<div ${SIGNATURE_MARKER_ATTR}="true"><p>Thanks, Alice</p></div>` +
+      `<div ${QUOTE_MARKER_ATTR}="true"><blockquote><p>Original</p></blockquote></div>`;
+    expect(stripSignatureMarkers(body)).toBe(
+      "<p>My reply</p><p>Thanks, Alice</p><blockquote><p>Original</p></blockquote>",
+    );
+  });
+
+  it("is a no-op when no markers are present", () => {
+    const body = "<p>Just a plain body</p>";
+    expect(stripSignatureMarkers(body)).toBe(body);
+  });
+
+  it("is a no-op on an empty body", () => {
+    expect(stripSignatureMarkers("")).toBe("");
   });
 });

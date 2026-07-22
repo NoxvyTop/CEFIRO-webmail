@@ -4,6 +4,7 @@ import { sendEmail, uploadAttachment } from "./api";
 import { fetchAiDraft } from "./aiApi";
 import { MailApiError } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
+import { stripSignatureMarkers } from "./signature";
 
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type PendingUpload = { id: string; name: string; progress: number; error: boolean };
@@ -159,14 +160,21 @@ export function useComposer(initial: ComposerDraft): {
       return false;
     }
 
+    // The composer's internal signature/quote marker divs (see
+    // composer/signature.ts) are an implementation detail for finding,
+    // replacing, and removing the signature block in the editor — they must
+    // never reach a recipient's inbox, so strip them right before building
+    // the outgoing payload.
+    const outgoingBodyHtml = stripSignatureMarkers(draft.bodyHtml);
+
     const input: SendEmailInput = {
       identityId: draft.identityId,
       to: draft.to,
       cc: draft.cc,
       bcc: draft.bcc,
       subject: draft.subject,
-      textBody: htmlToPlainText(draft.bodyHtml),
-      htmlBody: draft.bodyHtml,
+      textBody: htmlToPlainText(outgoingBodyHtml),
+      htmlBody: outgoingBodyHtml,
       attachments: attachments.map((attachment) => ({
         blobId: attachment.blobId, name: attachment.name, type: attachment.type,
       })),

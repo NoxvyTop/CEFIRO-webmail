@@ -49,3 +49,26 @@ export function applySignature(bodyHtml: string, signature: SignatureContent | n
 
   return doc.body.innerHTML;
 }
+
+/**
+ * Strips the internal `SIGNATURE_MARKER_ATTR` / `QUOTE_MARKER_ATTR` wrapper
+ * divs from a composer body, unwrapping them in place (children are kept,
+ * only the marker element itself is removed). These markers are an
+ * implementation detail of applySignature's find/replace/remove logic — they
+ * must never leak into a sent email's HTML, so this MUST run on `bodyHtml`
+ * right before it's used to build the outgoing `htmlBody` (see useComposer's
+ * send()). A no-op when no markers are present.
+ */
+export function stripSignatureMarkers(html: string): string {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const markers = doc.body.querySelectorAll(`[${SIGNATURE_MARKER_ATTR}], [${QUOTE_MARKER_ATTR}]`);
+
+  for (const marker of Array.from(markers)) {
+    while (marker.firstChild) {
+      marker.parentNode?.insertBefore(marker.firstChild, marker);
+    }
+    marker.remove();
+  }
+
+  return doc.body.innerHTML;
+}
