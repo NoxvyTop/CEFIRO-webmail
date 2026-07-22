@@ -40,21 +40,34 @@ describe("EmailBody", () => {
     expect(iframe.className).not.toMatch(/h-64/);
   });
 
-  it("injects the night theme ink color, panel background, dark color-scheme, and 15px/1.65 typography", () => {
+  it("wraps the iframe in a bordered, rounded paper card so it reads as a document instead of a floating box", () => {
+    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    const wrapper = getIframe().parentElement;
+    expect(wrapper?.className).toMatch(/\bborder-line\b/);
+    expect(wrapper?.className).toMatch(/rounded-/);
+  });
+
+  it("always renders the iframe srcdoc on light paper values (ink/panel/color-scheme) when the app theme is night", () => {
     document.documentElement.dataset.theme = "night";
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
     const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
 
-    expect(srcDoc).toContain("#eceef4");
-    expect(srcDoc).toContain("color-scheme:dark");
-    expect(srcDoc).toContain("background:#12141c");
+    // Styled marketing HTML assumes a light background (Gmail/Outlook
+    // "paper" approach) — the iframe canvas must stay light even though the
+    // app is in night theme, or the email's own dark text becomes
+    // dark-on-dark and unreadable (the newsletter-night.png regression).
+    expect(srcDoc).toContain("#101318");
+    expect(srcDoc).toContain("color-scheme:light");
+    expect(srcDoc).toContain("background:#ffffff");
     expect(srcDoc).toContain("font-size:15px");
     expect(srcDoc).toContain("line-height:1.65");
-    expect(srcDoc).not.toContain("color:#111");
+    expect(srcDoc).not.toContain("#eceef4");
+    expect(srcDoc).not.toContain("color-scheme:dark");
+    expect(srcDoc).not.toContain("background:#12141c");
     expect(srcDoc).not.toMatch(/font-family:\s*sans-serif/);
   });
 
-  it("injects the light theme ink color, panel background, and light color-scheme", () => {
+  it("always renders the iframe srcdoc on light paper values (ink/panel/color-scheme) when the app theme is light", () => {
     document.documentElement.dataset.theme = "light";
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
     const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
@@ -64,20 +77,16 @@ describe("EmailBody", () => {
     expect(srcDoc).toContain("background:#ffffff");
   });
 
-  it("re-injects the current theme's ink, background, and color-scheme when data-theme changes after mount", async () => {
+  it("keeps the srcdoc on light paper values even when data-theme changes after mount (the iframe no longer follows the app theme)", () => {
     document.documentElement.dataset.theme = "night";
     render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
-    expect(getIframe().getAttribute("srcdoc") ?? "").toContain("#eceef4");
-    expect(getIframe().getAttribute("srcdoc") ?? "").toContain("color-scheme:dark");
+    const beforeSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+    expect(beforeSrcDoc).toContain("color-scheme:light");
 
     document.documentElement.dataset.theme = "light";
 
-    await waitFor(() => {
-      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
-      expect(srcDoc).toContain("#101318");
-      expect(srcDoc).toContain("color-scheme:light");
-      expect(srcDoc).toContain("background:#ffffff");
-    });
+    const afterSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+    expect(afterSrcDoc).toBe(beforeSrcDoc);
   });
 
   it("resizes to the measured content height when the sandbox permits contentDocument access", async () => {
