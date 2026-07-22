@@ -53,7 +53,12 @@ const thread = {
 
 // Applies PATCH updates in place so a refetch after invalidateQueries reflects the mutation,
 // mirroring how the real server would respond to a keywords/mailboxIds update.
-function stubFetch() {
+// Identities the fetch stub reports by default — none of the thread's senders
+// match, so every message renders with inbox ("para mí y el equipo") framing
+// unless a test overrides identities via stubFetch's second argument.
+const NO_IDENTITIES: { id: string; name: string; email: string }[] = [];
+
+function stubFetch(identities = NO_IDENTITIES) {
   const state = structuredClone(thread);
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -74,6 +79,7 @@ function stubFetch() {
       }
       return new Response(null, { status: 204 });
     }
+    if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
     return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
   });
@@ -291,5 +297,82 @@ describe("ThreadView", () => {
     await screen.findByRole("button", { name: i18n.t("mail.star") });
     expect(screen.queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("mail.star") })).toBeInTheDocument();
+  });
+
+  describe("attachments", () => {
+    it("renders the attachments block after the email body, not between the AI card and the body", async () => {
+      stubFetch();
+      renderThread();
+
+      const body = await screen.findByTitle(i18n.t("mail.emailContent"));
+      const attachmentsHeading = await screen.findByText(i18n.t("attachments.count", { count: 1 }));
+
+      // DOCUMENT_POSITION_FOLLOWING set means attachmentsHeading comes after body in the DOM.
+      expect(body.compareDocumentPosition(attachmentsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("shows a pluralized 'N adjuntos' header above the attachment pills", async () => {
+      const state = structuredClone(thread);
+      state.emails[0]!.attachments = [
+        { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
+        { blobId: "b2", name: "logo.png", type: "image/png", size: 1024 },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      expect(await screen.findByText(i18n.t("attachments.count", { count: 2 }))).toBeInTheDocument();
+    });
+
+    it("shows a file-type icon next to each attachment", async () => {
+      stubFetch();
+      renderThread();
+
+      const attachmentText = await screen.findByText(/report\.pdf/);
+      // attachmentText is the innermost <span> holding just the name/size text;
+      // its direct parent is the pill that also holds the icon and the links.
+      const chip = attachmentText.parentElement;
+      expect(chip?.querySelector("svg")).toBeTruthy();
+    });
+  });
+
+  describe("sent-message framing", () => {
+    it('shows "Para: <recipients>" instead of inbox framing when the sender matches one of the user\'s own identities', async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.to = [{ name: "Dave", email: "dave@example.com" }];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) {
+            return new Response(JSON.stringify([{ id: "id1", name: "Carol", email: "carol@example.com" }]));
+          }
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      expect(await screen.findByText(`${i18n.t("mail.sentTo")} Dave`)).toBeInTheDocument();
+      // The sent message (carol@example.com, matching the identity) no longer
+      // uses the raw "<email> · para mí y el equipo" framing — the other
+      // message in the thread (alice, a received email) is unaffected and
+      // keeps it, so the assertion is scoped to carol's line specifically.
+      expect(screen.queryByText(/carol@example\.com ·/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the inbox framing for a received message when identities don't match the sender", async () => {
+      stubFetch([{ id: "id1", name: "Someone Else", email: "someone-else@example.com" }]);
+      renderThread();
+
+      expect(await screen.findByText(new RegExp(i18n.t("mail.toMeAndTeam")))).toBeInTheDocument();
+    });
   });
 });

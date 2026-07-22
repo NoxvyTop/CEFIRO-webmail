@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail } from "@webmail/shared";
 import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
+import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
 import {
   ArchiveIcon,
@@ -103,6 +104,16 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     queryFn: () => fetchThread(threadId),
     retry: mailRetry,
   });
+
+  // Used to detect messages the account itself sent (from === one of our
+  // identities) so the sender block can show "Para: <recipients>" instead of
+  // the inbox "para mí y el equipo" framing — correct regardless of which
+  // mailbox/folder the thread is being viewed from.
+  const identitiesQuery = useQuery({
+    queryKey: ["mail", "identities"],
+    queryFn: fetchIdentities,
+  });
+  const identities = identitiesQuery.data ?? [];
 
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
@@ -256,6 +267,12 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           {emails.map((email) => {
             const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             const sender = email.from[0];
+            // A message counts as "sent" when its `from` matches one of the
+            // account's own identities — this stays correct no matter which
+            // mailbox/folder the thread is currently being viewed from.
+            const isSentByMe = Boolean(
+              sender && identities.some((identity) => identity.email.toLowerCase() === sender.email.toLowerCase()),
+            );
 
             return (
               <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
@@ -265,7 +282,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     <div className="text-[14.5px] font-semibold">{addressLabel(sender)}</div>
                     {toCcLabel && (
                       <div className="truncate text-[12.5px] text-muted">
-                        {sender?.email} · {t("mail.toMeAndTeam")}
+                        {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
                       </div>
                     )}
                   </div>
