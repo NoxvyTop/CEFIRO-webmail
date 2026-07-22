@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useSearchParams } from "react-router-dom";
 import type { ThreadDetail } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -93,6 +93,14 @@ function stubFetch(identities = NO_IDENTITIES) {
   return fetchMock;
 }
 
+// Surfaces the current `compose` search param so tests can assert which
+// compose action a button click actually triggered (reply/reply-all/forward
+// + the target message id) without needing a real composer mounted.
+function ComposeParamProbe() {
+  const [params] = useSearchParams();
+  return <div data-testid="compose-param">{params.get("compose") ?? ""}</div>;
+}
+
 function renderThread(threadId = "t1", archiveMailboxId: string | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -100,6 +108,7 @@ function renderThread(threadId = "t1", archiveMailboxId: string | null = null) {
       <MemoryRouter>
         <ToastProvider>
           <ThreadView threadId={threadId} archiveMailboxId={archiveMailboxId} />
+          <ComposeParamProbe />
         </ToastProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -159,8 +168,9 @@ describe("ThreadView", () => {
     stubFetch();
     renderThread();
 
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
     expect(
-      await screen.findByRole("button", { name: i18n.t("composer.forward") }),
+      within(actionsBar).getByRole("button", { name: i18n.t("composer.forward") }),
     ).toBeInTheDocument();
   });
 
@@ -168,7 +178,7 @@ describe("ThreadView", () => {
     stubFetch();
     renderThread("t1", null);
 
-    await screen.findByRole("button", { name: i18n.t("composer.forward") });
+    await screen.findByTestId("thread-actions-bar");
     expect(screen.queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
   });
 
@@ -216,13 +226,28 @@ describe("ThreadView", () => {
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
   });
 
-  it("shows only Responder at the foot of the article — Archivar already lives in the top action bar", async () => {
+  it("shows Responder and Reenviar at the foot of the article — Archivar already lives in the top action bar", async () => {
     stubFetch();
     renderThread("t1", "arch1");
 
     const footer = await screen.findByTestId("thread-footer-actions");
     expect(within(footer).getByRole("button", { name: i18n.t("composer.reply") })).toBeInTheDocument();
+    expect(within(footer).getByRole("button", { name: i18n.t("composer.forward") })).toBeInTheDocument();
     expect(within(footer).queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
+    // Default fixture's last email (e2) has no recipients beyond the sender,
+    // so "Responder a todos" stays hidden here — covered explicitly by the
+    // "reply-all visibility" suite below.
+    expect(within(footer).queryByRole("button", { name: i18n.t("composer.replyAll") })).not.toBeInTheDocument();
+  });
+
+  it("wires the footer's Reenviar button to openCompose('forward:<id>')", async () => {
+    stubFetch();
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    fireEvent.click(within(footer).getByRole("button", { name: i18n.t("composer.forward") }));
+
+    expect(await screen.findByTestId("compose-param")).toHaveTextContent("forward:e2");
   });
 
   it("shows the sender's label chips next to the title", async () => {
@@ -269,7 +294,22 @@ describe("ThreadView", () => {
   });
 
   it("keeps action buttons from wrapping and lets the hint shrink so it truncates as a unit", async () => {
-    stubFetch();
+    // Reply all only shows up for a multi-recipient last email — give this
+    // one two distinct recipients so the button is present to assert on.
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [
+      { name: "Bob", email: "bob@example.com" },
+      { name: "Dave", email: "dave@example.com" },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
     renderThread("t1", "arch1");
 
     const actionsBar = await screen.findByTestId("thread-actions-bar");
@@ -463,6 +503,107 @@ describe("ThreadView", () => {
       renderThread();
 
       expect(await screen.findByText(new RegExp(i18n.t("mail.toMeAndTeam")))).toBeInTheDocument();
+    });
+  });
+
+  // Gmail shows "Reply all" when there is at least one other recipient
+  // besides the account itself and the original sender — mirrors
+  // replyDraft()'s reply-all `cc` in reply.ts (dedupe(to+cc) minus the
+  // account's own identity and minus the sender). These cover the top action
+  // bar and the footer, which must both follow the same rule.
+  describe("reply-all visibility", () => {
+    function stubThreadState(state: ThreadDetail, identities: { id: string; name: string; email: string }[] = []) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+    }
+
+    it("hides Responder a todos in the top bar and footer when the account is the only recipient besides the sender", async () => {
+      // from=carol, to=[you] only — reply-all wouldn't add anyone beyond
+      // what plain reply (to carol) already covers.
+      const state = structuredClone(thread);
+      state.emails[1]!.to = [{ name: "Me", email: "me@example.com" }];
+      state.emails[1]!.cc = [];
+      stubThreadState(state, [{ id: "id1", name: "Me", email: "me@example.com" }]);
+      renderThread("t1", "arch1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).queryByRole("button", { name: i18n.t("composer.replyAll") }),
+      ).not.toBeInTheDocument();
+
+      const footer = screen.getByTestId("thread-footer-actions");
+      expect(within(footer).queryByRole("button", { name: i18n.t("composer.replyAll") })).not.toBeInTheDocument();
+    });
+
+    it("hides Responder a todos when the sender cc'd themselves alongside the account", async () => {
+      // from=carol, to=[you], cc=[carol] — the sender showing up again in cc
+      // doesn't count as a real "other" recipient either.
+      const state = structuredClone(thread);
+      state.emails[1]!.from = [{ name: "Carol", email: "carol@example.com" }];
+      state.emails[1]!.to = [{ name: "Me", email: "me@example.com" }];
+      state.emails[1]!.cc = [{ name: "Carol", email: "carol@example.com" }];
+      stubThreadState(state, [{ id: "id1", name: "Me", email: "me@example.com" }]);
+      renderThread("t1", "arch1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).queryByRole("button", { name: i18n.t("composer.replyAll") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows Responder a todos in the top bar and footer when a real recipient besides the sender exists", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.to = [{ name: "Bob", email: "bob@example.com" }];
+      state.emails[1]!.cc = [{ name: "Dave", email: "dave@example.com" }];
+      stubThreadState(state);
+      renderThread("t1", "arch1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).getByRole("button", { name: i18n.t("composer.replyAll") }),
+      ).toBeInTheDocument();
+
+      const footer = screen.getByTestId("thread-footer-actions");
+      expect(within(footer).getByRole("button", { name: i18n.t("composer.replyAll") })).toBeInTheDocument();
+    });
+
+    it("still shows Responder a todos after excluding the account's own identity, as long as one other real recipient remains", async () => {
+      // to=[Bob, you] — once the account's own identity is excluded, Bob is
+      // still a real recipient distinct from the sender, so reply-all IS
+      // meaningful (this is the common "sender + you + one other" case).
+      const state = structuredClone(thread);
+      state.emails[1]!.to = [
+        { name: "Bob", email: "bob@example.com" },
+        { name: "Me", email: "me@example.com" },
+      ];
+      state.emails[1]!.cc = [];
+      stubThreadState(state, [{ id: "id1", name: "Me", email: "me@example.com" }]);
+      renderThread("t1", "arch1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).getByRole("button", { name: i18n.t("composer.replyAll") }),
+      ).toBeInTheDocument();
+    });
+
+    it("wires the footer's Responder a todos button to openCompose('reply-all:<id>')", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.to = [{ name: "Bob", email: "bob@example.com" }];
+      state.emails[1]!.cc = [{ name: "Dave", email: "dave@example.com" }];
+      stubThreadState(state);
+      renderThread("t1", "arch1");
+
+      const footer = await screen.findByTestId("thread-footer-actions");
+      fireEvent.click(within(footer).getByRole("button", { name: i18n.t("composer.replyAll") }));
+
+      expect(await screen.findByTestId("compose-param")).toHaveTextContent("reply-all:e2");
     });
   });
 });
