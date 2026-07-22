@@ -99,16 +99,20 @@ describe("sanitizeEmailHtml", () => {
   });
 
   describe("inline cid: images", () => {
+    // cidMap is cid -> already-resolved src string (a data: URL in
+    // production, built by EmailBody from the trusted attachment blob — see
+    // EmailBody.tsx). sanitize never constructs URLs itself; it only assigns
+    // whatever resolved src it's handed.
     const cidMap = {
-      logo123: { blobId: "blob-1", name: "logo.png", type: "image/png" },
+      logo123: "data:image/png;base64,AAAA",
     };
 
-    it("rewrites a cid: image src to the matching attachment's inline blob URL", () => {
+    it("rewrites a cid: image src to the resolved src from cidMap", () => {
       const out = sanitizeEmailHtml(`<img src="cid:logo123">`, {
         allowRemoteImages: false,
         cidMap,
       });
-      expect(firstImgSrc(out.html)).toBe("/api/mail/blobs/blob-1?name=logo.png&type=image%2Fpng");
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
       expect(out.html).not.toContain("cid:logo123");
     });
 
@@ -117,7 +121,7 @@ describe("sanitizeEmailHtml", () => {
         allowRemoteImages: false,
         cidMap,
       });
-      expect(firstImgSrc(out.html)).toBe("/api/mail/blobs/blob-1?name=logo.png&type=image%2Fpng");
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
     });
 
     it("strips angle brackets around the content id before matching", () => {
@@ -125,10 +129,10 @@ describe("sanitizeEmailHtml", () => {
         allowRemoteImages: false,
         cidMap,
       });
-      expect(firstImgSrc(out.html)).toBe("/api/mail/blobs/blob-1?name=logo.png&type=image%2Fpng");
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
     });
 
-    it("leaves a cid: image with no matching attachment untouched (authoring error, not ours to fix)", () => {
+    it("leaves a cid: image with no matching entry untouched (unresolved — authoring error or fetch not yet done)", () => {
       const out = sanitizeEmailHtml(`<img src="cid:unknown">`, {
         allowRemoteImages: false,
         cidMap,
@@ -154,7 +158,7 @@ describe("sanitizeEmailHtml", () => {
         `<img src="cid:logo123"><img src="https://tracker.evil/pixel.png">`,
         { allowRemoteImages: false, cidMap },
       );
-      expect(firstImgSrc(out.html)).toBe("/api/mail/blobs/blob-1?name=logo.png&type=image%2Fpng");
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
       // The remote image is still blocked (same convention as the other
       // remote-image tests above): the live src is stripped, so only the
       // percent-encoded data-blocked-src remains.

@@ -1,8 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { EmailBody } from "./EmailBody";
+
+// A 1x1 transparent PNG's raw bytes — enough to exercise the real fetch ->
+// arrayBuffer -> base64 pipeline without a fixture file.
+const PNG_BYTES = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+]);
 
 function getIframe() {
   return screen.getByTitle(i18n.t("mail.emailContent")) as HTMLIFrameElement;
@@ -136,7 +142,14 @@ describe("EmailBody", () => {
   });
 
   describe("inline cid attachments", () => {
-    it("builds a cid map from the attachments prop and rewrites a matching cid: image to its blob URL", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("fetches a referenced, safe-image cid attachment (credentialed) and rewrites its src to a data: URL", async () => {
+      const fetchMock = vi.fn(async () => new Response(PNG_BYTES, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
       render(
         <EmailBody
           bodyHtml={`<p>hi</p><img src="cid:logo123">`}
@@ -146,9 +159,42 @@ describe("EmailBody", () => {
           ]}
         />,
       );
+
+      await waitFor(() => {
+        const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+        expect(srcDoc).toMatch(/src="data:image\/png;base64,[A-Za-z0-9+/=]+"/);
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/mail/blobs/b1?name=logo.png&type=image%2Fpng",
+        expect.objectContaining({ credentials: "include" }),
+      );
       const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
-      expect(srcDoc).toContain("/api/mail/blobs/b1?name=logo.png");
       expect(srcDoc).not.toContain("cid:logo123");
+    });
+
+    it("does not fetch or rewrite a cid: image whose attachment type is not a safe inline image", async () => {
+      const fetchMock = vi.fn(async () => new Response(PNG_BYTES, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(
+        <EmailBody
+          bodyHtml={`<img src="cid:doc123">`}
+          bodyText={null}
+          attachments={[
+            { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 10, cid: "doc123" },
+          ]}
+        />,
+      );
+
+      // Let any (incorrect) async fetch have a couple of microtask turns
+      // before asserting it never happened.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("cid:doc123");
     });
 
     it("ignores attachments without a cid when building the map", () => {
@@ -167,6 +213,61 @@ describe("EmailBody", () => {
       render(<EmailBody bodyHtml={`<img src="cid:logo123">`} bodyText={null} />);
       const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
       expect(srcDoc).toContain("cid:logo123");
+    });
+
+    it("does not let a stale fetch from a previous message overwrite the current message's resolved images (message-change race safety)", async () => {
+      let resolveFirstFetch: ((response: Response) => void) | undefined;
+      const firstFetchPromise = new Promise<Response>((resolve) => {
+        resolveFirstFetch = resolve;
+      });
+
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes("first-blob")) return firstFetchPromise;
+        return Promise.resolve(new Response(PNG_BYTES, { status: 200 }));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { rerender } = render(
+        <EmailBody
+          bodyHtml={`<img src="cid:first123">`}
+          bodyText={null}
+          attachments={[
+            { blobId: "first-blob", name: "first.png", type: "image/png", size: 10, cid: "first123" },
+          ]}
+        />,
+      );
+
+      // The message changes (e.g. user opened another thread) before the
+      // first message's slow fetch has resolved.
+      rerender(
+        <EmailBody
+          bodyHtml={`<img src="cid:second123">`}
+          bodyText={null}
+          attachments={[
+            { blobId: "second-blob", name: "second.png", type: "image/png", size: 10, cid: "second123" },
+          ]}
+        />,
+      );
+
+      await waitFor(() => {
+        const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+        expect(srcDoc).not.toContain("cid:second123");
+      });
+
+      // The stale first-message fetch resolves only now, well after the
+      // message already moved on.
+      resolveFirstFetch?.(new Response(PNG_BYTES, { status: 200 }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      // A missing race guard would have the stale effect's setState fully
+      // replace the resolved-map state with just {first123: ...}, wiping
+      // out the current message's already-resolved second123 entry and
+      // reverting its <img> back to the unresolved cid: src.
+      expect(srcDoc).not.toContain("cid:second123");
+      expect(srcDoc).not.toContain("cid:first123");
     });
   });
 });

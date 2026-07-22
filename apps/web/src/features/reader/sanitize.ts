@@ -2,11 +2,6 @@ import DOMPurify from "dompurify";
 
 export type SanitizedEmail = { html: string; hasRemoteImages: boolean };
 
-// Minimal attachment info needed to build the inline blob URL for a
-// cid:-referenced image — sourced from server-provided attachment metadata,
-// never from the email's own (untrusted) HTML.
-export type CidAttachmentInfo = { blobId: string; name: string | null; type: string };
-
 // Matches absolute http(s) URLs and protocol-relative URLs (e.g. //evil.test/x.png),
 // which browsers resolve using the current page's protocol and are just as capable
 // of leaking a tracking pixel as a fully-qualified https:// URL.
@@ -37,13 +32,6 @@ function cidFromSrc(src: string): string | null {
   return stripAngleBrackets(src.slice(4));
 }
 
-function inlineBlobUrl(attachment: CidAttachmentInfo): string {
-  const name = encodeURIComponent(attachment.name ?? "");
-  const type = encodeURIComponent(attachment.type);
-  // No dl=1 — this must resolve inline (it's an embedded image, not a download).
-  return `/api/mail/blobs/${encodeURIComponent(attachment.blobId)}?name=${name}&type=${type}`;
-}
-
 /**
  * Finds every cid:-referenced image in the (untrusted, unsanitized) raw HTML
  * and returns the set of referenced content ids. Used by ThreadView to
@@ -66,7 +54,13 @@ export function extractReferencedCids(html: string | null | undefined): Set<stri
 
 export function sanitizeEmailHtml(
   raw: string,
-  options: { allowRemoteImages: boolean; cidMap?: Record<string, CidAttachmentInfo> },
+  // cidMap is cid -> already-resolved src string (a data: URL in production).
+  // Resolution — fetching the attachment's blob and building the data: URL —
+  // happens in EmailBody, which is the (authenticated) parent document; the
+  // email body itself renders inside an opaque-origin sandboxed iframe that
+  // can't authenticate a same-origin blob fetch on its own. sanitize just
+  // assigns whatever resolved src it's handed; it never constructs URLs.
+  options: { allowRemoteImages: boolean; cidMap?: Record<string, string> },
 ): SanitizedEmail {
   const clean = DOMPurify.sanitize(raw, {
     USE_PROFILES: { html: true },
@@ -77,7 +71,7 @@ export function sanitizeEmailHtml(
 
   let hasRemoteImages = false;
 
-  // Rewrite cid: image sources to their inline blob URL first. This is
+  // Rewrite cid: image sources to their resolved src first. This is
   // independent of the remote-image block below: embedded inline images are
   // not a tracking vector (they're already part of the message payload the
   // user received, not a fetch to a third party), so they always resolve —
@@ -89,14 +83,15 @@ export function sanitizeEmailHtml(
       const src = img.getAttribute("src");
       const cid = src ? cidFromSrc(src) : null;
       if (!cid) continue;
-      const attachment = options.cidMap[cid];
-      if (attachment) {
-        img.setAttribute("src", inlineBlobUrl(attachment));
+      const resolvedSrc = options.cidMap[cid];
+      if (resolvedSrc) {
+        img.setAttribute("src", resolvedSrc);
       }
-      // No matching attachment: leave the cid: src verbatim. This is an
+      // No resolved entry: leave the cid: src verbatim. Either this is an
       // authoring error in the source email (it references a Content-ID
-      // that isn't among this email's attachments) — the browser shows a
-      // broken image icon, same as before this fix, rather than us
+      // that isn't among this email's attachments), or the parent's blob
+      // fetch for this cid hasn't resolved yet (or isn't a safe image type)
+      // — either way the browser shows a broken image icon rather than us
       // guessing at a fallback or silently hiding the img.
     }
   }
