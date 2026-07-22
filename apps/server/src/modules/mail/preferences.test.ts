@@ -58,12 +58,12 @@ describe("preferences routes", () => {
     expect(res.status).toBe(401);
   });
 
-  it("defaults groupMailInMainInbox to true before any set", async () => {
+  it("defaults groupMailInMainInbox to true and customLabels to [] before any set", async () => {
     const res = await makeApp().request("/api/mail/preferences", {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ groupMailInMainInbox: true });
+    expect(await res.json()).toEqual({ groupMailInMainInbox: true, customLabels: [] });
   });
 
   it("persists a PUT and reflects it on a subsequent GET", async () => {
@@ -75,12 +75,12 @@ describe("preferences routes", () => {
       body: JSON.stringify({ groupMailInMainInbox: false }),
     });
     expect(putRes.status).toBe(200);
-    expect(await putRes.json()).toEqual({ groupMailInMainInbox: false });
+    expect(await putRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
 
     const getRes = await app.request("/api/mail/preferences", {
       headers: { cookie: `session=${token}` },
     });
-    expect(await getRes.json()).toEqual({ groupMailInMainInbox: false });
+    expect(await getRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
   });
 
   it("keeps the prior value on an empty PUT patch (merge, not overwrite)", async () => {
@@ -92,12 +92,12 @@ describe("preferences routes", () => {
       body: JSON.stringify({}),
     });
     expect(emptyPutRes.status).toBe(200);
-    expect(await emptyPutRes.json()).toEqual({ groupMailInMainInbox: false });
+    expect(await emptyPutRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
 
     const getRes = await app.request("/api/mail/preferences", {
       headers: { cookie: `session=${token}` },
     });
-    expect(await getRes.json()).toEqual({ groupMailInMainInbox: false });
+    expect(await getRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
   });
 
   it("returns 400 invalid_body on malformed JSON", async () => {
@@ -108,5 +108,108 @@ describe("preferences routes", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+});
+
+describe("custom labels persistence (preferences.customLabels)", () => {
+  it("persists custom labels via PUT and reflects them on GET", async () => {
+    const app = makeApp();
+    const label = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+
+    const putRes = await app.request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ customLabels: [label] }),
+    });
+    expect(putRes.status).toBe(200);
+    expect(await putRes.json()).toMatchObject({ customLabels: [label] });
+
+    const getRes = await app.request("/api/mail/preferences", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(await getRes.json()).toMatchObject({ customLabels: [label] });
+  });
+
+  it("replaces the whole customLabels array on a subsequent PUT (full-array patch, not append)", async () => {
+    const app = makeApp();
+    const first = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+    const second = { slug: "soporte", name: "Soporte", color: "#2FB8C4" };
+
+    await app.request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ customLabels: [first] }),
+    });
+    const putRes = await app.request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ customLabels: [first, second] }),
+    });
+    expect(await putRes.json()).toMatchObject({ customLabels: [first, second] });
+
+    const deleteRes = await app.request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ customLabels: [second] }),
+    });
+    expect(await deleteRes.json()).toMatchObject({ customLabels: [second] });
+  });
+
+  it("returns 400 invalid_body when a custom label has an invalid slug", async () => {
+    const res = await makeApp().request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ customLabels: [{ slug: "Not A Slug", name: "x", color: "#9B6BDB" }] }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+
+  it("returns 400 invalid_body when a custom label has an invalid color", async () => {
+    const res = await makeApp().request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ customLabels: [{ slug: "ventas", name: "Ventas", color: "not-a-color" }] }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+
+  it("returns 400 invalid_body when customLabels has duplicate slugs (case-insensitive)", async () => {
+    const res = await makeApp().request("/api/mail/preferences", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        customLabels: [
+          { slug: "ventas", name: "Ventas", color: "#9B6BDB" },
+          { slug: "VENTAS", name: "Ventas otra vez", color: "#E8639C" },
+        ],
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+
+  it("defensively drops a malformed stored customLabels entry instead of failing the GET", async () => {
+    const users = createUsersRepo(sql);
+    const user = await users.create({
+      email: `prefs-corrupt-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Corrupt Prefs User",
+    });
+    const corruptToken = (await sessions.create(user.id, 1)).token;
+    // Bypass the API's zod validation to simulate a legacy/corrupted row.
+    await sql`
+      insert into user_preferences (user_id, preferences)
+      values (${user.id}, ${sql.json({ customLabels: [{ slug: "ok-one", name: "Ok", color: "#9B6BDB" }, { slug: "bad" }] } as never)})
+    `;
+
+    const res = await makeApp().request("/api/mail/preferences", {
+      headers: { cookie: `session=${corruptToken}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      groupMailInMainInbox: true,
+      customLabels: [{ slug: "ok-one", name: "Ok", color: "#9B6BDB" }],
+    });
   });
 });

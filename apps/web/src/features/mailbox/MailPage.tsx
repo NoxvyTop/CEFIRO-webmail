@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import type { EmailSummary } from "@webmail/shared";
+import type { CustomLabel, EmailSummary } from "@webmail/shared";
 import { fetchMailboxes, fetchThread } from "./api";
 import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
 import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
@@ -73,12 +73,28 @@ export function MailPage() {
     queryFn: fetchPreferences,
   });
   const preferences = preferencesQuery.data;
+  const customLabels = preferences?.customLabels ?? [];
 
   const toggleGroupMailInInboxMutation = useMutation({
     mutationFn: (next: boolean) => updatePreferences({ groupMailInMainInbox: next }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "preferences"] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
+  });
+
+  const createLabelMutation = useMutation({
+    mutationFn: (label: CustomLabel) => updatePreferences({ customLabels: [...customLabels, label] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "preferences"] });
+    },
+  });
+
+  const deleteLabelMutation = useMutation({
+    mutationFn: (slug: string) =>
+      updatePreferences({ customLabels: customLabels.filter((label) => label.slug !== slug) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "preferences"] });
     },
   });
 
@@ -299,6 +315,9 @@ export function MailPage() {
         onSelectLabel={handleSelectLabel}
         onCompose={handleCompose}
         composeDisabled={!hasIdentities}
+        customLabels={customLabels}
+        onCreateLabel={(label) => createLabelMutation.mutate(label)}
+        onDeleteLabel={(slug) => deleteLabelMutation.mutate(slug)}
       />
       <section
         aria-label={t("mail.listRegion")}

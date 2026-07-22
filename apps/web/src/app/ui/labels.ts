@@ -1,4 +1,21 @@
+import type { CustomLabel } from "@webmail/shared";
+
 const LABEL_COLORS = ["#F26565", "#5B8DEF", "#E5A13D", "#34C79A"];
+
+// Small brand-safe palette offered by the "Nueva etiqueta" color picker.
+// Deliberately distinct from the 4 fixed canonical colors above (see the
+// labels.test.ts invariant) so a custom label never visually reads as one of
+// the product's 4-label taxonomy.
+export const CUSTOM_LABEL_PALETTE = [
+  "#9B6BDB", // violeta
+  "#E8639C", // magenta
+  "#2FB8C4", // turquesa
+  "#7C89A3", // gris azulado
+  "#D97757", // terracota
+  "#C9A227", // mostaza
+  "#6C7BD9", // indigo
+  "#4FB477", // salvia
+];
 
 // Fixed palette from docs/design/cefiro/README.md — same in both themes.
 // "diseno" covers the unaccented JMAP keyword slug alongside the accented
@@ -23,24 +40,42 @@ function hashColor(label: string): string {
   return LABEL_COLORS[hashString(label.toLowerCase()) % LABEL_COLORS.length]!;
 }
 
-// The hash-based palette is a fallback for labels outside the fixed spec map,
-// so it keeps the shared 0.14 alpha rather than any per-label alpha.
-function hashBackground(label: string): string {
-  const hex = hashColor(label);
+function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, 0.14)`;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-export function labelColor(label: string): string {
-  const fixed = FIXED_LABEL_STYLE[label.toLowerCase()];
-  return fixed ? fixed.color : hashColor(label);
+// The hash-based palette is a fallback for labels outside the fixed spec map,
+// so it keeps the shared 0.14 alpha rather than any per-label alpha.
+function hashBackground(label: string): string {
+  return hexToRgba(hashColor(label), 0.14);
 }
 
-export function labelBackground(label: string): string {
+function findCustomLabel(label: string, customLabels: CustomLabel[]): CustomLabel | undefined {
+  const key = normalizeLabelKey(label);
+  return customLabels.find((custom) => normalizeLabelKey(custom.slug) === key);
+}
+
+// `customLabels` defaults to [] so every existing 1-arg call site keeps
+// working unchanged — the caller only needs to pass the user's stored custom
+// label list (from userPreferences) when it wants those colors resolved
+// instead of falling through to the deterministic hash.
+export function labelColor(label: string, customLabels: CustomLabel[] = []): string {
   const fixed = FIXED_LABEL_STYLE[label.toLowerCase()];
-  return fixed ? fixed.background : hashBackground(label);
+  if (fixed) return fixed.color;
+  const custom = findCustomLabel(label, customLabels);
+  if (custom) return custom.color;
+  return hashColor(label);
+}
+
+export function labelBackground(label: string, customLabels: CustomLabel[] = []): string {
+  const fixed = FIXED_LABEL_STYLE[label.toLowerCase()];
+  if (fixed) return fixed.background;
+  const custom = findCustomLabel(label, customLabels);
+  if (custom) return hexToRgba(custom.color, 0.14);
+  return hashBackground(label);
 }
 
 export function userLabels(keywords: Record<string, boolean>): string[] {
@@ -73,8 +108,13 @@ const LABEL_DISPLAY_OVERRIDES: Record<string, string> = {
   diseno: "Diseño",
 };
 
-export function labelDisplayName(label: string): string {
-  return LABEL_DISPLAY_OVERRIDES[label.toLowerCase()] ?? label;
+// `customLabels` defaults to [] for the same backward-compatibility reason
+// as labelColor/labelBackground above.
+export function labelDisplayName(label: string, customLabels: CustomLabel[] = []): string {
+  const override = LABEL_DISPLAY_OVERRIDES[label.toLowerCase()];
+  if (override) return override;
+  const custom = findCustomLabel(label, customLabels);
+  return custom ? custom.name : label;
 }
 
 // Case- and diacritic-insensitive comparison key: JMAP keywords are
@@ -84,16 +124,52 @@ export function labelDisplayName(label: string): string {
 // separate, orphaned chip.
 const COMBINING_DIACRITICS_PATTERN = new RegExp("[\\u0300-\\u036f]", "g");
 
-function normalizeLabelKey(label: string): string {
-  return label.normalize("NFD").replace(COMBINING_DIACRITICS_PATTERN, "").toLowerCase();
+function stripDiacritics(value: string): string {
+  return value.normalize("NFD").replace(COMBINING_DIACRITICS_PATTERN, "");
 }
 
-// Merges the canonical taxonomy with whatever real labels were found in the
-// loaded messages: canonical labels always come first in spec order, real
-// labels not already covered (case- and diacritic-insensitively) are
-// appended after.
-export function mergeLabels(realLabels: string[]): string[] {
+function normalizeLabelKey(label: string): string {
+  return stripDiacritics(label).toLowerCase();
+}
+
+// Custom label creation: normalizes a free-form display name into the
+// ASCII-safe JMAP keyword slug used to store/filter it, following the same
+// convention as the canonical "diseno" slug (accents stripped, lowercased,
+// non-alnum runs collapsed to a single hyphen, edges trimmed). Returns "" for
+// a name with no ascii-alnum content — callers treat that as invalid.
+export function slugifyLabelName(name: string): string {
+  return stripDiacritics(name.trim().toLowerCase())
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// Design decision (dedupe custom vs canonical): a custom label whose name
+// slugifies to an existing canonical or custom slug (case/diacritic
+// insensitive) must not be created — it would either shadow a fixed-color
+// canonical entry or produce two chips backing the same JMAP keyword.
+export function isLabelNameTaken(name: string, customLabels: CustomLabel[]): boolean {
+  const slug = slugifyLabelName(name);
+  if (slug.length === 0) return false;
+  const key = normalizeLabelKey(slug);
   const canonicalKeys = new Set(CANONICAL_LABELS.map(normalizeLabelKey));
-  const extras = realLabels.filter((label) => !canonicalKeys.has(normalizeLabelKey(label)));
-  return [...CANONICAL_LABELS, ...extras];
+  if (canonicalKeys.has(key)) return true;
+  return customLabels.some((custom) => normalizeLabelKey(custom.slug) === key);
+}
+
+// Merges the canonical taxonomy with the user's custom labels (always shown,
+// like canonical, even with zero matching mail) and whatever other real
+// labels were found in the loaded messages: canonical first in spec order,
+// then custom labels in their stored order, then any remaining real labels
+// not already covered — case- and diacritic-insensitively deduped throughout.
+export function mergeLabels(realLabels: string[], customLabelSlugs: string[] = []): string[] {
+  const seen = new Set(CANONICAL_LABELS.map(normalizeLabelKey));
+  const customExtras: string[] = [];
+  for (const slug of customLabelSlugs) {
+    const key = normalizeLabelKey(slug);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    customExtras.push(slug);
+  }
+  const realExtras = realLabels.filter((label) => !seen.has(normalizeLabelKey(label)));
+  return [...CANONICAL_LABELS, ...customExtras, ...realExtras];
 }

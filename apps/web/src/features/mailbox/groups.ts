@@ -1,4 +1,6 @@
-import { userPreferencesSchema, type Identity, type UserPreferences } from "@webmail/shared";
+import {
+  userPreferencesSchema, type Identity, type UserPreferences, type UserPreferencesUpdate,
+} from "@webmail/shared";
 import { MailApiError } from "./api";
 
 // The user's group addresses = their identities whose email differs from the primary.
@@ -13,7 +15,7 @@ export async function fetchPreferences(): Promise<UserPreferences> {
   return userPreferencesSchema.parse(await res.json());
 }
 
-export async function updatePreferences(patch: { groupMailInMainInbox?: boolean }): Promise<UserPreferences> {
+export async function updatePreferences(patch: UserPreferencesUpdate): Promise<UserPreferences> {
   const res = await fetch("/api/mail/preferences", {
     method: "PUT",
     headers: { "content-type": "application/json" },

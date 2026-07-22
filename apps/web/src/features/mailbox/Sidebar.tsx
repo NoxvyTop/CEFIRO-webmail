@@ -1,9 +1,11 @@
-import type { ComponentType } from "react";
-import type { Identity, Mailbox } from "@webmail/shared";
+import { useState, type ComponentType, type FormEvent } from "react";
+import type { CustomLabel, Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
-import { ArchiveIcon, InboxIcon, SendIcon, StarIcon } from "../../app/ui/icons";
+import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
-import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
+import {
+  CUSTOM_LABEL_PALETTE, isLabelNameTaken, labelColor, labelDisplayName, mergeLabels, slugifyLabelName,
+} from "../../app/ui/labels";
 
 // Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
 // four primary rows carry an icon. Secondary folders (trash/junk/drafts)
@@ -30,15 +32,54 @@ interface SidebarProps {
   // CLARO-10: honest disabled state when there are no identities to compose
   // from (e.g. mailbox not linked yet) instead of a silent no-op click.
   composeDisabled?: boolean;
+  // User-defined labels (stored in userPreferences) — always shown in the
+  // taxonomy alongside the 4 canonical labels, like Gmail's custom labels.
+  customLabels?: CustomLabel[];
+  onCreateLabel?: (label: CustomLabel) => void;
+  onDeleteLabel?: (slug: string) => void;
 }
 
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
   groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
-  composeDisabled = false,
+  composeDisabled = false, customLabels = [], onCreateLabel = () => {}, onDeleteLabel = () => {},
 }: SidebarProps) {
   const { t } = useTranslation();
-  const displayLabels = mergeLabels(labels);
+  const displayLabels = mergeLabels(labels, customLabels.map((custom) => custom.slug));
+  const customLabelSlugs = new Set(customLabels.map((custom) => custom.slug.toLowerCase()));
+
+  const [creatingLabel, setCreatingLabel] = useState(false);
+  const [newLabelName, setNewLabelName] = useState("");
+  const [newLabelColor, setNewLabelColor] = useState(CUSTOM_LABEL_PALETTE[0]!);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  function openCreateForm() {
+    setCreatingLabel(true);
+    setNewLabelName("");
+    setNewLabelColor(CUSTOM_LABEL_PALETTE[0]!);
+    setCreateError(null);
+  }
+
+  function closeCreateForm() {
+    setCreatingLabel(false);
+    setCreateError(null);
+  }
+
+  function handleCreateSubmit(event: FormEvent) {
+    event.preventDefault();
+    const name = newLabelName.trim();
+    const slug = slugifyLabelName(name);
+    if (slug.length === 0) {
+      setCreateError(t("mail.labelNameRequired"));
+      return;
+    }
+    if (isLabelNameTaken(name, customLabels)) {
+      setCreateError(t("mail.labelNameDuplicate"));
+      return;
+    }
+    onCreateLabel({ slug, name, color: newLabelColor });
+    closeCreateForm();
+  }
 
   // Fixed nav order (docs/design/cefiro/README.md): Recibidos, Destacados,
   // Enviados, Archivados, then secondary folders grouped after. Destacados is
@@ -118,31 +159,111 @@ export function Sidebar({
         <ul className="flex flex-col gap-1">
           {displayLabels.map((label) => {
             const selected = label === selectedLabel;
+            // Only labels backed by a stored custom-label definition get a
+            // delete affordance — canonical labels are fixed, and arbitrary
+            // "discovered" keywords (freeform JMAP keywords applied by some
+            // other client, not created through this UI) have no definition
+            // to delete.
+            const isCustom = customLabelSlugs.has(label.toLowerCase());
+            const customDisplayName = labelDisplayName(label, customLabels);
             return (
-              <li key={label}>
+              <li key={label} className="flex items-center gap-1">
                 <button
                   type="button"
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onSelectLabel(label)}
-                  className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
+                  className="flex h-[34px] min-w-0 flex-1 items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
                 >
                   <span
                     aria-hidden="true"
                     className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
-                    style={{ background: labelColor(label) }}
+                    style={{ background: labelColor(label, customLabels) }}
                   />
-                  {/* labelDisplayName only swaps text for the few canonical
-                      labels whose spec spelling needs a diacritic CSS can't
-                      add (e.g. "diseno" -> "Diseño"); the `label` value
-                      itself — used for onSelectLabel/filtering, dedup and
-                      color lookup — is untouched. `capitalize` handles plain
-                      casing for everything else. */}
-                  <span className="truncate capitalize">{labelDisplayName(label)}</span>
+                  {/* labelDisplayName swaps text for the few canonical labels
+                      whose spec spelling needs a diacritic CSS can't add
+                      (e.g. "diseno" -> "Diseño") and for custom labels (their
+                      stored display name); the `label` value itself — used
+                      for onSelectLabel/filtering, dedup and color lookup — is
+                      untouched. `capitalize` handles plain casing for
+                      everything else. */}
+                  <span className="truncate capitalize">{customDisplayName}</span>
                 </button>
+                {isCustom && (
+                  <button
+                    type="button"
+                    aria-label={t("mail.deleteLabel", { name: customDisplayName })}
+                    onClick={() => onDeleteLabel(label)}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-ink"
+                  >
+                    <CloseIcon size={12} />
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
+        <div className="mt-1 px-3">
+          {!creatingLabel ? (
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="flex h-8 items-center gap-1.5 text-[12.5px] font-semibold text-muted hover:text-ink"
+            >
+              <PlusIcon size={13} />
+              {t("mail.newLabel")}
+            </button>
+          ) : (
+            <form onSubmit={handleCreateSubmit} className="flex flex-col gap-2 rounded-[10px] border border-line p-2.5">
+              <input
+                type="text"
+                value={newLabelName}
+                onChange={(event) => {
+                  setNewLabelName(event.target.value);
+                  setCreateError(null);
+                }}
+                placeholder={t("mail.labelNamePlaceholder")}
+                aria-label={t("mail.labelNamePlaceholder")}
+                autoFocus
+                className="h-8 rounded-[8px] border border-line bg-transparent px-2 text-[13px] text-ink outline-none focus:border-accent"
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {CUSTOM_LABEL_PALETTE.map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    aria-label={t("mail.chooseLabelColor", { hex })}
+                    aria-pressed={newLabelColor === hex}
+                    onClick={() => setNewLabelColor(hex)}
+                    className={`h-5 w-5 shrink-0 rounded-full border-2 ${
+                      newLabelColor === hex ? "border-accent" : "border-transparent"
+                    }`}
+                    style={{ background: hex }}
+                  />
+                ))}
+              </div>
+              {createError && (
+                <p role="alert" className="text-[11.5px] text-warn">
+                  {createError}
+                </p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="flex h-7 flex-1 items-center justify-center rounded-[8px] bg-accent text-[12.5px] font-semibold text-accent-ink"
+                >
+                  {t("mail.createLabel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeCreateForm}
+                  className="flex h-7 items-center justify-center rounded-[8px] px-2 text-[12.5px] text-muted hover:text-ink"
+                >
+                  {t("mail.cancelNewLabel")}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
       </nav>
       {groups.length > 0 && (
         <nav aria-label={t("groups.title")} className="text-sm">

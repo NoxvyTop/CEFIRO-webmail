@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useSearchParams } from "react-router-dom";
-import type { ThreadDetail } from "@webmail/shared";
+import type { CustomLabel, ThreadDetail } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
@@ -64,7 +64,7 @@ const thread: ThreadDetail = {
 // unless a test overrides identities via stubFetch's second argument.
 const NO_IDENTITIES: { id: string; name: string; email: string }[] = [];
 
-function stubFetch(identities = NO_IDENTITIES) {
+function stubFetch(identities = NO_IDENTITIES, customLabels: CustomLabel[] = []) {
   const state = structuredClone(thread);
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -86,6 +86,9 @@ function stubFetch(identities = NO_IDENTITIES) {
       return new Response(null, { status: 204 });
     }
     if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
+    if (url.includes("/api/mail/preferences")) {
+      return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels }));
+    }
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
     return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
   });
@@ -604,6 +607,130 @@ describe("ThreadView", () => {
       fireEvent.click(within(footer).getByRole("button", { name: i18n.t("composer.replyAll") }));
 
       expect(await screen.findByTestId("compose-param")).toHaveTextContent("reply-all:e2");
+    });
+  });
+
+  describe("label apply menu (mirrors the star toggle, applies/removes a keyword on the last email)", () => {
+    it("opens a menu listing the canonical labels as unchecked checkboxes when none are applied", async () => {
+      stubFetch();
+      renderThread("t1", "arch1");
+
+      const labelsButton = await screen.findByRole("button", { name: i18n.t("mail.labels") });
+      fireEvent.click(labelsButton);
+
+      const menu = await screen.findByRole("menu");
+      const urgente = within(menu).getByRole("menuitemcheckbox", { name: "urgente" });
+      expect(urgente).toHaveAttribute("aria-checked", "false");
+      expect(within(menu).getByRole("menuitemcheckbox", { name: "producto" })).toBeInTheDocument();
+      expect(within(menu).getByRole("menuitemcheckbox", { name: "Diseño" })).toBeInTheDocument();
+      expect(within(menu).getByRole("menuitemcheckbox", { name: "finanzas" })).toBeInTheDocument();
+    });
+
+    it("toggling a canonical label applies the keyword and shows it as a chip next to the subject", async () => {
+      const fetchMock = stubFetch();
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+      const menu = await screen.findByRole("menu");
+      fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "urgente" }));
+
+      const patchCall = await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "PATCH",
+        );
+        expect(call).toBeTruthy();
+        return call;
+      });
+      const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ keywords: { urgente: true } });
+
+      const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      expect(within(heading.parentElement!).getByText("urgente")).toBeInTheDocument();
+    });
+
+    it("unchecking an applied label removes the keyword and its chip", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.keywords = { urgente: true };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url.includes("/api/mail/messages/") && method === "PATCH") {
+            const update = JSON.parse(String(init?.body)) as { keywords?: Record<string, boolean> };
+            if (update.keywords) Object.assign(state.emails[1]!.keywords as Record<string, boolean>, update.keywords);
+            return new Response(null, { status: 204 });
+          }
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread("t1", "arch1");
+
+      const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      const chipContainer = heading.parentElement!;
+      expect(within(chipContainer).getByText("urgente")).toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+      const menu = await screen.findByRole("menu");
+      const urgenteItem = within(menu).getByRole("menuitemcheckbox", { name: "urgente" });
+      expect(urgenteItem).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(urgenteItem);
+
+      // The menu stays open (Gmail-style multi-select) and still lists
+      // "urgente" as an option — only the subject-line chip should disappear.
+      await waitFor(() => {
+        expect(within(chipContainer).queryByText("urgente")).not.toBeInTheDocument();
+      });
+    });
+
+    it("lists custom labels with their stored display name and color, and applies them like canonical labels", async () => {
+      const ventas: CustomLabel = { slug: "ventas-q3", name: "Ventas Q3", color: "#9B6BDB" };
+      const fetchMock = stubFetch(NO_IDENTITIES, [ventas]);
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+      const menu = await screen.findByRole("menu");
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas Q3" });
+      const dot = ventasItem.querySelector("span[aria-hidden='true']");
+      expect(dot).toHaveStyle({ background: "#9B6BDB" });
+
+      fireEvent.click(ventasItem);
+
+      const patchCall = await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "PATCH",
+        );
+        expect(call).toBeTruthy();
+        return call;
+      });
+      const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ keywords: { "ventas-q3": true } });
+
+      // The menu stays open and still lists "Ventas Q3" as an option, so
+      // scope this check to the subject-line chip container specifically.
+      const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      expect(within(heading.parentElement!).getByText("Ventas Q3")).toBeInTheDocument();
+    });
+
+    it("closes the menu when clicking outside of it", async () => {
+      stubFetch();
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+      await screen.findByRole("menu");
+
+      fireEvent.mouseDown(document.body);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      });
     });
   });
 });
