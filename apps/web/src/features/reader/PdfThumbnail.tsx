@@ -4,6 +4,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 // initial bundle. See the module docstring below for why the library is
 // loaded separately, via dynamic import().
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+// Type-only — erased at compile time (verbatimModuleSyntax), so this costs
+// nothing either; it's just used to type the destroy-on-cleanup ref below.
+// Note: destroy() lives on the *loading task* returned by getDocument(),
+// not on the resolved PDFDocumentProxy — that class has no public destroy.
+import type { PDFDocumentLoadingTask } from "pdfjs-dist";
 
 interface PdfThumbnailProps {
   blobId: string;
@@ -41,14 +46,24 @@ const MAX_HEIGHT = 160;
  * flag and bails at every await boundary once stale, so a slow, now
  * irrelevant render can never land on the canvas for a different
  * attachment.
+ *
+ * Each loaded PDF owns a worker/document on the pdf.js side — left open, it
+ * leaks one per rendered thumbnail as the user switches messages. `taskRef`
+ * tracks the currently-open loading task so it can be destroyed both right
+ * after the thumbnail is painted (we only ever needed page 1's bitmap, not
+ * the whole document) and, as a backstop, from the effect's cleanup if the
+ * component unmounts or the attachment changes before rendering gets that
+ * far.
  */
 export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const taskRef = useRef<PDFDocumentLoadingTask | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let isCurrent = true;
     setReady(false);
+    taskRef.current = null;
 
     async function renderThumbnail() {
       try {
@@ -61,7 +76,12 @@ export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps
         if (!isCurrent) return;
         pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-        const pdf = await pdfjsLib.getDocument({ data }).promise;
+        // getDocument() returns the loading task synchronously — destroy()
+        // lives here, not on the PDFDocumentProxy its .promise resolves to.
+        const loadingTask = pdfjsLib.getDocument({ data });
+        taskRef.current = loadingTask;
+
+        const pdf = await loadingTask.promise;
         if (!isCurrent) return;
         const page = await pdf.getPage(1);
         if (!isCurrent) return;
@@ -78,6 +98,12 @@ export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps
         await page.render({ canvas, viewport }).promise;
         if (!isCurrent) return;
         setReady(true);
+
+        // The rendered bitmap is all this component ever needed — release
+        // the document (and its worker-side resources) right away instead
+        // of holding it open for the thumbnail's remaining lifetime.
+        taskRef.current = null;
+        await loadingTask.destroy();
       } catch {
         // Network failure, corrupt/encrypted PDF, no canvas support,
         // whatever — stay on the fallback icon rather than ever showing a
@@ -90,6 +116,10 @@ export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps
 
     return () => {
       isCurrent = false;
+      if (taskRef.current) {
+        void taskRef.current.destroy();
+        taskRef.current = null;
+      }
     };
   }, [blobId, name, type]);
 

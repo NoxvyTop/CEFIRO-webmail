@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
 import {
@@ -92,13 +93,21 @@ export function AttachmentCard({ attachment }: AttachmentCardProps) {
   const Icon = attachmentIconFor(attachment.type);
   const previewable = kind !== "icon";
 
+  // A blob that classifies as an image type can still fail to actually load
+  // (corrupt bytes, a transient fetch error, ...) — onError swaps to the
+  // same generic file-type icon PdfThumbnail falls back to, so this card
+  // never shows the browser's broken-image glyph either.
+  const [imageFailed, setImageFailed] = useState(false);
+
   return (
     <div className="flex w-[172px] shrink-0 flex-col overflow-hidden rounded-xl border border-line">
-      <div className="flex h-[104px] items-center justify-center bg-soft">
-        {kind === "image" && (
+      <div data-testid="attachment-card-thumbnail" className="flex h-[104px] items-center justify-center bg-soft">
+        {kind === "image" && !imageFailed && (
           <img
             src={blobUrl(attachment.blobId, name, attachment.type, false)}
             alt={name}
+            loading="lazy"
+            onError={() => setImageFailed(true)}
             className="h-full w-full object-cover"
           />
         )}
@@ -110,7 +119,7 @@ export function AttachmentCard({ attachment }: AttachmentCardProps) {
             fallback={<Icon size={32} />}
           />
         )}
-        {kind === "icon" && <Icon size={32} />}
+        {(kind === "icon" || (kind === "image" && imageFailed)) && <Icon size={32} />}
       </div>
       <div className="flex flex-wrap items-center gap-1.5 border-t border-line bg-panel px-2 py-1.5 text-xs">
         <Icon size={15} />

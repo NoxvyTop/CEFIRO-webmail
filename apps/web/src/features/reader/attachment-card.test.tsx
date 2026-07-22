@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AttachmentMeta } from "@webmail/shared";
 import "../../app/i18n";
@@ -113,5 +113,25 @@ describe("AttachmentCard", () => {
     render(<AttachmentCard attachment={makeAttachment({ name: null, type: "text/csv" })} />);
 
     expect(screen.getByText(/attachment/)).toBeInTheDocument();
+  });
+
+  it("lazy-loads the image thumbnail", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "photo.png", type: "image/png" })} />);
+
+    expect(screen.getByRole("img", { name: "photo.png" })).toHaveAttribute("loading", "lazy");
+  });
+
+  it("swaps the image thumbnail for the generic file-type icon if it fails to load, never a broken image glyph", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "photo.png", type: "image/png" })} />);
+
+    const thumbnail = screen.getByTestId("attachment-card-thumbnail");
+    const img = within(thumbnail).getByRole("img", { name: "photo.png" });
+    expect(within(thumbnail).queryByRole("img")).toBeInTheDocument();
+    expect(thumbnail.querySelector("svg")).toBeFalsy();
+
+    fireEvent.error(img);
+
+    expect(within(thumbnail).queryByRole("img")).not.toBeInTheDocument();
+    expect(thumbnail.querySelector("svg")).toBeTruthy();
   });
 });
