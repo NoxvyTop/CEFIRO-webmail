@@ -8,25 +8,13 @@ import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
-import {
-  ArchiveIcon,
-  ArrowLeftIcon,
-  FileArchiveIcon,
-  FileCalendarIcon,
-  FileDocumentIcon,
-  FileGenericIcon,
-  FileImageIcon,
-  FileSpreadsheetIcon,
-  ReplyIcon,
-  StarFilledIcon,
-  StarIcon,
-  TagIcon,
-} from "../../app/ui/icons";
+import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
 import { CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { AiSummaryCard } from "./AiSummaryCard";
+import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
 
@@ -58,62 +46,6 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
     others.add(key);
   }
   return others.size >= 1;
-}
-
-function formatSizeKb(size: number) {
-  return `${(size / 1024).toFixed(1)} KB`;
-}
-
-// Mirrors the server's SAFE_INLINE_CONTENT_TYPES allowlist (apps/server/src/modules/mail/router.ts):
-// only these types are ever served inline (without dl=1), so only these get a "view" link.
-const PREVIEWABLE_CONTENT_TYPES = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
-
-function isPreviewable(type: string): boolean {
-  return PREVIEWABLE_CONTENT_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
-}
-
-const WORD_TYPES = new Set([
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-const SHEET_TYPES = new Set([
-  "text/csv",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-]);
-const ARCHIVE_TYPES = new Set([
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/x-tar",
-  "application/gzip",
-  "application/x-7z-compressed",
-  "application/x-rar-compressed",
-]);
-const CALENDAR_TYPES = new Set(["text/calendar", "application/ics"]);
-
-// Maps an attachment's content-type to the icon that best represents it in
-// the attachment pill — pdf/word share the document icon, spreadsheets get
-// a grid, archives a zipper mark; anything unrecognized (including plain
-// text/JSON) falls back to the generic file icon.
-function attachmentIconFor(type: string) {
-  const normalized = type.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (normalized.startsWith("image/")) return FileImageIcon;
-  if (normalized === "application/pdf" || WORD_TYPES.has(normalized)) return FileDocumentIcon;
-  if (SHEET_TYPES.has(normalized)) return FileSpreadsheetIcon;
-  if (ARCHIVE_TYPES.has(normalized)) return FileArchiveIcon;
-  if (CALENDAR_TYPES.has(normalized)) return FileCalendarIcon;
-  return FileGenericIcon;
-}
-
-function blobUrl(blobId: string, name: string, type: string, download: boolean): string {
-  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
 }
 
 export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
@@ -426,38 +358,10 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     <p className="mb-2 text-[12.5px] font-semibold text-muted">
                       {t("attachments.count", { count: visibleAttachments.length })}
                     </p>
-                    <div className="flex flex-wrap gap-2">
-                      {visibleAttachments.map((attachment) => {
-                        const attachmentName = attachment.name ?? "attachment";
-                        const AttachmentIcon = attachmentIconFor(attachment.type);
-                        return (
-                          <span
-                            key={attachment.blobId}
-                            className="flex items-center gap-1.5 rounded-full bg-soft px-2 py-1 text-xs"
-                          >
-                            <AttachmentIcon size={15} />
-                            <span>
-                              {attachmentName} ({formatSizeKb(attachment.size)})
-                            </span>
-                            <a
-                              href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
-                              className="text-accent-text underline"
-                            >
-                              {t("attachments.download")}
-                            </a>
-                            {isPreviewable(attachment.type) && (
-                              <a
-                                href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-accent-text underline"
-                              >
-                                {t("attachments.view")}
-                              </a>
-                            )}
-                          </span>
-                        );
-                      })}
+                    <div className="flex flex-wrap gap-3">
+                      {visibleAttachments.map((attachment) => (
+                        <AttachmentCard key={attachment.blobId} attachment={attachment} />
+                      ))}
                     </div>
                   </div>
                 )}
