@@ -98,6 +98,38 @@ describe("sanitizeEmailHtml", () => {
     expect(out.html).not.toContain("evil.test");
   });
 
+  describe("data: URI images (signature/composer inserted images)", () => {
+    // Verifies DOMPurify's default config (USE_PROFILES: { html: true }) does
+    // NOT strip data:image/* from <img src>: DOMPurify special-cases the
+    // src/href attribute for a fixed set of tags (img, audio, video, source,
+    // track) to allow data: URIs regardless of the ALLOWED_URI_REGEXP, since
+    // an <img> never executes its src as script the way e.g. an <a href>
+    // or <iframe src> could with data:text/html. No sanitizer config change
+    // was needed for the signature/composer image-insert feature — this
+    // test locks that in so a future DOMPurify upgrade can't silently
+    // regress it.
+    it.each(["image/png", "image/jpeg", "image/gif", "image/webp"])(
+      "keeps a data:%s image src intact and does not flag it as remote",
+      (mime) => {
+        const out = sanitizeEmailHtml(`<img src="data:${mime};base64,AAAA">`, {
+          allowRemoteImages: false,
+        });
+        expect(firstImgSrc(out.html)).toBe(`data:${mime};base64,AAAA`);
+        expect(out.hasRemoteImages).toBe(false);
+      },
+    );
+
+    it("still blocks remote http(s) images alongside a kept data: image", () => {
+      const out = sanitizeEmailHtml(
+        `<img src="data:image/png;base64,AAAA"><img src="https://tracker.evil/pixel.png">`,
+        { allowRemoteImages: false },
+      );
+      expect(out.html).toContain("data:image/png;base64,AAAA");
+      expect(out.html).not.toContain("https://tracker.evil");
+      expect(out.hasRemoteImages).toBe(true);
+    });
+  });
+
   describe("inline cid: images", () => {
     // cidMap is cid -> already-resolved src string (a data: URL in
     // production, built by EmailBody from the trusted attachment blob — see

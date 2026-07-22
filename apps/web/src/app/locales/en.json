@@ -228,6 +228,10 @@
     "bulletList": "Bulleted list",
     "link": "Link",
     "linkUrl": "Link URL",
+    "image": "Image",
+    "insertImage": "Insert image",
+    "imageTooLarge": "Image is too large (max 1 MB)",
+    "imageInvalidType": "Unsupported image type (use PNG, JPEG, GIF, or WebP)",
     "removeRecipient": "Remove {{email}}",
     "removeAttachment": "Remove {{name}}",
     "errors": {

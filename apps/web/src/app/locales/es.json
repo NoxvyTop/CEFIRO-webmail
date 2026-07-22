@@ -228,6 +228,10 @@
     "bulletList": "Lista con viñetas",
     "link": "Enlace",
     "linkUrl": "URL del enlace",
+    "image": "Imagen",
+    "insertImage": "Insertar imagen",
+    "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
+    "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG, GIF o WebP)",
     "removeRecipient": "Quitar {{email}}",
     "removeAttachment": "Quitar {{name}}",
     "errors": {

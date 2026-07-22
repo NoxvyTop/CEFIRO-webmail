@@ -1,9 +1,45 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { sanitizeEmailHtml } from "../reader/sanitize";
 import { isSafeLinkUrl, RichTextEditor } from "./RichTextEditor";
+
+function pngFile(name: string, byteLength: number, type = "image/png"): File {
+  return new File([new Uint8Array(byteLength)], name, { type });
+}
+
+// A controllable stand-in for the browser FileReader, used to deterministically
+// drive (and defer) the load/error callbacks that readFileAsDataUrl relies on,
+// instead of racing the real async file-read machinery.
+class ManualFileReader {
+  static instances: ManualFileReader[] = [];
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  error: Error | null = null;
+  result: string | null = null;
+
+  readAsDataURL(): void {
+    ManualFileReader.instances.push(this);
+  }
+
+  succeed(dataUrl: string): void {
+    this.result = dataUrl;
+    this.onload?.();
+  }
+
+  fail(error: Error): void {
+    this.error = error;
+    this.onerror?.();
+  }
+}
+
+const RealFileReader = globalThis.FileReader;
+
+function installManualFileReader(): void {
+  ManualFileReader.instances = [];
+  globalThis.FileReader = ManualFileReader as unknown as typeof FileReader;
+}
 
 describe("isSafeLinkUrl", () => {
   it.each(["https://x.test", "http://x.test", "mailto:a@b.com"])(
@@ -103,5 +139,157 @@ describe("RichTextEditor link toolbar", () => {
 
     const editor = screen.getByRole("textbox", { name: "Message" });
     expect(editor.querySelector("a")).toBeNull();
+  });
+});
+
+describe("RichTextEditor image insertion", () => {
+  function getImageFileInput(): HTMLInputElement {
+    return screen.getByLabelText(i18n.t("composer.image")) as HTMLInputElement;
+  }
+
+  it("inserts a selected PNG as a data: URL into the editor", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const insertButton = await screen.findByRole("button", { name: i18n.t("composer.insertImage") });
+    expect(insertButton).toBeInTheDocument();
+
+    const fileInput = getImageFileInput();
+    const file = pngFile("logo.png", 10, "image/png");
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    expect(editor.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it.each([
+    ["image/jpeg", "photo.jpg"],
+    ["image/gif", "anim.gif"],
+    ["image/webp", "pic.webp"],
+  ])("accepts %s files", async (type, name) => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    const file = pngFile(name, 10, type);
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    expect(editor.querySelector("img")?.getAttribute("src")).toMatch(new RegExp(`^data:${type.replace("/", "\\/")};base64,`));
+  });
+
+  it("rejects a file over the size cap and shows an i18n error without inserting", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    const oversized = pngFile("huge.png", 2_000_000, "image/png");
+    fireEvent.change(fileInput, { target: { files: [oversized] } });
+
+    expect(await screen.findByText(i18n.t("composer.imageTooLarge"))).toBeInTheDocument();
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    expect(editor.querySelector("img")).toBeNull();
+  });
+
+  it("rejects an unsupported file type and shows an i18n error without inserting", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    const svg = pngFile("evil.svg", 10, "image/svg+xml");
+    fireEvent.change(fileInput, { target: { files: [svg] } });
+
+    expect(await screen.findByText(i18n.t("composer.imageInvalidType"))).toBeInTheDocument();
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    expect(editor.querySelector("img")).toBeNull();
+  });
+
+  it("clears a previous error once a valid image is inserted afterward", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("huge.png", 2_000_000, "image/png")] } });
+    expect(await screen.findByText(i18n.t("composer.imageTooLarge"))).toBeInTheDocument();
+
+    fireEvent.change(fileInput, { target: { files: [pngFile("ok.png", 10, "image/png")] } });
+
+    await waitFor(() =>
+      expect(screen.queryByText(i18n.t("composer.imageTooLarge"))).not.toBeInTheDocument(),
+    );
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+  });
+
+  it("keeps an inserted image intact after a content re-sync (e.g. switching signatures re-feeds bodyHtml)", async () => {
+    const { rerender } = render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const htmlWithImage = editor.innerHTML;
+    expect(htmlWithImage).toContain("data:image/png;base64,");
+
+    // Simulate a real setContent re-sync: the parent re-feeds a *different*
+    // html string that still carries the same inserted image — exactly what
+    // happens when applySignature() rewraps bodyHtml around a signature
+    // switch and Composer re-renders RichTextEditor with the recomputed
+    // value (see composer.test.tsx's signature-switch tests). A different
+    // string forces RichTextEditor's `html !== editor.getHTML()` effect to
+    // call editor.commands.setContent(html, false), which re-parses the
+    // whole doc through the schema — exactly where an Image extension
+    // without allowBase64 (default false, parse rule
+    // `img[src]:not([src^="data:"])`) silently drops the data: image.
+    rerender(
+      <RichTextEditor
+        html={`<div data-cefiro-signature="true">${htmlWithImage}</div>`}
+        onChange={() => {}}
+        ariaLabel="Message"
+      />,
+    );
+
+    await waitFor(() => {
+      const img = editor.querySelector("img");
+      expect(img).not.toBeNull();
+      expect(img?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    });
+  });
+
+  describe("file read failure handling", () => {
+    afterEach(() => {
+      globalThis.FileReader = RealFileReader;
+    });
+
+    it("shows a generic i18n error and does not insert when the file read fails", async () => {
+      installManualFileReader();
+      render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+      const fileInput = getImageFileInput();
+      fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+      await waitFor(() => expect(ManualFileReader.instances).toHaveLength(1));
+      ManualFileReader.instances[0]?.fail(new Error("read failed"));
+
+      expect(await screen.findByText(i18n.t("composer.errors.generic"))).toBeInTheDocument();
+
+      const editor = screen.getByRole("textbox", { name: "Message" });
+      expect(editor.querySelector("img")).toBeNull();
+    });
+
+    // No dedicated test for "editor destroyed mid-read": verified directly
+    // against @tiptap/core (2.27.2) that calling chain().focus().setImage()
+    // .run() on an already-destroyed Editor does not throw — isDestroyed
+    // becomes true once EditorView.destroy() clears its internal docView,
+    // and dispatching a transaction against a torn-down view is a no-op at
+    // the DOM-sync level rather than an exception. A test asserting "does
+    // not throw" here would pass identically with or without the guard
+    // below, which fails the "watch it fail for the real reason" bar for a
+    // meaningful regression test (see the test-driven-development skill's
+    // "tests that pass immediately prove nothing" guidance). The
+    // `editor.isDestroyed` re-check is still added as defensive, technically
+    // correct code — it mirrors TipTap's own internal convention (`if
+    // (!editor.isDestroyed)`) and avoids running a command against — and
+    // setting React state from — a component instance mid-teardown.
   });
 });
