@@ -9,6 +9,7 @@ import {
   FileImageIcon,
   FileSpreadsheetIcon,
 } from "../../app/ui/icons";
+import { AttachmentViewer } from "./AttachmentViewer";
 import { PdfThumbnail } from "./PdfThumbnail";
 
 interface AttachmentCardProps {
@@ -92,6 +93,12 @@ export function AttachmentCard({ attachment }: AttachmentCardProps) {
   const kind = attachmentThumbnailKind(attachment.type);
   const Icon = attachmentIconFor(attachment.type);
   const previewable = kind !== "icon";
+  // Narrows `kind` to what AttachmentViewer accepts. Only ever read while
+  // `viewerOpen` is true, which the thumbnail/"Ver" handlers below only ever
+  // set for a previewable (image/pdf) attachment — `null` here is the
+  // (unreachable in practice) "not previewable" case, kept just so the
+  // viewer prop stays fully typed without an unsafe cast.
+  const previewKind: "image" | "pdf" | null = kind === "icon" ? null : kind;
 
   // A blob that classifies as an image type can still fail to actually load
   // (corrupt bytes, a transient fetch error, ...) — onError swaps to the
@@ -99,28 +106,51 @@ export function AttachmentCard({ attachment }: AttachmentCardProps) {
   // never shows the browser's broken-image glyph either.
   const [imageFailed, setImageFailed] = useState(false);
 
+  // Gmail-style in-app viewer instead of the old "open a new tab" behavior —
+  // opened by either the thumbnail or the "Ver" control, for previewable
+  // (image/pdf) attachments only. See AttachmentViewer.tsx.
+  const [viewerOpen, setViewerOpen] = useState(false);
+
+  const thumbnailContent = (
+    <>
+      {kind === "image" && !imageFailed && (
+        <img
+          src={blobUrl(attachment.blobId, name, attachment.type, false)}
+          alt={name}
+          loading="lazy"
+          onError={() => setImageFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      )}
+      {kind === "pdf" && (
+        <PdfThumbnail
+          blobId={attachment.blobId}
+          name={name}
+          type={attachment.type}
+          fallback={<Icon size={32} />}
+        />
+      )}
+      {(kind === "icon" || (kind === "image" && imageFailed)) && <Icon size={32} />}
+    </>
+  );
+
   return (
     <div className="flex w-[172px] shrink-0 flex-col overflow-hidden rounded-xl border border-line">
-      <div data-testid="attachment-card-thumbnail" className="flex h-[104px] items-center justify-center bg-soft">
-        {kind === "image" && !imageFailed && (
-          <img
-            src={blobUrl(attachment.blobId, name, attachment.type, false)}
-            alt={name}
-            loading="lazy"
-            onError={() => setImageFailed(true)}
-            className="h-full w-full object-cover"
-          />
-        )}
-        {kind === "pdf" && (
-          <PdfThumbnail
-            blobId={attachment.blobId}
-            name={name}
-            type={attachment.type}
-            fallback={<Icon size={32} />}
-          />
-        )}
-        {(kind === "icon" || (kind === "image" && imageFailed)) && <Icon size={32} />}
-      </div>
+      {previewable ? (
+        <button
+          type="button"
+          data-testid="attachment-card-thumbnail"
+          onClick={() => setViewerOpen(true)}
+          aria-label={t("attachments.viewNamed", { name })}
+          className="flex h-[104px] items-center justify-center bg-soft"
+        >
+          {thumbnailContent}
+        </button>
+      ) : (
+        <div data-testid="attachment-card-thumbnail" className="flex h-[104px] items-center justify-center bg-soft">
+          {thumbnailContent}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-1.5 border-t border-line bg-panel px-2 py-1.5 text-xs">
         <Icon size={15} />
         <span className="min-w-0 flex-1 truncate">
@@ -130,16 +160,20 @@ export function AttachmentCard({ attachment }: AttachmentCardProps) {
           {t("attachments.download")}
         </a>
         {previewable && (
-          <a
-            href={blobUrl(attachment.blobId, name, attachment.type, false)}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={() => setViewerOpen(true)}
             className="text-accent-text underline"
           >
             {t("attachments.view")}
-          </a>
+          </button>
         )}
       </div>
+      <AttachmentViewer
+        attachment={viewerOpen ? attachment : null}
+        kind={previewKind ?? "image"}
+        onClose={() => setViewerOpen(false)}
+      />
     </div>
   );
 }

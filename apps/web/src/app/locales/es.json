@@ -248,6 +248,11 @@
   "attachments": {
     "download": "Descargar",
     "view": "Ver",
+    "viewNamed": "Ver {{name}}",
+    "print": "Imprimir",
+    "close": "Cerrar",
+    "previewLoading": "Cargando vista previa…",
+    "previewError": "No se pudo cargar la vista previa. Probá descargarlo.",
     "count_one": "{{count}} adjunto",
     "count_other": "{{count}} adjuntos"
   },

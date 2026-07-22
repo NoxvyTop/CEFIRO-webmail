@@ -248,6 +248,11 @@
   "attachments": {
     "download": "Download",
     "view": "View",
+    "viewNamed": "View {{name}}",
+    "print": "Print",
+    "close": "Close",
+    "previewLoading": "Loading preview…",
+    "previewError": "Couldn't load the preview. Try downloading it instead.",
     "count_one": "{{count}} attachment",
     "count_other": "{{count}} attachments"
   },

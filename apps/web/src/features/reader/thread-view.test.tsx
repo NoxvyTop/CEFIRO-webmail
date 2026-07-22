@@ -128,7 +128,7 @@ describe("ThreadView", () => {
     expect(await screen.findByText(/report\.pdf/)).toBeInTheDocument();
   });
 
-  it("renders a download link and, for previewable types, a view link", async () => {
+  it("renders a download link and, for previewable types, a 'Ver' control that opens the in-app viewer", async () => {
     stubFetch();
     renderThread();
 
@@ -138,9 +138,11 @@ describe("ThreadView", () => {
       "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf&dl=1",
     );
 
-    const viewLink = screen.getByRole("link", { name: i18n.t("attachments.view") });
-    expect(viewLink).toHaveAttribute("href", "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf");
-    expect(viewLink).toHaveAttribute("target", "_blank");
+    // "Ver" is a button (not a new-tab link) — it opens AttachmentViewer
+    // in-app. Full viewer behavior (image/pdf rendering, print, a11y) is
+    // covered in attachment-viewer.test.tsx / attachment-card.test.tsx.
+    const viewButton = screen.getByRole("button", { name: i18n.t("attachments.view") });
+    expect(viewButton).toHaveAttribute("type", "button");
   });
 
   it("blocks the remote image by default and unblocks it after clicking load images", async () => {
