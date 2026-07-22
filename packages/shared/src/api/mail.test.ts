@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachmentMetaSchema,
   emailSummarySchema,
   emailUpdateSchema,
   mailboxSchema,
@@ -54,10 +55,43 @@ describe("mail contracts", () => {
       replyTo: [],
       bodyHtml: "<p>hi</p>",
       bodyText: null,
-      attachments: [{ blobId: "b1", name: "a.pdf", type: "application/pdf", size: 99 }],
+      attachments: [{ blobId: "b1", name: "a.pdf", type: "application/pdf", size: 99, cid: null }],
     };
     const parsed = threadDetailSchema.parse({ id: "t1", emails: [email] });
     expect(parsed.emails[0]?.attachments[0]?.name).toBe("a.pdf");
+  });
+
+  it("accepts an attachment with a cid (inline image reference)", () => {
+    const parsed = attachmentMetaSchema.parse({
+      blobId: "b1",
+      name: "logo.png",
+      type: "image/png",
+      size: 512,
+      cid: "logo123",
+    });
+    expect(parsed.cid).toBe("logo123");
+  });
+
+  it("accepts an attachment with a null cid (regular, non-inline attachment)", () => {
+    const parsed = attachmentMetaSchema.parse({
+      blobId: "b1",
+      name: "report.pdf",
+      type: "application/pdf",
+      size: 512,
+      cid: null,
+    });
+    expect(parsed.cid).toBeNull();
+  });
+
+  it("rejects an attachment missing the cid field", () => {
+    expect(() =>
+      attachmentMetaSchema.parse({
+        blobId: "b1",
+        name: "a.pdf",
+        type: "application/pdf",
+        size: 10,
+      }),
+    ).toThrow();
   });
 
   it("rejects an empty email update", () => {
