@@ -5,6 +5,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { authModeSchema, type AuthMode } from "@webmail/shared";
 import { bootstrapLogin } from "./useAuth";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
+import { MoonIcon, SunIcon } from "../../app/ui/icons";
+import { useTheme } from "../../app/ui/useTheme";
 
 const KNOWN_ERRORS = new Set(["state", "unknown_user", "oidc"]);
 const SSO_LOGIN_URL = "/api/auth/login";
@@ -18,11 +20,12 @@ async function fetchMode(): Promise<AuthMode> {
   return authModeSchema.parse(await res.json());
 }
 
-// Mirrors the prototype's own check (Login Céfiro.dc.html:139): a non-empty
-// value containing "@" is enough — this is a UX nicety catching obvious
-// typos, not the server's authoritative validation.
-function looksLikeEmail(value: string): boolean {
-  return value.trim().length > 0 && value.includes("@");
+// Bootstrap mode has no notion of an email address — the field is labeled
+// "Usuario" and the server (bootstrapLoginSchema) only requires a non-empty
+// string; it authenticates purely on the password. Email-format validation
+// belongs to a future credentials-mode form, not to this one.
+function isNonEmpty(value: string): boolean {
+  return value.trim().length > 0;
 }
 
 interface BootstrapFieldErrors {
@@ -37,6 +40,7 @@ export function LoginPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: mode } = useQuery({ queryKey: ["auth", "mode"], queryFn: fetchMode });
+  const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [bootstrapError, setBootstrapError] = useState(false);
@@ -45,7 +49,7 @@ export function LoginPage() {
 
   function validateBootstrapFields(): boolean {
     const errors: BootstrapFieldErrors = {};
-    if (!looksLikeEmail(email)) errors.email = t("auth.bootstrap.errors.invalidEmail");
+    if (!isNonEmpty(email)) errors.email = t("auth.bootstrap.errors.emptyUser");
     if (!password) errors.password = t("auth.bootstrap.errors.emptyPassword");
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -74,7 +78,16 @@ export function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4">
+    <main className="relative flex min-h-screen flex-col items-center justify-center bg-canvas px-4">
+      <button
+        type="button"
+        onClick={toggleTheme}
+        aria-label={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
+        title={t(theme === "night" ? "app.themeLight" : "app.themeNight")}
+        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full border border-line text-muted transition hover:bg-hover hover:text-ink"
+      >
+        {theme === "night" ? <SunIcon /> : <MoonIcon />}
+      </button>
       <div className="flex flex-col items-center">
         <div className="mb-5">
           <CefiroLogo size={72} />
@@ -101,7 +114,7 @@ export function LoginPage() {
               {ssoConnecting ? t("auth.connecting") : t("auth.signIn")}
             </a>
             {ssoConnecting && (
-              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent">
+              <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent-text">
                 {t("auth.redirecting")}
               </p>
             )}
@@ -139,7 +152,7 @@ export function LoginPage() {
                     setEmail(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, email: undefined }));
                   }}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
                 />
                 {fieldErrors.email && (
                   <p className="text-[12.5px] text-danger">{fieldErrors.email}</p>
@@ -157,7 +170,7 @@ export function LoginPage() {
                     setPassword(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, password: undefined }));
                   }}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent"
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
                 />
                 {fieldErrors.password && (
                   <p className="text-[12.5px] text-danger">{fieldErrors.password}</p>
@@ -165,7 +178,7 @@ export function LoginPage() {
               </div>
               <button
                 type="submit"
-                className="mt-0.5 h-11 rounded-[11px] border border-line text-[14px] font-semibold text-ink transition hover:border-accent hover:bg-hover"
+                className="mt-0.5 h-11 rounded-[11px] bg-accent text-[14.5px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
               >
                 {t("auth.bootstrap.submit")}
               </button>
@@ -177,7 +190,7 @@ export function LoginPage() {
         )}
       </div>
       <p className="mt-[22px] flex items-center gap-2 text-[11.5px] text-muted">
-        <span className="font-bold tracking-[0.14em] text-accent">CÉFIRO</span> · {t("app.sealMotto")}
+        <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> · {t("app.sealMotto")}
       </p>
     </main>
   );

@@ -64,7 +64,8 @@ export function UserRow({ user }: { user: AdminUser }) {
       ? t("admin.actions.archive")
       : t("admin.actions.reactivate");
 
-  const ghostButtonClass = "rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover disabled:opacity-50";
+  const ghostButtonClass =
+    "flex h-8 items-center rounded-[9px] px-2 text-xs transition hover:bg-hover disabled:opacity-50";
 
   return (
     <tr className="border-t border-line transition hover:bg-hover">
@@ -87,7 +88,7 @@ export function UserRow({ user }: { user: AdminUser }) {
       <td className="p-2">
         <span
           className={`rounded-full px-2 py-0.5 text-xs ${
-            user.active ? "bg-sel text-accent" : "border border-line text-muted"
+            user.active ? "bg-sel text-accent-text" : "border border-line text-muted"
           }`}
         >
           {user.active ? t("admin.status.active") : t("admin.status.archived")}

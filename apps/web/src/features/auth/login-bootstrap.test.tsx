@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -28,6 +28,11 @@ function stubFetch(handlers: Record<string, () => Response>) {
     }),
   );
 }
+
+beforeEach(() => {
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -140,17 +145,19 @@ describe("login screen bootstrap form", () => {
 
     const emailInput = await screen.findByLabelText("Usuario");
     const passwordInput = screen.getByLabelText("Contraseña");
-    fireEvent.change(emailInput, { target: { value: "not-an-email" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
-    expect(await screen.findByText(i18n.t("auth.bootstrap.errors.invalidEmail"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("auth.bootstrap.errors.emptyUser"))).toBeInTheDocument();
     expect(screen.getByText(i18n.t("auth.bootstrap.errors.emptyPassword"))).toBeInTheDocument();
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/auth/bootstrap"))).toBe(false);
 
-    fireEvent.change(emailInput, { target: { value: "admin@noxvytop.com" } });
+    // The real bootstrap username has no "@" — it must clear the error, not
+    // trigger a new one. This is the regression this suite guards against
+    // (CLARO-06/OSCURO-02): "Usuario" is not an email field.
+    fireEvent.change(emailInput, { target: { value: "bootstrap-admin" } });
     fireEvent.change(passwordInput, { target: { value: "s3cret" } });
 
-    expect(screen.queryByText(i18n.t("auth.bootstrap.errors.invalidEmail"))).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("auth.bootstrap.errors.emptyUser"))).not.toBeInTheDocument();
     expect(screen.queryByText(i18n.t("auth.bootstrap.errors.emptyPassword"))).not.toBeInTheDocument();
   });
 
@@ -174,7 +181,9 @@ describe("login screen bootstrap form", () => {
 
     const emailInput = await screen.findByLabelText("Usuario");
     const passwordInput = screen.getByLabelText("Contraseña");
-    fireEvent.change(emailInput, { target: { value: "admin@noxvytop.com" } });
+    // "bootstrap-admin" is the real emergency username (no "@") — it must
+    // pass client validation and reach the server unchanged.
+    fireEvent.change(emailInput, { target: { value: "bootstrap-admin" } });
     fireEvent.change(passwordInput, { target: { value: "s3cret" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
@@ -186,9 +195,30 @@ describe("login screen bootstrap form", () => {
       const init = bootstrapCall?.[1] as RequestInit | undefined;
       expect(init?.method).toBe("POST");
       expect(JSON.parse(init?.body as string)).toEqual({
-        email: "admin@noxvytop.com",
+        email: "bootstrap-admin",
         password: "s3cret",
       });
     });
+  });
+
+  it("renders a discreet theme toggle and switches themes when clicked", async () => {
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
+    });
+    renderAt("/");
+
+    await screen.findByLabelText("Usuario");
+
+    // No stored preference and no matchMedia in jsdom: useTheme resolves the
+    // brand default "light", so the toggle's accessible name offers night.
+    const toggle = await screen.findByRole("button", { name: i18n.t("app.themeNight") });
+    expect(document.documentElement.dataset.theme).toBe("light");
+
+    fireEvent.click(toggle);
+
+    expect(document.documentElement.dataset.theme).toBe("night");
+    expect(localStorage.getItem("cefiro-theme")).toBe("night");
+    expect(await screen.findByRole("button", { name: i18n.t("app.themeLight") })).toBeInTheDocument();
   });
 });

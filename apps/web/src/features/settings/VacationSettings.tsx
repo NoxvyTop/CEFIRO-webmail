@@ -155,7 +155,7 @@ export function VacationSettings() {
         <button type="submit" className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]">
           {t("vacation.save")}
         </button>
-        {saved && <span className="text-sm text-accent">{t("vacation.saved")}</span>}
+        {saved && <span className="text-sm text-accent-text">{t("vacation.saved")}</span>}
       </div>
     </form>
   );

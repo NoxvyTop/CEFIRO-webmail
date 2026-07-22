@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { labelBackground, labelColor, userLabels } from "./labels";
+import {
+  CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, mergeLabels, userLabels,
+} from "./labels";
 
 describe("labelColor", () => {
   it("is deterministic for the same label", () => {
@@ -99,5 +101,63 @@ describe("userLabels", () => {
 
   it("returns an empty array when there are no user keywords", () => {
     expect(userLabels({ $seen: true, $flagged: false })).toEqual([]);
+  });
+});
+
+describe("mergeLabels (CLARO-08/OSCURO-07: ETIQUETAS always shows the taxonomy)", () => {
+  it("returns just the 4 canonical labels, in spec order, when there are no real labels", () => {
+    expect(mergeLabels([])).toEqual(CANONICAL_LABELS);
+    // The stored/filter value is the ASCII-safe JMAP keyword slug "diseno" —
+    // NOT the accented "diseño" — because that's what real mail is tagged
+    // with (hasKeyword is passed verbatim to JMAP, no accent folding on the
+    // server). The accented spelling is a display-only concern, see
+    // labelDisplayName() below.
+    expect(CANONICAL_LABELS).toEqual(["urgente", "producto", "diseno", "finanzas"]);
+  });
+
+  it("appends real labels not covered by the canonical set after the canonical ones", () => {
+    expect(mergeLabels(["important", "urgent"])).toEqual([
+      "urgente", "producto", "diseno", "finanzas", "important", "urgent",
+    ]);
+  });
+
+  it("dedupes case-insensitively so a real label matching a canonical one isn't repeated", () => {
+    expect(mergeLabels(["Urgente", "PRODUCTO"])).toEqual(["urgente", "producto", "diseno", "finanzas"]);
+  });
+
+  it("keeps canonical labels first and preserves the caller's order for extras", () => {
+    // Callers (MailPage) already hand mergeLabels a sorted list of real
+    // labels, so this only guards that mergeLabels itself doesn't reorder.
+    expect(mergeLabels(["zeta", "alpha"])).toEqual([
+      "urgente", "producto", "diseno", "finanzas", "zeta", "alpha",
+    ]);
+  });
+
+  // Regression coverage for the fresh-review MAJOR: canonical "diseño" used
+  // to be stored accented, so a real diseno-tagged mail (1) didn't dedupe
+  // against it (two chips: "Diseño" and "diseno") and (2) the canonical chip
+  // filtered by hasKeyword=diseño, matching zero real mail. Both are wrong.
+  it("dedupes the real JMAP slug 'diseno' into the canonical entry (no duplicate chip)", () => {
+    expect(mergeLabels(["diseno"])).toEqual(CANONICAL_LABELS);
+  });
+
+  it("also dedupes an accented real label 'Diseño' via diacritic-insensitive normalization", () => {
+    expect(mergeLabels(["Diseño"])).toEqual(CANONICAL_LABELS);
+  });
+});
+
+describe("labelDisplayName (accented spec display name for the ASCII-safe canonical slug)", () => {
+  it("renders the 'diseno' slug with its spec display name 'Diseño'", () => {
+    expect(labelDisplayName("diseno")).toBe("Diseño");
+  });
+
+  it("is case-insensitive on the input slug", () => {
+    expect(labelDisplayName("DISENO")).toBe("Diseño");
+    expect(labelDisplayName("Diseno")).toBe("Diseño");
+  });
+
+  it("passes through labels with no display override unchanged (CSS `capitalize` handles casing)", () => {
+    expect(labelDisplayName("urgente")).toBe("urgente");
+    expect(labelDisplayName("important")).toBe("important");
   });
 });

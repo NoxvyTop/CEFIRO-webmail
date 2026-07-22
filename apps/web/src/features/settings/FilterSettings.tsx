@@ -148,7 +148,7 @@ export function FilterSettings() {
         </div>
       )}
       {reapplied && !errorKey && (
-        <p className="text-sm text-accent">{t("filters.reapplied")}</p>
+        <p className="text-sm text-accent-text">{t("filters.reapplied")}</p>
       )}
 
       {rules.length === 0 && !filtersQuery.isLoading && (
@@ -194,7 +194,7 @@ export function FilterSettings() {
                 }
                 className={
                   rule.enabled
-                    ? "rounded-full border border-accent/40 bg-sel px-2 py-0.5 text-xs text-accent"
+                    ? "rounded-full border border-accent/40 bg-sel px-2 py-0.5 text-xs text-accent-text"
                     : "rounded-full border border-line px-2 py-0.5 text-xs text-muted transition hover:bg-hover"
                 }
               >
@@ -229,7 +229,7 @@ export function FilterSettings() {
             setEditingId(null);
             setFormOpen(true);
           }}
-          className="self-start rounded-[9px] border border-line px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+          className="self-start rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
         >
           {t("filters.newRule")}
         </button>

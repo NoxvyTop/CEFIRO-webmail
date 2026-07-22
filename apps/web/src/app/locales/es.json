@@ -51,6 +51,15 @@
       "load": "No se pudieron cargar los usuarios",
       "action": "No se pudo completar la acción"
     },
+    "search": {
+      "placeholder": "Buscar por nombre o correo…",
+      "noResults": "Ningún usuario coincide con tu búsqueda"
+    },
+    "pagination": {
+      "prev": "Anterior",
+      "next": "Siguiente",
+      "range": "{{from}}–{{to}} de {{total}}"
+    },
     "sso": {
       "title": "Proveedor SSO (OIDC)",
       "configured": "Configurado",
@@ -90,7 +99,7 @@
       "error": "Credencial inválida",
       "hint": "Solo disponible en modo de configuración o recuperación",
       "errors": {
-        "invalidEmail": "Introduce un correo válido.",
+        "emptyUser": "Introduce tu usuario.",
         "emptyPassword": "Introduce tu contraseña."
       }
     }
@@ -142,6 +151,13 @@
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el resumen con IA",
       "generic": "No se pudo cargar el correo"
+    },
+    "unlinked": {
+      "title": "Vincula tu buzón",
+      "descriptionAdmin": "Conecta tu casilla de correo para empezar a recibir mensajes.",
+      "descriptionEmployee": "Tu buzón todavía no está vinculado a una casilla de correo.",
+      "cta": "Vincular buzón",
+      "hint": "Pide a un administrador que lo vincule."
     },
     "summarizeWithAi": "✦ Resumir con IA",
     "aiSummaryTitle": "Resumen IA",
@@ -216,7 +232,8 @@
     "draftWithAi": "✦ Redactar con IA",
     "draftingWithAi": "Redactando…",
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
-    "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA"
+    "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
+    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos"
   },
   "attachments": {
     "download": "Descargar",

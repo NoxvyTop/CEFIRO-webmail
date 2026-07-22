@@ -104,7 +104,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
             <button
               type="button"
               onClick={() => setShowCcBcc(true)}
-              className="self-start text-xs text-accent underline"
+              className="self-start text-xs text-accent-text underline"
             >
               {t("composer.addCcBcc")}
             </button>
@@ -168,7 +168,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover"
+                className="rounded-md border border-line-strong px-3 py-1 text-sm hover:bg-hover"
               >
                 {t("composer.attachFiles")}
               </button>
@@ -240,7 +240,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
               type="button"
               onClick={() => void draftWithAi()}
               disabled={state.aiDrafting}
-              className="flex h-[38px] items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+              className="flex h-[38px] items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent-text transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
             >
               {state.aiDrafting ? t("composer.draftingWithAi") : t("composer.draftWithAi")}
             </button>

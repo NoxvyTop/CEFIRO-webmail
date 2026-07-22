@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type { EmailSummary } from "@webmail/shared";
 import { fetchMailboxes, fetchThread } from "./api";
 import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
-import { mailErrorKey, mailRetry } from "./queryErrors";
+import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { folderName } from "../../app/ui/folders";
+import { useToast } from "../../app/ui/toast";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -28,7 +29,9 @@ export function MailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const { width: listWidth, startDrag, handleKeyDown } = useResizablePane();
+  const isAdmin = user?.role === "admin";
 
   useMailEvents(true);
 
@@ -54,6 +57,16 @@ export function MailPage() {
     queryKey: ["mail", "identities"],
     queryFn: fetchIdentities,
   });
+  // CLARO-10: gates both the Redactar button's disabled state and the "c"
+  // shortcut — without at least one identity, composing has nothing to send
+  // from (most commonly: the mailbox isn't linked yet).
+  const hasIdentities = Boolean(identitiesQuery.data && identitiesQuery.data.length > 0);
+
+  // CLARO-07/OSCURO-05: mail_credentials_missing is onboarding, not a server
+  // error — everything else (mail_not_configured, network failures, etc.)
+  // keeps the generic alert treatment.
+  const unlinkedMailbox = mailboxesQuery.isError && isUnlinkedMailboxError(mailboxesQuery.error);
+  const otherMailboxError = mailboxesQuery.isError && !unlinkedMailbox;
 
   const preferencesQuery = useQuery({
     queryKey: ["mail", "preferences"],
@@ -217,6 +230,13 @@ export function MailPage() {
       if (!isPlainShortcut(event)) return;
       if (event.key === "c") {
         event.preventDefault();
+        // CLARO-10: without identities the composer can't resolve a draft
+        // (resolveComposeDraft returns null), so "c" silently did nothing —
+        // now it surfaces the same hint the disabled Redactar button shows.
+        if (!hasIdentities) {
+          showToast(t("composer.noIdentitiesHint"));
+          return;
+        }
         handleCompose();
       }
     }
@@ -224,7 +244,7 @@ export function MailPage() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hasIdentities]);
 
   function removeComposeParam() {
     setSearchParams((prev) => {
@@ -278,6 +298,7 @@ export function MailPage() {
         selectedLabel={labelParam}
         onSelectLabel={handleSelectLabel}
         onCompose={handleCompose}
+        composeDisabled={!hasIdentities}
       />
       <section
         aria-label={t("mail.listRegion")}
@@ -286,13 +307,34 @@ export function MailPage() {
           threadParam ? "hidden lg:flex" : "flex"
         } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
-        {mailboxesQuery.isError && (
+        {otherMailboxError && (
           <p role="alert" className="p-4 text-sm text-warn">
             {t(mailErrorKey(mailboxesQuery.error))}
           </p>
         )}
+        {unlinkedMailbox && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted">
+            <div className="opacity-60">
+              <CefiroLogo size={52} />
+            </div>
+            <p className="text-[15px] font-semibold text-ink">{t("mail.unlinked.title")}</p>
+            <p className="max-w-[260px] text-[13px] text-muted">
+              {t(isAdmin ? "mail.unlinked.descriptionAdmin" : "mail.unlinked.descriptionEmployee")}
+            </p>
+            {isAdmin ? (
+              <Link
+                to="/admin"
+                className="mt-1 flex h-9 items-center justify-center rounded-[10px] bg-accent px-4 text-[13px] font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+              >
+                {t("mail.unlinked.cta")}
+              </Link>
+            ) : (
+              <p className="text-[12px] text-muted">{t("mail.unlinked.hint")}</p>
+            )}
+          </div>
+        )}
         {!starredParam && groupAddresses.length > 0 && (
-          <label className="flex items-center gap-2 border-b border-line p-2 text-sm text-muted">
+          <label className="flex h-[38px] w-full items-center gap-[11px] border-b border-line px-3 text-sm text-muted transition hover:bg-hover">
             <input
               type="checkbox"
               checked={preferences?.groupMailInMainInbox ?? false}

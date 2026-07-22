@@ -1,7 +1,7 @@
 # Handoff: Webmail Céfiro
 
 ## Overview
-**Céfiro** es el cliente de webmail del ecosistema (tercer producto junto a Noxvy y Argos). Interfaz de 3 columnas (carpetas / lista / lectura) para equipos de trabajo, en español, con atajos de teclado, funciones de IA (resumen y redacción asistida), etiquetas con filtro, y dos temas: **Noche** (por defecto, a juego con la estética del ecosistema) y **Claro**.
+**Céfiro** es el cliente de webmail del ecosistema (tercer producto junto a Noxvy y Argos). Interfaz de 3 columnas (carpetas / lista / lectura) para equipos de trabajo, en español, con atajos de teclado, funciones de IA (resumen y redacción asistida), etiquetas con filtro, y dos temas: **Claro** (por defecto desde 2026-07-21, con autodescubrimiento de la preferencia del sistema: elección guardada > sistema > Claro) y **Noche** (la estética distintiva del ecosistema).
 
 ## Sobre los archivos de diseño
 Los archivos de este paquete son **referencias de diseño creadas en HTML** — prototipos que muestran el aspecto y comportamiento previstos, NO código de producción para copiar tal cual. La tarea es **recrear este diseño en el entorno del codebase destino** (React, Vue, etc.) usando sus patrones y librerías existentes; si aún no hay entorno, elegir el framework más apropiado e implementarlo ahí.
@@ -11,7 +11,7 @@ Los archivos de este paquete son **referencias de diseño creadas en HTML** — 
 
 ## Design Tokens
 
-### Tema Noche (por defecto)
+### Tema Noche
 - `--bg: #0A0B10` fondo general
 - `--panel: #12141C` paneles (header, lista, modales)
 - `--ink: #ECEEF4` texto principal

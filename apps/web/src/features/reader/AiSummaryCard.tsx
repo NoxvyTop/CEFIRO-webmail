@@ -54,20 +54,20 @@ export function AiSummaryCard({ messageId }: AiSummaryCardProps) {
         <button
           type="button"
           onClick={() => query.refetch()}
-          className="flex items-center gap-2 bg-transparent text-[13.5px] font-semibold text-accent transition hover:opacity-80"
+          className="flex items-center gap-2 bg-transparent text-[13.5px] font-semibold text-accent-text transition hover:opacity-80"
         >
           <span aria-hidden="true" className="text-[15px]">✦</span>
           {t("mail.summarizeWithAi")}
         </button>
       )}
       {query.isFetching && (
-        <p className="flex animate-pulse items-center gap-2 text-[13.5px] font-semibold text-accent">
+        <p className="flex animate-pulse items-center gap-2 text-[13.5px] font-semibold text-accent-text">
           <span aria-hidden="true">✦</span> {t("mail.aiSummaryLoading")}
         </p>
       )}
       {ready && (
         <div role="region" aria-label={t("mail.aiSummaryTitle")} style={{ animation: "fadeUp 0.3s ease" }}>
-          <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-accent">
+          <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-accent-text">
             <span aria-hidden="true">✦</span> {t("mail.aiSummaryTitle")}
           </h3>
           <ul className="flex list-disc flex-col gap-[5px] pl-[18px] text-[13.5px] leading-[1.5]">
