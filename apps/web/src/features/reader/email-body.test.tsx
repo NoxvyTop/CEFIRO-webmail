@@ -134,4 +134,39 @@ describe("EmailBody", () => {
     expect(pre.className).not.toMatch(/\btext-(ink|muted|white|black)\b/);
     expect(pre.className).not.toMatch(/\bbg-/);
   });
+
+  describe("inline cid attachments", () => {
+    it("builds a cid map from the attachments prop and rewrites a matching cid: image to its blob URL", () => {
+      render(
+        <EmailBody
+          bodyHtml={`<p>hi</p><img src="cid:logo123">`}
+          bodyText={null}
+          attachments={[
+            { blobId: "b1", name: "logo.png", type: "image/png", size: 10, cid: "logo123" },
+          ]}
+        />,
+      );
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("/api/mail/blobs/b1?name=logo.png");
+      expect(srcDoc).not.toContain("cid:logo123");
+    });
+
+    it("ignores attachments without a cid when building the map", () => {
+      render(
+        <EmailBody
+          bodyHtml={`<img src="cid:logo123">`}
+          bodyText={null}
+          attachments={[{ blobId: "b1", name: "report.pdf", type: "application/pdf", size: 10, cid: null }]}
+        />,
+      );
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("cid:logo123");
+    });
+
+    it("leaves cid: images untouched when no attachments prop is passed at all", () => {
+      render(<EmailBody bodyHtml={`<img src="cid:logo123">`} bodyText={null} />);
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("cid:logo123");
+    });
+  });
 });

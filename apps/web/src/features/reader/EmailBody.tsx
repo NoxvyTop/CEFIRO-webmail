@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { sanitizeEmailHtml } from "./sanitize";
+import type { AttachmentMeta } from "@webmail/shared";
+import { sanitizeEmailHtml, type CidAttachmentInfo } from "./sanitize";
 
 interface EmailBodyProps {
   bodyHtml: string | null;
   bodyText: string | null;
+  attachments?: AttachmentMeta[];
 }
 
 // HTML emails are authored assuming a light background (the Gmail/Outlook
@@ -61,17 +63,30 @@ function useContentHeight(resetKey: string): {
   return { height, onLoad };
 }
 
-export function EmailBody({ bodyHtml, bodyText }: EmailBodyProps) {
+export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
+
+  // Content-ID -> blob lookup so cid: image srcs in the body can be rewritten
+  // to the matching attachment's inline blob URL (see sanitize.ts). Only
+  // attachments that actually carry a cid (inline embeds) are included.
+  const cidMap = useMemo(() => {
+    const map: Record<string, CidAttachmentInfo> = {};
+    for (const attachment of attachments ?? []) {
+      if (attachment.cid) {
+        map[attachment.cid] = { blobId: attachment.blobId, name: attachment.name, type: attachment.type };
+      }
+    }
+    return map;
+  }, [attachments]);
 
   const sanitized = useMemo(() => {
     if (!bodyHtml) return null;
     // Always re-sanitize from the original raw bodyHtml so toggling
     // allowRemoteImages restores the images that were stripped, rather than
     // re-processing already-blocked (data-blocked-src) markup.
-    return sanitizeEmailHtml(bodyHtml, { allowRemoteImages });
-  }, [bodyHtml, allowRemoteImages]);
+    return sanitizeEmailHtml(bodyHtml, { allowRemoteImages, cidMap });
+  }, [bodyHtml, allowRemoteImages, cidMap]);
 
   const { height, onLoad } = useContentHeight(sanitized?.html ?? "");
 
