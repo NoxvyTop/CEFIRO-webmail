@@ -1,12 +1,128 @@
 import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
-import { sanitizeEmailHtml, type CidAttachmentInfo } from "./sanitize";
+import { extractReferencedCids, sanitizeEmailHtml } from "./sanitize";
 
 interface EmailBodyProps {
   bodyHtml: string | null;
   bodyText: string | null;
   attachments?: AttachmentMeta[];
+}
+
+// Mirrors the server's SAFE_INLINE_CONTENT_TYPES image subset (see also
+// ThreadView's PREVIEWABLE_CONTENT_TYPES). Only these get fetched and
+// inlined as data: URLs — a cid: pointing at any other content-type is left
+// verbatim (broken image icon), so nothing but a genuine image is ever
+// turned into a data: URL.
+const SAFE_INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+function isSafeInlineImage(type: string): boolean {
+  return SAFE_INLINE_IMAGE_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
+}
+
+function blobFetchUrl(blobId: string, name: string | null, type: string): string {
+  const query = `name=${encodeURIComponent(name ?? "")}&type=${encodeURIComponent(type)}`;
+  // No dl=1 — this must resolve inline (it's an embedded image, not a download).
+  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}`;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+// The email body renders inside an `sandbox=""` iframe, which gives its
+// srcdoc document an opaque origin — the browser will never attach the
+// app's SameSite session cookie to a request that iframe makes on its own,
+// so a plain same-origin `/api/mail/blobs/...` <img src> 401s from inside
+// it. This runs in the PARENT document instead (which is authenticated),
+// fetches the referenced attachment's bytes with the session cookie, and
+// base64-encodes them into a data: URL — data: URLs need no network
+// request and have no origin at all, so they render fine inside the
+// sandboxed iframe without loosening the sandbox.
+async function fetchAsDataUrl(blobId: string, name: string | null, type: string): Promise<string> {
+  const response = await fetch(blobFetchUrl(blobId, name, type), { credentials: "include" });
+  if (!response.ok) throw new Error(`blob fetch failed: ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  // Anchor the data: prefix to the vetted base type (this is only reached for
+  // allowlisted image types), never the raw sender-controlled type string.
+  const baseType = type.split(";")[0]!.trim().toLowerCase();
+  return `data:${baseType};base64,${arrayBufferToBase64(buffer)}`;
+}
+
+/**
+ * Resolves cid: image references in bodyHtml to data: URLs. Only
+ * attachments that (a) carry a cid, (b) are actually referenced by a cid:
+ * image in the body, and (c) are a safe inline-image type are fetched — see
+ * isSafeInlineImage. Non-image cids and cids with no matching attachment
+ * are left unresolved (sanitize renders them verbatim — a transient/
+ * permanent broken image icon, not a security fallback).
+ *
+ * Async and racy by nature (message navigation can happen mid-fetch): each
+ * effect run captures its own `isCurrent` flag and only commits its
+ * resolved map while still current, so a slow, now-stale fetch from a
+ * previous message can never overwrite (or partially merge into) the
+ * current message's state after the user has moved on.
+ */
+function useResolvedCidImageMap(
+  bodyHtml: string | null,
+  attachments: AttachmentMeta[] | undefined,
+): Record<string, string> {
+  const candidates = useMemo(() => {
+    if (!bodyHtml) return [];
+    const referencedCids = extractReferencedCids(bodyHtml);
+    return (attachments ?? []).filter(
+      (attachment): attachment is AttachmentMeta & { cid: string } =>
+        Boolean(attachment.cid) &&
+        referencedCids.has(attachment.cid as string) &&
+        isSafeInlineImage(attachment.type),
+    );
+  }, [bodyHtml, attachments]);
+
+  const [resolvedMap, setResolvedMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    if (candidates.length === 0) {
+      setResolvedMap({});
+      return;
+    }
+
+    // Clear any previous message's resolved entries immediately so a stale
+    // map is never briefly attributed to the new message.
+    setResolvedMap({});
+
+    Promise.all(
+      candidates.map(async (attachment) => {
+        try {
+          const dataUrl = await fetchAsDataUrl(attachment.blobId, attachment.name, attachment.type);
+          return [attachment.cid, dataUrl] as const;
+        } catch {
+          // Fetch/network failure: leave this cid unresolved rather than
+          // falling back to an unauthenticated (401-prone) blob URL.
+          return null;
+        }
+      }),
+    ).then((results) => {
+      if (!isCurrent) return;
+      const resolved: Record<string, string> = {};
+      for (const entry of results) {
+        if (entry) resolved[entry[0]] = entry[1];
+      }
+      setResolvedMap(resolved);
+    });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [candidates]);
+
+  return resolvedMap;
 }
 
 // HTML emails are authored assuming a light background (the Gmail/Outlook
@@ -67,18 +183,11 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
 
-  // Content-ID -> blob lookup so cid: image srcs in the body can be rewritten
-  // to the matching attachment's inline blob URL (see sanitize.ts). Only
-  // attachments that actually carry a cid (inline embeds) are included.
-  const cidMap = useMemo(() => {
-    const map: Record<string, CidAttachmentInfo> = {};
-    for (const attachment of attachments ?? []) {
-      if (attachment.cid) {
-        map[attachment.cid] = { blobId: attachment.blobId, name: attachment.name, type: attachment.type };
-      }
-    }
-    return map;
-  }, [attachments]);
+  // Content-ID -> data: URL lookup, resolved by fetching each referenced,
+  // safe-image attachment's blob from this (authenticated) parent document
+  // — see useResolvedCidImageMap for why that fetch can't happen from
+  // inside the sandboxed iframe itself.
+  const cidMap = useResolvedCidImageMap(bodyHtml, attachments);
 
   const sanitized = useMemo(() => {
     if (!bodyHtml) return null;

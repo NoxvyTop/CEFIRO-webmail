@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { ThreadDetail } from "@webmail/shared";
@@ -396,26 +396,38 @@ describe("ThreadView", () => {
         expect(screen.getByText(/photo\.png/)).toBeInTheDocument();
       });
 
-      it("passes the email's attachments to EmailBody so the inline cid: image itself resolves to the blob URL", async () => {
+      it("passes the email's attachments to EmailBody so the inline cid: image itself resolves to a data: URL", async () => {
+        // Regression test for the fix: the body renders inside a fully
+        // sandboxed (opaque-origin) iframe that can't send the session
+        // cookie, so a plain same-origin /api/mail/blobs/... <img src>
+        // would 401 there. EmailBody instead fetches the blob from this
+        // (authenticated) parent document and inlines it as a data: URL —
+        // the blob URL itself must never end up in the srcdoc.
         const state = structuredClone(thread);
         state.emails[0]!.bodyHtml = `<p>See the logo below.</p><img src="cid:logo123">`;
         state.emails[0]!.attachments = [
           { blobId: "logo-blob", name: "logo.png", type: "image/png", size: 512, cid: "logo123" },
         ];
+        const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
         vi.stubGlobal(
           "fetch",
           vi.fn(async (input: RequestInfo | URL) => {
             const url = String(input);
             if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
             if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            if (url.includes("/api/mail/blobs/logo-blob")) return new Response(pngBytes, { status: 200 });
             return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
           }),
         );
         renderThread();
 
         const iframes = await screen.findAllByTitle(i18n.t("mail.emailContent"));
+        await waitFor(() => {
+          const srcDocs = iframes.map((iframe) => iframe.getAttribute("srcdoc") ?? "");
+          expect(srcDocs.some((doc) => doc.includes("data:image/png;base64,"))).toBe(true);
+        });
         const srcDocs = iframes.map((iframe) => iframe.getAttribute("srcdoc") ?? "");
-        expect(srcDocs.some((doc) => doc.includes("/api/mail/blobs/logo-blob"))).toBe(true);
+        expect(srcDocs.some((doc) => doc.includes("/api/mail/blobs/logo-blob"))).toBe(false);
         expect(srcDocs.some((doc) => doc.includes("cid:logo123"))).toBe(false);
       });
     });
