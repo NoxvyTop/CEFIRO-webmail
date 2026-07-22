@@ -171,6 +171,7 @@
     "labels": "Labels",
     "clearLabel": "Clear label filter",
     "toMeAndTeam": "me and the team",
+    "sentTo": "To:",
     "yesterday": "Yesterday",
     "folders": {
       "inbox": "Inbox",
@@ -237,7 +238,9 @@
   },
   "attachments": {
     "download": "Download",
-    "view": "View"
+    "view": "View",
+    "count_one": "{{count}} attachment",
+    "count_other": "{{count}} attachments"
   },
   "settings": {
     "title": "Settings",

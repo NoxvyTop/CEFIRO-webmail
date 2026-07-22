@@ -171,6 +171,7 @@
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta",
     "toMeAndTeam": "para mí y el equipo",
+    "sentTo": "Para:",
     "yesterday": "Ayer",
     "folders": {
       "inbox": "Recibidos",
@@ -237,7 +238,9 @@
   },
   "attachments": {
     "download": "Descargar",
-    "view": "Ver"
+    "view": "Ver",
+    "count_one": "{{count}} adjunto",
+    "count_other": "{{count}} adjuntos"
   },
   "settings": {
     "title": "Ajustes",

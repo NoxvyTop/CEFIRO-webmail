@@ -5,8 +5,21 @@ import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail } from "@webmail/shared";
 import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
+import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
+import {
+  ArchiveIcon,
+  ArrowLeftIcon,
+  FileArchiveIcon,
+  FileCalendarIcon,
+  FileDocumentIcon,
+  FileGenericIcon,
+  FileImageIcon,
+  FileSpreadsheetIcon,
+  ReplyIcon,
+  StarFilledIcon,
+  StarIcon,
+} from "../../app/ui/icons";
 import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
@@ -42,6 +55,39 @@ function isPreviewable(type: string): boolean {
   return PREVIEWABLE_CONTENT_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
 }
 
+const WORD_TYPES = new Set([
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+const SHEET_TYPES = new Set([
+  "text/csv",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+const ARCHIVE_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+]);
+const CALENDAR_TYPES = new Set(["text/calendar", "application/ics"]);
+
+// Maps an attachment's content-type to the icon that best represents it in
+// the attachment pill — pdf/word share the document icon, spreadsheets get
+// a grid, archives a zipper mark; anything unrecognized (including plain
+// text/JSON) falls back to the generic file icon.
+function attachmentIconFor(type: string) {
+  const normalized = type.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (normalized.startsWith("image/")) return FileImageIcon;
+  if (normalized === "application/pdf" || WORD_TYPES.has(normalized)) return FileDocumentIcon;
+  if (SHEET_TYPES.has(normalized)) return FileSpreadsheetIcon;
+  if (ARCHIVE_TYPES.has(normalized)) return FileArchiveIcon;
+  if (CALENDAR_TYPES.has(normalized)) return FileCalendarIcon;
+  return FileGenericIcon;
+}
+
 function blobUrl(blobId: string, name: string, type: string, download: boolean): string {
   const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
   return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
@@ -58,6 +104,16 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     queryFn: () => fetchThread(threadId),
     retry: mailRetry,
   });
+
+  // Used to detect messages the account itself sent (from === one of our
+  // identities) so the sender block can show "Para: <recipients>" instead of
+  // the inbox "para mí y el equipo" framing — correct regardless of which
+  // mailbox/folder the thread is being viewed from.
+  const identitiesQuery = useQuery({
+    queryKey: ["mail", "identities"],
+    queryFn: fetchIdentities,
+  });
+  const identities = identitiesQuery.data ?? [];
 
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
@@ -211,6 +267,12 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           {emails.map((email) => {
             const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             const sender = email.from[0];
+            // A message counts as "sent" when its `from` matches one of the
+            // account's own identities — this stays correct no matter which
+            // mailbox/folder the thread is currently being viewed from.
+            const isSentByMe = Boolean(
+              sender && identities.some((identity) => identity.email.toLowerCase() === sender.email.toLowerCase()),
+            );
 
             return (
               <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
@@ -220,7 +282,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     <div className="text-[14.5px] font-semibold">{addressLabel(sender)}</div>
                     {toCcLabel && (
                       <div className="truncate text-[12.5px] text-muted">
-                        {sender?.email} · {t("mail.toMeAndTeam")}
+                        {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
                       </div>
                     )}
                   </div>
@@ -229,42 +291,49 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                   </span>
                 </div>
                 {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
-                {email.attachments.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {email.attachments.map((attachment) => {
-                      const attachmentName = attachment.name ?? "attachment";
-                      return (
-                        <span
-                          key={attachment.blobId}
-                          className="flex items-center gap-1 rounded-full bg-soft px-2 py-1 text-xs"
-                        >
-                          <span>
-                            {attachmentName} ({formatSizeKb(attachment.size)})
-                          </span>
-                          <a
-                            href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
-                            className="text-accent-text underline"
-                          >
-                            {t("attachments.download")}
-                          </a>
-                          {isPreviewable(attachment.type) && (
-                            <a
-                              href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-accent-text underline"
-                            >
-                              {t("attachments.view")}
-                            </a>
-                          )}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
                   <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} />
                 </div>
+                {email.attachments.length > 0 && (
+                  <div className="mt-5">
+                    <p className="mb-2 text-[12.5px] font-semibold text-muted">
+                      {t("attachments.count", { count: email.attachments.length })}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {email.attachments.map((attachment) => {
+                        const attachmentName = attachment.name ?? "attachment";
+                        const AttachmentIcon = attachmentIconFor(attachment.type);
+                        return (
+                          <span
+                            key={attachment.blobId}
+                            className="flex items-center gap-1.5 rounded-full bg-soft px-2 py-1 text-xs"
+                          >
+                            <AttachmentIcon size={15} />
+                            <span>
+                              {attachmentName} ({formatSizeKb(attachment.size)})
+                            </span>
+                            <a
+                              href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
+                              className="text-accent-text underline"
+                            >
+                              {t("attachments.download")}
+                            </a>
+                            {isPreviewable(attachment.type) && (
+                              <a
+                                href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-accent-text underline"
+                              >
+                                {t("attachments.view")}
+                              </a>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {email.id === lastEmail.id && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">
@@ -291,15 +360,6 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                         <ReplyIcon size={14} />
                         {t("composer.reply")}
                       </button>
-                      {showArchive && (
-                        <button
-                          type="button"
-                          onClick={() => archiveMutation.mutate(lastEmail)}
-                          className="flex h-[38px] items-center rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
-                        >
-                          {t("mail.archive")}
-                        </button>
-                      )}
                     </div>
                   </>
                 )}
