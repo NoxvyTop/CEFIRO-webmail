@@ -137,6 +137,13 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
 export function buildEditDraft(email: EmailDetail, identities: Identity[]): ComposerDraft {
   const identity = pickIdentityByFrom(email, identities);
   const rawHtml = email.bodyHtml ?? escapeHtml(email.bodyText ?? "");
+  // KNOWN LIMITATION: no cidMap is passed here, so inline cid: images (e.g. an
+  // embedded logo/signature image) render broken in the composer editor and
+  // are dropped from the resend — sanitizeEmailHtml only rewrites cid: src
+  // attributes when handed a resolved cid -> src map (see EmailBody, which
+  // resolves those blobs for the read-only reader). forwardDraft's quotedBody
+  // has the exact same gap; parity with that existing behavior is accepted
+  // here rather than plumbing blob resolution into the draft-edit path.
   const sanitized = sanitizeEmailHtml(rawHtml, { allowRemoteImages: false });
 
   return {

@@ -229,6 +229,15 @@ export function MailPage() {
     // is the signal (not "is the currently selected mailbox Drafts"), since
     // it travels with the message regardless of which list/view produced it
     // (e.g. a future combined/search view mixing drafts with other mail).
+    //
+    // `thread` is set alongside `compose` purely so resolveComposeDraft can
+    // reuse the existing thread-fetch query (there is no single-email GET
+    // endpoint to fetch just this draft by id) — it does not mean "the
+    // reader is viewing this thread". That piggyback has one accepted,
+    // documented rough edge: the read-only reader can flash briefly in the
+    // background while the thread query resolves, just before the composer
+    // overlay mounts on top of it. removeComposeParam() below clears
+    // `thread` again on close so it doesn't linger afterward.
     if (email.keywords.$draft) {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
@@ -288,6 +297,15 @@ export function MailPage() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete("compose");
+      // Editing a draft sets `thread` only as a piggyback on the existing
+      // thread-fetch query (see handleSelectMessage above), never because the
+      // reader was actually being viewed — clear it too on close (Cancel or
+      // after a successful send) so the reader doesn't keep showing that
+      // thread (now stale: sent-and-trashed, or just abandoned) once the
+      // composer is gone.
+      if (composeMode === "draft") {
+        next.delete("thread");
+      }
       return next;
     });
   }

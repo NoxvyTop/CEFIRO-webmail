@@ -223,3 +223,55 @@ describe("delete-on-send for an edited draft", () => {
     });
   });
 });
+
+// NEW — review follow-up: draft-click piggybacks `thread=<id>` on the
+// compose URL purely to reuse the existing thread-fetch query (no
+// single-email GET endpoint exists to fetch just the draft by id — see
+// apps/server/src/modules/mail/router.ts). Left alone, that `thread` param
+// would linger after the composer closes and the reader would show the
+// (now sent-and-trashed, or just abandoned) draft thread. removeComposeParam
+// clears `thread` too whenever the closing composer was in draft mode.
+describe("clearing the piggybacked thread param when a draft-mode composer closes", () => {
+  it("clears both compose and thread on Cancel, so the reader doesn't show the abandoned draft's thread", async () => {
+    renderAt("/?mailbox=mb-drafts&thread=td1&compose=draft:d1");
+
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    const cancelButton = within(dialog).getByRole("button", { name: i18n.t("composer.cancel") });
+    fireEvent.click(cancelButton);
+
+    expect(
+      screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("thread-actions-bar")).not.toBeInTheDocument();
+  });
+
+  it("clears the thread param after a successful send, so the reader doesn't linger on the sent-and-trashed draft", async () => {
+    renderAt("/?mailbox=mb-drafts&thread=td1&compose=draft:d1");
+
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    const sendButton = within(dialog).getByRole("button", { name: i18n.t("composer.send") });
+    fireEvent.click(sendButton);
+
+    await vi.waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("thread-actions-bar")).not.toBeInTheDocument();
+  });
+
+  it("does NOT clear the thread param when closing a non-draft compose (e.g. reply), unchanged from prior behavior", async () => {
+    renderAt("/?mailbox=mb-inbox&thread=t1&compose=reply:e1");
+
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    const cancelButton = within(dialog).getByRole("button", { name: i18n.t("composer.cancel") });
+    fireEvent.click(cancelButton);
+
+    expect(
+      screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+    ).not.toBeInTheDocument();
+    // Reply/forward never piggybacked `thread` — closing must keep showing
+    // the reader for the thread the user was actually viewing.
+    expect(await screen.findByTestId("thread-actions-bar")).toBeInTheDocument();
+  });
+});
