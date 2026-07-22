@@ -7,40 +7,17 @@ interface EmailBodyProps {
   bodyText: string | null;
 }
 
-type Theme = "night" | "light";
-
-// Mirrors --ink from theme.css. The iframe is a separate document, so CSS
-// custom properties from the app shell don't cascade into it — the resolved
-// hex has to be injected directly into the srcdoc. Fixed two-value map keyed
-// by theme — never derived from email-controlled content.
-const THEME_INK: Record<Theme, string> = {
-  night: "#eceef4",
-  light: "#101318",
-};
-
-// Mirrors --panel from theme.css, same rationale as THEME_INK above.
-//
-// The srcdoc document has no color-scheme/background of its own, so an
-// unstyled canvas paints white by default — that's the OSCURO-01/CLARO-13
-// "white box" bug. Relying on `color-scheme` + `background: transparent`
-// alone to make the UA paint a themed canvas isn't a safe fix: the resulting
-// fallback canvas color is UA-chosen (varies across Chromium/Firefox/Safari
-// and versions) and isn't guaranteed to match --panel, and jsdom can't
-// verify actual paint either way. Painting the panel color explicitly is
-// deterministic, matches the design token exactly in every engine, and is
-// verifiable in tests the same way THEME_INK already is.
-const THEME_PANEL: Record<Theme, string> = {
-  night: "#12141c",
-  light: "#ffffff",
-};
-
-// Declared regardless of the explicit panel paint above so native form
-// controls/scrollbars rendered inside the srcdoc (if any) pick up the
-// correct theme instead of defaulting to light.
-const THEME_COLOR_SCHEME: Record<Theme, "dark" | "light"> = {
-  night: "dark",
-  light: "light",
-};
+// HTML emails are authored assuming a light background (the Gmail/Outlook
+// "paper" convention), so the iframe canvas is always painted light —
+// regardless of the app's active theme. Matching the app's dark theme here
+// would turn styled marketing HTML with hardcoded dark text (e.g.
+// color:#333 on an implicit white background) into unreadable dark-on-dark
+// text; rendering it as a clean white card is the safe, standard webmail
+// behavior for both simple and styled bodies. Fixed constants — never
+// derived from email-controlled content or the app theme.
+const EMAIL_PAPER_INK = "#101318";
+const EMAIL_PAPER_PANEL = "#ffffff";
+const EMAIL_PAPER_COLOR_SCHEME = "light";
 
 // Used until (or unless) the content height can be measured — see
 // useContentHeight below for why real sandboxed browsers usually can't (in
@@ -49,29 +26,8 @@ const THEME_COLOR_SCHEME: Record<Theme, "dark" | "light"> = {
 // as a squat frame floating in dead space (OSCURO-04).
 const FALLBACK_HEIGHT = "min(60vh, 640px)";
 
-function readActiveTheme(): Theme {
-  return document.documentElement.dataset.theme === "light" ? "light" : "night";
-}
-
-/** Tracks data-theme on <html> so the iframe srcdoc can follow theme toggles. */
-function useActiveTheme(): Theme {
-  const [theme, setTheme] = useState<Theme>(readActiveTheme);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => setTheme(readActiveTheme()));
-    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
-}
-
-function wrapDocument(bodyInnerHtml: string, theme: Theme) {
-  const ink = THEME_INK[theme];
-  const panel = THEME_PANEL[theme];
-  const colorScheme = THEME_COLOR_SCHEME[theme];
-  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${colorScheme}}html,body{background:${panel};margin:0}body{padding:2px;color:${ink};font-family:"Space Grotesk Variable","Space Grotesk",system-ui,sans-serif;font-size:15px;line-height:1.65}</style></head><body>${bodyInnerHtml}</body></html>`;
+function wrapDocument(bodyInnerHtml: string) {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${EMAIL_PAPER_COLOR_SCHEME}}html,body{background:${EMAIL_PAPER_PANEL};margin:0}body{padding:2px;color:${EMAIL_PAPER_INK};font-family:"Space Grotesk Variable","Space Grotesk",system-ui,sans-serif;font-size:15px;line-height:1.65}</style></head><body>${bodyInnerHtml}</body></html>`;
 }
 
 /**
@@ -108,7 +64,6 @@ function useContentHeight(resetKey: string): {
 export function EmailBody({ bodyHtml, bodyText }: EmailBodyProps) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
-  const theme = useActiveTheme();
 
   const sanitized = useMemo(() => {
     if (!bodyHtml) return null;
@@ -132,14 +87,19 @@ export function EmailBody({ bodyHtml, bodyText }: EmailBodyProps) {
             {t("mail.loadImages")}
           </button>
         )}
-        <iframe
-          sandbox=""
-          srcDoc={wrapDocument(sanitized.html, theme)}
-          onLoad={onLoad}
-          title={t("mail.emailContent")}
-          style={{ height }}
-          className="block w-full"
-        />
+        {/* Hairline border + radius so the always-light email "paper" reads
+            as an intentional document card rather than a floating white box
+            against a dark app panel (most noticeable in night theme). */}
+        <div className="overflow-hidden rounded-[10px] border border-line">
+          <iframe
+            sandbox=""
+            srcDoc={wrapDocument(sanitized.html)}
+            onLoad={onLoad}
+            title={t("mail.emailContent")}
+            style={{ height }}
+            className="block w-full"
+          />
+        </div>
       </div>
     );
   }
