@@ -179,6 +179,98 @@ describe("Composer", () => {
     });
   });
 
+  describe("default signature auto-apply and switching", () => {
+    const altSignature: Signature = {
+      id: "sig2",
+      name: "Alt",
+      contentHtml: "<p>Alt sig content</p>",
+      isDefault: false,
+    };
+
+    function renderWithTwoSignatures(onClose = vi.fn(), initial: ComposerDraft = baseDraft()) {
+      fetchIdentities.mockResolvedValue(identities);
+      fetchSignatures.mockResolvedValue([signatures[0], altSignature]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <Composer initial={initial} onClose={onClose} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+      return { onClose };
+    }
+
+    it("auto-applies the default signature on open and pre-selects it in the select", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      await waitFor(() => expect(signatureSelect.value).toBe("sig1"));
+
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+    });
+
+    it("does not auto-apply anything when no signature is marked default", async () => {
+      fetchIdentities.mockResolvedValue(identities);
+      fetchSignatures.mockResolvedValue([altSignature]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <Composer initial={baseDraft()} onClose={vi.fn()} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      await waitFor(() => expect(signatureSelect.querySelectorAll("option")).toHaveLength(2));
+      expect(signatureSelect.value).toBe("");
+
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      expect(body.textContent).not.toContain("Alt sig content");
+    });
+
+    it("replaces the applied signature instead of stacking a second one when switching", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      fireEvent.change(signatureSelect, { target: { value: "sig2" } });
+
+      await waitFor(() => expect(body.textContent).toContain("Alt sig content"));
+      expect(body.textContent).not.toContain("Thanks");
+
+      // Switching back doesn't stack a second copy of the default either.
+      fireEvent.change(signatureSelect, { target: { value: "sig1" } });
+
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+      expect(body.textContent).not.toContain("Alt sig content");
+    });
+
+    it("removes the signature entirely when selecting the empty option", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      fireEvent.change(signatureSelect, { target: { value: "" } });
+
+      await waitFor(() => expect(body.textContent).not.toContain("Thanks"));
+    });
+  });
+
   describe("Redactar con IA", () => {
     it("fills the body and shows the review notice on success", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador solicitado.");

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EmailDetail, Identity } from "@webmail/shared";
 import { emptyDraft, replyDraft, forwardDraft } from "./reply";
+import { QUOTE_MARKER_ATTR } from "./signature";
 
 const identities: Identity[] = [
   { id: "id1", name: "Alice", email: "alice@example.com" },
@@ -106,6 +107,11 @@ describe("replyDraft", () => {
     expect(draft.bodyHtml).not.toMatch(/src=["']https?:\/\//i);
   });
 
+  it("wraps the quoted block in the marker composer/signature.ts anchors on", () => {
+    const draft = replyDraft(makeEmail(), identities, false);
+    expect(draft.bodyHtml).toContain(`<div ${QUOTE_MARKER_ATTR}="true">`);
+  });
+
   it("prepends an escaped attribution line with date and sender", () => {
     const draft = replyDraft(makeEmail(), identities, false);
     expect(draft.bodyHtml).toContain("2024-01-01T00:00:00Z");
@@ -149,6 +155,11 @@ describe("forwardDraft", () => {
     expect(draft.bodyHtml).toContain("2024-01-01T00:00:00Z");
     expect(draft.bodyHtml).toContain("Bob");
     expect(draft.bodyHtml).not.toMatch(/src=["']https?:\/\//i);
+  });
+
+  it("wraps the quoted block in the marker composer/signature.ts anchors on", () => {
+    const draft = forwardDraft(makeEmail(), identities);
+    expect(draft.bodyHtml).toContain(`<div ${QUOTE_MARKER_ATTR}="true">`);
   });
 
   it("reuses the original attachments by blobId with a name fallback", () => {
