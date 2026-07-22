@@ -2,7 +2,7 @@ import type { SendEmailInput } from "@webmail/shared";
 import { useReducer } from "react";
 import { sendEmail, uploadAttachment } from "./api";
 import { fetchAiDraft } from "./aiApi";
-import { MailApiError } from "../mailbox/api";
+import { MailApiError, updateMessage } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
 import { stripSignatureMarkers } from "./signature";
 
@@ -114,7 +114,14 @@ function htmlToPlainText(html: string): string {
     .trim();
 }
 
-export function useComposer(initial: ComposerDraft): {
+export function useComposer(
+  initial: ComposerDraft,
+  // Present when editing an existing draft (compose=draft:<id>, see
+  // reply.ts's buildEditDraft) and a Trash mailbox exists — lets send()
+  // clean up the stale original draft after a successful send (Gmail: the
+  // draft you sent stops lingering in Borradores).
+  trashMailboxId?: string | null,
+): {
   state: ComposerState;
   setField<K extends keyof ComposerDraft>(key: K, value: ComposerDraft[K]): void;
   addFiles(files: File[]): void;
@@ -185,6 +192,17 @@ export function useComposer(initial: ComposerDraft): {
     dispatch({ type: "sendStart" });
     try {
       await sendEmail(input);
+      // Best-effort cleanup: the send already succeeded (it's in Sent now),
+      // so a failure to trash the stale original draft must not surface as
+      // a send failure — the user just keeps a leftover draft, same as
+      // today's behavior without this feature.
+      if (draft.originalDraftId && trashMailboxId) {
+        try {
+          await updateMessage(draft.originalDraftId, { mailboxIds: { [trashMailboxId]: true } });
+        } catch {
+          // ignore — see comment above
+        }
+      }
       dispatch({ type: "sendSucceeded" });
       return true;
     } catch (err) {

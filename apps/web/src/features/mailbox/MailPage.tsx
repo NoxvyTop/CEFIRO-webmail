@@ -15,7 +15,7 @@ import { folderName } from "../../app/ui/folders";
 import { useToast } from "../../app/ui/toast";
 import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
-import { emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
+import { buildEditDraft, emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useAuth } from "../auth/useAuth";
 import {
@@ -42,7 +42,7 @@ export function MailPage() {
   const groupParam = searchParams.get("group");
   const starredParam = searchParams.get("starred") === "1";
   const labelParam = searchParams.get("label");
-  const composeMatch = composeParam?.match(/^(reply|reply-all|forward):(.+)$/) ?? null;
+  const composeMatch = composeParam?.match(/^(reply|reply-all|forward|draft):(.+)$/) ?? null;
   const composeMode = composeMatch?.[1];
   const composeEmailId = composeMatch?.[2];
   const [availableLabels, setAvailableLabels] = useState<string[]>([]);
@@ -121,6 +121,14 @@ export function MailPage() {
 
   const archiveMailboxId = useMemo(
     () => mailboxes.find((mailbox) => mailbox.role === "archive")?.id ?? null,
+    [mailboxes],
+  );
+
+  // Delete-on-send target: after sending an edited draft (compose=draft:<id>),
+  // the ORIGINAL draft is moved here so it doesn't linger as a stale copy
+  // (Gmail removes the draft you sent) — see useComposer.ts's send().
+  const trashMailboxId = useMemo(
+    () => mailboxes.find((mailbox) => mailbox.role === "trash")?.id ?? null,
     [mailboxes],
   );
 
@@ -216,6 +224,29 @@ export function MailPage() {
   }
 
   function handleSelectMessage(email: EmailSummary) {
+    // Gmail behavior: a draft has nothing to "read" — clicking it should
+    // resume writing, not open the read-only reader. The JMAP $draft keyword
+    // is the signal (not "is the currently selected mailbox Drafts"), since
+    // it travels with the message regardless of which list/view produced it
+    // (e.g. a future combined/search view mixing drafts with other mail).
+    //
+    // `thread` is set alongside `compose` purely so resolveComposeDraft can
+    // reuse the existing thread-fetch query (there is no single-email GET
+    // endpoint to fetch just this draft by id) — it does not mean "the
+    // reader is viewing this thread". That piggyback has one accepted,
+    // documented rough edge: the read-only reader can flash briefly in the
+    // background while the thread query resolves, just before the composer
+    // overlay mounts on top of it. removeComposeParam() below clears
+    // `thread` again on close so it doesn't linger afterward.
+    if (email.keywords.$draft) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("thread", email.threadId);
+        next.set("compose", `draft:${email.id}`);
+        return next;
+      });
+      return;
+    }
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set("thread", email.threadId);
@@ -266,6 +297,15 @@ export function MailPage() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete("compose");
+      // Editing a draft sets `thread` only as a piggyback on the existing
+      // thread-fetch query (see handleSelectMessage above), never because the
+      // reader was actually being viewed — clear it too on close (Cancel or
+      // after a successful send) so the reader doesn't keep showing that
+      // thread (now stale: sent-and-trashed, or just abandoned) once the
+      // composer is gone.
+      if (composeMode === "draft") {
+        next.delete("thread");
+      }
       return next;
     });
   }
@@ -294,6 +334,7 @@ export function MailPage() {
     );
     if (!email) return emptyDraft(identities);
     if (composeMode === "forward") return forwardDraft(email, identities);
+    if (composeMode === "draft") return buildEditDraft(email, identities);
     return replyDraft(email, identities, composeMode === "reply-all");
   }
 
@@ -418,7 +459,13 @@ export function MailPage() {
           </div>
         )}
       </section>
-      {composeDraft && <Composer initial={composeDraft} onClose={removeComposeParam} />}
+      {composeDraft && (
+        <Composer
+          initial={composeDraft}
+          onClose={removeComposeParam}
+          trashMailboxId={trashMailboxId}
+        />
+      )}
     </div>
   );
 }

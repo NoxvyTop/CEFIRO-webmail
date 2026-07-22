@@ -14,16 +14,23 @@ import { useToast } from "../../app/ui/toast";
 interface ComposerProps {
   initial: ComposerDraft;
   onClose(): void;
+  // Passed through to useComposer so a successful send of an edited draft
+  // (initial.originalDraftId set) can trash the stale original — see
+  // reply.ts's buildEditDraft and useComposer.ts's send().
+  trashMailboxId?: string | null;
 }
 
 function formatSizeKb(size: number): string {
   return `${(size / 1024).toFixed(1)} KB`;
 }
 
-export function Composer({ initial, onClose }: ComposerProps) {
+export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(initial);
+  const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(
+    initial,
+    trashMailboxId,
+  );
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
