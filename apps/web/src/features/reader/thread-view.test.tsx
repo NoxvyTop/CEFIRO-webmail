@@ -204,13 +204,13 @@ describe("ThreadView", () => {
     expect(JSON.parse(String(init.body))).toEqual({ keywords: { $flagged: true } });
   });
 
-  it("shows Responder and Archivar buttons at the foot of the article", async () => {
+  it("shows only Responder at the foot of the article — Archivar already lives in the top action bar", async () => {
     stubFetch();
     renderThread("t1", "arch1");
 
     const footer = await screen.findByTestId("thread-footer-actions");
     expect(within(footer).getByRole("button", { name: i18n.t("composer.reply") })).toBeInTheDocument();
-    expect(within(footer).getByRole("button", { name: i18n.t("mail.archive") })).toBeInTheDocument();
+    expect(within(footer).queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
   });
 
   it("shows the sender's label chips next to the title", async () => {

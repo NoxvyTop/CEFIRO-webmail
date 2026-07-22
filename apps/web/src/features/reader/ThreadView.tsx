@@ -291,15 +291,6 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                         <ReplyIcon size={14} />
                         {t("composer.reply")}
                       </button>
-                      {showArchive && (
-                        <button
-                          type="button"
-                          onClick={() => archiveMutation.mutate(lastEmail)}
-                          className="flex h-[38px] items-center rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
-                        >
-                          {t("mail.archive")}
-                        </button>
-                      )}
                     </div>
                   </>
                 )}
