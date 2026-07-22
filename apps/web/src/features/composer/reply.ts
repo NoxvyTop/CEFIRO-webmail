@@ -1,5 +1,6 @@
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { sanitizeEmailHtml } from "../reader/sanitize";
+import { QUOTE_MARKER_ATTR } from "./signature";
 
 export type DraftAttachment = { blobId: string; name: string; type: string; size: number };
 
@@ -69,7 +70,11 @@ function quotedBody(email: EmailDetail): string {
   const sender = email.from[0];
   const senderLabel = sender ? sender.name || sender.email : "";
   const attribution = `<p>${escapeHtml(email.receivedAt)} — ${escapeHtml(senderLabel)}:</p>`;
-  return `<br><br>${attribution}<blockquote>${sanitized.html}</blockquote>`;
+  // Wrapped in a marked container so composer/signature.ts can place the
+  // auto-applied default signature above the whole quoted block (Gmail
+  // model) instead of guessing based on the raw <blockquote> tag, which
+  // could also appear inside the quoted original itself (nested quotes).
+  return `<div ${QUOTE_MARKER_ATTR}="true"><br><br>${attribution}<blockquote>${sanitized.html}</blockquote></div>`;
 }
 
 export function emptyDraft(identities: Identity[]): ComposerDraft {

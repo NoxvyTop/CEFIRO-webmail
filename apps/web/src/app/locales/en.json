@@ -210,6 +210,7 @@
     "body": "Message",
     "bodyPlaceholder": "Write your message… or ask the AI",
     "signature": "Signature",
+    "noSignature": "None",
     "reply": "Reply",
     "replyAll": "Reply all",
     "forward": "Forward",

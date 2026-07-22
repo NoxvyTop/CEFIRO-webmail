@@ -96,6 +96,31 @@ describe("useComposer", () => {
     );
   });
 
+  it("send: strips internal signature/quote marker attributes from the outgoing htmlBody", async () => {
+    sendEmail.mockResolvedValueOnce(undefined);
+    const draft: ComposerDraft = {
+      ...baseDraft(),
+      to: [{ name: "Bob", email: "bob@example.com" }],
+      bodyHtml:
+        '<p>Hi</p><div data-cefiro-signature="true"><p>Thanks, Alice</p></div>' +
+        '<div data-cefiro-quote="true"><blockquote><p>Original</p></blockquote></div>',
+    };
+    const { result } = renderHook(() => useComposer(draft));
+
+    await act(async () => {
+      await result.current.send();
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        htmlBody: "<p>Hi</p><p>Thanks, Alice</p><blockquote><p>Original</p></blockquote>",
+      }),
+    );
+    const sentHtml = sendEmail.mock.calls[0]?.[0]?.htmlBody as string;
+    expect(sentHtml).not.toContain("data-cefiro-signature");
+    expect(sentHtml).not.toContain("data-cefiro-quote");
+  });
+
   it("send: maps MailApiError to a namespaced error code and returns false", async () => {
     sendEmail.mockRejectedValueOnce(new MailApiError(503, "mail_not_configured"));
     const draft: ComposerDraft = {

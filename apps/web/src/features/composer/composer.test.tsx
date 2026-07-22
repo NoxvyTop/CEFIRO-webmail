@@ -179,6 +179,139 @@ describe("Composer", () => {
     });
   });
 
+  describe("default signature auto-apply and switching", () => {
+    const altSignature: Signature = {
+      id: "sig2",
+      name: "Alt",
+      contentHtml: "<p>Alt sig content</p>",
+      isDefault: false,
+    };
+
+    function renderWithTwoSignatures(onClose = vi.fn(), initial: ComposerDraft = baseDraft()) {
+      fetchIdentities.mockResolvedValue(identities);
+      fetchSignatures.mockResolvedValue([signatures[0], altSignature]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <Composer initial={initial} onClose={onClose} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+      return { onClose };
+    }
+
+    it("auto-applies the default signature on open and pre-selects it in the select", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      await waitFor(() => expect(signatureSelect.value).toBe("sig1"));
+
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+    });
+
+    it("does not auto-apply anything when no signature is marked default", async () => {
+      fetchIdentities.mockResolvedValue(identities);
+      fetchSignatures.mockResolvedValue([altSignature]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <Composer initial={baseDraft()} onClose={vi.fn()} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      await waitFor(() => expect(signatureSelect.querySelectorAll("option")).toHaveLength(2));
+      expect(signatureSelect.value).toBe("");
+
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      expect(body.textContent).not.toContain("Alt sig content");
+    });
+
+    it("replaces the applied signature instead of stacking a second one when switching", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      fireEvent.change(signatureSelect, { target: { value: "sig2" } });
+
+      await waitFor(() => expect(body.textContent).toContain("Alt sig content"));
+      expect(body.textContent).not.toContain("Thanks");
+
+      // Switching back doesn't stack a second copy of the default either.
+      fireEvent.change(signatureSelect, { target: { value: "sig1" } });
+
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+      expect(body.textContent).not.toContain("Alt sig content");
+    });
+
+    it("removes the signature entirely when selecting the empty option", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      fireEvent.change(signatureSelect, { target: { value: "" } });
+
+      await waitFor(() => expect(body.textContent).not.toContain("Thanks"));
+    });
+
+    // KNOWN LIMITATION: marker stripped by TipTap on edit → replace regresses
+    // to append; fixed in the RichTextEditor marker-persistence PR.
+    //
+    // applySignature's find/replace/remove logic depends on the
+    // data-cefiro-signature wrapper surviving in state.draft.bodyHtml.
+    // RichTextEditor's TipTap instance (StarterKit schema) has no node
+    // definition for that custom div, so the moment the user actually types
+    // (TipTap's onUpdate fires and calls onChange with the schema-serialized
+    // HTML) the wrapper — and its data attribute — is silently stripped, and
+    // the old signature's content is left behind as plain unmarked
+    // paragraphs. The next signature switch then finds no existing wrapper
+    // to replace and inserts a fresh one, so the old (now-unmarked) content
+    // and the new signature both end up in the body — a regression of the
+    // original stacking bug this PR fixes for the untouched-body path.
+    // Deferred to the upcoming signature-logo PR, which already needs to
+    // extend RichTextEditor's TipTap schema and can add persistence for
+    // these markers as part of that same change.
+    it("KNOWN LIMITATION: typing before switching loses the marker and the switch stacks instead of replacing", async () => {
+      renderWithTwoSignatures();
+
+      const signatureSelect = (await screen.findByRole("combobox", {
+        name: i18n.t("composer.signature"),
+      })) as HTMLSelectElement;
+      const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      // Simulate real typing: TipTap's onUpdate fires and re-serializes via
+      // its schema, dropping the signature marker div/attribute.
+      fireEvent.input(body, { target: { innerHTML: `${body.innerHTML}<p>my reply text</p>` } });
+      await waitFor(() => expect(body.textContent).toContain("my reply text"));
+
+      fireEvent.change(signatureSelect, { target: { value: "sig2" } });
+
+      // Pins the CURRENT (regressed) behavior: both the old, now-unmarked
+      // "Thanks" content and the new "Alt sig content" are present — this
+      // assertion should flip to "not.toContain('Thanks')" once the marker
+      // survives edits (RichTextEditor marker-persistence PR).
+      await waitFor(() => expect(body.textContent).toContain("Alt sig content"));
+      expect(body.textContent).toContain("Thanks");
+    });
+  });
+
   describe("Redactar con IA", () => {
     it("fills the body and shows the review notice on success", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador solicitado.");
