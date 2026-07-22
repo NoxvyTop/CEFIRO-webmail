@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { fetchThread, updateMessage } from "../mailbox/api";
+import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
@@ -19,8 +20,9 @@ import {
   ReplyIcon,
   StarFilledIcon,
   StarIcon,
+  TagIcon,
 } from "../../app/ui/icons";
-import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -136,6 +138,41 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   });
   const identities = identitiesQuery.data ?? [];
 
+  // Powers custom label colors/names in the subject chips and the label-apply
+  // menu below — shares the ["mail","preferences"] cache key with MailPage's
+  // own preferencesQuery, so this is a no-op refetch in the common case.
+  const preferencesQuery = useQuery({
+    queryKey: ["mail", "preferences"],
+    queryFn: fetchPreferences,
+  });
+  const customLabels = preferencesQuery.data?.customLabels ?? [];
+  // Only the registry of "known" labels (canonical + user-defined custom
+  // ones) is toggleable from this menu, mirroring Gmail's "Label as" list —
+  // an arbitrary keyword applied by some other client still shows read-only
+  // as a subject-line chip, it just isn't offered as a checkbox here.
+  const applyLabelSlugs = [...CANONICAL_LABELS, ...customLabels.map((custom) => custom.slug)];
+
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  const labelMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!labelMenuOpen) return;
+    function handleMouseDown(event: MouseEvent) {
+      if (labelMenuRef.current && !labelMenuRef.current.contains(event.target as Node)) {
+        setLabelMenuOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setLabelMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [labelMenuOpen]);
+
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
@@ -151,6 +188,17 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
       updateMessage(email.id, { keywords: { $flagged: starred } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
+      queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
+  });
+
+  // Mirrors starMutation's shape: toggles a single JMAP keyword on the last
+  // email, the same pattern the star affordance already uses.
+  const keywordMutation = useMutation({
+    mutationFn: ({ email, label, checked }: { email: EmailDetail; label: string; checked: boolean }) =>
+      updateMessage(email.id, { keywords: { [label]: checked } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
@@ -270,6 +318,50 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
         >
           {t("composer.forward")}
         </button>
+        <div ref={labelMenuRef} className="relative shrink-0">
+          <button
+            type="button"
+            aria-label={t("mail.labels")}
+            aria-haspopup="menu"
+            aria-expanded={labelMenuOpen}
+            onClick={() => setLabelMenuOpen((open) => !open)}
+            className={actionButtonClass}
+          >
+            <TagIcon size={15} />
+            {t("mail.labels")}
+          </button>
+          {labelMenuOpen && (
+            <div
+              role="menu"
+              className="absolute left-0 top-[calc(100%+8px)] z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
+            >
+              {applyLabelSlugs.map((slug) => {
+                const checked = Boolean(lastEmail.keywords[slug]);
+                return (
+                  <button
+                    key={slug}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={checked}
+                    onClick={() => keywordMutation.mutate({ email: lastEmail, label: slug, checked: !checked })}
+                    className={`flex h-9 w-full items-center gap-2 px-3 text-left text-sm hover:bg-hover ${
+                      checked ? "bg-sel font-[650]" : "text-ink"
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                      style={{ background: labelColor(slug, customLabels) }}
+                    />
+                    <span className="min-w-0 flex-1 truncate capitalize">
+                      {labelDisplayName(slug, customLabels)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <span className="ml-auto hidden min-w-0 truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -282,9 +374,9 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
               <span
                 key={label}
                 className="rounded-full px-2.5 py-[3px] text-[11.5px] font-semibold"
-                style={{ color: labelColor(label), background: labelBackground(label) }}
+                style={{ color: labelColor(label, customLabels), background: labelBackground(label, customLabels) }}
               >
-                {label}
+                {labelDisplayName(label, customLabels)}
               </span>
             ))}
           </div>
