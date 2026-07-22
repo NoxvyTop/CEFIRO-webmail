@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import type { EmailAddress, EmailDetail } from "@webmail/shared";
+import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { fetchThread, updateMessage } from "../mailbox/api";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
@@ -36,6 +36,26 @@ interface ThreadViewProps {
 function addressLabel(address: EmailAddress | undefined) {
   if (!address) return "";
   return address.name || address.email;
+}
+
+// Gmail shows "Reply all" when there is at least one other recipient besides
+// the account itself and the original sender — plain reply already goes to
+// the sender, so reply-all is only meaningful once it would add someone.
+// This mirrors reply.ts's replyDraft(): reply-all's cc is exactly
+// dedupe(to+cc) minus the account's own identity and minus the sender's
+// address, so the two modes are equivalent (and the button redundant)
+// whenever that set is empty.
+function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boolean {
+  const ownEmails = new Set(identities.map((identity) => identity.email.trim().toLowerCase()));
+  const senderEmail = email.from[0]?.email.trim().toLowerCase();
+  const others = new Set<string>();
+  for (const address of [...email.to, ...email.cc]) {
+    const key = address.email.trim().toLowerCase();
+    if (ownEmails.has(key)) continue;
+    if (senderEmail && key === senderEmail) continue;
+    others.add(key);
+  }
+  return others.size >= 1;
 }
 
 function formatSizeKb(size: number) {
@@ -187,6 +207,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     lastEmail.mailboxIds[0] === archiveMailboxId;
   const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
   const starred = Boolean(lastEmail.keywords.$flagged);
+  const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
 
   const actionButtonBaseClass =
     "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
@@ -233,13 +254,15 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           <ReplyIcon size={15} />
           {t("composer.reply")}
         </button>
-        <button
-          type="button"
-          onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-          className={actionButtonClass}
-        >
-          {t("composer.replyAll")}
-        </button>
+        {showReplyAll && (
+          <button
+            type="button"
+            onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
+            className={actionButtonClass}
+          >
+            {t("composer.replyAll")}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => openCompose(`forward:${lastEmail.id}`)}
@@ -371,6 +394,22 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                       >
                         <ReplyIcon size={14} />
                         {t("composer.reply")}
+                      </button>
+                      {showReplyAll && (
+                        <button
+                          type="button"
+                          onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
+                          className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                        >
+                          {t("composer.replyAll")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => openCompose(`forward:${lastEmail.id}`)}
+                        className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                      >
+                        {t("composer.forward")}
                       </button>
                     </div>
                   </>
