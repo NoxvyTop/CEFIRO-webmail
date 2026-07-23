@@ -141,8 +141,110 @@ const EMAIL_PAPER_COLOR_SCHEME = "light";
 // useContentHeight below for why real sandboxed browsers usually can't (in
 // practice this fallback is what most real users see). A generous,
 // viewport-proportional value replaces the old fixed 200px box, which read
-// as a squat frame floating in dead space (OSCURO-04).
-const FALLBACK_HEIGHT = "min(60vh, 640px)";
+// as a squat frame floating in dead space (OSCURO-04). Genuine HTML emails
+// that reach this fallback are now routed here for real formatted content
+// only (see isEffectivelyPlainText below) — short plain-text messages take
+// the auto-sizing <pre> path instead, so this constant no longer needs to
+// cover the "short plain text" case; kept generous but a bit lower than
+// before (was min(60vh, 640px)) since genuine short HTML is the only
+// remaining case that still shows a void while the iframe is unmeasurable.
+const FALLBACK_HEIGHT = "min(50vh, 520px)";
+
+// Tags that show up when plain text gets wrapped in trivial HTML (line/
+// paragraph breaks) and carry no formatting of their own. This is an
+// ALLOWLIST, not a blocklist: any tag outside this set — or any element in
+// this set that carries an attribute (style, class, href, src, ...) — fails
+// the "trivial" check. Allowlisting fails closed: an element type nobody
+// thought to blocklist (a custom element, <marquee>, a future HTML tag) is
+// treated as real markup by default, not silently let through as trivial.
+const TRIVIAL_TAG_NAMES = new Set(["br", "p", "div", "span"]);
+
+/**
+ * Returns true when bodyHtml has NO meaningful HTML markup — i.e. it is
+ * effectively the same plain-text content as bodyText, just wrapped in
+ * inert tags (a common pattern: servers sometimes synthesize bodyHtml from
+ * bodyText verbatim, or wrap it in a bare <p>/<br> structure with no real
+ * formatting). When true, EmailBody renders the auto-sizing text path
+ * instead of the sandboxed iframe, so a short plain-text message doesn't
+ * sit inside a large empty box sized for HTML content that isn't there.
+ *
+ * The check is purely structural on bodyHtml (parsed the same
+ * detached-document way as sanitize.ts's extractReferencedCids — DOMParser
+ * only reads into a detached document, it never executes scripts or
+ * attaches to the page, so this is safe to run on raw, unsanitized email
+ * HTML): every element in the parsed tree must be one of TRIVIAL_TAG_NAMES
+ * and carry no attributes. A single <img>, <a>, <table>, heading, list,
+ * <blockquote>, <pre>, <hr>, or any element with a style/class/bgcolor/
+ * background attribute means the body is genuinely formatted HTML, and
+ * this returns false so it keeps rendering in the secure sandboxed iframe,
+ * unchanged.
+ *
+ * Safety in both directions:
+ *  - A genuine HTML email (the newsletter with tables/colors/images) always
+ *    contains at least one non-trivial tag or attribute, so it can never be
+ *    misclassified as plain text and lose its formatting.
+ *  - A plain-text email that happens to contain a stray "<" (e.g. "5 < 10")
+ *    either parses as inert text (most cases — HTML5 parsing requires a
+ *    letter immediately after "<" to start a tag) or, in the rarer case
+ *    where it accidentally looks like a real tag (e.g. "a<b then c>d"
+ *    parses as a literal <b> element), it correctly falls to false — safe
+ *    ambiguity is resolved by keeping the well-tested iframe path, not by
+ *    guessing that it's plain text.
+ *  - bodyText itself is never at risk of HTML injection here regardless of
+ *    this function's verdict: the text path renders it as a React text
+ *    child (`{bodyText}`), which always escapes markup — never via
+ *    dangerouslySetInnerHTML — so a stray angle bracket in bodyText can
+ *    never be interpreted as HTML.
+ *
+ * bodyText is accepted for API symmetry with the call site (and to leave
+ * room for a future stricter check, e.g. comparing extracted text against
+ * bodyText) but the current rule intentionally only inspects bodyHtml's
+ * structure — see the "robust simple version" this implements.
+ */
+export function isEffectivelyPlainText(
+  bodyHtml: string | null | undefined,
+  _bodyText?: string | null,
+): boolean {
+  if (!bodyHtml || !bodyHtml.trim()) return true;
+
+  const doc = new DOMParser().parseFromString(bodyHtml, "text/html");
+  for (const el of Array.from(doc.body.querySelectorAll("*"))) {
+    if (!TRIVIAL_TAG_NAMES.has(el.tagName.toLowerCase())) return false;
+    if (el.attributes.length > 0) return false;
+  }
+  return true;
+}
+
+// Extracts a readable text rendering of a bodyHtml that isEffectivelyPlainText
+// has already confirmed is trivial (only br/p/div/span, no attributes) —
+// used as the last-resort source of display text when there's no bodyText
+// prop at all, so a trivial-HTML-only email still shows its content instead
+// of the empty-body message. <br> and block-level p/div boundaries become
+// newlines so multi-line content doesn't get smashed into one line by
+// textContent's default behavior.
+function extractTextFromTrivialHtml(bodyHtml: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, "text/html");
+  const parts: string[] = [];
+
+  function walk(node: ChildNode) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as Element;
+    const tag = element.tagName.toLowerCase();
+    if (tag === "br") {
+      parts.push("\n");
+      return;
+    }
+    for (const child of Array.from(element.childNodes)) walk(child);
+    if (tag === "p" || tag === "div") parts.push("\n");
+  }
+
+  for (const child of Array.from(doc.body.childNodes)) walk(child);
+  return parts.join("").trim();
+}
 
 function wrapDocument(bodyInnerHtml: string) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${EMAIL_PAPER_COLOR_SCHEME}}html,body{background:${EMAIL_PAPER_PANEL};margin:0}body{padding:2px;color:${EMAIL_PAPER_INK};font-family:"Space Grotesk Variable","Space Grotesk",system-ui,sans-serif;font-size:15px;line-height:1.65}</style></head><body>${bodyInnerHtml}</body></html>`;
@@ -183,6 +285,16 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
 
+  // True when bodyHtml carries no real markup — see isEffectivelyPlainText.
+  // Such bodies (including the common case of a server-synthesized bodyHtml
+  // that's identical to bodyText) render via the auto-sizing text path
+  // below instead of the sandboxed iframe, which fits the content exactly
+  // instead of leaving a giant empty box sized for HTML that isn't there.
+  const isPlainText = useMemo(
+    () => bodyHtml != null && isEffectivelyPlainText(bodyHtml, bodyText),
+    [bodyHtml, bodyText],
+  );
+
   // Content-ID -> data: URL lookup, resolved by fetching each referenced,
   // safe-image attachment's blob from this (authenticated) parent document
   // — see useResolvedCidImageMap for why that fetch can't happen from
@@ -190,12 +302,16 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const cidMap = useResolvedCidImageMap(bodyHtml, attachments);
 
   const sanitized = useMemo(() => {
-    if (!bodyHtml) return null;
+    // Only genuine HTML (isPlainText false) goes through the sandboxed
+    // iframe. bodyHtml absent, or effectively plain text, both fall through
+    // to the text path below — the iframe/sandbox is unchanged for real
+    // HTML, it's just no longer used for content that has no real markup.
+    if (!bodyHtml || isPlainText) return null;
     // Always re-sanitize from the original raw bodyHtml so toggling
     // allowRemoteImages restores the images that were stripped, rather than
     // re-processing already-blocked (data-blocked-src) markup.
     return sanitizeEmailHtml(bodyHtml, { allowRemoteImages, cidMap });
-  }, [bodyHtml, allowRemoteImages, cidMap]);
+  }, [bodyHtml, isPlainText, allowRemoteImages, cidMap]);
 
   const { height, onLoad } = useContentHeight(sanitized?.html ?? "");
 
@@ -230,6 +346,16 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
 
   if (bodyText) {
     return <pre className="whitespace-pre-wrap text-[15px] leading-[1.65]">{bodyText}</pre>;
+  }
+
+  // bodyHtml was trivial (isPlainText) but there was no bodyText to fall
+  // back on — extract readable text from the trivial markup itself rather
+  // than showing an empty body for content that does have something to say.
+  if (bodyHtml && isPlainText) {
+    const extracted = extractTextFromTrivialHtml(bodyHtml);
+    if (extracted) {
+      return <pre className="whitespace-pre-wrap text-[15px] leading-[1.65]">{extracted}</pre>;
+    }
   }
 
   return <p className="text-sm text-muted">{t("mail.emptyBody")}</p>;
