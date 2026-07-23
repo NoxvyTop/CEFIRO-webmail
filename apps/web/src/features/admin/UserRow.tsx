@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { AdminUser } from "@webmail/shared";
+import { Avatar } from "../../app/ui/Avatar";
 import { setUserActive, setUserCredential, setUserRole } from "./api";
 
 const USERS_QUERY_KEY = ["admin", "users"] as const;
@@ -64,45 +65,61 @@ export function UserRow({ user }: { user: AdminUser }) {
       ? t("admin.actions.archive")
       : t("admin.actions.reactivate");
 
-  const ghostButtonClass =
-    "flex h-8 items-center rounded-[9px] px-2 text-xs transition hover:bg-hover disabled:opacity-50";
+  // Compact variant of the app's canonical secondary button (same visual
+  // language as the reader's Responder/Reenviar/Archivar, see
+  // ThreadView.tsx:389), sized to fit inline in a table row.
+  const compactSecondaryButtonClass =
+    "flex h-8 items-center rounded-[9px] border border-line bg-panel px-3 text-xs font-semibold text-ink transition hover:bg-hover disabled:opacity-50";
 
   return (
     <tr className="border-t border-line transition hover:bg-hover">
-      <td className="p-2">{user.email}</td>
-      <td className="p-2">{user.displayName}</td>
-      <td className="p-2">
+      <td className="px-3 py-2.5">
+        <div className="flex items-center gap-2.5">
+          <Avatar name={user.displayName} email={user.email} size={30} />
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-medium text-ink">{user.displayName}</span>
+            <span className="truncate text-xs text-muted">{user.email}</span>
+          </div>
+        </div>
+      </td>
+      <td className="px-3 py-2.5">
         <select
           aria-label={t("admin.actions.role")}
           value={user.role}
           onChange={(event) => roleMutation.mutate(event.target.value as "employee" | "admin")}
-          className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+          className="h-8 rounded-[8px] border border-line bg-soft px-2 text-xs font-medium text-ink outline-none focus:border-accent"
         >
           <option value="employee">{t("admin.roles.employee")}</option>
           <option value="admin">{t("admin.roles.admin")}</option>
         </select>
       </td>
-      <td className="p-2">
-        {user.mailboxLinked ? t("admin.mailbox.linked") : t("admin.mailbox.unlinked")}
+      <td className="px-3 py-2.5">
+        {user.mailboxLinked ? (
+          <span className="text-xs text-muted">{t("admin.mailbox.linked")}</span>
+        ) : (
+          <span className="inline-flex items-center rounded-full border border-warn/40 px-2 py-0.5 text-xs font-medium text-warn">
+            {t("admin.mailbox.unlinked")}
+          </span>
+        )}
       </td>
-      <td className="p-2">
+      <td className="px-3 py-2.5">
         <span
-          className={`rounded-full px-2 py-0.5 text-xs ${
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
             user.active ? "bg-sel text-accent-text" : "border border-line text-muted"
           }`}
         >
           {user.active ? t("admin.status.active") : t("admin.status.archived")}
         </span>
       </td>
-      <td className="p-2">
+      <td className="px-3 py-2.5">
         <div className="flex flex-col items-start gap-1">
           {!credentialOpen && (
-            <button type="button" onClick={() => setCredentialOpen(true)} className={ghostButtonClass}>
+            <button type="button" onClick={() => setCredentialOpen(true)} className={compactSecondaryButtonClass}>
               {t("admin.actions.linkMailbox")}
             </button>
           )}
           {credentialOpen && (
-            <form onSubmit={handleCredentialSubmit} className="flex gap-1">
+            <form onSubmit={handleCredentialSubmit} className="flex items-center gap-1">
               <input
                 type="password"
                 aria-label={t("admin.actions.linkMailbox")}
@@ -110,14 +127,14 @@ export function UserRow({ user }: { user: AdminUser }) {
                 required
                 value={mailPassword}
                 onChange={(event) => setMailPassword(event.target.value)}
-                className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+                className="h-8 rounded-[9px] border border-line bg-soft px-3 text-xs text-ink outline-none focus:border-accent"
               />
-              <button type="submit" className={ghostButtonClass}>
+              <button type="submit" className={compactSecondaryButtonClass}>
                 {t("admin.actions.saveCredential")}
               </button>
             </form>
           )}
-          <button type="button" onClick={handleArchiveClick} className={ghostButtonClass}>
+          <button type="button" onClick={handleArchiveClick} className={compactSecondaryButtonClass}>
             {archiveLabel}
           </button>
           {hasError && (

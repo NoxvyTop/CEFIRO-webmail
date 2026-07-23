@@ -11,6 +11,27 @@
     "forbidden": "No tienes permisos de administrador",
     "back": "Volver",
     "empty": "No hay usuarios",
+    "nav": {
+      "label": "Secciones de administración",
+      "resumen": "Resumen",
+      "users": "Usuarios",
+      "sso": "Identidad (SSO)",
+      "settings": "Ajustes"
+    },
+    "metrics": {
+      "users": "Usuarios",
+      "active": "Activos",
+      "mailboxes": "Buzones",
+      "sso": "SSO",
+      "archivedSuffix": "/ {{count}} arch.",
+      "mailboxGaugeTitle": "Buzones vinculados",
+      "mailboxGaugeLabel": "{{linked}} de {{total}} buzones vinculados, {{percentage}}%",
+      "mailboxGaugeRatio": "{{linked}} / {{total}} vinculados",
+      "unlinkedCount": "{{count}} sin vincular"
+    },
+    "settings": {
+      "comingSoon": "Próximamente"
+    },
     "mailbox": {
       "linked": "Buzón vinculado",
       "unlinked": "Sin vincular"

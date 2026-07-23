@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { AdminUser, CreateUserInput } from "@webmail/shared";
 import { createAdminUser, fetchAdminSso, fetchAdminUsers, updateAdminSso } from "./api";
+import { MailboxGauge } from "./MailboxGauge";
 import { UserRow } from "./UserRow";
 
 const inputClass =
@@ -15,9 +16,31 @@ const primaryButtonClass =
 const paginationButtonClass =
   "flex h-9 items-center rounded-[9px] border border-line px-3 text-xs font-semibold transition hover:bg-hover disabled:opacity-50";
 
+// Canonical secondary button (same visual language as the reader's
+// Responder/Reenviar/Archivar buttons, see ThreadView.tsx:389).
+const secondaryButtonClass =
+  "flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover";
+
 const USERS_QUERY_KEY = ["admin", "users"] as const;
 const SSO_QUERY_KEY = ["admin", "sso"] as const;
 const USERS_PAGE_SIZE = 25;
+
+type Section = "resumen" | "users" | "sso" | "settings";
+
+const NAV_ITEMS: { id: Section; labelKey: string }[] = [
+  { id: "resumen", labelKey: "admin.nav.resumen" },
+  { id: "users", labelKey: "admin.nav.users" },
+  { id: "sso", labelKey: "admin.nav.sso" },
+  { id: "settings", labelKey: "admin.nav.settings" },
+];
+
+const metricCardClass = "rounded-[14px] border border-line bg-panel p-5";
+const metricLabelClass = "text-[11px] font-bold uppercase tracking-[0.12em] text-muted";
+const metricValueClass = "mt-1 text-[27px] font-semibold tracking-tight tabular-nums";
+// Big "banner" figure for the standalone metric cards (fills the full-width
+// stretched cards); the gauge card keeps the smaller metricValueClass.
+const metricBannerClass = "mt-2 text-[40px] font-semibold leading-none tracking-tight tabular-nums";
+const metricStatClass = `${metricCardClass} flex flex-col justify-center`;
 
 function filterUsers(users: AdminUser[], term: string): AdminUser[] {
   const normalized = term.trim().toLowerCase();
@@ -46,6 +69,7 @@ export function AdminPage() {
   const [ssoForm, setSsoForm] = useState(EMPTY_SSO_FORM);
   const [userSearch, setUserSearch] = useState("");
   const [userPage, setUserPage] = useState(0);
+  const [section, setSection] = useState<Section>("resumen");
 
   const createMutation = useMutation({
     mutationFn: (input: CreateUserInput) => createAdminUser(input),
@@ -89,227 +113,329 @@ export function AdminPage() {
   const pageStart = currentPage * USERS_PAGE_SIZE;
   const pagedUsers = filteredUsers.slice(pageStart, pageStart + USERS_PAGE_SIZE);
 
+  const metrics = useMemo(() => {
+    const total = users.length;
+    const active = users.filter((user) => user.active).length;
+    const archived = total - active;
+    const mailboxLinked = users.filter((user) => user.mailboxLinked).length;
+    return { total, active, archived, mailboxLinked };
+  }, [users]);
+
   function handleUserSearchChange(value: string) {
     setUserSearch(value);
     setUserPage(0);
   }
 
   return (
-    <main aria-label={t("admin.title")} className="mx-auto flex min-h-full max-w-5xl flex-col gap-6 p-6">
+    <main aria-label={t("admin.title")} className="flex min-h-full flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t("admin.title")}</h1>
-        <Link to="/" className="text-sm text-accent-text underline">
+        <Link to="/" className={secondaryButtonClass}>
           {t("admin.back")}
         </Link>
       </div>
 
-      <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-        <h2 className="text-lg font-medium">{t("admin.new.title")}</h2>
-        <form onSubmit={handleCreateSubmit} className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.new.email")}
-            <input
-              type="email"
-              required
-              value={newUser.email}
-              onChange={(event) => setNewUser({ ...newUser, email: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.new.name")}
-            <input
-              required
-              value={newUser.displayName}
-              onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.new.role")}
-            <select
-              value={newUser.role}
-              onChange={(event) =>
-                setNewUser({ ...newUser, role: event.target.value as "employee" | "admin" })
-              }
-              className={inputClass}
+      <div className="flex flex-1 flex-col gap-6 md:flex-row md:items-start">
+        <nav
+          aria-label={t("admin.nav.label")}
+          className="flex w-full shrink-0 flex-row gap-1 rounded-[14px] border border-line bg-panel p-3 md:w-[184px] md:flex-col"
+        >
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setSection(item.id)}
+              aria-current={section === item.id ? "page" : undefined}
+              className={`rounded-[10px] px-3 py-2 text-left text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-accent ${
+                section === item.id ? "bg-sel text-accent-text" : "text-ink hover:bg-hover"
+              }`}
             >
-              <option value="employee">{t("admin.roles.employee")}</option>
-              <option value="admin">{t("admin.roles.admin")}</option>
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.new.mailPassword")}
-            <input
-              type="password"
-              minLength={8}
-              value={newUser.mailPassword}
-              onChange={(event) => setNewUser({ ...newUser, mailPassword: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <button type="submit" className={primaryButtonClass}>
-            {t("admin.new.create")}
-          </button>
-        </form>
-        {createMutation.isError && (
-          <p role="alert" className="text-sm text-danger">
-            {t("admin.errors.action")}
-          </p>
-        )}
-      </section>
+              {t(item.labelKey)}
+            </button>
+          ))}
+        </nav>
 
-      <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-        {usersQuery.isError && (
-          <p role="alert" className="text-sm text-danger">
-            {t("admin.errors.load")}
-          </p>
-        )}
-        {!usersQuery.isError && !usersQuery.isLoading && users.length === 0 && (
-          <p>{t("admin.empty")}</p>
-        )}
-        {users.length > 0 && (
-          <>
-            <input
-              type="search"
-              value={userSearch}
-              onChange={(event) => handleUserSearchChange(event.target.value)}
-              placeholder={t("admin.search.placeholder")}
-              aria-label={t("admin.search.placeholder")}
-              className={`${inputClass} w-full max-w-xs`}
-            />
-            {filteredUsers.length === 0 ? (
-              <p>{t("admin.search.noResults")}</p>
-            ) : (
-              <>
-                <div className="overflow-x-auto rounded-[10px] border border-line">
-                  <table className="w-full min-w-[720px] text-sm">
-                    <thead>
-                      <tr>
-                        <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.email")}</th>
-                        <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.name")}</th>
-                        <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.role")}</th>
-                        <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.mailbox")}</th>
-                        <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.status")}</th>
-                        <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.actions")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pagedUsers.map((user) => (
-                        <UserRow key={user.id} user={user} />
-                      ))}
-                    </tbody>
-                  </table>
+        <div className="flex min-w-0 flex-1 flex-col gap-6">
+          {section === "resumen" && (
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+              <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className={metricStatClass}>
+                  <p className={metricLabelClass}>{t("admin.metrics.users")}</p>
+                  <p className={`${metricBannerClass} text-ink`}>{metrics.total}</p>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-xs text-muted">
-                    {t("admin.pagination.range", {
-                      from: pageStart + 1,
-                      to: pageStart + pagedUsers.length,
-                      total: filteredUsers.length,
-                    })}
+                <div className={metricStatClass}>
+                  <p className={metricLabelClass}>{t("admin.metrics.active")}</p>
+                  <p className={`${metricBannerClass} text-accent-text`}>
+                    {metrics.active}
+                    <span className="ml-2 text-base font-medium text-muted">
+                      {t("admin.metrics.archivedSuffix", { count: metrics.archived })}
+                    </span>
                   </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setUserPage(Math.max(0, currentPage - 1))}
-                      disabled={currentPage === 0}
-                      className={paginationButtonClass}
-                    >
-                      {t("admin.pagination.prev")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUserPage(Math.min(pageCount - 1, currentPage + 1))}
-                      disabled={currentPage >= pageCount - 1}
-                      className={paginationButtonClass}
-                    >
-                      {t("admin.pagination.next")}
-                    </button>
-                  </div>
                 </div>
-              </>
-            )}
-          </>
-        )}
-      </section>
+                <div className={metricStatClass}>
+                  <p className={metricLabelClass}>{t("admin.metrics.sso")}</p>
+                  <p className={`mt-2 text-[26px] font-semibold leading-none ${sso?.configured ? "text-accent-text" : "text-ink"}`}>
+                    {sso
+                      ? sso.configured
+                        ? t("admin.sso.configured")
+                        : t("admin.sso.notConfigured")
+                      : ssoQuery.isError
+                        ? "—"
+                        : null}
+                  </p>
+                </div>
+              </div>
 
-      <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-        <h2 className="text-lg font-medium">{t("admin.sso.title")}</h2>
+              <div className={`${metricCardClass} flex items-center gap-4 lg:w-[340px] lg:shrink-0`}>
+                <MailboxGauge linked={metrics.mailboxLinked} total={metrics.total} />
+                <div>
+                  <p className={metricLabelClass}>{t("admin.metrics.mailboxGaugeTitle")}</p>
+                  <p className={`${metricValueClass} text-ink`}>
+                    {t("admin.metrics.mailboxGaugeRatio", { linked: metrics.mailboxLinked, total: metrics.total })}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {t("admin.metrics.unlinkedCount", { count: metrics.total - metrics.mailboxLinked })}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
-        {sso && (
-          <div className="flex flex-col gap-1 text-sm">
-            <p>{sso.configured ? t("admin.sso.configured") : t("admin.sso.notConfigured")}</p>
-            {sso.configured && (
-              <dl className="flex flex-col gap-1">
-                {sso.issuer && (
-                  <div className="flex gap-2">
-                    <dt className="font-medium">{t("admin.sso.fields.issuer")}</dt>
-                    <dd>{sso.issuer}</dd>
-                  </div>
+          {section === "users" && (
+            <>
+              <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+                <h2 className="text-lg font-medium">{t("admin.new.title")}</h2>
+                <form onSubmit={handleCreateSubmit} className="flex flex-wrap items-end gap-3">
+                  <label className="flex flex-col gap-1 text-sm">
+                    {t("admin.new.email")}
+                    <input
+                      type="email"
+                      required
+                      value={newUser.email}
+                      onChange={(event) => setNewUser({ ...newUser, email: event.target.value })}
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    {t("admin.new.name")}
+                    <input
+                      required
+                      value={newUser.displayName}
+                      onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })}
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    {t("admin.new.role")}
+                    <select
+                      value={newUser.role}
+                      onChange={(event) =>
+                        setNewUser({ ...newUser, role: event.target.value as "employee" | "admin" })
+                      }
+                      className={inputClass}
+                    >
+                      <option value="employee">{t("admin.roles.employee")}</option>
+                      <option value="admin">{t("admin.roles.admin")}</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    {t("admin.new.mailPassword")}
+                    <input
+                      type="password"
+                      minLength={8}
+                      value={newUser.mailPassword}
+                      onChange={(event) => setNewUser({ ...newUser, mailPassword: event.target.value })}
+                      className={inputClass}
+                    />
+                  </label>
+                  <button type="submit" className={primaryButtonClass}>
+                    {t("admin.new.create")}
+                  </button>
+                </form>
+                {createMutation.isError && (
+                  <p role="alert" className="text-sm text-danger">
+                    {t("admin.errors.action")}
+                  </p>
                 )}
-                {sso.clientId && (
-                  <div className="flex gap-2">
-                    <dt className="font-medium">{t("admin.sso.fields.clientId")}</dt>
-                    <dd>{sso.clientId}</dd>
-                  </div>
-                )}
-                {sso.scopes && (
-                  <div className="flex gap-2">
-                    <dt className="font-medium">{t("admin.sso.fields.scopes")}</dt>
-                    <dd>{sso.scopes}</dd>
-                  </div>
-                )}
-              </dl>
-            )}
-          </div>
-        )}
+              </section>
 
-        <form onSubmit={handleSsoSubmit} className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.sso.fields.issuer")}
-            <input
-              value={ssoForm.issuer}
-              onChange={(event) => setSsoForm({ ...ssoForm, issuer: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.sso.fields.clientId")}
-            <input
-              value={ssoForm.clientId}
-              onChange={(event) => setSsoForm({ ...ssoForm, clientId: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.sso.fields.clientSecret")}
-            <input
-              type="password"
-              value={ssoForm.clientSecret}
-              onChange={(event) => setSsoForm({ ...ssoForm, clientSecret: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t("admin.sso.fields.scopes")}
-            <input
-              value={ssoForm.scopes}
-              onChange={(event) => setSsoForm({ ...ssoForm, scopes: event.target.value })}
-              className={inputClass}
-            />
-          </label>
-          <button type="submit" className={primaryButtonClass}>
-            {t("admin.sso.save")}
-          </button>
-        </form>
-        {ssoMutation.isSuccess && <p>{t("admin.sso.saved")}</p>}
-        {ssoMutation.isError && (
-          <p role="alert" className="text-sm text-danger">
-            {t("admin.sso.error")}
-          </p>
-        )}
-      </section>
+              <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+                {usersQuery.isError && (
+                  <p role="alert" className="text-sm text-danger">
+                    {t("admin.errors.load")}
+                  </p>
+                )}
+                {!usersQuery.isError && !usersQuery.isLoading && users.length === 0 && (
+                  <p>{t("admin.empty")}</p>
+                )}
+                {users.length > 0 && (
+                  <>
+                    <input
+                      type="search"
+                      value={userSearch}
+                      onChange={(event) => handleUserSearchChange(event.target.value)}
+                      placeholder={t("admin.search.placeholder")}
+                      aria-label={t("admin.search.placeholder")}
+                      className={`${inputClass} w-full max-w-xs`}
+                    />
+                    {filteredUsers.length === 0 ? (
+                      <p>{t("admin.search.noResults")}</p>
+                    ) : (
+                      <>
+                        <div className="overflow-x-auto rounded-[10px] border border-line">
+                          <table className="w-full min-w-[720px] text-sm">
+                            <thead>
+                              <tr>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.name")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.role")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.mailbox")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.status")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.actions")}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pagedUsers.map((user) => (
+                                <UserRow key={user.id} user={user} />
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-xs text-muted">
+                            {t("admin.pagination.range", {
+                              from: pageStart + 1,
+                              to: pageStart + pagedUsers.length,
+                              total: filteredUsers.length,
+                            })}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setUserPage(Math.max(0, currentPage - 1))}
+                              disabled={currentPage === 0}
+                              className={paginationButtonClass}
+                            >
+                              {t("admin.pagination.prev")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setUserPage(Math.min(pageCount - 1, currentPage + 1))}
+                              disabled={currentPage >= pageCount - 1}
+                              className={paginationButtonClass}
+                            >
+                              {t("admin.pagination.next")}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </section>
+            </>
+          )}
+
+          {section === "sso" && (
+            <section className="flex flex-col gap-4 rounded-[14px] border border-line bg-panel p-5">
+              <h2 className="text-lg font-medium">{t("admin.sso.title")}</h2>
+
+              {sso && (
+                <div className="flex flex-col gap-3 rounded-[14px] border border-line bg-soft p-4">
+                  <span
+                    className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      sso.configured ? "bg-sel text-accent-text" : "border border-line text-muted"
+                    }`}
+                  >
+                    {sso.configured ? t("admin.sso.configured") : t("admin.sso.notConfigured")}
+                  </span>
+                  {sso.configured && (
+                    <dl className="flex flex-col gap-2">
+                      {sso.issuer && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <dt className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+                            {t("admin.sso.fields.issuer")}
+                          </dt>
+                          <dd className="text-sm text-ink">{sso.issuer}</dd>
+                        </div>
+                      )}
+                      {sso.clientId && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <dt className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+                            {t("admin.sso.fields.clientId")}
+                          </dt>
+                          <dd className="text-sm text-ink">{sso.clientId}</dd>
+                        </div>
+                      )}
+                      {sso.scopes && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <dt className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+                            {t("admin.sso.fields.scopes")}
+                          </dt>
+                          <dd className="text-sm text-ink">{sso.scopes}</dd>
+                        </div>
+                      )}
+                    </dl>
+                  )}
+                </div>
+              )}
+
+              <form
+                onSubmit={handleSsoSubmit}
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:items-end"
+              >
+                <label className="flex flex-col gap-1 text-sm">
+                  {t("admin.sso.fields.issuer")}
+                  <input
+                    value={ssoForm.issuer}
+                    onChange={(event) => setSsoForm({ ...ssoForm, issuer: event.target.value })}
+                    className={inputClass}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  {t("admin.sso.fields.clientId")}
+                  <input
+                    value={ssoForm.clientId}
+                    onChange={(event) => setSsoForm({ ...ssoForm, clientId: event.target.value })}
+                    className={inputClass}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  {t("admin.sso.fields.clientSecret")}
+                  <input
+                    type="password"
+                    value={ssoForm.clientSecret}
+                    onChange={(event) => setSsoForm({ ...ssoForm, clientSecret: event.target.value })}
+                    className={inputClass}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  {t("admin.sso.fields.scopes")}
+                  <input
+                    value={ssoForm.scopes}
+                    onChange={(event) => setSsoForm({ ...ssoForm, scopes: event.target.value })}
+                    className={inputClass}
+                  />
+                </label>
+                <button type="submit" className={`${primaryButtonClass} justify-center sm:col-span-2 lg:col-span-4`}>
+                  {t("admin.sso.save")}
+                </button>
+              </form>
+              {ssoMutation.isSuccess && <p className="text-sm text-accent-text">{t("admin.sso.saved")}</p>}
+              {ssoMutation.isError && (
+                <p role="alert" className="text-sm text-danger">
+                  {t("admin.sso.error")}
+                </p>
+              )}
+            </section>
+          )}
+
+          {section === "settings" && (
+            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+              <p className="text-sm text-muted">{t("admin.settings.comingSoon")}</p>
+            </section>
+          )}
+        </div>
+      </div>
     </main>
   );
 }

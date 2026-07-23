@@ -54,6 +54,7 @@ function renderPage() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.nav.users") }));
   return client;
 }
 
@@ -68,6 +69,15 @@ describe("AdminPage users table", () => {
     expect(screen.getByText(i18n.t("admin.mailbox.unlinked"))).toBeInTheDocument();
     const table = screen.getByRole("table");
     expect(within(table).getAllByRole("combobox", { name: i18n.t("admin.actions.role") })).toHaveLength(2);
+  });
+
+  it("renders each row with an avatar showing the user's initials next to their name", async () => {
+    fetchAdminUsers.mockResolvedValue([adminActive, employeeUnlinked]);
+    renderPage();
+
+    const row = (await screen.findByText("admin@example.com")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("AO")).toBeInTheDocument();
+    expect(within(row).getByText("Admin One")).toBeInTheDocument();
   });
 
   it("shows the empty state when there are no users", async () => {

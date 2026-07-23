@@ -21,8 +21,16 @@ test("Administración navigates to /admin and renders the users table inside the
 
   await expect(page).toHaveURL("/admin");
   await expect(page.locator("header").getByText("CÉFIRO")).toBeVisible();
+  // The admin console opens on the Resumen section; the users table lives under
+  // the Usuarios section, so switch to it before asserting the table.
+  await page
+    .getByRole("navigation", { name: "Secciones de administración" })
+    .getByRole("button", { name: "Usuarios" })
+    .click();
   await expect(page.getByRole("table")).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Correo" })).toBeVisible();
+  // Slice 3 merged the email + name columns into a single identity column,
+  // whose header uses admin.columns.name ("Nombre").
+  await expect(page.getByRole("columnheader", { name: "Nombre" })).toBeVisible();
 });
 
 test("an unknown route redirects to the mail shell at /", async ({ page }) => {
