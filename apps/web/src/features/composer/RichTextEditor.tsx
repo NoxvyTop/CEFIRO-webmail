@@ -111,7 +111,7 @@ function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorPr
         aria-multiline="true"
         contentEditable
         suppressContentEditableWarning
-        className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6]"
+        className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6] field-focus-line"
         // eslint-disable-next-line react/no-danger -- initial content only; sanitized seed + ongoing edits through onInput
         dangerouslySetInnerHTML={{ __html: safeHtml }}
         onInput={handleInput}
@@ -187,6 +187,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
         role: "textbox",
         "aria-label": ariaLabel,
         "aria-multiline": "true",
+        class: "field-focus-line",
       },
     },
     onUpdate: ({ editor: current }) => {
@@ -306,7 +307,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
                 applyLink();
               }
             }}
-            className="ml-1 rounded-input border border-line bg-panel px-1 py-0.5 text-xs text-ink outline-none focus:border-accent"
+            className="ml-1 rounded-input border border-line bg-panel px-1 py-0.5 text-xs text-ink field-focus"
           />
         )}
         {linkInvalid && <p className="text-xs text-warn">{t("composer.invalidLink")}</p>}

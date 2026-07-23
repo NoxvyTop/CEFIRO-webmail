@@ -89,7 +89,7 @@ export function VacationSettings() {
           value={form.subject}
           maxLength={200}
           onChange={(event) => update({ subject: event.target.value })}
-          className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+          className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
         />
       </label>
 
@@ -101,7 +101,7 @@ export function VacationSettings() {
           maxLength={5000}
           rows={4}
           onChange={(event) => update({ message: event.target.value })}
-          className="rounded-input border border-line bg-soft px-3 py-2 text-ink outline-none focus:border-accent"
+          className="rounded-input border border-line bg-soft px-3 py-2 text-ink field-focus"
         />
       </label>
 
@@ -113,7 +113,7 @@ export function VacationSettings() {
             type="date"
             value={form.startsAt ?? ""}
             onChange={(event) => update({ startsAt: event.target.value || null })}
-            className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+            className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
           />
         </label>
 
@@ -124,7 +124,7 @@ export function VacationSettings() {
             type="date"
             value={form.endsAt ?? ""}
             onChange={(event) => update({ endsAt: event.target.value || null })}
-            className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+            className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
           />
         </label>
 
@@ -140,7 +140,7 @@ export function VacationSettings() {
               const parsed = Number.parseInt(event.target.value, 10);
               update({ intervalDays: Number.isNaN(parsed) ? 7 : Math.min(60, Math.max(1, parsed)) });
             }}
-            className="h-11 w-24 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+            className="h-11 w-24 rounded-input border border-line bg-soft px-3 text-ink field-focus"
           />
         </label>
       </div>

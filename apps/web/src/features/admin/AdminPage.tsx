@@ -8,7 +8,7 @@ import { MailboxGauge } from "./MailboxGauge";
 import { UserRow } from "./UserRow";
 
 const inputClass =
-  "h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent";
+  "h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus";
 
 const primaryButtonClass =
   "flex h-11 items-center rounded-[11px] bg-accent px-4 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]";

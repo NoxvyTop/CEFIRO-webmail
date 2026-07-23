@@ -107,7 +107,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               aria-label={t("composer.from")}
               value={state.draft.identityId}
               onChange={(event) => setField("identityId", event.target.value)}
-              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink outline-none"
+              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
             >
               {identities.map((identity) => (
                 <option key={identity.id} value={identity.id}>
@@ -152,7 +152,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             placeholder={t("composer.subject")}
             value={state.draft.subject}
             onChange={(event) => setField("subject", event.target.value)}
-            className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink outline-none placeholder:font-normal placeholder:text-muted focus:border-accent"
+            className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink field-focus-line focus:border-accent placeholder:font-normal placeholder:text-muted"
           />
 
           <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
@@ -161,7 +161,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               aria-label={t("composer.signature")}
               value={appliedSignatureId}
               onChange={(event) => handleSignatureChange(event.target.value)}
-              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink outline-none"
+              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
             >
               <option value="">{t("composer.noSignature")}</option>
               {signatures.map((signature) => (

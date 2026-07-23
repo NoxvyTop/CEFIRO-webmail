@@ -131,7 +131,7 @@ export function SignatureSettings() {
               id="signature-name"
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
-              className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
             />
           </label>
 

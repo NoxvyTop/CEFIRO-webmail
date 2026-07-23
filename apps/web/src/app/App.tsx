@@ -92,7 +92,7 @@ export function App() {
             </div>
           </div>
           <form onSubmit={handleSearchSubmit} className="min-w-0 max-w-[560px] flex-1">
-            <div className="flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2">
+            <div className="field-focus-within flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 opacity-50">
                 <circle cx="11" cy="11" r="7" />
                 <path d="m20 20-3.5-3.5" />
@@ -104,7 +104,7 @@ export function App() {
                 onChange={(event) => setSearchValue(event.target.value)}
                 placeholder={t("mail.searchPlaceholder")}
                 aria-label={t("mail.searchPlaceholder")}
-                className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted"
+                className="w-full bg-transparent text-sm text-ink field-focus-line placeholder:text-muted"
               />
               <kbd aria-hidden="true" className="rounded-[5px] border border-line bg-panel px-[7px] py-[2px] text-[11px] text-muted">/</kbd>
             </div>

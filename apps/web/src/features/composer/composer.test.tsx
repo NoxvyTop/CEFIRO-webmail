@@ -137,6 +137,19 @@ describe("Composer", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("gives the underline subject field the line focus treatment, not the boxed ring", async () => {
+    renderComposer();
+
+    const subjectInput = await screen.findByRole("textbox", { name: i18n.t("composer.subject") });
+
+    // The composer uses Gmail-style underline fields: focus turns the bottom
+    // border accent (focus:border-accent) with the hard outline suppressed
+    // (field-focus-line) — never the boxed ring reserved for card inputs.
+    expect(subjectInput).toHaveClass("field-focus-line");
+    expect(subjectInput).toHaveClass("focus:border-accent");
+    expect(subjectInput).not.toHaveClass("field-focus");
+  });
+
   describe("attachment control", () => {
     it("hides the native file input and exposes a styled attach button instead", async () => {
       renderComposer();

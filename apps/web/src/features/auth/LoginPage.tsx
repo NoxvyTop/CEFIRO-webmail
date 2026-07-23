@@ -152,7 +152,7 @@ export function LoginPage() {
                     setEmail(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, email: undefined }));
                   }}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
                 />
                 {fieldErrors.email && (
                   <p className="text-[12.5px] text-danger">{fieldErrors.email}</p>
@@ -170,7 +170,7 @@ export function LoginPage() {
                     setPassword(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, password: undefined }));
                   }}
-                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink outline-none focus:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                  className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
                 />
                 {fieldErrors.password && (
                   <p className="text-[12.5px] text-danger">{fieldErrors.password}</p>

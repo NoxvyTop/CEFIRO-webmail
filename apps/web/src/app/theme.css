@@ -21,6 +21,10 @@
      as small text on dark surfaces (11.76:1 on --panel, 12.58:1 on --bg), so
      this reuses --accent unchanged — only light needs a darker stand-in. */
   --accent-text: #6fe3c1;
+  /* Soft accent ring used by .field-focus (index.css) for the unified input/
+     textarea/select focus treatment — a translucent halo instead of a hard
+     outline. Mixed from this block's own --accent so it adapts per theme. */
+  --ring: color-mix(in srgb, var(--accent) 30%, transparent);
   --soft: #171a24;
   --hover: #191d28;
   --sel: #15302b;
@@ -55,6 +59,11 @@
      for accent used AS TEXT (badges, links, idle labels); solid accent
      fills keep #0fa383. */
   --accent-text: #0a725c;
+  /* Soft accent ring used by .field-focus (index.css) for the unified input/
+     textarea/select focus treatment — a translucent halo instead of a hard
+     outline. Mixed from this block's own --accent so it adapts per theme.
+     Lower mix % than night's (22% vs 30%) since light's --accent is denser. */
+  --ring: color-mix(in srgb, var(--accent) 22%, transparent);
   --soft: #edf7f3;
   /* CLARO-03 + hierarchy fix: --hover must be perceptible against BOTH
      #ffffff panels and the #f1f4f4 canvas, AND strictly less prominent

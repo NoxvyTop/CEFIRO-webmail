@@ -224,7 +224,7 @@ export function Sidebar({
                 placeholder={t("mail.labelNamePlaceholder")}
                 aria-label={t("mail.labelNamePlaceholder")}
                 autoFocus
-                className="h-8 rounded-[8px] border border-line bg-transparent px-2 text-[13px] text-ink outline-none focus:border-accent"
+                className="h-8 rounded-[8px] border border-line bg-transparent px-2 text-[13px] text-ink field-focus"
               />
               <div className="flex flex-wrap gap-1.5">
                 {CUSTOM_LABEL_PALETTE.map((hex) => (
