@@ -2,7 +2,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
-import { EmailBody } from "./EmailBody";
+import { EmailBody, isEffectivelyPlainText } from "./EmailBody";
+
+// Genuine markup fixture: a <p> carrying a style attribute is real HTML per
+// isEffectivelyPlainText's allowlist (a bare, attribute-free <p> would be
+// classified as trivial/plain-text and routed to the <pre> path instead —
+// these tests exercise iframe/sandbox mechanics specifically, so the fixture
+// must never be trivial).
+const HTML_BODY = '<p style="margin:0">Hello</p>';
 
 // A 1x1 transparent PNG's raw bytes — enough to exercise the real fetch ->
 // arrayBuffer -> base64 pipeline without a fixture file.
@@ -32,14 +39,63 @@ afterEach(() => {
   document.documentElement.removeAttribute("data-theme");
 });
 
+describe("isEffectivelyPlainText", () => {
+  it("treats a bodyHtml that is trivially the same as bodyText as plain text", () => {
+    expect(isEffectivelyPlainText("Te paso todo el paquete.", "Te paso todo el paquete.")).toBe(true);
+  });
+
+  it("treats bare, attribute-free <p> and <br> wrappers as plain text", () => {
+    expect(isEffectivelyPlainText("<p>Hello</p>", null)).toBe(true);
+    expect(isEffectivelyPlainText("Line1<br>Line2", null)).toBe(true);
+    expect(isEffectivelyPlainText("<div><p>Hello</p><br></div>", null)).toBe(true);
+  });
+
+  it("treats an empty or null bodyHtml as plain text", () => {
+    expect(isEffectivelyPlainText("", null)).toBe(true);
+    expect(isEffectivelyPlainText(null, null)).toBe(true);
+    expect(isEffectivelyPlainText(undefined, null)).toBe(true);
+    expect(isEffectivelyPlainText("   ", null)).toBe(true);
+  });
+
+  it("treats an <img> as real markup", () => {
+    expect(isEffectivelyPlainText('<img src="https://example.test/x.png">', null)).toBe(false);
+  });
+
+  it("treats a <table> as real markup", () => {
+    expect(isEffectivelyPlainText("<table><tr><td>Hello</td></tr></table>", null)).toBe(false);
+  });
+
+  it("treats an <a> link as real markup", () => {
+    expect(isEffectivelyPlainText('<a href="https://example.test">click</a>', null)).toBe(false);
+  });
+
+  it("treats a heading as real markup", () => {
+    expect(isEffectivelyPlainText("<h1>Title</h1>", null)).toBe(false);
+  });
+
+  it("treats a style attribute on an otherwise-trivial tag as real markup", () => {
+    expect(isEffectivelyPlainText('<p style="color:red">Hello</p>', null)).toBe(false);
+  });
+
+  it("treats a class attribute on an otherwise-trivial tag as real markup", () => {
+    expect(isEffectivelyPlainText('<div class="callout">Hello</div>', null)).toBe(false);
+  });
+
+  it("does not misclassify a plain-text message with a stray angle bracket as real markup", () => {
+    // "< 10" has no letter immediately after "<", so HTML5 parsing keeps it
+    // as inert text rather than starting a tag.
+    expect(isEffectivelyPlainText("5 < 10 and 10 > 5", "5 < 10 and 10 > 5")).toBe(true);
+  });
+});
+
 describe("EmailBody", () => {
   it("keeps the sandbox attribute empty (no allow-scripts/allow-same-origin)", () => {
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     expect(getIframe().getAttribute("sandbox")).toBe("");
   });
 
   it("no longer boxes the body in a white, bordered, fixed-height frame", () => {
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const iframe = getIframe();
     expect(iframe.className).not.toMatch(/bg-white/);
     expect(iframe.className).not.toMatch(/border/);
@@ -47,7 +103,7 @@ describe("EmailBody", () => {
   });
 
   it("wraps the iframe in a bordered, rounded paper card so it reads as a document instead of a floating box", () => {
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const wrapper = getIframe().parentElement;
     expect(wrapper?.className).toMatch(/\bborder-line\b/);
     expect(wrapper?.className).toMatch(/rounded-/);
@@ -55,7 +111,7 @@ describe("EmailBody", () => {
 
   it("always renders the iframe srcdoc on light paper values (ink/panel/color-scheme) when the app theme is night", () => {
     document.documentElement.dataset.theme = "night";
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
 
     // Styled marketing HTML assumes a light background (Gmail/Outlook
@@ -75,7 +131,7 @@ describe("EmailBody", () => {
 
   it("always renders the iframe srcdoc on light paper values (ink/panel/color-scheme) when the app theme is light", () => {
     document.documentElement.dataset.theme = "light";
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
 
     expect(srcDoc).toContain("#101318");
@@ -85,7 +141,7 @@ describe("EmailBody", () => {
 
   it("keeps the srcdoc on light paper values even when data-theme changes after mount (the iframe no longer follows the app theme)", () => {
     document.documentElement.dataset.theme = "night";
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const beforeSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
     expect(beforeSrcDoc).toContain("color-scheme:light");
 
@@ -96,7 +152,7 @@ describe("EmailBody", () => {
   });
 
   it("resizes to the measured content height when the sandbox permits contentDocument access", async () => {
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const iframe = getIframe();
     stubContentDocument(iframe, 420);
 
@@ -108,7 +164,7 @@ describe("EmailBody", () => {
   });
 
   it("falls back to a generous, viewport-proportional height without throwing when contentDocument is unreachable (real sandboxed browsers)", () => {
-    render(<EmailBody bodyHtml="<p>Hello</p>" bodyText={null} />);
+    render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
     const iframe = getIframe();
     stubContentDocument(iframe, null);
 
@@ -139,6 +195,45 @@ describe("EmailBody", () => {
     expect(pre.style.background).toBe("");
     expect(pre.className).not.toMatch(/\btext-(ink|muted|white|black)\b/);
     expect(pre.className).not.toMatch(/\bbg-/);
+  });
+
+  describe("plain-text routing (OSCURO-04 giant empty box for short/plain emails)", () => {
+    it("renders the auto-sizing <pre> path (no iframe) for a server-synthesized bodyHtml that equals bodyText", () => {
+      render(<EmailBody bodyHtml="Te paso todo el paquete." bodyText="Te paso todo el paquete." />);
+      const pre = screen.getByText("Te paso todo el paquete.");
+      expect(pre.tagName).toBe("PRE");
+      expect(screen.queryByTitle(i18n.t("mail.emailContent"))).toBeNull();
+    });
+
+    it("renders the auto-sizing <pre> path for a trivial bodyHtml (bare <p>) with bodyText present", () => {
+      render(<EmailBody bodyHtml="<p>Hello</p>" bodyText="Hello" />);
+      const pre = screen.getByText("Hello");
+      expect(pre.tagName).toBe("PRE");
+      expect(screen.queryByTitle(i18n.t("mail.emailContent"))).toBeNull();
+    });
+
+    it("still renders the sandboxed iframe for genuine HTML even when bodyText is also present", () => {
+      render(
+        <EmailBody
+          bodyHtml='<table><tr><td style="color:#333">Formatted</td></tr></table>'
+          bodyText="Formatted"
+        />,
+      );
+      expect(getIframe().getAttribute("sandbox")).toBe("");
+    });
+
+    it("falls back to the trivial html's own text content in the <pre> when bodyHtml is trivial but there is no bodyText at all", () => {
+      render(<EmailBody bodyHtml="<p>Line one</p><p>Line two</p>" bodyText={null} />);
+      expect(screen.queryByTitle(i18n.t("mail.emailContent"))).toBeNull();
+      const pre = screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === "Line one\nLine two");
+      expect(pre.tagName).toBe("PRE");
+    });
+
+    it("shows the empty-body message rather than an empty <pre> when a trivial bodyHtml has no extractable text and no bodyText", () => {
+      render(<EmailBody bodyHtml="<br>" bodyText={null} />);
+      expect(screen.queryByTitle(i18n.t("mail.emailContent"))).toBeNull();
+      expect(screen.getByText(i18n.t("mail.emptyBody"))).toBeTruthy();
+    });
   });
 
   describe("inline cid attachments", () => {
