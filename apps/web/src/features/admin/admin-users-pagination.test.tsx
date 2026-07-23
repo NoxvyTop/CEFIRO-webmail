@@ -46,6 +46,7 @@ function renderPage() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.nav.users") }));
   return client;
 }
 
