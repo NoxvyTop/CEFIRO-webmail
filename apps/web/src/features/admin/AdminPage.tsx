@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { AdminUser, CreateUserInput } from "@webmail/shared";
 import { createAdminUser, fetchAdminSso, fetchAdminUsers, updateAdminSso } from "./api";
+import { MailboxGauge } from "./MailboxGauge";
 import { UserRow } from "./UserRow";
 
 const inputClass =
@@ -147,39 +148,48 @@ export function AdminPage() {
 
         <div className="flex min-w-0 flex-1 flex-col gap-6">
           {section === "resumen" && (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className={metricCardClass}>
-                <p className={metricLabelClass}>{t("admin.metrics.users")}</p>
-                <p className={`${metricValueClass} text-ink`}>{metrics.total}</p>
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className={metricCardClass}>
+                  <p className={metricLabelClass}>{t("admin.metrics.users")}</p>
+                  <p className={`${metricValueClass} text-ink`}>{metrics.total}</p>
+                </div>
+                <div className={metricCardClass}>
+                  <p className={metricLabelClass}>{t("admin.metrics.active")}</p>
+                  <p className={`${metricValueClass} text-accent-text`}>
+                    {metrics.active}
+                    <span className="ml-1.5 text-sm font-medium text-muted">
+                      {t("admin.metrics.archivedSuffix", { count: metrics.archived })}
+                    </span>
+                  </p>
+                </div>
+                <div className={metricCardClass}>
+                  <p className={metricLabelClass}>{t("admin.metrics.sso")}</p>
+                  <p className={`mt-1 text-base font-semibold ${sso?.configured ? "text-accent-text" : "text-ink"}`}>
+                    {sso
+                      ? sso.configured
+                        ? t("admin.sso.configured")
+                        : t("admin.sso.notConfigured")
+                      : ssoQuery.isError
+                        ? "—"
+                        : null}
+                  </p>
+                </div>
               </div>
-              <div className={metricCardClass}>
-                <p className={metricLabelClass}>{t("admin.metrics.active")}</p>
-                <p className={`${metricValueClass} text-accent-text`}>
-                  {metrics.active}
-                  <span className="ml-1.5 text-sm font-medium text-muted">
-                    {t("admin.metrics.archivedSuffix", { count: metrics.archived })}
-                  </span>
-                </p>
+
+              <div className={`${metricCardClass} flex w-fit max-w-xs items-center gap-4`}>
+                <MailboxGauge linked={metrics.mailboxLinked} total={metrics.total} />
+                <div>
+                  <p className={metricLabelClass}>{t("admin.metrics.mailboxGaugeTitle")}</p>
+                  <p className={`${metricValueClass} text-ink`}>
+                    {t("admin.metrics.mailboxGaugeRatio", { linked: metrics.mailboxLinked, total: metrics.total })}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {t("admin.metrics.unlinkedCount", { count: metrics.total - metrics.mailboxLinked })}
+                  </p>
+                </div>
               </div>
-              <div className={metricCardClass}>
-                <p className={metricLabelClass}>{t("admin.metrics.mailboxes")}</p>
-                <p className={`${metricValueClass} text-ink`}>
-                  {metrics.mailboxLinked} / {metrics.total}
-                </p>
-              </div>
-              <div className={metricCardClass}>
-                <p className={metricLabelClass}>{t("admin.metrics.sso")}</p>
-                <p className={`mt-1 text-base font-semibold ${sso?.configured ? "text-accent-text" : "text-ink"}`}>
-                  {sso
-                    ? sso.configured
-                      ? t("admin.sso.configured")
-                      : t("admin.sso.notConfigured")
-                    : ssoQuery.isError
-                      ? "—"
-                      : null}
-                </p>
-              </div>
-            </div>
+            </>
           )}
 
           {section === "users" && (

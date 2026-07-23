@@ -80,11 +80,28 @@ describe("AdminPage console shell", () => {
     expect(
       screen.getByText(i18n.t("admin.metrics.archivedSuffix", { count: 1 })),
     ).toBeInTheDocument();
-    expect(screen.getByText("2 / 3")).toBeInTheDocument();
+    expect(
+      screen.getByText(i18n.t("admin.metrics.mailboxGaugeRatio", { linked: 2, total: 3 })),
+    ).toBeInTheDocument();
     expect(screen.getByText(i18n.t("admin.sso.configured"))).toBeInTheDocument();
 
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText(i18n.t("admin.sso.title"))).not.toBeInTheDocument();
+  });
+
+  it("shows the mailbox-linked gauge card with the derived percentage and unlinked count", async () => {
+    fetchAdminUsers.mockResolvedValue([
+      makeUser({ id: "u1", email: "a@example.com", mailboxLinked: true }),
+      makeUser({ id: "u2", email: "b@example.com", mailboxLinked: true }),
+      makeUser({ id: "u3", email: "c@example.com", mailboxLinked: true }),
+      makeUser({ id: "u4", email: "d@example.com", mailboxLinked: false }),
+    ]);
+    fetchAdminSso.mockResolvedValue(configuredSso);
+    renderPage();
+
+    expect(await screen.findByText("75%")).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("admin.metrics.mailboxGaugeTitle"))).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("admin.metrics.unlinkedCount", { count: 1 }))).toBeInTheDocument();
   });
 
   it("shows Sin configurar and a 0 archived suffix for a fully-active tenant without SSO", async () => {
