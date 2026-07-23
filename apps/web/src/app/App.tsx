@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { CefiroLogo } from "./ui/CefiroLogo";
@@ -84,13 +84,14 @@ export function App() {
       <div className="flex h-screen flex-col">
         {/* no overflow clipping here: it would cut off the absolutely-positioned user menu */}
         <header className="flex h-[60px] shrink-0 items-center gap-5 border-b border-line bg-panel px-5 text-ink">
-          <div className="flex shrink-0 items-center gap-[11px] md:min-w-[210px]">
+          <Link
+            to="/"
+            aria-label={t("app.home")}
+            className="flex shrink-0 items-center justify-center gap-[11px] rounded-md transition hover:opacity-80 md:min-w-[210px]"
+          >
             <CefiroLogo size={32} />
-            <div className="hidden flex-col md:flex">
-              <span className="text-[15px] font-bold tracking-[0.32em]">CÉFIRO</span>
-              <span className="text-[10.5px] tracking-[0.08em] text-muted">{t("app.tagline")}</span>
-            </div>
-          </div>
+            <span className="hidden text-[15px] font-bold tracking-[0.32em] md:block">CÉFIRO</span>
+          </Link>
           <form onSubmit={handleSearchSubmit} className="min-w-0 max-w-[560px] flex-1">
             <div className="field-focus-within flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 opacity-50">

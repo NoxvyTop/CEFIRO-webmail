@@ -1,6 +1,6 @@
 {
   "app": {
-    "tagline": "correo del ecosistema",
+    "home": "Go to home",
     "themeLight": "Switch to light theme",
     "themeNight": "Switch to night theme",
     "sentWith": "Sent with",
@@ -210,10 +210,6 @@
       "junk": "Spam",
       "drafts": "Drafts"
     }
-  },
-  "modules": {
-    "title": "Modules",
-    "mail": "Mail"
   },
   "groups": {
     "title": "Groups",

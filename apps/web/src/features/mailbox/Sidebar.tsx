@@ -289,9 +289,6 @@ export function Sidebar({
           </ul>
         </nav>
       )}
-      <nav aria-label={t("modules.title")} className="mt-auto border-t border-line pt-2 text-sm text-muted">
-        <span aria-current="true">{t("modules.mail")}</span>
-      </nav>
     </aside>
   );
 }
