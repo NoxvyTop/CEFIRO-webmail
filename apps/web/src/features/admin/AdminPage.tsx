@@ -277,12 +277,11 @@ export function AdminPage() {
                           <table className="w-full min-w-[720px] text-sm">
                             <thead>
                               <tr>
-                                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.email")}</th>
-                                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.name")}</th>
-                                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.role")}</th>
-                                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.mailbox")}</th>
-                                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.status")}</th>
-                                <th className="p-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.actions")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.name")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.role")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.mailbox")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.status")}</th>
+                                <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{t("admin.columns.actions")}</th>
                               </tr>
                             </thead>
                             <tbody>

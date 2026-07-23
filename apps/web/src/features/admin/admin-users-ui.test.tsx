@@ -71,6 +71,15 @@ describe("AdminPage users table", () => {
     expect(within(table).getAllByRole("combobox", { name: i18n.t("admin.actions.role") })).toHaveLength(2);
   });
 
+  it("renders each row with an avatar showing the user's initials next to their name", async () => {
+    fetchAdminUsers.mockResolvedValue([adminActive, employeeUnlinked]);
+    renderPage();
+
+    const row = (await screen.findByText("admin@example.com")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("AO")).toBeInTheDocument();
+    expect(within(row).getByText("Admin One")).toBeInTheDocument();
+  });
+
   it("shows the empty state when there are no users", async () => {
     fetchAdminUsers.mockResolvedValue([]);
     renderPage();
