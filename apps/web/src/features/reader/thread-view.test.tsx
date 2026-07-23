@@ -104,18 +104,43 @@ function ComposeParamProbe() {
   return <div data-testid="compose-param">{params.get("compose") ?? ""}</div>;
 }
 
-function renderThread(threadId = "t1", archiveMailboxId: string | null = null) {
+function renderThread(
+  threadId = "t1",
+  archiveMailboxId: string | null = null,
+  inboxMailboxId: string | null = null,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <ToastProvider>
-          <ThreadView threadId={threadId} archiveMailboxId={archiveMailboxId} />
+          <ThreadView
+            threadId={threadId}
+            archiveMailboxId={archiveMailboxId}
+            inboxMailboxId={inboxMailboxId}
+          />
           <ComposeParamProbe />
         </ToastProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+// Builds a fetch mock whose thread endpoint returns a thread whose last email
+// (e2) sits ONLY in the archive mailbox — the state where the reader should
+// offer "move back to inbox" instead of "archive".
+function stubArchivedThread() {
+  const state = structuredClone(thread);
+  state.emails[1]!.mailboxIds = ["arch1"];
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.includes("/api/mail/messages/") && method === "PATCH") {
+      return new Response(null, { status: 204 });
+    }
+    if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+    return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+  });
 }
 
 describe("ThreadView", () => {
@@ -348,6 +373,53 @@ describe("ThreadView", () => {
     await screen.findByRole("button", { name: i18n.t("mail.star") });
     expect(screen.queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("mail.star") })).toBeInTheDocument();
+  });
+
+  it("shows Mover a Recibidos (and hides Archivar) when the last email is only in the archive", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", "mb-inbox");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    expect(
+      within(actionsBar).getByRole("button", { name: i18n.t("mail.unarchive") }),
+    ).toBeInTheDocument();
+    expect(
+      within(actionsBar).queryByRole("button", { name: i18n.t("mail.archive") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Mover a Recibidos moves the last email back to the inbox mailbox", async () => {
+    const fetchMock = stubArchivedThread();
+    vi.stubGlobal("fetch", fetchMock);
+    renderThread("t1", "arch1", "mb-inbox");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    const unarchiveButton = within(actionsBar).getByRole("button", {
+      name: i18n.t("mail.unarchive"),
+    });
+    fireEvent.click(unarchiveButton);
+
+    const patchCall = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/mail/messages/e2" &&
+          (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(call).toBeTruthy();
+      return call;
+    });
+    const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { "mb-inbox": true } });
+  });
+
+  it("hides Mover a Recibidos when there is no inbox mailbox", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", null);
+
+    await screen.findByRole("button", { name: i18n.t("mail.star") });
+    expect(
+      screen.queryByRole("button", { name: i18n.t("mail.unarchive") }),
+    ).not.toBeInTheDocument();
   });
 
   describe("attachments", () => {

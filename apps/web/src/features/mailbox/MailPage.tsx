@@ -442,7 +442,11 @@ export function MailPage() {
         } min-w-0 flex-1 overflow-y-auto overflow-x-hidden`}
       >
         {threadParam ? (
-          <ThreadView threadId={threadParam} archiveMailboxId={archiveMailboxId} />
+          <ThreadView
+            threadId={threadParam}
+            archiveMailboxId={archiveMailboxId}
+            inboxMailboxId={inboxMailboxId}
+          />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
             <div className="opacity-60">

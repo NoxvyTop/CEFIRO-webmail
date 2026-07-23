@@ -8,7 +8,7 @@ import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
+import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
 import { CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
@@ -21,6 +21,7 @@ import { extractReferencedCids } from "./sanitize";
 interface ThreadViewProps {
   threadId: string;
   archiveMailboxId: string | null;
+  inboxMailboxId: string | null;
 }
 
 function addressLabel(address: EmailAddress | undefined) {
@@ -48,7 +49,7 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
   return others.size >= 1;
 }
 
-export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
+export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -113,6 +114,21 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail"] });
       showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
+      backToList();
+    },
+  });
+
+  // Inverse of archiveMutation: moves the email back into Recibidos. Same
+  // single-mailbox move (JMAP mailboxIds is a full set, so this drops the
+  // archive membership and adds the inbox), same post-success flow.
+  const unarchiveMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!inboxMailboxId) throw new Error("no inbox mailbox");
+      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      showToast(t("mail.unarchived"));
       backToList();
     },
   });
@@ -186,6 +202,9 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     lastEmail.mailboxIds.length === 1 &&
     lastEmail.mailboxIds[0] === archiveMailboxId;
   const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
+  // Mutually exclusive with showArchive: only an archived email offers the way
+  // back to Recibidos, and only when we know which mailbox that is.
+  const showUnarchive = isOnlyInArchive && inboxMailboxId !== null;
   const starred = Boolean(lastEmail.keywords.$flagged);
   const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
 
@@ -215,6 +234,16 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           >
             <ArchiveIcon size={15} />
             {t("mail.archive")}
+          </button>
+        )}
+        {showUnarchive && (
+          <button
+            type="button"
+            onClick={() => unarchiveMutation.mutate(lastEmail)}
+            className={actionButtonClass}
+          >
+            <InboxIcon size={15} />
+            {t("mail.unarchive")}
           </button>
         )}
         <button

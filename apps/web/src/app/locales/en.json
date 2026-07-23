@@ -189,6 +189,8 @@
     "unstar": "Unstar",
     "archived": "Email archived",
     "archivedHint": "press e to archive faster",
+    "unarchive": "Move to Inbox",
+    "unarchived": "Moved to Inbox",
     "labels": "Labels",
     "clearLabel": "Clear label filter",
     "newLabel": "New label",

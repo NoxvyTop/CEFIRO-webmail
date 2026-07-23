@@ -189,6 +189,8 @@
     "unstar": "Quitar destacado",
     "archived": "Correo archivado",
     "archivedHint": "pulsa e para archivar más rápido",
+    "unarchive": "Mover a Recibidos",
+    "unarchived": "Movido a Recibidos",
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta",
     "newLabel": "Nueva etiqueta",
