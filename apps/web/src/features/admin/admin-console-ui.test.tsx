@@ -9,7 +9,7 @@ import { AdminPage } from "./AdminPage";
 
 const {
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
-  fetchAdminSso, updateAdminSso,
+  fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 } = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   createAdminUser: vi.fn(),
@@ -18,11 +18,13 @@ const {
   setUserCredential: vi.fn(),
   fetchAdminSso: vi.fn(),
   updateAdminSso: vi.fn(),
+  fetchAdminInstance: vi.fn(),
+  updateAdminInstance: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
-  fetchAdminSso, updateAdminSso,
+  fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 }));
 
 function makeUser(overrides: Partial<AdminUser>): AdminUser {
@@ -67,6 +69,7 @@ describe("AdminPage console shell", () => {
   it("defaults to the Resumen section with derived metric cards, and hides other sections' content", async () => {
     fetchAdminUsers.mockResolvedValue(threeUsers);
     fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
 
     const nav = await screen.findByRole("navigation", { name: i18n.t("admin.nav.label") });
@@ -97,6 +100,7 @@ describe("AdminPage console shell", () => {
       makeUser({ id: "u4", email: "d@example.com", mailboxLinked: false }),
     ]);
     fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
 
     expect(await screen.findByText("75%")).toBeInTheDocument();
@@ -109,6 +113,7 @@ describe("AdminPage console shell", () => {
       makeUser({ id: "u1", email: "a@example.com", active: true, mailboxLinked: true }),
     ]);
     fetchAdminSso.mockResolvedValue({ configured: false, issuer: null, clientId: null, scopes: null });
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
 
     expect(await screen.findByText(i18n.t("admin.sso.notConfigured"))).toBeInTheDocument();
@@ -120,6 +125,7 @@ describe("AdminPage console shell", () => {
   it("switches to Usuarios and shows the existing users table", async () => {
     fetchAdminUsers.mockResolvedValue(threeUsers);
     fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
 
     await screen.findByText("3");
@@ -132,6 +138,7 @@ describe("AdminPage console shell", () => {
   it("switches to Identidad (SSO) and shows the existing SSO form", async () => {
     fetchAdminUsers.mockResolvedValue(threeUsers);
     fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
 
     await screen.findByText("3");
@@ -141,14 +148,17 @@ describe("AdminPage console shell", () => {
     expect(screen.getByLabelText("Issuer")).toBeInTheDocument();
   });
 
-  it("switches to Ajustes and shows an honest placeholder", async () => {
+  it("switches to Ajustes and shows the sent-with-footer toggle, off by default", async () => {
     fetchAdminUsers.mockResolvedValue(threeUsers);
     fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
 
     await screen.findByText("3");
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.nav.settings") }));
 
-    expect(await screen.findByText(i18n.t("admin.settings.comingSoon"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("admin.settings.title"))).toBeInTheDocument();
+    const toggle = screen.getByLabelText(i18n.t("admin.settings.footer.label"));
+    expect(toggle).not.toBeChecked();
   });
 });

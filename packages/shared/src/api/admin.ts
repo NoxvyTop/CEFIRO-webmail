@@ -38,3 +38,16 @@ export const adminSsoViewSchema = z.object({
   scopes: z.string().nullable(),
 });
 export type AdminSsoView = z.infer<typeof adminSsoViewSchema>;
+
+// Shape shared by the admin-only GET/PUT `/admin/instance` endpoints and the
+// public GET `/instance` endpoint — the flag is non-sensitive branding, so
+// both surfaces read the same view.
+export const instanceSettingsViewSchema = z.object({
+  sentWithFooter: z.boolean(),
+});
+export type InstanceSettingsView = z.infer<typeof instanceSettingsViewSchema>;
+
+export const updateInstanceSettingsSchema = z.object({
+  sentWithFooter: z.boolean(),
+});
+export type UpdateInstanceSettingsInput = z.infer<typeof updateInstanceSettingsSchema>;

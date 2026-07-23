@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { fetchThread, updateMessage } from "../mailbox/api";
+import { fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
@@ -78,6 +78,15 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     queryKey: ["mail", "preferences"],
     queryFn: fetchPreferences,
   });
+
+  // Instance-level branding toggle (GH #86, admin console "Ajustes"): off
+  // by default so a fresh instance shows no footer until an admin enables
+  // it. Non-sensitive, so it's read from the public /api/instance endpoint.
+  const instanceQuery = useQuery({
+    queryKey: ["instance"],
+    queryFn: fetchInstanceSettings,
+  });
+  const sentWithFooter = instanceQuery.data?.sentWithFooter ?? false;
   const customLabels = preferencesQuery.data?.customLabels ?? [];
   // Only the registry of "known" labels (canonical + user-defined custom
   // ones) is toggleable from this menu, mirroring Gmail's "Label as" list —
@@ -398,18 +407,23 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>
-                      <p className="mt-4 flex items-center gap-2 text-[11.5px] text-muted">
-                        <svg width="14" height="14" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true" className="text-accent">
-                          <path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" />
-                          <path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" />
-                          <path d="M9 27h10" />
-                        </svg>
-                        <span>
-                          {t("app.sentWith")}{" "}
-                          <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> ·{" "}
-                          {t("app.sealMotto")}
-                        </span>
-                      </p>
+                      {sentWithFooter && (
+                        <p
+                          data-testid="sent-with-footer"
+                          className="mt-4 flex items-center gap-2 text-[11.5px] text-muted"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true" className="text-accent">
+                            <path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" />
+                            <path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" />
+                            <path d="M9 27h10" />
+                          </svg>
+                          <span>
+                            {t("app.sentWith")}{" "}
+                            <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> ·{" "}
+                            {t("app.sealMotto")}
+                          </span>
+                        </p>
+                      )}
                     </div>
                     <div data-testid="thread-footer-actions" className="mt-[26px] flex gap-2.5">
                       <button

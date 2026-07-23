@@ -30,7 +30,11 @@
       "unlinkedCount": "{{count}} sin vincular"
     },
     "settings": {
-      "comingSoon": "Próximamente"
+      "title": "Ajustes de la instancia",
+      "footer": {
+        "label": "Pie \"Enviado con CÉFIRO\"",
+        "description": "Muestra la frase de marca CÉFIRO debajo de los botones Responder y Reenviar en cada correo del lector. Desactivado por defecto."
+      }
     },
     "mailbox": {
       "linked": "Buzón vinculado",

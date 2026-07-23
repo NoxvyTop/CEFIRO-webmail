@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { adminUserSchema, createUserInputSchema } from "./admin";
+import {
+  adminUserSchema, createUserInputSchema, instanceSettingsViewSchema, updateInstanceSettingsSchema,
+} from "./admin";
 
 describe("admin contracts", () => {
   it("parses an admin user with mailboxLinked", () => {
@@ -19,5 +21,10 @@ describe("admin contracts", () => {
     expect(parsed.role).toBe("employee");
     expect(parsed.locale).toBe("es");
     expect(() => createUserInputSchema.parse({ email: "nope", displayName: "A" })).toThrow();
+  });
+  it("instanceSettingsViewSchema and updateInstanceSettingsSchema require a boolean sentWithFooter", () => {
+    expect(instanceSettingsViewSchema.parse({ sentWithFooter: false })).toEqual({ sentWithFooter: false });
+    expect(updateInstanceSettingsSchema.parse({ sentWithFooter: true })).toEqual({ sentWithFooter: true });
+    expect(() => updateInstanceSettingsSchema.parse({ sentWithFooter: "yes" })).toThrow();
   });
 });

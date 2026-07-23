@@ -7,6 +7,7 @@ import { createDb } from "./infra/db/client";
 import { checkDb } from "./infra/db/health";
 import { migrate } from "./infra/db/migrate";
 import { createAuditRepo } from "./infra/repos/audit";
+import { createInstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { createMailCredentialsRepo } from "./infra/repos/mail-credentials";
 import { createSignaturesRepo } from "./infra/repos/signatures";
 import { createSsoConfigRepo } from "./infra/repos/sso-config";
@@ -43,6 +44,7 @@ const users = createUsersRepo(db);
 const audit = createAuditRepo(db);
 const sessions = createSessionStore(db);
 const ssoConfig = createSsoConfigRepo(db, masterKey);
+const instanceSettings = createInstanceSettingsRepo(db);
 const mailCredentials = createMailCredentialsRepo(db, masterKey);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
@@ -75,6 +77,7 @@ if (bootstrap.enabled) {
 
 const app = createApp({
   checks: { postgres: () => checkDb(db) },
+  instanceSettings,
   authRouter: createAuthRouter({
     sessions,
     users,
@@ -88,7 +91,7 @@ const app = createApp({
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap }),
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
-  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
+  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
 });
 

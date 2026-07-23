@@ -89,6 +89,7 @@ function stubFetch(identities = NO_IDENTITIES, customLabels: CustomLabel[] = [])
     if (url.includes("/api/mail/preferences")) {
       return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels }));
     }
+    if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
     return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
   });
@@ -138,6 +139,7 @@ function stubArchivedThread() {
     if (url.includes("/api/mail/messages/") && method === "PATCH") {
       return new Response(null, { status: 204 });
     }
+    if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
     return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
   });
@@ -805,6 +807,64 @@ describe("ThreadView", () => {
       await waitFor(() => {
         expect(screen.queryByRole("menu")).not.toBeInTheDocument();
       });
+    });
+  });
+
+  // Gated by the instance-level "sent with footer" setting (GitHub #86) — off
+  // by default so a fresh instance shows no footer until an admin enables it.
+  describe("sent-with-footer notice (instance setting, GH #86)", () => {
+    function stubThreadWithInstanceFlag(sentWithFooter: boolean) {
+      const state = structuredClone(thread);
+      return vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("hides the footer notice when /api/instance reports sentWithFooter:false (default)", async () => {
+      vi.stubGlobal("fetch", stubThreadWithInstanceFlag(false));
+      renderThread();
+
+      await screen.findByTestId("thread-footer-actions");
+      expect(screen.queryByTestId("sent-with-footer")).not.toBeInTheDocument();
+    });
+
+    it("shows the footer notice when /api/instance reports sentWithFooter:true", async () => {
+      vi.stubGlobal("fetch", stubThreadWithInstanceFlag(true));
+      renderThread();
+
+      const footer = await screen.findByTestId("sent-with-footer");
+      expect(within(footer).getByText("CÉFIRO")).toBeInTheDocument();
+    });
+
+    it("keeps the footer notice hidden when /api/instance fails (never flashes on for an errored instance)", async () => {
+      const state = structuredClone(thread);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) {
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      // Reader renders fully; the branding footer stays hidden on the errored flag.
+      await screen.findByTestId("thread-footer-actions");
+      expect(screen.queryByTestId("sent-with-footer")).not.toBeInTheDocument();
     });
   });
 });

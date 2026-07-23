@@ -1,6 +1,6 @@
 import {
-  adminSsoViewSchema, adminUserSchema,
-  type AdminSsoView, type AdminUser, type CreateUserInput,
+  adminSsoViewSchema, adminUserSchema, instanceSettingsViewSchema,
+  type AdminSsoView, type AdminUser, type CreateUserInput, type InstanceSettingsView,
 } from "@webmail/shared";
 import { z } from "zod";
 import { MailApiError } from "../mailbox/api";
@@ -71,5 +71,16 @@ export async function updateAdminSso(input: {
   issuer: string; clientId: string; clientSecret: string; scopes: string;
 }): Promise<void> {
   const res = await fetch("/api/admin/sso", jsonRequest("PUT", input));
+  if (!res.ok) return parseError(res);
+}
+
+export async function fetchAdminInstance(): Promise<InstanceSettingsView> {
+  const res = await fetch("/api/admin/instance");
+  if (!res.ok) return parseError(res);
+  return instanceSettingsViewSchema.parse(await res.json());
+}
+
+export async function updateAdminInstance(input: { sentWithFooter: boolean }): Promise<void> {
+  const res = await fetch("/api/admin/instance", jsonRequest("PUT", input));
   if (!res.ok) return parseError(res);
 }

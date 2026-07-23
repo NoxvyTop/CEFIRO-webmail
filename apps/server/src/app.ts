@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import type { HealthResponse } from "@webmail/shared";
+import type { HealthResponse, InstanceSettingsView } from "@webmail/shared";
+import type { InstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { DomainError } from "./core/errors";
 import { log } from "./core/logger";
 
@@ -10,6 +11,7 @@ export type HealthCheck = () => Promise<boolean>;
 
 export type CreateAppOptions = {
   checks?: Record<string, HealthCheck>;
+  instanceSettings?: InstanceSettingsRepo;
   authRouter?: Hono<any>;
   setupRouter?: Hono<any>;
   mailRouter?: Hono<any>;
@@ -76,6 +78,18 @@ export function createApp(options: CreateAppOptions = {}) {
       status: Object.values(results).every(Boolean) ? "ok" : "degraded",
       checks: results,
     };
+    return c.json(body);
+  });
+
+  // Public: the sent-with-footer flag is non-sensitive instance branding
+  // (unlike the rest of instance/admin config), so the reader can read it
+  // without a session. Defaults to disabled when no repo is wired (e.g. in
+  // tests that construct createApp() without a database).
+  app.get("/api/instance", async (c) => {
+    const settings = options.instanceSettings
+      ? await options.instanceSettings.get()
+      : { sentWithFooterEnabled: false };
+    const body: InstanceSettingsView = { sentWithFooter: settings.sentWithFooterEnabled };
     return c.json(body);
   });
 

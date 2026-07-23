@@ -3,7 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { AdminUser, CreateUserInput } from "@webmail/shared";
-import { createAdminUser, fetchAdminSso, fetchAdminUsers, updateAdminSso } from "./api";
+import {
+  createAdminUser, fetchAdminInstance, fetchAdminSso, fetchAdminUsers,
+  updateAdminInstance, updateAdminSso,
+} from "./api";
 import { MailboxGauge } from "./MailboxGauge";
 import { UserRow } from "./UserRow";
 
@@ -23,6 +26,7 @@ const secondaryButtonClass =
 
 const USERS_QUERY_KEY = ["admin", "users"] as const;
 const SSO_QUERY_KEY = ["admin", "sso"] as const;
+const INSTANCE_QUERY_KEY = ["admin", "instance"] as const;
 const USERS_PAGE_SIZE = 25;
 
 type Section = "resumen" | "users" | "sso" | "settings";
@@ -64,6 +68,7 @@ export function AdminPage() {
   const queryClient = useQueryClient();
   const usersQuery = useQuery({ queryKey: USERS_QUERY_KEY, queryFn: fetchAdminUsers });
   const ssoQuery = useQuery({ queryKey: SSO_QUERY_KEY, queryFn: fetchAdminSso });
+  const instanceQuery = useQuery({ queryKey: INSTANCE_QUERY_KEY, queryFn: fetchAdminInstance });
 
   const [newUser, setNewUser] = useState(EMPTY_NEW_USER);
   const [ssoForm, setSsoForm] = useState(EMPTY_SSO_FORM);
@@ -85,6 +90,11 @@ export function AdminPage() {
       await queryClient.invalidateQueries({ queryKey: SSO_QUERY_KEY });
       setSsoForm(EMPTY_SSO_FORM);
     },
+  });
+
+  const instanceMutation = useMutation({
+    mutationFn: (input: { sentWithFooter: boolean }) => updateAdminInstance(input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: INSTANCE_QUERY_KEY }),
   });
 
   function handleCreateSubmit(event: FormEvent) {
@@ -430,8 +440,31 @@ export function AdminPage() {
           )}
 
           {section === "settings" && (
-            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-              <p className="text-sm text-muted">{t("admin.settings.comingSoon")}</p>
+            <section className="flex flex-col gap-4 rounded-[14px] border border-line bg-panel p-5">
+              <h2 className="text-lg font-medium">{t("admin.settings.title")}</h2>
+              <div className="flex items-start gap-3 rounded-[14px] border border-line bg-soft p-4">
+                <input
+                  id="instance-footer-toggle"
+                  type="checkbox"
+                  checked={instanceQuery.data?.sentWithFooter ?? false}
+                  onChange={(event) => instanceMutation.mutate({ sentWithFooter: event.target.checked })}
+                  aria-describedby="instance-footer-toggle-description"
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-line accent-accent"
+                />
+                <div className="flex flex-col gap-0.5">
+                  <label htmlFor="instance-footer-toggle" className="text-sm font-medium text-ink">
+                    {t("admin.settings.footer.label")}
+                  </label>
+                  <p id="instance-footer-toggle-description" className="text-xs text-muted">
+                    {t("admin.settings.footer.description")}
+                  </p>
+                </div>
+              </div>
+              {instanceMutation.isError && (
+                <p role="alert" className="text-sm text-danger">
+                  {t("admin.errors.action")}
+                </p>
+              )}
             </section>
           )}
         </div>

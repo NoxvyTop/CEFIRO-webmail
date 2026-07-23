@@ -30,7 +30,11 @@
       "unlinkedCount": "{{count}} not linked"
     },
     "settings": {
-      "comingSoon": "Coming soon"
+      "title": "Instance settings",
+      "footer": {
+        "label": "\"Sent with CÉFIRO\" footer",
+        "description": "Shows the CÉFIRO branding line below the Reply and Forward buttons on every email in the reader. Off by default."
+      }
     },
     "mailbox": {
       "linked": "Mailbox linked",

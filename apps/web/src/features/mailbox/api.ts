@@ -1,6 +1,6 @@
 import {
-  mailboxSchema, messagesPageSchema, threadDetailSchema,
-  type EmailUpdate, type Mailbox, type MessagesPage, type ThreadDetail,
+  instanceSettingsViewSchema, mailboxSchema, messagesPageSchema, threadDetailSchema,
+  type EmailUpdate, type InstanceSettingsView, type Mailbox, type MessagesPage, type ThreadDetail,
 } from "@webmail/shared";
 import { z } from "zod";
 
@@ -59,6 +59,14 @@ export async function updateMessage(id: string, update: EmailUpdate): Promise<vo
     body: JSON.stringify(update),
   });
   if (!res.ok) return parseError(res);
+}
+
+// Public, unauthenticated instance branding flag (see apps/server/src/app.ts
+// GET /api/instance) — read by the reader footer, not admin-gated.
+export async function fetchInstanceSettings(): Promise<InstanceSettingsView> {
+  const res = await fetch("/api/instance");
+  if (!res.ok) return parseError(res);
+  return instanceSettingsViewSchema.parse(await res.json());
 }
 
 export const PAGE_SIZE = 50;

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { MailApiError } from "../mailbox/api";
 import {
-  createAdminUser, fetchAdminSso, fetchAdminUsers,
-  setUserActive, setUserCredential, setUserRole, updateAdminSso,
+  createAdminUser, fetchAdminInstance, fetchAdminSso, fetchAdminUsers,
+  setUserActive, setUserCredential, setUserRole, updateAdminInstance, updateAdminSso,
 } from "./api";
 
 const adminUser = {
@@ -96,6 +96,23 @@ describe("admin api client", () => {
     expect(String(url)).toBe("/api/admin/sso");
     expect(init?.method).toBe("PUT");
     expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("fetches and validates the instance settings view", async () => {
+    stubFetchByUrl({ "/api/admin/instance": () => new Response(JSON.stringify({ sentWithFooter: true })) });
+    const view = await fetchAdminInstance();
+    expect(view.sentWithFooter).toBe(true);
+  });
+
+  it("PUTs the instance settings and resolves void", async () => {
+    const fetchMock = stubFetchByUrl({
+      "/api/admin/instance": () => new Response(JSON.stringify({ sentWithFooter: true })),
+    });
+    await expect(updateAdminInstance({ sentWithFooter: true })).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toBe("/api/admin/instance");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ sentWithFooter: true });
   });
 
   it("throws MailApiError with code 'forbidden' on 403", async () => {
