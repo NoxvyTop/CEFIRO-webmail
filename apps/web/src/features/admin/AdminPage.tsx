@@ -16,6 +16,11 @@ const primaryButtonClass =
 const paginationButtonClass =
   "flex h-9 items-center rounded-[9px] border border-line px-3 text-xs font-semibold transition hover:bg-hover disabled:opacity-50";
 
+// Canonical secondary button (same visual language as the reader's
+// Responder/Reenviar/Archivar buttons, see ThreadView.tsx:389).
+const secondaryButtonClass =
+  "flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover";
+
 const USERS_QUERY_KEY = ["admin", "users"] as const;
 const SSO_QUERY_KEY = ["admin", "sso"] as const;
 const USERS_PAGE_SIZE = 25;
@@ -29,9 +34,13 @@ const NAV_ITEMS: { id: Section; labelKey: string }[] = [
   { id: "settings", labelKey: "admin.nav.settings" },
 ];
 
-const metricCardClass = "rounded-[14px] border border-line bg-panel p-4";
+const metricCardClass = "rounded-[14px] border border-line bg-panel p-5";
 const metricLabelClass = "text-[11px] font-bold uppercase tracking-[0.12em] text-muted";
 const metricValueClass = "mt-1 text-[27px] font-semibold tracking-tight tabular-nums";
+// Big "banner" figure for the standalone metric cards (fills the full-width
+// stretched cards); the gauge card keeps the smaller metricValueClass.
+const metricBannerClass = "mt-2 text-[40px] font-semibold leading-none tracking-tight tabular-nums";
+const metricStatClass = `${metricCardClass} flex flex-col justify-center`;
 
 function filterUsers(users: AdminUser[], term: string): AdminUser[] {
   const normalized = term.trim().toLowerCase();
@@ -118,10 +127,10 @@ export function AdminPage() {
   }
 
   return (
-    <main aria-label={t("admin.title")} className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 p-6">
+    <main aria-label={t("admin.title")} className="flex min-h-full flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t("admin.title")}</h1>
-        <Link to="/" className="text-sm text-accent-text underline">
+        <Link to="/" className={secondaryButtonClass}>
           {t("admin.back")}
         </Link>
       </div>
@@ -148,24 +157,24 @@ export function AdminPage() {
 
         <div className="flex min-w-0 flex-1 flex-col gap-6">
           {section === "resumen" && (
-            <>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div className={metricCardClass}>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+              <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className={metricStatClass}>
                   <p className={metricLabelClass}>{t("admin.metrics.users")}</p>
-                  <p className={`${metricValueClass} text-ink`}>{metrics.total}</p>
+                  <p className={`${metricBannerClass} text-ink`}>{metrics.total}</p>
                 </div>
-                <div className={metricCardClass}>
+                <div className={metricStatClass}>
                   <p className={metricLabelClass}>{t("admin.metrics.active")}</p>
-                  <p className={`${metricValueClass} text-accent-text`}>
+                  <p className={`${metricBannerClass} text-accent-text`}>
                     {metrics.active}
-                    <span className="ml-1.5 text-sm font-medium text-muted">
+                    <span className="ml-2 text-base font-medium text-muted">
                       {t("admin.metrics.archivedSuffix", { count: metrics.archived })}
                     </span>
                   </p>
                 </div>
-                <div className={metricCardClass}>
+                <div className={metricStatClass}>
                   <p className={metricLabelClass}>{t("admin.metrics.sso")}</p>
-                  <p className={`mt-1 text-base font-semibold ${sso?.configured ? "text-accent-text" : "text-ink"}`}>
+                  <p className={`mt-2 text-[26px] font-semibold leading-none ${sso?.configured ? "text-accent-text" : "text-ink"}`}>
                     {sso
                       ? sso.configured
                         ? t("admin.sso.configured")
@@ -177,7 +186,7 @@ export function AdminPage() {
                 </div>
               </div>
 
-              <div className={`${metricCardClass} flex w-fit max-w-xs items-center gap-4`}>
+              <div className={`${metricCardClass} flex items-center gap-4 lg:w-[340px] lg:shrink-0`}>
                 <MailboxGauge linked={metrics.mailboxLinked} total={metrics.total} />
                 <div>
                   <p className={metricLabelClass}>{t("admin.metrics.mailboxGaugeTitle")}</p>
@@ -189,7 +198,7 @@ export function AdminPage() {
                   </p>
                 </div>
               </div>
-            </>
+            </div>
           )}
 
           {section === "users" && (
