@@ -23,7 +23,11 @@
       "active": "Activos",
       "mailboxes": "Buzones",
       "sso": "SSO",
-      "archivedSuffix": "/ {{count}} arch."
+      "archivedSuffix": "/ {{count}} arch.",
+      "mailboxGaugeTitle": "Buzones vinculados",
+      "mailboxGaugeLabel": "{{linked}} de {{total}} buzones vinculados, {{percentage}}%",
+      "mailboxGaugeRatio": "{{linked}} / {{total}} vinculados",
+      "unlinkedCount": "{{count}} sin vincular"
     },
     "settings": {
       "comingSoon": "Próximamente"

@@ -23,7 +23,11 @@
       "active": "Active",
       "mailboxes": "Mailboxes",
       "sso": "SSO",
-      "archivedSuffix": "/ {{count}} arch."
+      "archivedSuffix": "/ {{count}} arch.",
+      "mailboxGaugeTitle": "Linked mailboxes",
+      "mailboxGaugeLabel": "{{linked}} of {{total}} mailboxes linked, {{percentage}}%",
+      "mailboxGaugeRatio": "{{linked}} / {{total}} linked",
+      "unlinkedCount": "{{count}} not linked"
     },
     "settings": {
       "comingSoon": "Coming soon"
