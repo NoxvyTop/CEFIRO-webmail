@@ -327,30 +327,42 @@ export function AdminPage() {
           )}
 
           {section === "sso" && (
-            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+            <section className="flex flex-col gap-4 rounded-[14px] border border-line bg-panel p-5">
               <h2 className="text-lg font-medium">{t("admin.sso.title")}</h2>
 
               {sso && (
-                <div className="flex flex-col gap-1 text-sm">
-                  <p>{sso.configured ? t("admin.sso.configured") : t("admin.sso.notConfigured")}</p>
+                <div className="flex flex-col gap-3 rounded-[14px] border border-line bg-soft p-4">
+                  <span
+                    className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      sso.configured ? "bg-sel text-accent-text" : "border border-line text-muted"
+                    }`}
+                  >
+                    {sso.configured ? t("admin.sso.configured") : t("admin.sso.notConfigured")}
+                  </span>
                   {sso.configured && (
-                    <dl className="flex flex-col gap-1">
+                    <dl className="flex flex-col gap-2">
                       {sso.issuer && (
-                        <div className="flex gap-2">
-                          <dt className="font-medium">{t("admin.sso.fields.issuer")}</dt>
-                          <dd>{sso.issuer}</dd>
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <dt className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+                            {t("admin.sso.fields.issuer")}
+                          </dt>
+                          <dd className="text-sm text-ink">{sso.issuer}</dd>
                         </div>
                       )}
                       {sso.clientId && (
-                        <div className="flex gap-2">
-                          <dt className="font-medium">{t("admin.sso.fields.clientId")}</dt>
-                          <dd>{sso.clientId}</dd>
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <dt className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+                            {t("admin.sso.fields.clientId")}
+                          </dt>
+                          <dd className="text-sm text-ink">{sso.clientId}</dd>
                         </div>
                       )}
                       {sso.scopes && (
-                        <div className="flex gap-2">
-                          <dt className="font-medium">{t("admin.sso.fields.scopes")}</dt>
-                          <dd>{sso.scopes}</dd>
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <dt className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
+                            {t("admin.sso.fields.scopes")}
+                          </dt>
+                          <dd className="text-sm text-ink">{sso.scopes}</dd>
                         </div>
                       )}
                     </dl>
@@ -358,7 +370,10 @@ export function AdminPage() {
                 </div>
               )}
 
-              <form onSubmit={handleSsoSubmit} className="flex flex-wrap items-end gap-3">
+              <form
+                onSubmit={handleSsoSubmit}
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:items-end"
+              >
                 <label className="flex flex-col gap-1 text-sm">
                   {t("admin.sso.fields.issuer")}
                   <input
@@ -392,11 +407,11 @@ export function AdminPage() {
                     className={inputClass}
                   />
                 </label>
-                <button type="submit" className={primaryButtonClass}>
+                <button type="submit" className={`${primaryButtonClass} justify-center sm:col-span-2 lg:col-span-4`}>
                   {t("admin.sso.save")}
                 </button>
               </form>
-              {ssoMutation.isSuccess && <p>{t("admin.sso.saved")}</p>}
+              {ssoMutation.isSuccess && <p className="text-sm text-accent-text">{t("admin.sso.saved")}</p>}
               {ssoMutation.isError && (
                 <p role="alert" className="text-sm text-danger">
                   {t("admin.sso.error")}
