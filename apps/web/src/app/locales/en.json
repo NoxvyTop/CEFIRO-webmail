@@ -11,6 +11,23 @@
     "forbidden": "You do not have admin permissions",
     "back": "Back",
     "empty": "No users",
+    "nav": {
+      "label": "Administration sections",
+      "resumen": "Overview",
+      "users": "Users",
+      "sso": "Identity (SSO)",
+      "settings": "Settings"
+    },
+    "metrics": {
+      "users": "Users",
+      "active": "Active",
+      "mailboxes": "Mailboxes",
+      "sso": "SSO",
+      "archivedSuffix": "/ {{count}} arch."
+    },
+    "settings": {
+      "comingSoon": "Coming soon"
+    },
     "mailbox": {
       "linked": "Mailbox linked",
       "unlinked": "Not linked"
