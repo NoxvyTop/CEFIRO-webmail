@@ -65,8 +65,11 @@ export function UserRow({ user }: { user: AdminUser }) {
       ? t("admin.actions.archive")
       : t("admin.actions.reactivate");
 
-  const ghostButtonClass =
-    "flex h-8 items-center rounded-[9px] px-2 text-xs transition hover:bg-hover disabled:opacity-50";
+  // Compact variant of the app's canonical secondary button (same visual
+  // language as the reader's Responder/Reenviar/Archivar, see
+  // ThreadView.tsx:389), sized to fit inline in a table row.
+  const compactSecondaryButtonClass =
+    "flex h-8 items-center rounded-[9px] border border-line bg-panel px-3 text-xs font-semibold text-ink transition hover:bg-hover disabled:opacity-50";
 
   return (
     <tr className="border-t border-line transition hover:bg-hover">
@@ -111,12 +114,12 @@ export function UserRow({ user }: { user: AdminUser }) {
       <td className="px-3 py-2.5">
         <div className="flex flex-col items-start gap-1">
           {!credentialOpen && (
-            <button type="button" onClick={() => setCredentialOpen(true)} className={ghostButtonClass}>
+            <button type="button" onClick={() => setCredentialOpen(true)} className={compactSecondaryButtonClass}>
               {t("admin.actions.linkMailbox")}
             </button>
           )}
           {credentialOpen && (
-            <form onSubmit={handleCredentialSubmit} className="flex gap-1">
+            <form onSubmit={handleCredentialSubmit} className="flex items-center gap-1">
               <input
                 type="password"
                 aria-label={t("admin.actions.linkMailbox")}
@@ -124,14 +127,14 @@ export function UserRow({ user }: { user: AdminUser }) {
                 required
                 value={mailPassword}
                 onChange={(event) => setMailPassword(event.target.value)}
-                className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+                className="h-8 rounded-[9px] border border-line bg-soft px-3 text-xs text-ink outline-none focus:border-accent"
               />
-              <button type="submit" className={ghostButtonClass}>
+              <button type="submit" className={compactSecondaryButtonClass}>
                 {t("admin.actions.saveCredential")}
               </button>
             </form>
           )}
-          <button type="button" onClick={handleArchiveClick} className={ghostButtonClass}>
+          <button type="button" onClick={handleArchiveClick} className={compactSecondaryButtonClass}>
             {archiveLabel}
           </button>
           {hasError && (
