@@ -44,6 +44,10 @@ export const attachmentMetaSchema = z.object({
   name: z.string().nullable(),
   type: z.string(),
   size: z.number(),
+  // Content-ID (without angle brackets) for attachments referenced inline in
+  // the body via <img src="cid:...">, e.g. embedded logos/signatures. Null
+  // for regular (non-inline) attachments.
+  cid: z.string().nullable(),
 });
 export type AttachmentMeta = z.infer<typeof attachmentMetaSchema>;
 
@@ -72,12 +76,43 @@ export const emailUpdateSchema = z
   });
 export type EmailUpdate = z.infer<typeof emailUpdateSchema>;
 
+// A custom label is a user-defined JMAP keyword: `slug` is the ASCII-safe
+// stored/filter value (mirrors the canonical "diseno" convention in
+// apps/web/src/app/ui/labels.ts — real IMAP/JMAP keyword atoms are
+// ASCII-safe, no accent folding on the server), `name` is the free-form
+// display text the user typed, and `color` is a hex swatch chosen from the
+// app's brand-safe custom label palette.
+export const customLabelSchema = z.object({
+  slug: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be a lowercase ascii keyword"),
+  name: z.string().trim().min(1).max(60),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "color must be a 6-digit hex value"),
+});
+export type CustomLabel = z.infer<typeof customLabelSchema>;
+
+function hasUniqueSlugs(labels: CustomLabel[]): boolean {
+  const slugs = labels.map((label) => label.slug.toLowerCase());
+  return new Set(slugs).size === slugs.length;
+}
+
+const customLabelsListSchema = z
+  .array(customLabelSchema)
+  .max(50)
+  .refine(hasUniqueSlugs, { message: "customLabels slugs must be unique" });
+
 export const userPreferencesSchema = z.object({
   groupMailInMainInbox: z.boolean(),
+  // Defaults to [] so responses from a server that predates this field (or
+  // hand-written test fixtures) still parse instead of throwing.
+  customLabels: customLabelsListSchema.default([]),
 });
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
 export const userPreferencesUpdateSchema = z.object({
   groupMailInMainInbox: z.boolean().optional(),
+  customLabels: customLabelsListSchema.optional(),
 });
 export type UserPreferencesUpdate = z.infer<typeof userPreferencesUpdateSchema>;

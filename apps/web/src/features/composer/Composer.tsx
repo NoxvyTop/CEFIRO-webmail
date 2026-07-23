@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
@@ -7,25 +7,36 @@ import { useComposer } from "./useComposer";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import type { ComposerDraft } from "./reply";
+import { applySignature } from "./signature";
 import { CloseIcon } from "../../app/ui/icons";
 import { useToast } from "../../app/ui/toast";
 
 interface ComposerProps {
   initial: ComposerDraft;
   onClose(): void;
+  // Passed through to useComposer so a successful send of an edited draft
+  // (initial.originalDraftId set) can trash the stale original — see
+  // reply.ts's buildEditDraft and useComposer.ts's send().
+  trashMailboxId?: string | null;
 }
 
 function formatSizeKb(size: number): string {
   return `${(size / 1024).toFixed(1)} KB`;
 }
 
-export function Composer({ initial, onClose }: ComposerProps) {
+export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(initial);
+  const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(
+    initial,
+    trashMailboxId,
+  );
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Guards the default-signature auto-apply so it only runs once per composer
+  // session (on open), not on every render once signatures finish loading.
+  const appliedDefaultRef = useRef(false);
 
   const identitiesQuery = useQuery({ queryKey: ["mail", "identities"], queryFn: fetchIdentities });
   const signaturesQuery = useQuery({ queryKey: ["mail", "signatures"], queryFn: fetchSignatures });
@@ -33,12 +44,24 @@ export function Composer({ initial, onClose }: ComposerProps) {
   const identities: Identity[] = identitiesQuery.data ?? [];
   const signatures: Signature[] = signaturesQuery.data ?? [];
 
+  // Auto-apply the default signature once, when signatures finish loading —
+  // mirrors Gmail, which appends your default signature to every new email
+  // (and reply/forward) without the user having to pick it manually.
+  useEffect(() => {
+    if (appliedDefaultRef.current) return;
+    if (!signaturesQuery.data) return;
+    appliedDefaultRef.current = true;
+    const defaultSignature = signaturesQuery.data.find((candidate) => candidate.isDefault);
+    if (!defaultSignature) return;
+    setAppliedSignatureId(defaultSignature.id);
+    setField("bodyHtml", applySignature(state.draft.bodyHtml, defaultSignature));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on load, guarded by appliedDefaultRef
+  }, [signaturesQuery.data]);
+
   function handleSignatureChange(signatureId: string) {
     setAppliedSignatureId(signatureId);
-    if (!signatureId) return;
-    const signature = signatures.find((candidate) => candidate.id === signatureId);
-    if (!signature) return;
-    setField("bodyHtml", `${state.draft.bodyHtml}<br>—<br>${signature.contentHtml}`);
+    const signature = signatures.find((candidate) => candidate.id === signatureId) ?? null;
+    setField("bodyHtml", applySignature(state.draft.bodyHtml, signature));
   }
 
   async function handleSend() {
@@ -140,7 +163,7 @@ export function Composer({ initial, onClose }: ComposerProps) {
               onChange={(event) => handleSignatureChange(event.target.value)}
               className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink outline-none"
             >
-              <option value="" />
+              <option value="">{t("composer.noSignature")}</option>
               {signatures.map((signature) => (
                 <option key={signature.id} value={signature.id}>
                   {signature.name}

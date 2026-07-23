@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { CustomLabel } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
-import { labelColor } from "../../app/ui/labels";
+import { CUSTOM_LABEL_PALETTE, labelColor } from "../../app/ui/labels";
 import { Sidebar } from "./Sidebar";
 
 const mailboxes = [
@@ -139,6 +140,119 @@ describe("sidebar labels zone", () => {
     const row = screen.getByText("important").closest("button")!;
     const dot = row.querySelector("span[aria-hidden='true']");
     expect(dot).toHaveStyle({ background: labelColor("important") });
+  });
+});
+
+describe("sidebar custom labels (Gmail-model: create/list/delete)", () => {
+  const ventas: CustomLabel = { slug: "ventas-q3", name: "Ventas Q3", color: "#9B6BDB" };
+
+  it("lists custom labels after the canonical ones with their stored name and color", () => {
+    renderSidebar({ customLabels: [ventas] });
+
+    const region = screen.getByRole("navigation", { name: i18n.t("mail.labels") });
+    const row = within(region).getByText("Ventas Q3").closest("button")!;
+    const dot = row.querySelector("span[aria-hidden='true']");
+    expect(dot).toHaveStyle({ background: labelColor("ventas-q3", [ventas]) });
+
+    const buttons = within(region).getAllByRole("button").map((button) => button.textContent);
+    expect(buttons.indexOf("Diseño")).toBeLessThan(buttons.indexOf("Ventas Q3"));
+  });
+
+  it("shows a 'Nueva etiqueta' affordance that reveals an inline create form", () => {
+    renderSidebar();
+
+    expect(screen.queryByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+
+    expect(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).toBeInTheDocument();
+  });
+
+  it("creating a label slugifies the name, uses the picked color, and calls onCreateLabel", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    fireEvent.change(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder")), {
+      target: { value: "Ventas Q3" },
+    });
+    const pickedColor = CUSTOM_LABEL_PALETTE[1]!;
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.chooseLabelColor", { hex: pickedColor }) }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.createLabel") }));
+
+    expect(onCreateLabel).toHaveBeenCalledWith({ slug: "ventas-q3", name: "Ventas Q3", color: pickedColor });
+    // Form closes after a successful submit.
+    expect(screen.queryByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).not.toBeInTheDocument();
+  });
+
+  it("submitting an empty name shows a validation error and does not call onCreateLabel", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.createLabel") }));
+
+    expect(screen.getByText(i18n.t("mail.labelNameRequired"))).toBeInTheDocument();
+    expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("submitting a name that collides with a canonical label shows a duplicate error", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    fireEvent.change(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder")), {
+      target: { value: "Urgente" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.createLabel") }));
+
+    expect(screen.getByText(i18n.t("mail.labelNameDuplicate"))).toBeInTheDocument();
+    expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("submitting a name that collides with an existing custom label (case-insensitive) shows a duplicate error", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ customLabels: [ventas], onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    fireEvent.change(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder")), {
+      target: { value: "ventas q3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.createLabel") }));
+
+    expect(screen.getByText(i18n.t("mail.labelNameDuplicate"))).toBeInTheDocument();
+    expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("clicking cancel hides the form without calling onCreateLabel", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    fireEvent.change(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder")), {
+      target: { value: "Ventas" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.cancelNewLabel") }));
+
+    expect(screen.queryByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).not.toBeInTheDocument();
+    expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("shows a delete affordance on a custom label row that calls onDeleteLabel with its slug", () => {
+    const onDeleteLabel = vi.fn();
+    renderSidebar({ customLabels: [ventas], onDeleteLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.deleteLabel", { name: "Ventas Q3" }) }));
+
+    expect(onDeleteLabel).toHaveBeenCalledWith("ventas-q3");
+  });
+
+  it("does not show a delete affordance on canonical label rows", () => {
+    renderSidebar();
+
+    const region = screen.getByRole("navigation", { name: i18n.t("mail.labels") });
+    const urgenteRow = within(region).getByText("urgente").closest("li")!;
+    expect(within(urgenteRow).getAllByRole("button")).toHaveLength(1);
   });
 });
 

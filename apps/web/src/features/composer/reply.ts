@@ -1,5 +1,6 @@
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { sanitizeEmailHtml } from "../reader/sanitize";
+import { QUOTE_MARKER_ATTR } from "./signature";
 
 export type DraftAttachment = { blobId: string; name: string; type: string; size: number };
 
@@ -18,6 +19,10 @@ export type ComposerDraft = {
   references?: string[];
   // present only on forward drafts: original attachments reattached by blobId
   attachments?: DraftAttachment[];
+  // present only when editing an existing draft (compose=draft:<id>): the id
+  // of the original JMAP draft being edited, so a successful send can trash
+  // the stale copy instead of leaving it behind (see useComposer.ts send()).
+  originalDraftId?: string;
 };
 
 function normalizeEmail(email: string): string {
@@ -55,6 +60,16 @@ function pickIdentity(email: EmailDetail, identities: Identity[]): Identity | un
   );
 }
 
+// A draft was authored by us, so — unlike replyDraft/forwardDraft, which
+// match an identity against who *received* the original — the signal here is
+// who the draft's own From address belongs to.
+function pickIdentityByFrom(email: EmailDetail, identities: Identity[]): Identity | undefined {
+  const fromEmails = new Set(email.from.map((address) => normalizeEmail(address.email)));
+  return (
+    identities.find((identity) => fromEmails.has(normalizeEmail(identity.email))) ?? identities[0]
+  );
+}
+
 function deriveSubject(subject: string): string {
   return /^re:/i.test(subject.trim()) ? subject : `Re: ${subject}`;
 }
@@ -69,7 +84,11 @@ function quotedBody(email: EmailDetail): string {
   const sender = email.from[0];
   const senderLabel = sender ? sender.name || sender.email : "";
   const attribution = `<p>${escapeHtml(email.receivedAt)} — ${escapeHtml(senderLabel)}:</p>`;
-  return `<br><br>${attribution}<blockquote>${sanitized.html}</blockquote>`;
+  // Wrapped in a marked container so composer/signature.ts can place the
+  // auto-applied default signature above the whole quoted block (Gmail
+  // model) instead of guessing based on the raw <blockquote> tag, which
+  // could also appear inside the quoted original itself (nested quotes).
+  return `<div ${QUOTE_MARKER_ATTR}="true"><br><br>${attribution}<blockquote>${sanitized.html}</blockquote></div>`;
 }
 
 export function emptyDraft(identities: Identity[]): ComposerDraft {
@@ -107,6 +126,45 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
     bcc: [],
     subject: deriveSubject(email.subject),
     bodyHtml: quotedBody(email),
+  };
+}
+
+// Continues editing an existing draft (Gmail: click a draft row → it opens
+// in the composer instead of the read-only reader). Unlike replyDraft/
+// forwardDraft, this does not quote/wrap the body — the draft's own body is
+// the thing being edited, verbatim — and it carries originalDraftId so a
+// successful send can trash the stale original (see useComposer.ts).
+export function buildEditDraft(email: EmailDetail, identities: Identity[]): ComposerDraft {
+  const identity = pickIdentityByFrom(email, identities);
+  const rawHtml = email.bodyHtml ?? escapeHtml(email.bodyText ?? "");
+  // KNOWN LIMITATION: no cidMap is passed here, so inline cid: images (e.g. an
+  // embedded logo/signature image) render broken in the composer editor and
+  // are dropped from the resend — sanitizeEmailHtml only rewrites cid: src
+  // attributes when handed a resolved cid -> src map (see EmailBody, which
+  // resolves those blobs for the read-only reader). forwardDraft's quotedBody
+  // has the exact same gap; parity with that existing behavior is accepted
+  // here rather than plumbing blob resolution into the draft-edit path.
+  const sanitized = sanitizeEmailHtml(rawHtml, { allowRemoteImages: false });
+
+  return {
+    identityId: identity?.id ?? identities[0]?.id ?? "",
+    to: dedupeAddresses(email.to),
+    cc: dedupeAddresses(email.cc),
+    // KNOWN LIMITATION: EmailDetail (packages/shared/src/api/mail.ts) does not
+    // expose bcc — the /threads endpoint never requests it from JMAP (see
+    // apps/server/src/modules/mail/router.ts) — so a draft's original bcc
+    // recipients cannot be restored here without extending that shared
+    // contract, which is out of scope for this change.
+    bcc: [],
+    subject: email.subject,
+    bodyHtml: sanitized.html,
+    originalDraftId: email.id,
+    attachments: email.attachments.map((attachment) => ({
+      blobId: attachment.blobId,
+      name: attachment.name?.trim() || "attachment",
+      type: attachment.type,
+      size: attachment.size,
+    })),
   };
 }
 

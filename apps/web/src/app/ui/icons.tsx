@@ -76,6 +76,24 @@ export function CloseIcon({ size = 16 }: IconProps) {
   );
 }
 
+export function PlusIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+export function TagIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M12.59 2H6a2 2 0 0 0-2 2v6.59a2 2 0 0 0 .59 1.41l9 9a2 2 0 0 0 2.82 0l6-6a2 2 0 0 0 0-2.82l-9-9A2 2 0 0 0 12.59 2Z" />
+      <circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ size = 16 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
@@ -155,6 +173,80 @@ export function SendIcon({ size = 16 }: IconProps) {
     <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
       <path d="M22 2 11 13" />
       <path d="M22 2 15 22l-4-9-9-4Z" />
+    </svg>
+  );
+}
+
+// Attachment file-type icons — share the "file" silhouette (a page with a
+// folded corner) and differ by the mark inside, mirroring the common
+// document/image/sheet/archive/calendar iconography users already recognize.
+const FILE_OUTLINE = "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z";
+const FILE_FOLD = "M14 2v6h6";
+
+export function FileDocumentIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d={FILE_OUTLINE} />
+      <path d={FILE_FOLD} />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+      <path d="M10 9H8" />
+    </svg>
+  );
+}
+
+export function FileImageIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d={FILE_OUTLINE} />
+      <path d={FILE_FOLD} />
+      <circle cx="10" cy="13" r="2" />
+      <path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22" />
+    </svg>
+  );
+}
+
+export function FileSpreadsheetIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d={FILE_OUTLINE} />
+      <path d={FILE_FOLD} />
+      <path d="M8 13h2" />
+      <path d="M14 13h2" />
+      <path d="M8 17h2" />
+      <path d="M14 17h2" />
+    </svg>
+  );
+}
+
+export function FileArchiveIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d={FILE_OUTLINE} />
+      <path d={FILE_FOLD} />
+      <path d="M11 11h2" />
+      <path d="M11 14h2" />
+      <circle cx="12" cy="17.5" r="1.5" />
+    </svg>
+  );
+}
+
+export function FileCalendarIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h18" />
+    </svg>
+  );
+}
+
+export function FileGenericIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d={FILE_OUTLINE} />
+      <path d={FILE_FOLD} />
     </svg>
   );
 }

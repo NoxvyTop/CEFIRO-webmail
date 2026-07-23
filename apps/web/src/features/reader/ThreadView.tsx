@@ -1,18 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import type { EmailAddress, EmailDetail } from "@webmail/shared";
+import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { fetchThread, updateMessage } from "../mailbox/api";
+import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
+import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
-import { labelBackground, labelColor, userLabels } from "../../app/ui/labels";
+import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
+import { CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { AiSummaryCard } from "./AiSummaryCard";
+import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody } from "./EmailBody";
+import { extractReferencedCids } from "./sanitize";
 
 interface ThreadViewProps {
   threadId: string;
@@ -24,27 +28,24 @@ function addressLabel(address: EmailAddress | undefined) {
   return address.name || address.email;
 }
 
-function formatSizeKb(size: number) {
-  return `${(size / 1024).toFixed(1)} KB`;
-}
-
-// Mirrors the server's SAFE_INLINE_CONTENT_TYPES allowlist (apps/server/src/modules/mail/router.ts):
-// only these types are ever served inline (without dl=1), so only these get a "view" link.
-const PREVIEWABLE_CONTENT_TYPES = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
-
-function isPreviewable(type: string): boolean {
-  return PREVIEWABLE_CONTENT_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
-}
-
-function blobUrl(blobId: string, name: string, type: string, download: boolean): string {
-  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
+// Gmail shows "Reply all" when there is at least one other recipient besides
+// the account itself and the original sender — plain reply already goes to
+// the sender, so reply-all is only meaningful once it would add someone.
+// This mirrors reply.ts's replyDraft(): reply-all's cc is exactly
+// dedupe(to+cc) minus the account's own identity and minus the sender's
+// address, so the two modes are equivalent (and the button redundant)
+// whenever that set is empty.
+function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boolean {
+  const ownEmails = new Set(identities.map((identity) => identity.email.trim().toLowerCase()));
+  const senderEmail = email.from[0]?.email.trim().toLowerCase();
+  const others = new Set<string>();
+  for (const address of [...email.to, ...email.cc]) {
+    const key = address.email.trim().toLowerCase();
+    if (ownEmails.has(key)) continue;
+    if (senderEmail && key === senderEmail) continue;
+    others.add(key);
+  }
+  return others.size >= 1;
 }
 
 export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
@@ -58,6 +59,51 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     queryFn: () => fetchThread(threadId),
     retry: mailRetry,
   });
+
+  // Used to detect messages the account itself sent (from === one of our
+  // identities) so the sender block can show "Para: <recipients>" instead of
+  // the inbox "para mí y el equipo" framing — correct regardless of which
+  // mailbox/folder the thread is being viewed from.
+  const identitiesQuery = useQuery({
+    queryKey: ["mail", "identities"],
+    queryFn: fetchIdentities,
+  });
+  const identities = identitiesQuery.data ?? [];
+
+  // Powers custom label colors/names in the subject chips and the label-apply
+  // menu below — shares the ["mail","preferences"] cache key with MailPage's
+  // own preferencesQuery, so this is a no-op refetch in the common case.
+  const preferencesQuery = useQuery({
+    queryKey: ["mail", "preferences"],
+    queryFn: fetchPreferences,
+  });
+  const customLabels = preferencesQuery.data?.customLabels ?? [];
+  // Only the registry of "known" labels (canonical + user-defined custom
+  // ones) is toggleable from this menu, mirroring Gmail's "Label as" list —
+  // an arbitrary keyword applied by some other client still shows read-only
+  // as a subject-line chip, it just isn't offered as a checkbox here.
+  const applyLabelSlugs = [...CANONICAL_LABELS, ...customLabels.map((custom) => custom.slug)];
+
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  const labelMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!labelMenuOpen) return;
+    function handleMouseDown(event: MouseEvent) {
+      if (labelMenuRef.current && !labelMenuRef.current.contains(event.target as Node)) {
+        setLabelMenuOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setLabelMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [labelMenuOpen]);
 
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
@@ -74,6 +120,17 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
       updateMessage(email.id, { keywords: { $flagged: starred } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
+      queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
+  });
+
+  // Mirrors starMutation's shape: toggles a single JMAP keyword on the last
+  // email, the same pattern the star affordance already uses.
+  const keywordMutation = useMutation({
+    mutationFn: ({ email, label, checked }: { email: EmailDetail; label: string; checked: boolean }) =>
+      updateMessage(email.id, { keywords: { [label]: checked } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
@@ -130,6 +187,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     lastEmail.mailboxIds[0] === archiveMailboxId;
   const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
   const starred = Boolean(lastEmail.keywords.$flagged);
+  const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
 
   const actionButtonBaseClass =
     "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
@@ -176,13 +234,15 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           <ReplyIcon size={15} />
           {t("composer.reply")}
         </button>
-        <button
-          type="button"
-          onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-          className={actionButtonClass}
-        >
-          {t("composer.replyAll")}
-        </button>
+        {showReplyAll && (
+          <button
+            type="button"
+            onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
+            className={actionButtonClass}
+          >
+            {t("composer.replyAll")}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => openCompose(`forward:${lastEmail.id}`)}
@@ -190,6 +250,50 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
         >
           {t("composer.forward")}
         </button>
+        <div ref={labelMenuRef} className="relative shrink-0">
+          <button
+            type="button"
+            aria-label={t("mail.labels")}
+            aria-haspopup="menu"
+            aria-expanded={labelMenuOpen}
+            onClick={() => setLabelMenuOpen((open) => !open)}
+            className={actionButtonClass}
+          >
+            <TagIcon size={15} />
+            {t("mail.labels")}
+          </button>
+          {labelMenuOpen && (
+            <div
+              role="menu"
+              className="absolute left-0 top-[calc(100%+8px)] z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
+            >
+              {applyLabelSlugs.map((slug) => {
+                const checked = Boolean(lastEmail.keywords[slug]);
+                return (
+                  <button
+                    key={slug}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={checked}
+                    onClick={() => keywordMutation.mutate({ email: lastEmail, label: slug, checked: !checked })}
+                    className={`flex h-9 w-full items-center gap-2 px-3 text-left text-sm hover:bg-hover ${
+                      checked ? "bg-sel font-[650]" : "text-ink"
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                      style={{ background: labelColor(slug, customLabels) }}
+                    />
+                    <span className="min-w-0 flex-1 truncate capitalize">
+                      {labelDisplayName(slug, customLabels)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <span className="ml-auto hidden min-w-0 truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -202,15 +306,32 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
               <span
                 key={label}
                 className="rounded-full px-2.5 py-[3px] text-[11.5px] font-semibold"
-                style={{ color: labelColor(label), background: labelBackground(label) }}
+                style={{ color: labelColor(label, customLabels), background: labelBackground(label, customLabels) }}
               >
-                {label}
+                {labelDisplayName(label, customLabels)}
               </span>
             ))}
           </div>
           {emails.map((email) => {
             const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             const sender = email.from[0];
+            // A message counts as "sent" when its `from` matches one of the
+            // account's own identities — this stays correct no matter which
+            // mailbox/folder the thread is currently being viewed from.
+            const isSentByMe = Boolean(
+              sender && identities.some((identity) => identity.email.toLowerCase() === sender.email.toLowerCase()),
+            );
+
+            // Attachments referenced inline via <img src="cid:..."> in the body
+            // render inside EmailBody itself (see the cidMap it builds from
+            // `attachments`) — they'd be a duplicate if also shown as a
+            // downloadable chip below, so they're hidden from the chip list
+            // here (Gmail behavior). Attachments not referenced by any cid:
+            // image — including images sent as real attachments — stay visible.
+            const referencedCids = extractReferencedCids(email.bodyHtml);
+            const visibleAttachments = email.attachments.filter(
+              (attachment) => !(attachment.cid && referencedCids.has(attachment.cid)),
+            );
 
             return (
               <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
@@ -220,7 +341,7 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     <div className="text-[14.5px] font-semibold">{addressLabel(sender)}</div>
                     {toCcLabel && (
                       <div className="truncate text-[12.5px] text-muted">
-                        {sender?.email} · {t("mail.toMeAndTeam")}
+                        {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
                       </div>
                     )}
                   </div>
@@ -229,42 +350,21 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                   </span>
                 </div>
                 {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
-                {email.attachments.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {email.attachments.map((attachment) => {
-                      const attachmentName = attachment.name ?? "attachment";
-                      return (
-                        <span
-                          key={attachment.blobId}
-                          className="flex items-center gap-1 rounded-full bg-soft px-2 py-1 text-xs"
-                        >
-                          <span>
-                            {attachmentName} ({formatSizeKb(attachment.size)})
-                          </span>
-                          <a
-                            href={blobUrl(attachment.blobId, attachmentName, attachment.type, true)}
-                            className="text-accent-text underline"
-                          >
-                            {t("attachments.download")}
-                          </a>
-                          {isPreviewable(attachment.type) && (
-                            <a
-                              href={blobUrl(attachment.blobId, attachmentName, attachment.type, false)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-accent-text underline"
-                            >
-                              {t("attachments.view")}
-                            </a>
-                          )}
-                        </span>
-                      );
-                    })}
+                <div className="mt-3 text-[15px] leading-[1.65]">
+                  <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} attachments={email.attachments} />
+                </div>
+                {visibleAttachments.length > 0 && (
+                  <div className="mt-5">
+                    <p className="mb-2 text-[12.5px] font-semibold text-muted">
+                      {t("attachments.count", { count: visibleAttachments.length })}
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      {visibleAttachments.map((attachment) => (
+                        <AttachmentCard key={attachment.blobId} attachment={attachment} />
+                      ))}
+                    </div>
                   </div>
                 )}
-                <div className="mt-3 text-[15px] leading-[1.65]">
-                  <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} />
-                </div>
                 {email.id === lastEmail.id && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">
@@ -291,15 +391,22 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                         <ReplyIcon size={14} />
                         {t("composer.reply")}
                       </button>
-                      {showArchive && (
+                      {showReplyAll && (
                         <button
                           type="button"
-                          onClick={() => archiveMutation.mutate(lastEmail)}
-                          className="flex h-[38px] items-center rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                          onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
+                          className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                         >
-                          {t("mail.archive")}
+                          {t("composer.replyAll")}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => openCompose(`forward:${lastEmail.id}`)}
+                        className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                      >
+                        {t("composer.forward")}
+                      </button>
                     </div>
                   </>
                 )}

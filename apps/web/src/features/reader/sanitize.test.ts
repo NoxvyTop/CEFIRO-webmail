@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeEmailHtml } from "./sanitize";
+import { extractReferencedCids, sanitizeEmailHtml } from "./sanitize";
+
+// HTML attribute serialization escapes "&" to "&amp;", so a multi-query-param
+// URL asserted against `out.html` directly would need to account for that.
+// Re-parsing and reading the live attribute value sidesteps the escaping
+// entirely and asserts what actually ends up in the DOM.
+function firstImgSrc(html: string): string | null {
+  return new DOMParser().parseFromString(html, "text/html").querySelector("img")?.getAttribute("src") ?? null;
+}
 
 describe("sanitizeEmailHtml", () => {
   it("strips scripts and event handlers", () => {
@@ -88,5 +96,132 @@ describe("sanitizeEmailHtml", () => {
     );
     expect(out.hasRemoteImages).toBe(true);
     expect(out.html).not.toContain("evil.test");
+  });
+
+  describe("data: URI images (signature/composer inserted images)", () => {
+    // Verifies DOMPurify's default config (USE_PROFILES: { html: true }) does
+    // NOT strip data:image/* from <img src>: DOMPurify special-cases the
+    // src/href attribute for a fixed set of tags (img, audio, video, source,
+    // track) to allow data: URIs regardless of the ALLOWED_URI_REGEXP, since
+    // an <img> never executes its src as script the way e.g. an <a href>
+    // or <iframe src> could with data:text/html. No sanitizer config change
+    // was needed for the signature/composer image-insert feature — this
+    // test locks that in so a future DOMPurify upgrade can't silently
+    // regress it.
+    it.each(["image/png", "image/jpeg", "image/gif", "image/webp"])(
+      "keeps a data:%s image src intact and does not flag it as remote",
+      (mime) => {
+        const out = sanitizeEmailHtml(`<img src="data:${mime};base64,AAAA">`, {
+          allowRemoteImages: false,
+        });
+        expect(firstImgSrc(out.html)).toBe(`data:${mime};base64,AAAA`);
+        expect(out.hasRemoteImages).toBe(false);
+      },
+    );
+
+    it("still blocks remote http(s) images alongside a kept data: image", () => {
+      const out = sanitizeEmailHtml(
+        `<img src="data:image/png;base64,AAAA"><img src="https://tracker.evil/pixel.png">`,
+        { allowRemoteImages: false },
+      );
+      expect(out.html).toContain("data:image/png;base64,AAAA");
+      expect(out.html).not.toContain("https://tracker.evil");
+      expect(out.hasRemoteImages).toBe(true);
+    });
+  });
+
+  describe("inline cid: images", () => {
+    // cidMap is cid -> already-resolved src string (a data: URL in
+    // production, built by EmailBody from the trusted attachment blob — see
+    // EmailBody.tsx). sanitize never constructs URLs itself; it only assigns
+    // whatever resolved src it's handed.
+    const cidMap = {
+      logo123: "data:image/png;base64,AAAA",
+    };
+
+    it("rewrites a cid: image src to the resolved src from cidMap", () => {
+      const out = sanitizeEmailHtml(`<img src="cid:logo123">`, {
+        allowRemoteImages: false,
+        cidMap,
+      });
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
+      expect(out.html).not.toContain("cid:logo123");
+    });
+
+    it("is case-insensitive on the cid: scheme", () => {
+      const out = sanitizeEmailHtml(`<img src="CID:logo123">`, {
+        allowRemoteImages: false,
+        cidMap,
+      });
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
+    });
+
+    it("strips angle brackets around the content id before matching", () => {
+      const out = sanitizeEmailHtml(`<img src="cid:<logo123>">`, {
+        allowRemoteImages: false,
+        cidMap,
+      });
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
+    });
+
+    it("leaves a cid: image with no matching entry untouched (unresolved — authoring error or fetch not yet done)", () => {
+      const out = sanitizeEmailHtml(`<img src="cid:unknown">`, {
+        allowRemoteImages: false,
+        cidMap,
+      });
+      expect(out.html).toContain("cid:unknown");
+    });
+
+    it("leaves cid: images untouched when no cidMap is provided", () => {
+      const out = sanitizeEmailHtml(`<img src="cid:logo123">`, { allowRemoteImages: false });
+      expect(out.html).toContain("cid:logo123");
+    });
+
+    it("never flags cid: images as remote — they are embedded content, not tracking, and always resolve", () => {
+      const out = sanitizeEmailHtml(`<img src="cid:logo123">`, {
+        allowRemoteImages: false,
+        cidMap,
+      });
+      expect(out.hasRemoteImages).toBe(false);
+    });
+
+    it("resolves the cid image even when remote images are blocked (no 'Cargar imágenes' gate)", () => {
+      const out = sanitizeEmailHtml(
+        `<img src="cid:logo123"><img src="https://tracker.evil/pixel.png">`,
+        { allowRemoteImages: false, cidMap },
+      );
+      expect(firstImgSrc(out.html)).toBe("data:image/png;base64,AAAA");
+      // The remote image is still blocked (same convention as the other
+      // remote-image tests above): the live src is stripped, so only the
+      // percent-encoded data-blocked-src remains.
+      expect(out.html).not.toContain("https://tracker.evil");
+    });
+  });
+});
+
+describe("extractReferencedCids", () => {
+  it("returns the set of content ids referenced by cid: images in the body", () => {
+    const cids = extractReferencedCids(`<p>hi</p><img src="cid:logo123">`);
+    expect(cids).toEqual(new Set(["logo123"]));
+  });
+
+  it("is case-insensitive on the cid: scheme and strips angle brackets", () => {
+    const cids = extractReferencedCids(`<img src="CID:<logo123>">`);
+    expect(cids).toEqual(new Set(["logo123"]));
+  });
+
+  it("collects multiple referenced cids", () => {
+    const cids = extractReferencedCids(`<img src="cid:a"><img src="cid:b">`);
+    expect(cids).toEqual(new Set(["a", "b"]));
+  });
+
+  it("ignores non-cid image srcs", () => {
+    const cids = extractReferencedCids(`<img src="https://cdn.ok/logo.png">`);
+    expect(cids).toEqual(new Set());
+  });
+
+  it("returns an empty set for null or empty html", () => {
+    expect(extractReferencedCids(null)).toEqual(new Set());
+    expect(extractReferencedCids("")).toEqual(new Set());
   });
 });

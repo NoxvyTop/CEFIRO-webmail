@@ -62,14 +62,12 @@ test("inbox lists the seeded subjects newest-first and opens the reading pane on
   await expect(reader.getByRole("heading", { name: seed.subject })).toBeVisible();
   await expect(reader.getByText(senderName(seed.from)).first()).toBeVisible();
 
-  // The body renders inside a sandboxed srcDoc <iframe> (EmailBody.tsx),
-  // not directly in the page — these plain-text SMTP fixtures come back from
-  // Stalwart's JMAP Email/get with BOTH textBody and htmlBody pointing at the
-  // same text/plain part (confirmed via a live Email/get round trip), so the
-  // app's bodyHtml-preferring EmailBody component always takes the iframe
-  // path here, never the plain <pre> path.
-  const readerFrame = reader.frameLocator("iframe");
-  await expect(readerFrame.getByText(bodySnippet(seed.body))).toBeVisible();
+  // The body renders directly in the reader pane (main document), not in a
+  // sandboxed iframe: these plain-text SMTP fixtures come back from Stalwart's
+  // JMAP Email/get with BOTH textBody and htmlBody pointing at the same
+  // text/plain part, so EmailBody's isEffectivelyPlainText check routes them
+  // to the auto-sizing <pre> path (the iframe is only used for genuine HTML).
+  await expect(reader.getByText(bodySnippet(seed.body))).toBeVisible();
 
   // The message becomes read: MessageList's row weight goes from
   // font-semibold (unread) to font-normal (read) once the optimistic

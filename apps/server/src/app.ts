@@ -32,6 +32,12 @@ const DEFAULT_CSP = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
+  // The in-app attachment viewer fetches a preview blob and frames it via a
+  // same-origin `blob:` object URL (image/pdf only). Without `blob:` here,
+  // frame-src falls back to default-src 'self' and the browser blocks the
+  // object-URL iframe ("this content is blocked"). Safe: object URLs are
+  // created only from server-verified previewable types, never text/html.
+  "frame-src 'self' blob:",
   "font-src 'self' data:",
   "connect-src 'self'",
 ].join("; ");

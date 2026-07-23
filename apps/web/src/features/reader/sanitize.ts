@@ -8,6 +8,10 @@ export type SanitizedEmail = { html: string; hasRemoteImages: boolean };
 const REMOTE_URL_PATTERN = /^(https?:)?\/\//i;
 const CSS_REMOTE_URL_PATTERN = /url\(\s*['"]?\s*(https?:)?\/\//i;
 
+// The "cid:" URI scheme (RFC 2392) referencing a Content-ID body part —
+// case-insensitive per the URI spec.
+const CID_SCHEME_PATTERN = /^cid:/i;
+
 function extractSrcsetCandidates(srcset: string): string[] {
   return srcset
     .split(",")
@@ -15,9 +19,48 @@ function extractSrcsetCandidates(srcset: string): string[] {
     .filter((url): url is string => Boolean(url));
 }
 
+// Some mail authoring tools wrap the Content-ID in angle brackets even inside
+// the src attribute (mirroring the raw Content-ID header syntax), e.g.
+// cid:<logo123>. Strip them so the id matches the server's cid (which never
+// includes brackets).
+function stripAngleBrackets(value: string): string {
+  return value.replace(/^</, "").replace(/>$/, "");
+}
+
+function cidFromSrc(src: string): string | null {
+  if (!CID_SCHEME_PATTERN.test(src)) return null;
+  return stripAngleBrackets(src.slice(4));
+}
+
+/**
+ * Finds every cid:-referenced image in the (untrusted, unsanitized) raw HTML
+ * and returns the set of referenced content ids. Used by ThreadView to
+ * de-duplicate inline images out of the attachment chip list — parsing via
+ * DOMParser only reads attributes into a detached document, it never
+ * executes scripts, so this is safe to run on raw email HTML.
+ */
+export function extractReferencedCids(html: string | null | undefined): Set<string> {
+  const cids = new Set<string>();
+  if (!html) return cids;
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const img of Array.from(doc.querySelectorAll("img"))) {
+    const src = img.getAttribute("src");
+    const cid = src ? cidFromSrc(src) : null;
+    if (cid) cids.add(cid);
+  }
+  return cids;
+}
+
 export function sanitizeEmailHtml(
   raw: string,
-  options: { allowRemoteImages: boolean },
+  // cidMap is cid -> already-resolved src string (a data: URL in production).
+  // Resolution — fetching the attachment's blob and building the data: URL —
+  // happens in EmailBody, which is the (authenticated) parent document; the
+  // email body itself renders inside an opaque-origin sandboxed iframe that
+  // can't authenticate a same-origin blob fetch on its own. sanitize just
+  // assigns whatever resolved src it's handed; it never constructs URLs.
+  options: { allowRemoteImages: boolean; cidMap?: Record<string, string> },
 ): SanitizedEmail {
   const clean = DOMPurify.sanitize(raw, {
     USE_PROFILES: { html: true },
@@ -27,6 +70,31 @@ export function sanitizeEmailHtml(
   const doc = new DOMParser().parseFromString(clean, "text/html");
 
   let hasRemoteImages = false;
+
+  // Rewrite cid: image sources to their resolved src first. This is
+  // independent of the remote-image block below: embedded inline images are
+  // not a tracking vector (they're already part of the message payload the
+  // user received, not a fetch to a third party), so they always resolve —
+  // no "load images" opt-in gate. Only <img src> is handled (not <source>/
+  // srcset): a Content-ID always names one specific resource, not a set of
+  // responsive candidates.
+  if (options.cidMap) {
+    for (const img of Array.from(doc.querySelectorAll("img"))) {
+      const src = img.getAttribute("src");
+      const cid = src ? cidFromSrc(src) : null;
+      if (!cid) continue;
+      const resolvedSrc = options.cidMap[cid];
+      if (resolvedSrc) {
+        img.setAttribute("src", resolvedSrc);
+      }
+      // No resolved entry: leave the cid: src verbatim. Either this is an
+      // authoring error in the source email (it references a Content-ID
+      // that isn't among this email's attachments), or the parent's blob
+      // fetch for this cid hasn't resolved yet (or isn't a safe image type)
+      // — either way the browser shows a broken image icon rather than us
+      // guessing at a fallback or silently hiding the img.
+    }
+  }
 
   for (const el of Array.from(doc.querySelectorAll("img, source"))) {
     const src = el.getAttribute("src");

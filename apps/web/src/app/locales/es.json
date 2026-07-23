@@ -170,7 +170,16 @@
     "archivedHint": "pulsa e para archivar más rápido",
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta",
+    "newLabel": "Nueva etiqueta",
+    "labelNamePlaceholder": "Nombre de la etiqueta",
+    "chooseLabelColor": "Elegir color {{hex}}",
+    "createLabel": "Crear etiqueta",
+    "cancelNewLabel": "Cancelar",
+    "deleteLabel": "Eliminar etiqueta {{name}}",
+    "labelNameRequired": "Escribe un nombre para la etiqueta",
+    "labelNameDuplicate": "Ya existe una etiqueta con ese nombre",
     "toMeAndTeam": "para mí y el equipo",
+    "sentTo": "Para:",
     "yesterday": "Ayer",
     "folders": {
       "inbox": "Recibidos",
@@ -201,6 +210,7 @@
     "body": "Mensaje",
     "bodyPlaceholder": "Escribe tu mensaje… o pídeselo a la IA",
     "signature": "Firma",
+    "noSignature": "Ninguna",
     "reply": "Responder",
     "replyAll": "Responder a todos",
     "forward": "Reenviar",
@@ -218,6 +228,10 @@
     "bulletList": "Lista con viñetas",
     "link": "Enlace",
     "linkUrl": "URL del enlace",
+    "image": "Imagen",
+    "insertImage": "Insertar imagen",
+    "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
+    "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG, GIF o WebP)",
     "removeRecipient": "Quitar {{email}}",
     "removeAttachment": "Quitar {{name}}",
     "errors": {
@@ -237,7 +251,14 @@
   },
   "attachments": {
     "download": "Descargar",
-    "view": "Ver"
+    "view": "Ver",
+    "viewNamed": "Ver {{name}}",
+    "print": "Imprimir",
+    "close": "Cerrar",
+    "previewLoading": "Cargando vista previa…",
+    "previewError": "No se pudo cargar la vista previa. Probá descargarlo.",
+    "count_one": "{{count}} adjunto",
+    "count_other": "{{count}} adjuntos"
   },
   "settings": {
     "title": "Ajustes",

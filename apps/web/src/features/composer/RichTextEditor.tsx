@@ -1,9 +1,20 @@
-import { Component, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Component,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
+import Image from "@tiptap/extension-image";
 import { useTranslation } from "react-i18next";
 import { sanitizeEmailHtml } from "../reader/sanitize";
+import { MarkerBlock } from "./markerBlockExtension";
 
 export interface RichTextEditorProps {
   html: string;
@@ -120,18 +131,55 @@ const configuredLink = Link.configure({
   shouldAutoLink: (url) => isSafeLinkUrl(url),
 });
 
+// Images inserted from disk are embedded as data: URLs directly in the
+// signature/body HTML (see handleImageFileSelected below) — self-contained,
+// so they survive storage and render in the sandboxed reader iframe without
+// needing auth or a same-origin fetch (the same reasoning that resolved
+// inline cid: images to data: URLs for EmailBody). Only raster formats that
+// can't carry executable content are allowed; SVG is deliberately excluded
+// since it can embed <script>.
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+// ~1 MiB cap: generous for a signature logo or small inline image, but small
+// enough to avoid bloating draft/signature rows in the DB with base64 blobs
+// (base64 itself already inflates the raw bytes by ~33%).
+const MAX_IMAGE_BYTES = 1024 * 1024;
+
+// allowBase64 defaults to false in @tiptap/extension-image, which sets its
+// parseHTML rule to `img[src]:not([src^="data:"])` — i.e. it silently drops
+// any data: image on parse. setImage() (used below) bypasses that on the
+// initial insert since it builds the node directly via insertContent, but
+// every subsequent `editor.commands.setContent(html, false)` call (the
+// useEffect below, which fires whenever the `html` prop is re-synced from
+// outside — e.g. applySignature() rewrapping bodyHtml on a signature switch,
+// or the initial mount of a draft/reply whose bodyHtml already has an
+// inline image) re-parses the whole document through the schema and would
+// strip the image without this.
+const configuredImage = Image.configure({ allowBase64: true });
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   const { t } = useTranslation();
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [linkInvalid, setLinkInvalid] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   // Tracked via TipTap's own editor.isEmpty on every update (not derived from
   // the `html` prop) so the placeholder reacts to live typing immediately,
   // instead of waiting for the caller to round-trip onChange into a new prop.
   const [isEmpty, setIsEmpty] = useState(() => isHtmlEmpty(html));
 
   const editor = useEditor({
-    extensions: [StarterKit, configuredLink],
+    extensions: [StarterKit, configuredLink, configuredImage, MarkerBlock],
     content: html,
     immediatelyRender: false,
     editorProps: {
@@ -174,6 +222,39 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
     setLinkUrl("");
     setLinkInputOpen(false);
     setLinkInvalid(false);
+  }
+
+  async function handleImageFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    if (!editor) return;
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    // Always allow re-selecting the same file (browsers don't fire onChange
+    // again otherwise since the input's value wouldn't have changed).
+    input.value = "";
+    if (!file) return;
+
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      setImageError(t("composer.imageInvalidType"));
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setImageError(t("composer.imageTooLarge"));
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      // The component may have unmounted (destroying the TipTap editor)
+      // while this read was in flight. `editor` is a stable closure
+      // reference — it is never reassigned to null — so re-testing
+      // `!editor` here would be a no-op; `isDestroyed` is TipTap's actual
+      // signal that this Editor instance is no longer safe to command.
+      if (editor.isDestroyed) return;
+      editor.chain().focus().setImage({ src: dataUrl }).run();
+      setImageError(null);
+    } catch {
+      setImageError(t("composer.errors.generic"));
+    }
   }
 
   return (
@@ -229,6 +310,23 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
           />
         )}
         {linkInvalid && <p className="text-xs text-warn">{t("composer.invalidLink")}</p>}
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept={Array.from(ALLOWED_IMAGE_TYPES).join(",")}
+          aria-label={t("composer.image")}
+          onChange={handleImageFileSelected}
+          className="sr-only"
+        />
+        <button
+          type="button"
+          aria-label={t("composer.insertImage")}
+          onClick={() => imageInputRef.current?.click()}
+          className="rounded px-2 py-1 text-sm hover:bg-hover"
+        >
+          {t("composer.insertImage")}
+        </button>
+        {imageError && <p className="text-xs text-warn">{imageError}</p>}
       </div>
       <div className="relative">
         {isEmpty && (

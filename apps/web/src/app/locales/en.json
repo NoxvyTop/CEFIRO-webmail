@@ -170,7 +170,16 @@
     "archivedHint": "press e to archive faster",
     "labels": "Labels",
     "clearLabel": "Clear label filter",
+    "newLabel": "New label",
+    "labelNamePlaceholder": "Label name",
+    "chooseLabelColor": "Choose color {{hex}}",
+    "createLabel": "Create label",
+    "cancelNewLabel": "Cancel",
+    "deleteLabel": "Delete label {{name}}",
+    "labelNameRequired": "Enter a name for the label",
+    "labelNameDuplicate": "A label with that name already exists",
     "toMeAndTeam": "me and the team",
+    "sentTo": "To:",
     "yesterday": "Yesterday",
     "folders": {
       "inbox": "Inbox",
@@ -201,6 +210,7 @@
     "body": "Message",
     "bodyPlaceholder": "Write your message… or ask the AI",
     "signature": "Signature",
+    "noSignature": "None",
     "reply": "Reply",
     "replyAll": "Reply all",
     "forward": "Forward",
@@ -218,6 +228,10 @@
     "bulletList": "Bulleted list",
     "link": "Link",
     "linkUrl": "Link URL",
+    "image": "Image",
+    "insertImage": "Insert image",
+    "imageTooLarge": "Image is too large (max 1 MB)",
+    "imageInvalidType": "Unsupported image type (use PNG, JPEG, GIF, or WebP)",
     "removeRecipient": "Remove {{email}}",
     "removeAttachment": "Remove {{name}}",
     "errors": {
@@ -237,7 +251,14 @@
   },
   "attachments": {
     "download": "Download",
-    "view": "View"
+    "view": "View",
+    "viewNamed": "View {{name}}",
+    "print": "Print",
+    "close": "Close",
+    "previewLoading": "Loading preview…",
+    "previewError": "Couldn't load the preview. Try downloading it instead.",
+    "count_one": "{{count}} attachment",
+    "count_other": "{{count}} attachments"
   },
   "settings": {
     "title": "Settings",

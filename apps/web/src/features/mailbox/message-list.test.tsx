@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CustomLabel } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
@@ -61,6 +62,22 @@ const emailLabeled = {
   keywords: { important: true, $seen: true },
   hasAttachment: false,
   size: 120,
+};
+
+const ventasCustomLabel: CustomLabel = { slug: "ventas-q3", name: "Ventas Q3", color: "#9B6BDB" };
+
+const emailCustomLabeled = {
+  id: "e5",
+  threadId: "t5",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Erin", email: "erin@example.com" }],
+  to: [],
+  subject: "Custom labeled email",
+  receivedAt: "2026-07-01T06:00:00.000Z",
+  preview: "preview text five",
+  keywords: { "ventas-q3": true, $seen: true },
+  hasAttachment: false,
+  size: 90,
 };
 
 function stubFetch(page: { total: number; position: number; emails: unknown[] }) {
@@ -212,6 +229,30 @@ describe("MessageList", () => {
     const clearButton = screen.getByRole("button", { name: i18n.t("mail.clearLabel") });
     fireEvent.click(clearButton);
     expect(onClearLabel).toHaveBeenCalled();
+  });
+
+  // Fresh review: custom-label chips in the list were resolving color via the
+  // hash fallback and rendering the raw slug, while the Sidebar/reader showed
+  // the stored color + display name for the same label — the list must match.
+  it("renders a custom label's row chip with its stored color and display name, not the hash fallback / raw slug", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailCustomLabeled] });
+    renderList(vi.fn(), { customLabels: [ventasCustomLabel] });
+
+    const chip = await screen.findByText("Ventas Q3");
+    expect(chip).toHaveStyle({
+      color: labelColor("ventas-q3", [ventasCustomLabel]),
+      background: labelBackground("ventas-q3", [ventasCustomLabel]),
+    });
+    expect(chip).toHaveStyle({ color: "#9B6BDB" });
+    expect(screen.queryByText("ventas-q3")).not.toBeInTheDocument();
+  });
+
+  it("renders the active label header chip with a custom label's stored color and display name", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailCustomLabeled] });
+    renderList(vi.fn(), { title: "Inbox", activeLabel: "ventas-q3", customLabels: [ventasCustomLabel] });
+
+    const chip = await screen.findByText("Ventas Q3");
+    expect(chip).toHaveStyle({ color: "#9B6BDB" });
   });
 
   it("clicking the unstar button on a starred email toggles $flagged to false", async () => {

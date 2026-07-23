@@ -51,6 +51,9 @@ type JmapAttachment = {
   name?: string | null;
   type?: string | null;
   size?: number;
+  // Content-ID (without angle brackets) when this attachment body part is
+  // referenced inline from the HTML body via <img src="cid:...">.
+  cid?: string | null;
 };
 
 type JmapEmailDetail = JmapEmail & {
@@ -147,6 +150,7 @@ function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
       name: a.name ?? null,
       type: a.type ?? "application/octet-stream",
       size: a.size ?? 0,
+      cid: a.cid ?? null,
     }));
 }
 
