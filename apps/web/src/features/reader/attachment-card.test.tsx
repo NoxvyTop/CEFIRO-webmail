@@ -13,6 +13,27 @@ vi.mock("./PdfThumbnail", () => ({
   PdfThumbnail: ({ blobId }: { blobId: string }) => <div data-testid="pdf-thumbnail" data-blob-id={blobId} />,
 }));
 
+// AttachmentViewer itself (the in-app preview overlay) is covered in its own
+// attachment-viewer.test.tsx — here we only care that AttachmentCard *wires*
+// the thumbnail/"Ver" control to open it for the right attachment, so it's
+// swapped for a cheap marker that surfaces what it was opened with.
+vi.mock("./AttachmentViewer", () => ({
+  AttachmentViewer: ({
+    attachment,
+    onClose,
+  }: {
+    attachment: AttachmentMeta | null;
+    onClose: () => void;
+  }) =>
+    attachment ? (
+      <div data-testid="attachment-viewer" data-blob-id={attachment.blobId}>
+        <button type="button" onClick={onClose}>
+          mock-close
+        </button>
+      </div>
+    ) : null,
+}));
+
 function makeAttachment(overrides: Partial<AttachmentMeta> = {}): AttachmentMeta {
   return {
     blobId: "b1",
@@ -95,18 +116,62 @@ describe("AttachmentCard", () => {
     expect(link).toHaveAttribute("href", "/api/mail/blobs/b1?name=sheet.csv&type=text%2Fcsv&dl=1");
   });
 
-  it("shows the view link only for previewable types (image/pdf)", () => {
+  it("shows a 'Ver' control only for previewable types (image/pdf), as a button (not a new-tab link)", () => {
     render(<AttachmentCard attachment={makeAttachment({ name: "report.pdf", type: "application/pdf" })} />);
 
-    const viewLink = screen.getByRole("link", { name: i18n.t("attachments.view") });
-    expect(viewLink).toHaveAttribute("href", "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf");
-    expect(viewLink).toHaveAttribute("target", "_blank");
+    const viewButton = screen.getByRole("button", { name: i18n.t("attachments.view") });
+    expect(viewButton).toHaveAttribute("type", "button");
+    expect(screen.queryByRole("link", { name: i18n.t("attachments.view") })).not.toBeInTheDocument();
   });
 
-  it("hides the view link for a non-previewable type", () => {
+  it("hides the view control for a non-previewable type", () => {
     render(<AttachmentCard attachment={makeAttachment({ name: "sheet.csv", type: "text/csv" })} />);
 
-    expect(screen.queryByRole("link", { name: i18n.t("attachments.view") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: i18n.t("attachments.view") })).not.toBeInTheDocument();
+  });
+
+  it("opens the in-app viewer for the attachment when 'Ver' is clicked", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "report.pdf", type: "application/pdf" })} />);
+
+    expect(screen.queryByTestId("attachment-viewer")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("attachments.view") }));
+
+    expect(screen.getByTestId("attachment-viewer")).toHaveAttribute("data-blob-id", "b1");
+  });
+
+  it("opens the in-app viewer when the thumbnail itself is clicked, for a previewable attachment", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "photo.png", type: "image/png" })} />);
+
+    fireEvent.click(screen.getByTestId("attachment-card-thumbnail"));
+
+    expect(screen.getByTestId("attachment-viewer")).toHaveAttribute("data-blob-id", "b1");
+  });
+
+  it("closes the viewer when the mock viewer's onClose fires", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "photo.png", type: "image/png" })} />);
+
+    fireEvent.click(screen.getByTestId("attachment-card-thumbnail"));
+    expect(screen.getByTestId("attachment-viewer")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "mock-close" }));
+    expect(screen.queryByTestId("attachment-viewer")).not.toBeInTheDocument();
+  });
+
+  it("renders a non-interactive (button-less) thumbnail for a non-previewable type, and never opens the viewer", () => {
+    render(
+      <AttachmentCard
+        attachment={makeAttachment({
+          name: "sheet.xlsx",
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        })}
+      />,
+    );
+
+    const thumbnail = screen.getByTestId("attachment-card-thumbnail");
+    expect(thumbnail.tagName).toBe("DIV");
+
+    fireEvent.click(thumbnail);
+    expect(screen.queryByTestId("attachment-viewer")).not.toBeInTheDocument();
   });
 
   it("falls back to a generic name when the attachment has none", () => {
