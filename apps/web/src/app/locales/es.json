@@ -268,7 +268,8 @@
     "imageAlignCenter": "Centrar imagen",
     "imageAlignRight": "Alinear imagen a la derecha",
     "removeRecipient": "Quitar {{email}}",
-    "removeAttachment": "Quitar {{name}}",
+    "dropHint": "Suelta para adjuntar",
+    "duplicateAttachment": "{{name}} ya fue adjuntado",
     "errors": {
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
@@ -288,6 +289,7 @@
     "download": "Descargar",
     "view": "Ver",
     "viewNamed": "Ver {{name}}",
+    "remove": "Quitar {{name}}",
     "print": "Imprimir",
     "close": "Cerrar",
     "previewLoading": "Cargando vista previa…",

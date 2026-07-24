@@ -199,4 +199,26 @@ describe("AttachmentCard", () => {
     expect(within(thumbnail).queryByRole("img")).not.toBeInTheDocument();
     expect(thumbnail.querySelector("svg")).toBeTruthy();
   });
+
+  describe("onRemove (optional)", () => {
+    it("renders no remove button when onRemove is not provided — unchanged reader behavior", () => {
+      render(<AttachmentCard attachment={makeAttachment({ name: "photo.png" })} />);
+
+      expect(screen.queryByTestId("attachment-card-remove")).not.toBeInTheDocument();
+    });
+
+    it("renders a remove button with a named aria-label and calls onRemove when clicked, when provided", () => {
+      const onRemove = vi.fn();
+      render(
+        <AttachmentCard attachment={makeAttachment({ name: "photo.png" })} onRemove={onRemove} />,
+      );
+
+      const removeButton = screen.getByTestId("attachment-card-remove");
+      expect(removeButton).toHaveAttribute("aria-label", i18n.t("attachments.remove", { name: "photo.png" }));
+
+      fireEvent.click(removeButton);
+
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+  });
 });

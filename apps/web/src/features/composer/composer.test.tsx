@@ -50,6 +50,7 @@ function renderComposer(onClose = vi.fn(), initial: ComposerDraft = baseDraft())
 describe("Composer", () => {
   beforeEach(() => {
     fetchAiDraft.mockReset();
+    uploadAttachment.mockReset();
   });
 
   it("renders a dialog with identities in the From select", async () => {
@@ -189,6 +190,121 @@ describe("Composer", () => {
       });
 
       expect(await screen.findByText(/note\.txt/)).toBeInTheDocument();
+    });
+  });
+
+  describe("attachment cards (#114)", () => {
+    it("renders an uploaded attachment as an AttachmentCard (reused preview) with a working remove button", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "image/png", size: 5 });
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "photo.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(await screen.findAllByTestId("attachment-card-thumbnail")).toHaveLength(1);
+
+      const removeButton = screen.getByRole("button", {
+        name: i18n.t("attachments.remove", { name: "photo.png" }),
+      });
+      fireEvent.click(removeButton);
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId("attachment-card-thumbnail")).toHaveLength(0),
+      );
+    });
+
+    it("renders a pending upload as a lightweight placeholder (no blobId to preview yet)", async () => {
+      uploadAttachment.mockReturnValueOnce(new Promise(() => {})); // never resolves — stays pending
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "uploading.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      expect(await screen.findByText(/uploading\.png/)).toBeInTheDocument();
+      // Pending uploads have no blobId yet, so they must not render the
+      // full preview-capable AttachmentCard structure.
+      expect(screen.queryByTestId("attachment-card-thumbnail")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("duplicate attachment dedup (#114)", () => {
+    it("skips a file that duplicates one already attached (same name+size) and shows a notice", async () => {
+      // The mocked upload response's size must match the real File's byte
+      // size ("hola" = 4 bytes) — dedup compares the incoming File's actual
+      // size against the previously-reported attachment size, exactly as a
+      // real server (which echoes back the size it received) would.
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "text/plain", size: 4 });
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file1 = new File(["hola"], "note.txt", { type: "text/plain" });
+      fireEvent.change(fileInput, { target: { files: [file1] } });
+      // Wait for the upload to actually resolve into a real attachment
+      // (not just for the call count, which is already true synchronously)
+      // — the dedup check on the next addFiles call reads state.attachments,
+      // so it must have committed before firing the duplicate.
+      expect(await screen.findByTestId("attachment-card-thumbnail")).toBeInTheDocument();
+
+      const file2 = new File(["hola"], "note.txt", { type: "text/plain" });
+      fireEvent.change(fileInput, { target: { files: [file2] } });
+
+      expect(uploadAttachment).toHaveBeenCalledTimes(1);
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        i18n.t("composer.duplicateAttachment", { name: "note.txt" }),
+      );
+    });
+  });
+
+  describe("drag and drop attaching (#112)", () => {
+    it("shows the drop hint while dragging files over the composer dialog", async () => {
+      renderComposer();
+      const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      fireEvent.dragOver(dialog, { dataTransfer: { types: ["Files"], files: [] } });
+
+      expect(await screen.findByText(i18n.t("composer.dropHint"))).toBeInTheDocument();
+    });
+
+    it("attaches dropped files via addFiles", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b2", type: "image/png", size: 9 });
+      renderComposer();
+      const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      const file = new File(["hi"], "dropped.png", { type: "image/png" });
+
+      fireEvent.drop(dialog, { dataTransfer: { types: ["Files"], files: [file] } });
+
+      await waitFor(() => expect(uploadAttachment).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText(/dropped\.png/)).toBeInTheDocument();
+    });
+
+    it("hides the drop hint again after the drop completes", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b3", type: "image/png", size: 9 });
+      renderComposer();
+      const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      const file = new File(["hi"], "dropped2.png", { type: "image/png" });
+
+      fireEvent.dragOver(dialog, { dataTransfer: { types: ["Files"], files: [] } });
+      expect(await screen.findByText(i18n.t("composer.dropHint"))).toBeInTheDocument();
+
+      fireEvent.drop(dialog, { dataTransfer: { types: ["Files"], files: [file] } });
+
+      await waitFor(() =>
+        expect(screen.queryByText(i18n.t("composer.dropHint"))).not.toBeInTheDocument(),
+      );
+    });
+
+    it("ignores a non-file drag (dataTransfer.types without Files) — no hint, no preventDefault hijack", async () => {
+      renderComposer();
+      const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      fireEvent.dragOver(dialog, { dataTransfer: { types: ["text/plain"], files: [] } });
+
+      expect(screen.queryByText(i18n.t("composer.dropHint"))).not.toBeInTheDocument();
     });
   });
 
