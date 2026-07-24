@@ -9,12 +9,17 @@ test("Ajustes navigates to /settings and renders its sectioned console inside th
   await expect(page).toHaveURL("/settings");
   await expect(page.locator("header").getByText("CÉFIRO")).toBeVisible();
 
-  // The settings console opens on the Firmas section by default; the section
-  // nav lists all three sections, mirroring the /admin sectioned console.
+  // The settings console opens on the Perfil section by default (added with the
+  // user-profile feature); the section nav lists all sections, mirroring the
+  // /admin sectioned console.
   const nav = page.getByRole("navigation", { name: "Secciones de ajustes" });
-  await expect(nav.getByRole("button", { name: "Firmas" })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("button", { name: "Perfil" })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("button", { name: "Firmas" })).toBeVisible();
   await expect(nav.getByRole("button", { name: "Filtros" })).toBeVisible();
   await expect(nav.getByRole("button", { name: "Ausencia" })).toBeVisible();
+
+  // Switching to Firmas shows the Firmas section.
+  await nav.getByRole("button", { name: "Firmas" }).click();
   await expect(page.getByRole("heading", { name: "Firmas" })).toBeVisible();
 
   // Switching to Filtros hides Firmas and shows the Filtros section.
