@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -97,12 +98,37 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   const applyLabelSlugs = customLabels.map((custom) => custom.slug);
 
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  // GH #93: thread-actions-bar has overflow-x-hidden, and per the CSS spec a
+  // non-"visible" value on one overflow axis forces the other axis to
+  // compute as "auto" too — so overflow-y clips right along with it. That
+  // clipped the apply-menu, which opens below the button. The menu is
+  // rendered in a document.body portal (see below) so it escapes the bar's
+  // overflow instead of trying to fight it. labelButtonRef is the trigger
+  // (used for both the click-outside check and computing the portal's
+  // position); labelMenuRef now refers to the portaled menu element itself
+  // so click-outside can still recognize a click inside it as "inside".
+  const labelButtonRef = useRef<HTMLButtonElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
+  function toggleLabelMenu() {
+    setLabelMenuOpen((open) => {
+      const next = !open;
+      if (next) {
+        const rect = labelButtonRef.current?.getBoundingClientRect();
+        if (rect) setMenuPosition({ top: rect.bottom + 8, left: rect.left });
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!labelMenuOpen) return;
     function handleMouseDown(event: MouseEvent) {
-      if (labelMenuRef.current && !labelMenuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const insideButton = labelButtonRef.current?.contains(target) ?? false;
+      const insideMenu = labelMenuRef.current?.contains(target) ?? false;
+      if (!insideButton && !insideMenu) {
         setLabelMenuOpen(false);
       }
     }
@@ -114,6 +140,22 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     return () => {
       document.removeEventListener("mousedown", handleMouseDown);
       document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [labelMenuOpen]);
+
+  // The portal escapes the action bar's layout, so its fixed position can't
+  // reflow with the trigger on scroll/resize — closing on either is a
+  // deliberate simplification over tracking the button's position live.
+  useEffect(() => {
+    if (!labelMenuOpen) return;
+    function closeOnViewportChange() {
+      setLabelMenuOpen(false);
+    }
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    window.addEventListener("resize", closeOnViewportChange);
+    return () => {
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+      window.removeEventListener("resize", closeOnViewportChange);
     };
   }, [labelMenuOpen]);
 
@@ -290,54 +332,56 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
         >
           {t("composer.forward")}
         </button>
-        <div ref={labelMenuRef} className="relative shrink-0">
-          <button
-            type="button"
-            aria-label={t("mail.labels")}
-            aria-haspopup="menu"
-            aria-expanded={labelMenuOpen}
-            onClick={() => setLabelMenuOpen((open) => !open)}
-            className={actionButtonClass}
+        <button
+          ref={labelButtonRef}
+          type="button"
+          aria-label={t("mail.labels")}
+          aria-haspopup="menu"
+          aria-expanded={labelMenuOpen}
+          onClick={toggleLabelMenu}
+          className={actionButtonClass}
+        >
+          <TagIcon size={15} />
+          {t("mail.labels")}
+        </button>
+        {labelMenuOpen && menuPosition && createPortal(
+          <div
+            ref={labelMenuRef}
+            role="menu"
+            style={{ position: "fixed", top: menuPosition.top, left: menuPosition.left }}
+            className="z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
           >
-            <TagIcon size={15} />
-            {t("mail.labels")}
-          </button>
-          {labelMenuOpen && (
-            <div
-              role="menu"
-              className="absolute left-0 top-[calc(100%+8px)] z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
-            >
-              {applyLabelSlugs.length === 0 ? (
-                <p className="px-3 py-2.5 text-[12.5px] text-muted">{t("mail.noLabelsToApply")}</p>
-              ) : (
-                applyLabelSlugs.map((slug) => {
-                  const checked = Boolean(lastEmail.keywords[slug]);
-                  return (
-                    <button
-                      key={slug}
-                      type="button"
-                      role="menuitemcheckbox"
-                      aria-checked={checked}
-                      onClick={() => keywordMutation.mutate({ email: lastEmail, label: slug, checked: !checked })}
-                      className={`flex h-9 w-full items-center gap-2 px-3 text-left text-sm hover:bg-hover ${
-                        checked ? "bg-sel font-[650]" : "text-ink"
-                      }`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
-                        style={{ background: labelColor(slug, customLabels) }}
-                      />
-                      <span className="min-w-0 flex-1 truncate capitalize">
-                        {labelDisplayName(slug, customLabels)}
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
+            {applyLabelSlugs.length === 0 ? (
+              <p className="px-3 py-2.5 text-[12.5px] text-muted">{t("mail.noLabelsToApply")}</p>
+            ) : (
+              applyLabelSlugs.map((slug) => {
+                const checked = Boolean(lastEmail.keywords[slug]);
+                return (
+                  <button
+                    key={slug}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={checked}
+                    onClick={() => keywordMutation.mutate({ email: lastEmail, label: slug, checked: !checked })}
+                    className={`flex h-9 w-full items-center gap-2 px-3 text-left text-sm hover:bg-hover ${
+                      checked ? "bg-sel font-[650]" : "text-ink"
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                      style={{ background: labelColor(slug, customLabels) }}
+                    />
+                    <span className="min-w-0 flex-1 truncate capitalize">
+                      {labelDisplayName(slug, customLabels)}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>,
+          document.body,
+        )}
         <span className="ml-auto hidden min-w-0 truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">

@@ -47,6 +47,23 @@ function rowClassName(selected: boolean) {
   return [base, highlight].join(" ");
 }
 
+// Base row height (avatar + 3 text lines + vertical padding) — the original
+// flat estimateSize constant, still correct for a row with no label chips.
+const ROW_HEIGHT = 84;
+// GH #87: a row with at least one label chip renders an extra
+// "mt-1 flex gap-1" line below the preview. Without this, every row got the
+// same fixed ROW_HEIGHT box from the virtualizer regardless of content, so a
+// labeled row's chip line overflowed its absolutely-positioned box and bled
+// into the next row's box — which paints later in DOM order, so an opaque
+// selected background on the row below covered the chip. Growing the box for
+// labeled rows keeps their content fully inside their own box, so there's
+// nothing left to overlap.
+const ROW_LABEL_EXTRA_HEIGHT = 26;
+
+function rowHasLabelChip(keywords: Record<string, boolean>): boolean {
+  return userLabels(keywords).length > 0;
+}
+
 export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
@@ -219,7 +236,10 @@ export function MessageList({
   const rowVirtualizer = useVirtualizer({
     count: emails.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 84,
+    estimateSize: (index) => {
+      const email = emails[index];
+      return email && rowHasLabelChip(email.keywords) ? ROW_HEIGHT + ROW_LABEL_EXTRA_HEIGHT : ROW_HEIGHT;
+    },
     overscan: 10,
   });
 

@@ -825,6 +825,71 @@ describe("ThreadView", () => {
         expect(screen.queryByRole("menu")).not.toBeInTheDocument();
       });
     });
+
+    // GH #93: thread-actions-bar has overflow-x-hidden — per the CSS spec, a
+    // non-"visible" value on one overflow axis forces the other axis to
+    // compute as "auto" too, so overflow-y clips right along with it. That
+    // clipped the menu, which opens BELOW the button and needs the bar to
+    // allow vertical overflow it never gets. The fix renders the menu into a
+    // document.body portal so it escapes the bar's overflow entirely.
+    describe("portal rendering (GH #93: overflow-x-hidden on thread-actions-bar was clipping the menu)", () => {
+      it("renders the open menu outside thread-actions-bar, directly under document.body, while role=menu and its checkboxes keep working", async () => {
+        const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+        stubFetch(NO_IDENTITIES, [ventas]);
+        renderThread("t1", "arch1");
+
+        const actionsBar = await screen.findByTestId("thread-actions-bar");
+        fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.labels") }));
+
+        const menu = await screen.findByRole("menu");
+        expect(actionsBar.contains(menu)).toBe(false);
+        expect(menu.parentElement).toBe(document.body);
+
+        // Portaling changes only where the menu lives in the DOM, not its
+        // accessible role/content or the keyword toggle wired to it.
+        expect(within(menu).getByRole("menuitemcheckbox", { name: "Ventas" })).toBeInTheDocument();
+      });
+
+      it("keeps aria-haspopup and aria-expanded on the trigger button even though the menu itself now renders elsewhere", async () => {
+        stubFetch();
+        renderThread("t1", "arch1");
+
+        const actionsBar = await screen.findByTestId("thread-actions-bar");
+        const labelsButton = within(actionsBar).getByRole("button", { name: i18n.t("mail.labels") });
+        expect(labelsButton).toHaveAttribute("aria-haspopup", "menu");
+        expect(labelsButton).toHaveAttribute("aria-expanded", "false");
+
+        fireEvent.click(labelsButton);
+        await screen.findByRole("menu");
+        expect(labelsButton).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("keeps the portaled menu open when mousedown lands on a menu item (click-outside must treat the portal as inside, not just the button)", async () => {
+        const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+        stubFetch(NO_IDENTITIES, [ventas]);
+        renderThread("t1", "arch1");
+
+        fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+        const menu = await screen.findByRole("menu");
+        const ventasItem = within(menu).getByRole("menuitemcheckbox", { name: "Ventas" });
+
+        fireEvent.mouseDown(ventasItem);
+
+        expect(screen.getByRole("menu")).toBeInTheDocument();
+      });
+
+      it("still shows the empty-state hint with no menuitemcheckbox items when portaled, for a fresh user with no custom labels", async () => {
+        stubFetch(); // defaults to customLabels: []
+        renderThread("t1", "arch1");
+
+        fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+        const menu = await screen.findByRole("menu");
+
+        expect(menu.parentElement).toBe(document.body);
+        expect(await within(menu).findByText(i18n.t("mail.noLabelsToApply"))).toBeInTheDocument();
+        expect(within(menu).queryAllByRole("menuitemcheckbox")).toHaveLength(0);
+      });
+    });
   });
 
   // Gated by the instance-level "sent with footer" setting (GitHub #86) — off

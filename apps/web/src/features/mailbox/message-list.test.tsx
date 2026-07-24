@@ -8,6 +8,32 @@ import { ToastProvider } from "../../app/ui/toast";
 import { labelBackground, labelColor } from "../../app/ui/labels";
 import { MessageList } from "./MessageList";
 
+// @tanstack/react-virtual measures the scroll container via
+// getBoundingClientRect, which jsdom always reports as zero-sized — the
+// virtualized branch would then compute an empty visible window and no rows
+// mount. The rest of this file sidesteps that with virtualized={false}, but
+// the GH #87 row-height fix below lives entirely inside the virtualizer's
+// estimateSize/getVirtualItems output, so those specific tests need real
+// rows; force the virtualizer to report every row as visible instead
+// (mirrors draft-click-routing.test.tsx's mock, which forwards estimateSize
+// per-index so a per-row size function is actually exercised).
+vi.mock("@tanstack/react-virtual", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
+  return {
+    ...actual,
+    useVirtualizer: (options: { count: number; estimateSize: (index: number) => number }) => ({
+      getVirtualItems: () =>
+        Array.from({ length: options.count }, (_, index) => ({
+          key: index,
+          index,
+          start: index * options.estimateSize(index),
+          size: options.estimateSize(index),
+        })),
+      getTotalSize: () => options.count * options.estimateSize(0),
+    }),
+  };
+});
+
 const emailUnread = {
   id: "e1",
   threadId: "t1",
@@ -360,6 +386,50 @@ describe("MessageList", () => {
       renderList();
 
       expect(await screen.findByText(i18n.t("mail.yesterday"))).toBeInTheDocument();
+    });
+  });
+
+  // GH #87: a virtualized row is wrapped in an absolutely-positioned box
+  // whose height comes from the virtualizer's estimateSize — previously a
+  // flat constant for every row. A row carrying a label chip renders taller
+  // than that constant, so its content overflowed the box and bled into the
+  // next row's absolutely-positioned box; since that box paints later in DOM
+  // order, an opaque selected background (bg-sel) on the row below covered
+  // the chip. The fix makes estimateSize grow for a labeled row so its box
+  // actually fits the content — no overflow, nothing to paint over.
+  describe("virtualized row sizing (GH #87)", () => {
+    it("gives a virtualized row with a label chip a taller box than a plain row, so its content isn't overlapped by the row below", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailLabeled, emailRead] });
+      renderList(vi.fn(), { virtualized: true });
+
+      const labeledRow = (await screen.findByText("Labeled email")).closest('[role="option"]');
+      const plainRow = (await screen.findByText(i18n.t("mail.noSubject"))).closest('[role="option"]');
+      expect(labeledRow).toBeTruthy();
+      expect(plainRow).toBeTruthy();
+
+      // The row wrapper is the virtualizer's absolutely-positioned box —
+      // it's the direct parent of the row content rendered by renderRow().
+      const labeledWrapper = labeledRow!.parentElement as HTMLElement;
+      const plainWrapper = plainRow!.parentElement as HTMLElement;
+
+      const labeledHeight = parseFloat(labeledWrapper.style.height);
+      const plainHeight = parseFloat(plainWrapper.style.height);
+
+      expect(plainHeight).toBe(84);
+      expect(labeledHeight).toBeGreaterThan(plainHeight);
+    });
+
+    it("gives two plain (label-less) rows the same box height", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      renderList(vi.fn(), { virtualized: true });
+
+      const firstRow = (await screen.findByText("Hello there")).closest('[role="option"]');
+      const secondRow = (await screen.findByText(i18n.t("mail.noSubject"))).closest('[role="option"]');
+
+      const firstHeight = parseFloat((firstRow!.parentElement as HTMLElement).style.height);
+      const secondHeight = parseFloat((secondRow!.parentElement as HTMLElement).style.height);
+
+      expect(firstHeight).toBe(secondHeight);
     });
   });
 });
