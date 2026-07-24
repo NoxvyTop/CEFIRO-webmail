@@ -29,13 +29,35 @@ export function initials(name: string | null, email: string): string {
   return (first + second).toUpperCase();
 }
 
-type AvatarProps = { name: string | null; email: string; size?: number; tone?: "palette" | "accent" };
+type AvatarProps = {
+  name: string | null;
+  email: string;
+  size?: number;
+  tone?: "palette" | "accent";
+  // Uploaded profile photo (data: URL from GET /api/profile). When present
+  // (and non-null), it replaces the initials block entirely; when absent or
+  // null, the existing initials fallback renders unchanged.
+  imageUrl?: string | null;
+};
 
 // "accent" is a distinct visual role from the rotating sender palette: the
 // header's own user avatar (spec: 36px circular, fixed accent background),
 // not another entry in the deterministic per-sender color rotation.
-export function Avatar({ name, email, size = 38, tone = "palette" }: AvatarProps) {
+export function Avatar({ name, email, size = 38, tone = "palette", imageUrl }: AvatarProps) {
   const isAccent = tone === "accent";
+
+  if (imageUrl) {
+    return (
+      <img
+        src={imageUrl}
+        alt=""
+        aria-hidden="true"
+        className="shrink-0 rounded-full object-cover"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+
   return (
     <span
       aria-hidden="true"

@@ -30,6 +30,34 @@ describe("components", () => {
     expect(screen.getByText("CB")).toBeInTheDocument();
   });
 
+  it("renders a photo instead of initials when imageUrl is provided", () => {
+    const { container } = render(
+      <Avatar
+        name="Carla Bosch"
+        email="carla@noxvytop.com"
+        imageUrl="data:image/png;base64,AAAA"
+      />,
+    );
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    expect(screen.queryByText("CB")).not.toBeInTheDocument();
+  });
+
+  it("falls back to initials when imageUrl is null", () => {
+    const { container } = render(
+      <Avatar name="Carla Bosch" email="carla@noxvytop.com" imageUrl={null} />,
+    );
+    expect(screen.getByText("CB")).toBeInTheDocument();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("falls back to initials when imageUrl is absent", () => {
+    const { container } = render(<Avatar name="Carla Bosch" email="carla@noxvytop.com" />);
+    expect(screen.getByText("CB")).toBeInTheDocument();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("renders the logo as decorative svg", () => {
     const { container } = render(<CefiroLogo size={72} />);
     const svg = container.querySelector("svg");

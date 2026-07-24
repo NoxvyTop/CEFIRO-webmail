@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "./i18n";
@@ -57,5 +57,38 @@ describe("App search input focus treatment", () => {
     // not carry the boxed ring (that belongs to the wrapper).
     expect(searchInput).toHaveClass("field-focus-line");
     expect(searchInput).not.toHaveClass("field-focus");
+  });
+});
+
+describe("App header avatar fallback", () => {
+  it("shows initials (no img) in the header when the profile has no photo", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) return new Response(JSON.stringify(user));
+        if (path.includes("/api/profile")) {
+          return new Response(
+            JSON.stringify({ displayName: user.displayName, email: user.email, avatarDataUrl: null }),
+          );
+        }
+        return new Response(JSON.stringify({ status: "ok", checks: {} }));
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter(routes, { initialEntries: ["/"] });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const avatarButton = await screen.findByRole("button", {
+      name: i18n.t("auth.signedInAs", { email: user.email }),
+    });
+    // "Emp" -> single-word initials fallback; no <img> means no avatar photo
+    // was rendered, i.e. the UserMenu/Avatar wiring fell back correctly.
+    expect(within(avatarButton).getByText("E")).toBeInTheDocument();
+    expect(avatarButton.querySelector("img")).toBeNull();
   });
 });

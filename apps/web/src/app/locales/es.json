@@ -288,18 +288,25 @@
   },
   "settings": {
     "title": "Ajustes",
+    "profile": "Perfil",
     "signatures": "Firmas",
     "back": "Volver",
     "nav": {
       "label": "Secciones de ajustes",
+      "profile": "Perfil",
       "signatures": "Firmas",
       "filters": "Filtros",
       "vacation": "Ausencia"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
+    "displayName": "Nombre para mostrar",
+    "photo": "Foto de perfil",
+    "changePhoto": "Cambiar foto",
+    "removePhoto": "Quitar foto",
     "default": "Predeterminada",
     "save": "Guardar",
+    "saved": "Guardado",
     "delete": "Eliminar",
     "edit": "Editar",
     "errors": {
@@ -310,6 +317,8 @@
       "sieve_sync_failed": "Guardado, pero aún no aplicado en el servidor de correo",
       "vacationMessageRequired": "Escribe un mensaje para la respuesta automática",
       "vacationDateOrder": "La fecha de fin no puede ser anterior a la de inicio",
+      "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG o WebP)",
+      "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
       "generic": "Algo salió mal"
     }
   },

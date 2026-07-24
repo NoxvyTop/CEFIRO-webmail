@@ -288,18 +288,25 @@
   },
   "settings": {
     "title": "Settings",
+    "profile": "Profile",
     "signatures": "Signatures",
     "back": "Back",
     "nav": {
       "label": "Settings sections",
+      "profile": "Profile",
       "signatures": "Signatures",
       "filters": "Filters",
       "vacation": "Vacation"
     },
     "newSignature": "New signature",
     "name": "Name",
+    "displayName": "Display name",
+    "photo": "Profile photo",
+    "changePhoto": "Change photo",
+    "removePhoto": "Remove photo",
     "default": "Default",
     "save": "Save",
+    "saved": "Saved",
     "delete": "Delete",
     "edit": "Edit",
     "errors": {
@@ -310,6 +317,8 @@
       "sieve_sync_failed": "Saved, but not applied to the mail server yet",
       "vacationMessageRequired": "Write a message for the automatic reply",
       "vacationDateOrder": "The end date must not be before the start date",
+      "imageInvalidType": "Unsupported image type (use PNG, JPEG, or WebP)",
+      "imageTooLarge": "Image is too large (max 1 MB)",
       "generic": "Something went wrong"
     }
   },

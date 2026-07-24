@@ -2,10 +2,14 @@ import { z } from "zod";
 import {
   filterRuleInputSchema,
   filterRuleSchema,
+  profileViewSchema,
+  updateProfileSchema,
   vacationSettingsInputSchema,
   vacationSettingsSchema,
   type FilterRule,
   type FilterRuleInput,
+  type ProfileView,
+  type UpdateProfileInput,
   type VacationSettings,
   type VacationSettingsInput,
 } from "@webmail/shared";
@@ -78,4 +82,16 @@ export async function updateVacationSettings(
   const res = await fetch("/api/mail/vacation", jsonRequest("PUT", vacationSettingsInputSchema.parse(input)));
   if (!res.ok) return parseError(res);
   return vacationSettingsSchema.parse(await res.json());
+}
+
+export async function fetchProfile(): Promise<ProfileView> {
+  const res = await fetch("/api/profile");
+  if (!res.ok) return parseError(res);
+  return profileViewSchema.parse(await res.json());
+}
+
+export async function updateProfile(input: UpdateProfileInput): Promise<ProfileView> {
+  const res = await fetch("/api/profile", jsonRequest("PATCH", updateProfileSchema.parse(input)));
+  if (!res.ok) return parseError(res);
+  return profileViewSchema.parse(await res.json());
 }

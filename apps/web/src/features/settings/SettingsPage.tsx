@@ -2,12 +2,14 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { FilterSettings } from "./FilterSettings";
+import { ProfileSettings } from "./ProfileSettings";
 import { SignatureSettings } from "./SignatureSettings";
 import { VacationSettings } from "./VacationSettings";
 
-type Section = "signatures" | "filters" | "vacation";
+type Section = "profile" | "signatures" | "filters" | "vacation";
 
 const NAV_ITEMS: { id: Section; labelKey: string }[] = [
+  { id: "profile", labelKey: "settings.nav.profile" },
   { id: "signatures", labelKey: "settings.nav.signatures" },
   { id: "filters", labelKey: "settings.nav.filters" },
   { id: "vacation", labelKey: "settings.nav.vacation" },
@@ -15,7 +17,7 @@ const NAV_ITEMS: { id: Section; labelKey: string }[] = [
 
 export function SettingsPage() {
   const { t } = useTranslation();
-  const [section, setSection] = useState<Section>("signatures");
+  const [section, setSection] = useState<Section>("profile");
 
   return (
     <main role="main" className="mx-auto flex min-h-full max-w-3xl flex-col gap-6 p-6">
@@ -47,6 +49,13 @@ export function SettingsPage() {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col gap-6">
+          {section === "profile" && (
+            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+              <h2 className="text-lg font-medium">{t("settings.profile")}</h2>
+              <ProfileSettings />
+            </section>
+          )}
+
           {section === "signatures" && (
             <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
               <h2 className="text-lg font-medium">{t("settings.signatures")}</h2>

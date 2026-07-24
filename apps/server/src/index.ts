@@ -22,6 +22,7 @@ import { createJmapClient } from "./infra/stalwart/jmap";
 import { createMailRouter } from "./modules/mail/router";
 import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
+import { createProfileRouter } from "./modules/profile/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
 import { createAiRouter } from "./modules/ai/router";
@@ -93,6 +94,7 @@ const app = createApp({
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
+  profileRouter: createProfileRouter({ sessions, users, audit }),
 });
 
 if (process.env.NODE_ENV === "production") {

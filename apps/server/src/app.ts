@@ -18,6 +18,7 @@ export type CreateAppOptions = {
   sieveRouter?: Hono<any>;
   adminRouter?: Hono<any>;
   aiRouter?: Hono<any>;
+  profileRouter?: Hono<any>;
 };
 
 // Default Content-Security-Policy for the self-hosted SPA. There are no
@@ -99,6 +100,7 @@ export function createApp(options: CreateAppOptions = {}) {
   if (options.sieveRouter) app.route("/api/mail", options.sieveRouter as never);
   if (options.adminRouter) app.route("/api/admin", options.adminRouter as never);
   if (options.aiRouter) app.route("/api/mail", options.aiRouter as never);
+  if (options.profileRouter) app.route("/api/profile", options.profileRouter as never);
 
   app.notFound((c) =>
     c.json(

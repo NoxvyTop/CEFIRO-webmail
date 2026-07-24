@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
+import { useProfile } from "../features/settings/useProfile";
 import { CefiroLogo } from "./ui/CefiroLogo";
 import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { isPlainShortcut } from "./ui/shortcuts";
@@ -23,6 +24,7 @@ function currentNotificationPermission(): NotificationPermission | null {
 export function App() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const profile = useProfile();
   const { theme, toggleTheme } = useTheme();
   const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
   const location = useLocation();
@@ -126,6 +128,7 @@ export function App() {
               </button>
               <UserMenu
                 user={user}
+                avatarUrl={profile.data?.avatarDataUrl}
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onLogout={() => void logout()}

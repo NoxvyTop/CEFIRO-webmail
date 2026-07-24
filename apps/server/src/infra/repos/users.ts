@@ -1,3 +1,4 @@
+import type { ProfileView } from "@webmail/shared";
 import type { Db } from "../db/client";
 
 export type UserRole = "employee" | "admin";
@@ -30,6 +31,23 @@ function toRecord(row: UserRow): UserRecord {
     active: row.active,
   };
 }
+
+// ProfileView comes from @webmail/shared (packages/shared/src/api/profile.ts)
+// rather than being redefined here — it's structurally identical to the
+// zod-inferred shared type and apps/server already imports other shared
+// types/schemas elsewhere with no reverse dependency (shared has no
+// dependency on apps/server, so there's no import cycle risk).
+//
+// Kept separate from UserRecord/toRecord: /api/auth/me and other hot paths
+// return UserRecord-shaped payloads and must NOT carry the (potentially
+// large, base64-encoded) avatar. Only the dedicated profile endpoints read
+// this shape.
+
+type ProfileRow = {
+  display_name: string;
+  email: string;
+  avatar_data_url: string | null;
+};
 
 export function createUsersRepo(sql: Db) {
   return {
@@ -90,6 +108,20 @@ export function createUsersRepo(sql: Db) {
         select count(*)::text as count from users where role = 'admin' and active = true
       `;
       return Number(rows[0]!.count);
+    },
+    async setDisplayName(id: string, displayName: string): Promise<void> {
+      await sql`update users set display_name = ${displayName} where id = ${id}`;
+    },
+    async setAvatar(id: string, dataUrl: string | null): Promise<void> {
+      await sql`update users set avatar_data_url = ${dataUrl} where id = ${id}`;
+    },
+    async getProfile(id: string): Promise<ProfileView | null> {
+      const rows = await sql<ProfileRow[]>`
+        select display_name, email, avatar_data_url from users where id = ${id}
+      `;
+      const row = rows[0];
+      if (!row) return null;
+      return { displayName: row.display_name, email: row.email, avatarDataUrl: row.avatar_data_url };
     },
   };
 }
