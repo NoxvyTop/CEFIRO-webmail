@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CustomLabel } from "@webmail/shared";
+import type { CustomLabel, EmailSummary } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
@@ -90,6 +91,37 @@ const emailLabeled = {
   size: 120,
 };
 
+// GH #89: two messages in the same thread ("thread-group"), deliberately
+// listed oldest-first in some tests below to prove the representative is
+// chosen by receivedAt (latest wins), not by array position.
+const threadGroupOlder = {
+  id: "g1",
+  threadId: "thread-group",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Frank", email: "frank@example.com" }],
+  to: [],
+  subject: "Original message",
+  receivedAt: "2026-07-01T05:00:00.000Z",
+  preview: "preview text six",
+  keywords: { $seen: true },
+  hasAttachment: false,
+  size: 80,
+};
+
+const threadGroupNewer = {
+  id: "g2",
+  threadId: "thread-group",
+  mailboxIds: ["mb-inbox"],
+  from: [{ name: "Grace", email: "grace@example.com" }],
+  to: [],
+  subject: "Re: Original message",
+  receivedAt: "2026-07-01T11:00:00.000Z",
+  preview: "preview text seven",
+  keywords: {},
+  hasAttachment: false,
+  size: 95,
+};
+
 const ventasCustomLabel: CustomLabel = { slug: "ventas-q3", name: "Ventas Q3", color: "#9B6BDB" };
 
 const emailCustomLabeled = {
@@ -139,6 +171,49 @@ function renderList(
           archiveMailboxId={null}
           {...overrides}
         />
+      </ToastProvider>
+    </QueryClientProvider>,
+  );
+  return { onSelect };
+}
+
+// Mirrors how MailPage actually wires MessageList: selectedThreadId flows
+// back in from the onSelect callback, so pressing j/k repeatedly advances
+// selection like it would in the real app. The plain renderList() helper
+// above always renders with selectedThreadId=null, which is enough for
+// single-press tests but can't exercise multi-step keyboard navigation.
+function ControlledMessageList({
+  onSelect,
+  overrides = {},
+}: {
+  onSelect: (email: EmailSummary) => void;
+  overrides?: Partial<React.ComponentProps<typeof MessageList>>;
+}) {
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  function handleSelect(email: EmailSummary) {
+    onSelect(email);
+    setSelectedThreadId(email.threadId);
+  }
+  return (
+    <MessageList
+      mailboxId="mb-inbox"
+      query={null}
+      selectedThreadId={selectedThreadId}
+      onSelect={handleSelect}
+      virtualized={false}
+      archiveMailboxId={null}
+      {...overrides}
+    />
+  );
+}
+
+function renderControlledList(overrides: Partial<React.ComponentProps<typeof MessageList>> = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const onSelect = vi.fn();
+  render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>
+        <ControlledMessageList onSelect={onSelect} overrides={overrides} />
       </ToastProvider>
     </QueryClientProvider>,
   );
@@ -430,6 +505,194 @@ describe("MessageList", () => {
       const secondHeight = parseFloat((secondRow!.parentElement as HTMLElement).style.height);
 
       expect(firstHeight).toBe(secondHeight);
+    });
+  });
+
+  // GH #89: the list showed one row per email, so a 5-message thread took up
+  // 5 rows. Group loaded messages by threadId into one row per conversation,
+  // Gmail-style, with a counter badge when a thread has more than one loaded
+  // message.
+  describe("conversation grouping (GH #89)", () => {
+    it("renders one row per thread with a counter, keeping singleton threads as separate rows", async () => {
+      stubFetch({ total: 3, position: 0, emails: [threadGroupNewer, threadGroupOlder, emailRead] });
+      renderList();
+
+      await screen.findByText("Grace");
+      const options = screen.getAllByRole("option");
+      // thread-group (2 loaded messages) + t2 (1 message) = 2 conversation rows.
+      expect(options).toHaveLength(2);
+
+      const counter = screen.getByLabelText(i18n.t("mail.conversationCount", { count: 2 }));
+      expect(counter).toHaveTextContent("2");
+
+      // The singleton thread must not render a counter at all.
+      expect(screen.queryAllByLabelText(/./).filter((el) => el.textContent === "2")).toHaveLength(1);
+    });
+
+    it("shows the latest message's subject and sender as the conversation's representative, regardless of load order", async () => {
+      // Oldest-first on purpose: proves the representative is chosen by
+      // receivedAt, not by first occurrence in the loaded page.
+      stubFetch({ total: 2, position: 0, emails: [threadGroupOlder, threadGroupNewer] });
+      renderList();
+
+      expect(await screen.findByText("Re: Original message")).toBeInTheDocument();
+      expect(screen.getByText("Grace")).toBeInTheDocument();
+      expect(screen.queryByText("Original message")).not.toBeInTheDocument();
+      expect(screen.queryByText("Frank")).not.toBeInTheDocument();
+    });
+
+    it("clicking a conversation row opens that thread via the representative message (existing onSelect contract)", async () => {
+      stubFetch({ total: 2, position: 0, emails: [threadGroupNewer, threadGroupOlder] });
+      const { onSelect } = renderList();
+
+      const row = (await screen.findByText("Re: Original message")).closest('[role="option"]');
+      fireEvent.click(row!);
+
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "g2", threadId: "thread-group" }));
+    });
+
+    it("moves selection by conversation with j, skipping over grouped messages within a thread", async () => {
+      // The thread's second message (g1) is placed directly AFTER the
+      // representative (g2), not last — this is deliberate. Per-email
+      // navigation (the pre-grouping code) finds the FIRST email whose
+      // threadId matches the selection via emails.findIndex, so after
+      // selecting g2 it would resolve currentIndex back to g2's position (0)
+      // every time, advance to g1 (index 1, same thread) on the 2nd press,
+      // and then get stuck re-resolving to index 0 again on the 3rd press —
+      // it can never advance past the group to t2/t3. Grouped navigation
+      // must skip straight from g2 to t2 on the 2nd press. If the duplicate
+      // were placed last instead, both implementations would happen to
+      // produce the same 3-step sequence and this test wouldn't discriminate
+      // between them (that was the original, non-discriminating fixture).
+      stubFetch({
+        total: 4,
+        position: 0,
+        emails: [threadGroupNewer, threadGroupOlder, emailRead, emailStarred],
+      });
+      const { onSelect } = renderControlledList();
+
+      await screen.findByText("Grace");
+
+      fireEvent.keyDown(window, { key: "j" });
+      await vi.waitFor(() => {
+        expect(onSelect).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "g2", threadId: "thread-group" }));
+      });
+
+      // The row directly AFTER the whole 2-message thread — not g1, the
+      // thread's other loaded message.
+      fireEvent.keyDown(window, { key: "j" });
+      await vi.waitFor(() => {
+        expect(onSelect).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "e2", threadId: "t2" }));
+      });
+
+      fireEvent.keyDown(window, { key: "j" });
+      await vi.waitFor(() => {
+        expect(onSelect).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: "e3", threadId: "t3" }));
+      });
+
+      // 4th press: no more conversations — selection should not move again
+      // (and must not somehow loop back into the thread).
+      fireEvent.keyDown(window, { key: "j" });
+      expect(onSelect).toHaveBeenCalledTimes(3);
+    });
+
+    it("shows the unread indicator when any loaded message in the thread is unread, even if the representative is read", async () => {
+      const representativeRead = { ...threadGroupNewer, keywords: { $seen: true } };
+      const olderUnread = { ...threadGroupOlder, keywords: {} };
+      stubFetch({ total: 2, position: 0, emails: [representativeRead, olderUnread] });
+      renderList();
+
+      const sender = await screen.findByText("Grace");
+      expect(sender).toHaveClass("font-bold");
+    });
+
+    // CRITICAL fix: `unread` became a thread-wide aggregate (true if ANY
+    // loaded message in the thread is unread), but opening a conversation
+    // only ever PATCHed the representative. A thread whose non-representative
+    // message was unread (or whose representative was already seen while an
+    // older message wasn't) could never be cleared through the UI — it
+    // stayed bold forever. Opening a conversation must mark ALL of its
+    // loaded messages seen, not just the representative.
+    it("marks ALL loaded unread messages in a thread as seen when the conversation is opened, not just the representative", async () => {
+      const representativeUnread = { ...threadGroupNewer, keywords: {} }; // g2 — unread
+      const olderUnread = { ...threadGroupOlder, keywords: {} }; // g1 — also unread
+      const fetchMock = stubFetch({ total: 2, position: 0, emails: [representativeUnread, olderUnread] });
+      const { onSelect } = renderList();
+
+      const sender = await screen.findByText("Grace");
+      expect(sender).toHaveClass("font-bold");
+
+      fireEvent.click(sender.closest('[role="option"]')!);
+
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "g2", threadId: "thread-group" }));
+
+      await vi.waitFor(() => {
+        const patchedUrls = fetchMock.mock.calls
+          .filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH")
+          .map(([input]) => String(input));
+        expect(patchedUrls).toEqual(
+          expect.arrayContaining(["/api/mail/messages/g2", "/api/mail/messages/g1"]),
+        );
+      });
+
+      const patchBodies = fetchMock.mock.calls
+        .filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH")
+        .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+      for (const body of patchBodies) {
+        expect(body).toEqual({ keywords: { $seen: true } });
+      }
+
+      // The optimistic update must flip the thread's aggregate unread
+      // indicator off once both loaded messages are marked seen.
+      await vi.waitFor(() => {
+        expect(screen.getByText("Grace")).toHaveClass("font-medium");
+      });
+    });
+
+    // WARNING fix: the pagination-trigger effect used to compare against
+    // emails.length, which is wrong once grouping collapses rows — it must
+    // compare against conversations.length instead, or fetchNextPage stops
+    // firing before the visible window reaches the true end of the grouped
+    // list. This test's fixture depends on the mocked useVirtualizer at the
+    // top of this file, which reports every row (0..count-1) as visible.
+    it("triggers fetchNextPage once the grouped rows reach the end of the loaded window (fewer conversations than raw emails)", async () => {
+      // 4 raw emails collapse into 3 conversations (thread-group has 2
+      // loaded messages). Under the mocked virtualizer, lastItem.index is
+      // conversations.length - 1 (2) here. Comparing that against
+      // emails.length - 1 (3) — the pre-fix bug — is never satisfied, so
+      // fetchNextPage would never fire and position=4 would never be
+      // requested.
+      const firstPage = {
+        total: 6,
+        position: 0,
+        emails: [threadGroupNewer, threadGroupOlder, emailRead, emailStarred],
+      };
+      const secondPage = { total: 6, position: 4, emails: [emailLabeled, emailCustomLabeled] };
+
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.includes("/api/mail/messages/") && method === "PATCH") {
+          return new Response(null, { status: 204 });
+        }
+        if (url.includes("/api/mail/messages")) {
+          const position = new URL(url, "http://local").searchParams.get("position");
+          return new Response(JSON.stringify(position === "4" ? secondPage : firstPage));
+        }
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderList(vi.fn(), { virtualized: true });
+
+      await screen.findByText("Grace");
+
+      await vi.waitFor(() => {
+        const positions = fetchMock.mock.calls
+          .filter(([input]) => String(input).includes("/api/mail/messages?"))
+          .map(([input]) => new URL(String(input), "http://local").searchParams.get("position"));
+        expect(positions).toContain("4");
+      });
     });
   });
 });

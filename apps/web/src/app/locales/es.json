@@ -160,6 +160,7 @@
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount": "{{count}} correos",
+    "conversationCount": "{{count}} mensajes",
     "searchPlaceholder": "Buscar en el correo…",
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",

@@ -160,6 +160,7 @@
     "starredView": "Starred",
     "unread": "{{count}} unread",
     "messageCount": "{{count}} messages",
+    "conversationCount": "{{count}} messages",
     "searchPlaceholder": "Search mail…",
     "empty": "No mail here.",
     "noSubject": "(no subject)",
