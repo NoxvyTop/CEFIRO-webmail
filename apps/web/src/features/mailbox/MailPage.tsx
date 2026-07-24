@@ -137,8 +137,37 @@ export function MailPage() {
     return inboxMailboxId;
   }, [mailboxParam, inboxMailboxId]);
 
-  const messageListMailboxId =
-    starredParam ? undefined : (groupParam ? inboxMailboxId : selectedMailboxId) ?? undefined;
+  // GH #106: a label view — no explicit `mailbox` param, not starred, not
+  // grouped — must span every folder instead of silently defaulting to
+  // Inbox. That implicit Inbox default was the root of the
+  // folder-then-label accidental intersection bug: `selectedMailboxId`
+  // itself keeps its Inbox fallback (sidebar highlighting, the group-scoped
+  // query and the "main inbox selected" checks below all still depend on
+  // that default), so this is a separate derivation rather than a change to
+  // `selectedMailboxId`. If `mailbox` IS present in the URL (an explicit
+  // combination, e.g. loaded directly), that explicit choice is respected
+  // and the view stays scoped to it, per design.
+  const labelSpansFolders = Boolean(labelParam) && !mailboxParam && !starredParam && !groupParam;
+
+  const messageListMailboxId = starredParam
+    ? undefined
+    : labelSpansFolders
+      ? undefined
+      : (groupParam ? inboxMailboxId : selectedMailboxId) ?? undefined;
+
+  // GH #106: label views (see `labelSpansFolders` above) exclude Trash so
+  // deleted mail doesn't leak into a label search spanning every folder.
+  // Reuses the same single-value `excludeMailboxId` slot already used to
+  // exclude Archive from the starred view — fetchMessages only accepts one
+  // exclusion today. Follow-up: excluding Spam/Junk too would need
+  // multi-mailbox exclude support (a list-shaped query param on the client
+  // plus matching support in fetchMessages/the server's JMAP filter) — out
+  // of scope for this change, so only Trash is excluded for now.
+  const messageListExcludeMailboxId = starredParam
+    ? archiveMailboxId ?? undefined
+    : labelSpansFolders
+      ? trashMailboxId ?? undefined
+      : undefined;
 
   const messageListTo = starredParam ? undefined : (groupParam ?? undefined);
 
@@ -175,6 +204,10 @@ export function MailPage() {
       next.delete("q");
       next.delete("group");
       next.delete("starred");
+      // GH #106: selecting a folder replaces any active label view — without
+      // this, the message list silently intersected the folder AND the
+      // still-active label instead of just navigating to the folder.
+      next.delete("label");
       return next;
     });
   }
@@ -205,9 +238,18 @@ export function MailPage() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       if (next.get("label") === label) {
+        // Toggle-off: returning to the default view needs nothing extra
+        // cleared here — there is no new selection being made.
         next.delete("label");
       } else {
         next.set("label", label);
+        // GH #106: selecting a label replaces the folder/starred/group view
+        // (Gmail-style navigation) instead of intersecting with it — without
+        // these, the message list silently combined the label with whatever
+        // folder/starred/group was still active.
+        next.delete("mailbox");
+        next.delete("starred");
+        next.delete("group");
       }
       next.delete("thread");
       return next;
@@ -403,7 +445,11 @@ export function MailPage() {
             {t("groups.showInInbox")}
           </label>
         )}
-        {!mailboxesQuery.isError && (starredParam || messageListMailboxId) && (
+        {/* GH #106: a label view spanning folders deliberately leaves
+            messageListMailboxId undefined (see labelSpansFolders above) —
+            without labelSpansFolders in this guard the list never mounted
+            at all for that case. */}
+        {!mailboxesQuery.isError && (starredParam || messageListMailboxId || labelSpansFolders) && (
           <MessageList
             mailboxId={messageListMailboxId}
             hasKeyword={messageListHasKeyword}
@@ -412,7 +458,7 @@ export function MailPage() {
             onSelect={handleSelectMessage}
             to={messageListTo}
             excludeTo={messageListExcludeTo}
-            excludeMailboxId={starredParam ? archiveMailboxId ?? undefined : undefined}
+            excludeMailboxId={messageListExcludeMailboxId}
             title={messageListTitle}
             onLabels={handleLabels}
             activeLabel={labelParam ?? undefined}
