@@ -687,28 +687,33 @@ describe("ThreadView", () => {
   });
 
   describe("label apply menu (mirrors the star toggle, applies/removes a keyword on the last email)", () => {
-    it("opens a menu listing the canonical labels as unchecked checkboxes when none are applied", async () => {
-      stubFetch();
+    // GH #102: the apply menu offers only the user's own custom labels now —
+    // there is no more canonical/seeded registry, so a name the user never
+    // created (e.g. "urgente") must not appear as an option.
+    it("opens a menu listing the user's custom labels as unchecked checkboxes, not a former-canonical name", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const soporte: CustomLabel = { slug: "soporte", name: "Soporte", color: "#2FB8C4" };
+      stubFetch(NO_IDENTITIES, [ventas, soporte]);
       renderThread("t1", "arch1");
 
       const labelsButton = await screen.findByRole("button", { name: i18n.t("mail.labels") });
       fireEvent.click(labelsButton);
 
       const menu = await screen.findByRole("menu");
-      const urgente = within(menu).getByRole("menuitemcheckbox", { name: "urgente" });
-      expect(urgente).toHaveAttribute("aria-checked", "false");
-      expect(within(menu).getByRole("menuitemcheckbox", { name: "producto" })).toBeInTheDocument();
-      expect(within(menu).getByRole("menuitemcheckbox", { name: "Diseño" })).toBeInTheDocument();
-      expect(within(menu).getByRole("menuitemcheckbox", { name: "finanzas" })).toBeInTheDocument();
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      expect(ventasItem).toHaveAttribute("aria-checked", "false");
+      expect(within(menu).getByRole("menuitemcheckbox", { name: "Soporte" })).toBeInTheDocument();
+      expect(within(menu).queryByRole("menuitemcheckbox", { name: "urgente" })).not.toBeInTheDocument();
     });
 
-    it("toggling a canonical label applies the keyword and shows it as a chip next to the subject", async () => {
-      const fetchMock = stubFetch();
+    it("toggling a custom label applies the keyword and shows it as a chip next to the subject", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const fetchMock = stubFetch(NO_IDENTITIES, [ventas]);
       renderThread("t1", "arch1");
 
       fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
       const menu = await screen.findByRole("menu");
-      fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "urgente" }));
+      fireEvent.click(await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" }));
 
       const patchCall = await vi.waitFor(() => {
         const call = fetchMock.mock.calls.find(
@@ -719,15 +724,16 @@ describe("ThreadView", () => {
         return call;
       });
       const [, init] = patchCall as [RequestInfo | URL, RequestInit];
-      expect(JSON.parse(String(init.body))).toEqual({ keywords: { urgente: true } });
+      expect(JSON.parse(String(init.body))).toEqual({ keywords: { ventas: true } });
 
       const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
-      expect(within(heading.parentElement!).getByText("urgente")).toBeInTheDocument();
+      expect(within(heading.parentElement!).getByText("Ventas")).toBeInTheDocument();
     });
 
     it("unchecking an applied label removes the keyword and its chip", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
       const state = structuredClone(thread);
-      state.emails[1]!.keywords = { urgente: true };
+      state.emails[1]!.keywords = { ventas: true };
       vi.stubGlobal(
         "fetch",
         vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -740,7 +746,7 @@ describe("ThreadView", () => {
           }
           if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
           if (url.includes("/api/mail/preferences")) {
-            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [ventas] }));
           }
           if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
           return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
@@ -750,19 +756,30 @@ describe("ThreadView", () => {
 
       const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
       const chipContainer = heading.parentElement!;
-      expect(within(chipContainer).getByText("urgente")).toBeInTheDocument();
+      expect(within(chipContainer).getByText("Ventas")).toBeInTheDocument();
 
       fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
       const menu = await screen.findByRole("menu");
-      const urgenteItem = within(menu).getByRole("menuitemcheckbox", { name: "urgente" });
-      expect(urgenteItem).toHaveAttribute("aria-checked", "true");
-      fireEvent.click(urgenteItem);
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      expect(ventasItem).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(ventasItem);
 
       // The menu stays open (Gmail-style multi-select) and still lists
-      // "urgente" as an option — only the subject-line chip should disappear.
+      // "Ventas" as an option — only the subject-line chip should disappear.
       await waitFor(() => {
-        expect(within(chipContainer).queryByText("urgente")).not.toBeInTheDocument();
+        expect(within(chipContainer).queryByText("Ventas")).not.toBeInTheDocument();
       });
+    });
+
+    it("shows an empty-state hint and no menuitemcheckbox items for a fresh user with no custom labels (GH #102)", async () => {
+      stubFetch(); // defaults to customLabels: []
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+      const menu = await screen.findByRole("menu");
+
+      expect(await within(menu).findByText(i18n.t("mail.noLabelsToApply"))).toBeInTheDocument();
+      expect(within(menu).queryAllByRole("menuitemcheckbox")).toHaveLength(0);
     });
 
     it("lists custom labels with their stored display name and color, and applies them like canonical labels", async () => {

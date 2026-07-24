@@ -1,4 +1,4 @@
-import { useState, type ComponentType, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ComponentType, type FormEvent } from "react";
 import type { CustomLabel, Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon } from "../../app/ui/icons";
@@ -32,8 +32,9 @@ interface SidebarProps {
   // CLARO-10: honest disabled state when there are no identities to compose
   // from (e.g. mailbox not linked yet) instead of a silent no-op click.
   composeDisabled?: boolean;
-  // User-defined labels (stored in userPreferences) — always shown in the
-  // taxonomy alongside the 4 canonical labels, like Gmail's custom labels.
+  // User-defined labels (stored in userPreferences) — GH #102/#83: this is
+  // now the entire taxonomy (no more seeded canonical scaffold), always
+  // shown even with zero matching mail, like Gmail's custom labels.
   customLabels?: CustomLabel[];
   onCreateLabel?: (label: CustomLabel) => void;
   onDeleteLabel?: (slug: string) => void;
@@ -52,6 +53,24 @@ export function Sidebar({
   const [newLabelName, setNewLabelName] = useState("");
   const [newLabelColor, setNewLabelColor] = useState(CUSTOM_LABEL_PALETTE[0]!);
   const [createError, setCreateError] = useState<string | null>(null);
+  // GH #103: a single click on the delete "x" must never delete outright —
+  // it switches that one row into an inline confirm prompt instead. Tracking
+  // just the slug (not a per-row boolean map) keeps at most one row in the
+  // confirming state at a time, which is all the UI needs.
+  const [confirmingDeleteSlug, setConfirmingDeleteSlug] = useState<string | null>(null);
+  const cancelDeleteButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Review finding #2: without this, focus falls back to document.body when
+  // a row swaps into the confirm prompt, stranding a keyboard user who just
+  // activated delete via Enter/Space. Cancelar (not Confirmar) is the
+  // auto-focus target — it's the safe action, so a reflexive second
+  // Enter/Space (muscle memory from the keypress that opened the prompt)
+  // cancels instead of deleting.
+  useEffect(() => {
+    if (confirmingDeleteSlug !== null) {
+      cancelDeleteButtonRef.current?.focus();
+    }
+  }, [confirmingDeleteSlug]);
 
   function openCreateForm() {
     setCreatingLabel(true);
@@ -149,9 +168,10 @@ export function Sidebar({
         </li>
         {afterStarred.map(renderMailboxRow)}
       </ul>
-      {/* CLARO-08/OSCURO-07: always render the ETIQUETAS rail — the 4 canonical
-          spec labels scaffold the taxonomy even on a fresh mailbox with no
-          keywords yet, with any real labels merged in after them. */}
+      {/* GH #102/#83: the ETIQUETAS rail always renders, but no longer
+          scaffolds any canonical labels — it's empty on a fresh mailbox
+          until the user creates their own or real keywords are discovered
+          in loaded mail. */}
       <nav aria-label={t("mail.labels")} className="text-sm">
         <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">
           {t("mail.labels")}
@@ -160,43 +180,79 @@ export function Sidebar({
           {displayLabels.map((label) => {
             const selected = label === selectedLabel;
             // Only labels backed by a stored custom-label definition get a
-            // delete affordance — canonical labels are fixed, and arbitrary
-            // "discovered" keywords (freeform JMAP keywords applied by some
-            // other client, not created through this UI) have no definition
-            // to delete.
+            // delete affordance — a "discovered" keyword (a freeform JMAP
+            // keyword applied by some other client, not created through this
+            // UI) has no stored definition to delete.
             const isCustom = customLabelSlugs.has(label.toLowerCase());
             const customDisplayName = labelDisplayName(label, customLabels);
+            const isConfirmingDelete = isCustom && confirmingDeleteSlug === label;
             return (
-              <li key={label} className="flex items-center gap-1">
-                <button
-                  type="button"
-                  aria-current={selected ? "true" : undefined}
-                  onClick={() => onSelectLabel(label)}
-                  className="flex h-[34px] min-w-0 flex-1 items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
-                    style={{ background: labelColor(label, customLabels) }}
-                  />
-                  {/* labelDisplayName swaps text for the few canonical labels
-                      whose spec spelling needs a diacritic CSS can't add
-                      (e.g. "diseno" -> "Diseño") and for custom labels (their
-                      stored display name); the `label` value itself — used
-                      for onSelectLabel/filtering, dedup and color lookup — is
-                      untouched. `capitalize` handles plain casing for
-                      everything else. */}
-                  <span className="truncate capitalize">{customDisplayName}</span>
-                </button>
-                {isCustom && (
-                  <button
-                    type="button"
-                    aria-label={t("mail.deleteLabel", { name: customDisplayName })}
-                    onClick={() => onDeleteLabel(label)}
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-ink"
-                  >
-                    <CloseIcon size={12} />
-                  </button>
+              <li key={label} className="group flex items-center gap-1">
+                {isConfirmingDelete ? (
+                  // GH #103: replaces the row with an inline confirm instead
+                  // of deleting on the first click — onDeleteLabel only fires
+                  // from the Confirmar button below.
+                  <div className="flex h-[34px] min-w-0 flex-1 items-center gap-1.5 rounded-[9px] px-3 text-[13px]">
+                    <span className="min-w-0 flex-1 truncate text-warn">
+                      {t("mail.confirmDeleteLabel", { name: customDisplayName })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDeleteLabel(label);
+                        setConfirmingDeleteSlug(null);
+                      }}
+                      className="flex h-6 shrink-0 items-center justify-center rounded-md px-2 text-[12px] font-semibold text-warn hover:bg-hover"
+                    >
+                      {t("mail.confirmDelete")}
+                    </button>
+                    <button
+                      type="button"
+                      ref={cancelDeleteButtonRef}
+                      onClick={() => setConfirmingDeleteSlug(null)}
+                      className="flex h-6 shrink-0 items-center justify-center rounded-md px-2 text-[12px] text-muted hover:bg-hover hover:text-ink"
+                    >
+                      {t("mail.cancelNewLabel")}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      aria-current={selected ? "true" : undefined}
+                      onClick={() => onSelectLabel(label)}
+                      className="flex h-[34px] min-w-0 flex-1 items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                        style={{ background: labelColor(label, customLabels) }}
+                      />
+                      {/* labelDisplayName swaps text for the few labels whose
+                          spec spelling needs a diacritic CSS can't add (e.g.
+                          "diseno" -> "Diseño") and for custom labels (their
+                          stored display name); the `label` value itself —
+                          used for onSelectLabel/filtering, dedup and color
+                          lookup — is untouched. `capitalize` handles plain
+                          casing for everything else. */}
+                      <span className="truncate capitalize">{customDisplayName}</span>
+                    </button>
+                    {isCustom && (
+                      // GH #103: hidden by default (opacity-0, not removed —
+                      // it stays in the tab order) and revealed on row
+                      // hover/focus. group-focus-within + the button's own
+                      // focus-visible cover keyboard users tabbing straight
+                      // to it without hovering first.
+                      <button
+                        type="button"
+                        aria-label={t("mail.deleteLabel", { name: customDisplayName })}
+                        onClick={() => setConfirmingDeleteSlug(label)}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-hover hover:text-ink group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                      >
+                        <CloseIcon size={12} />
+                      </button>
+                    )}
+                  </>
                 )}
               </li>
             );

@@ -9,7 +9,7 @@ import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
 import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
-import { CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
+import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -88,11 +88,13 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   });
   const sentWithFooter = instanceQuery.data?.sentWithFooter ?? false;
   const customLabels = preferencesQuery.data?.customLabels ?? [];
-  // Only the registry of "known" labels (canonical + user-defined custom
-  // ones) is toggleable from this menu, mirroring Gmail's "Label as" list —
-  // an arbitrary keyword applied by some other client still shows read-only
-  // as a subject-line chip, it just isn't offered as a checkbox here.
-  const applyLabelSlugs = [...CANONICAL_LABELS, ...customLabels.map((custom) => custom.slug)];
+  // GH #102: only the user's own custom labels are toggleable from this
+  // menu — there is no more canonical/seeded registry, so a fresh user with
+  // no custom labels sees an empty menu (the empty-state hint below) instead
+  // of 4 names they never created. An arbitrary keyword applied by some
+  // other client still shows read-only as a subject-line chip (userLabels()
+  // below), it just isn't offered as a checkbox here.
+  const applyLabelSlugs = customLabels.map((custom) => custom.slug);
 
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
   const labelMenuRef = useRef<HTMLDivElement>(null);
@@ -305,30 +307,34 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
               role="menu"
               className="absolute left-0 top-[calc(100%+8px)] z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
             >
-              {applyLabelSlugs.map((slug) => {
-                const checked = Boolean(lastEmail.keywords[slug]);
-                return (
-                  <button
-                    key={slug}
-                    type="button"
-                    role="menuitemcheckbox"
-                    aria-checked={checked}
-                    onClick={() => keywordMutation.mutate({ email: lastEmail, label: slug, checked: !checked })}
-                    className={`flex h-9 w-full items-center gap-2 px-3 text-left text-sm hover:bg-hover ${
-                      checked ? "bg-sel font-[650]" : "text-ink"
-                    }`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
-                      style={{ background: labelColor(slug, customLabels) }}
-                    />
-                    <span className="min-w-0 flex-1 truncate capitalize">
-                      {labelDisplayName(slug, customLabels)}
-                    </span>
-                  </button>
-                );
-              })}
+              {applyLabelSlugs.length === 0 ? (
+                <p className="px-3 py-2.5 text-[12.5px] text-muted">{t("mail.noLabelsToApply")}</p>
+              ) : (
+                applyLabelSlugs.map((slug) => {
+                  const checked = Boolean(lastEmail.keywords[slug]);
+                  return (
+                    <button
+                      key={slug}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={checked}
+                      onClick={() => keywordMutation.mutate({ email: lastEmail, label: slug, checked: !checked })}
+                      className={`flex h-9 w-full items-center gap-2 px-3 text-left text-sm hover:bg-hover ${
+                        checked ? "bg-sel font-[650]" : "text-ink"
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="h-[9px] w-[9px] shrink-0 rounded-[3px]"
+                        style={{ background: labelColor(slug, customLabels) }}
+                      />
+                      <span className="min-w-0 flex-1 truncate capitalize">
+                        {labelDisplayName(slug, customLabels)}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </div>
           )}
         </div>
