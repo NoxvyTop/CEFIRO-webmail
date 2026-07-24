@@ -2,6 +2,7 @@ import {
   Component,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ChangeEvent,
@@ -11,10 +12,16 @@ import {
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
-import Image from "@tiptap/extension-image";
+import TextAlign from "@tiptap/extension-text-align";
 import { useTranslation } from "react-i18next";
 import { sanitizeEmailHtml } from "../reader/sanitize";
 import { MarkerBlock } from "./markerBlockExtension";
+import {
+  IMAGE_SIZE_PRESETS,
+  ResizableImage,
+  type ImageAlign,
+  type ImageSizePreset,
+} from "./resizableImageExtension";
 
 export interface RichTextEditorProps {
   html: string;
@@ -155,7 +162,17 @@ const MAX_IMAGE_BYTES = 1024 * 1024;
 // or the initial mount of a draft/reply whose bodyHtml already has an
 // inline image) re-parses the whole document through the schema and would
 // strip the image without this.
-const configuredImage = Image.configure({ allowBase64: true });
+//
+// ResizableImage (./resizableImageExtension) extends the base Image node
+// with `width`/`align` attributes rendered as inline style, so a picked
+// size/alignment survives getHTML()/setContent() round-trips exactly like
+// src/alt/title already did.
+const configuredImage = ResizableImage.configure({ allowBase64: true });
+
+// Paragraphs only (headings aren't offered via any toolbar control here, but
+// StarterKit's schema includes the heading node — e.g. pasted content — so
+// this keeps text-align consistent if one shows up).
+const configuredTextAlign = TextAlign.configure({ types: ["heading", "paragraph"] });
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -178,8 +195,14 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   // instead of waiting for the caller to round-trip onChange into a new prop.
   const [isEmpty, setIsEmpty] = useState(() => isHtmlEmpty(html));
 
+  // Bumped on every transaction (content OR selection-only) so the toolbar
+  // re-renders when e.g. the user clicks an image (a pure NodeSelection
+  // change, no document change) — onUpdate alone only fires when the doc
+  // changes, which would leave "is an image selected" / aria-pressed stale.
+  const [, forceToolbarUpdate] = useReducer((count: number) => count + 1, 0);
+
   const editor = useEditor({
-    extensions: [StarterKit, configuredLink, configuredImage, MarkerBlock],
+    extensions: [StarterKit, configuredLink, configuredImage, configuredTextAlign, MarkerBlock],
     content: html,
     immediatelyRender: false,
     editorProps: {
@@ -194,6 +217,9 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
       onChange(current.getHTML());
       setIsEmpty(current.isEmpty);
     },
+    onTransaction: () => {
+      forceToolbarUpdate();
+    },
   });
 
   useEffect(() => {
@@ -205,6 +231,23 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
   }, [editor, html]);
 
   if (!editor) return null;
+
+  const isImageSelected = editor.isActive("image");
+  const selectedImageAttrs = isImageSelected
+    ? (editor.getAttributes("image") as { width?: string | null; align?: ImageAlign | null })
+    : null;
+
+  function setImageSize(preset: ImageSizePreset) {
+    editor?.chain().focus().updateAttributes("image", { width: IMAGE_SIZE_PRESETS[preset] }).run();
+  }
+
+  function setImageAlign(align: ImageAlign) {
+    editor?.chain().focus().updateAttributes("image", { align }).run();
+  }
+
+  function setParagraphAlign(align: "left" | "center" | "right") {
+    editor?.chain().focus().setTextAlign(align).run();
+  }
 
   function applyLink() {
     if (!editor) return;
@@ -285,6 +328,35 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
         >
           •
         </button>
+        <div role="group" className="flex items-center gap-1 border-l border-line pl-1.5 ml-0.5">
+          <button
+            type="button"
+            aria-label={t("composer.textAlignLeft")}
+            aria-pressed={editor.isActive({ textAlign: "left" })}
+            onClick={() => setParagraphAlign("left")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel"
+          >
+            L
+          </button>
+          <button
+            type="button"
+            aria-label={t("composer.textAlignCenter")}
+            aria-pressed={editor.isActive({ textAlign: "center" })}
+            onClick={() => setParagraphAlign("center")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel"
+          >
+            C
+          </button>
+          <button
+            type="button"
+            aria-label={t("composer.textAlignRight")}
+            aria-pressed={editor.isActive({ textAlign: "right" })}
+            onClick={() => setParagraphAlign("right")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel"
+          >
+            R
+          </button>
+        </div>
         <button
           type="button"
           aria-label={t("composer.link")}
@@ -327,6 +399,74 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
         >
           {t("composer.insertImage")}
         </button>
+        {/* Only act on the currently selected image (disabled otherwise) —
+            these apply updateAttributes('image', ...) to whatever image node
+            holds the selection, so they must not silently no-op or affect an
+            unintended image when nothing is selected. */}
+        <div role="group" className="flex items-center gap-1 border-l border-line pl-1.5 ml-0.5">
+          <button
+            type="button"
+            aria-label={t("composer.imageSizeSmall")}
+            aria-pressed={selectedImageAttrs?.width === IMAGE_SIZE_PRESETS.small}
+            disabled={!isImageSelected}
+            onClick={() => setImageSize("small")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+          >
+            S
+          </button>
+          <button
+            type="button"
+            aria-label={t("composer.imageSizeMedium")}
+            aria-pressed={selectedImageAttrs?.width === IMAGE_SIZE_PRESETS.medium}
+            disabled={!isImageSelected}
+            onClick={() => setImageSize("medium")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+          >
+            M
+          </button>
+          <button
+            type="button"
+            aria-label={t("composer.imageSizeLarge")}
+            aria-pressed={selectedImageAttrs?.width === IMAGE_SIZE_PRESETS.large}
+            disabled={!isImageSelected}
+            onClick={() => setImageSize("large")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+          >
+            L
+          </button>
+        </div>
+        <div role="group" className="flex items-center gap-1 border-l border-line pl-1.5 ml-0.5">
+          <button
+            type="button"
+            aria-label={t("composer.imageAlignLeft")}
+            aria-pressed={selectedImageAttrs?.align === "left"}
+            disabled={!isImageSelected}
+            onClick={() => setImageAlign("left")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+          >
+            L
+          </button>
+          <button
+            type="button"
+            aria-label={t("composer.imageAlignCenter")}
+            aria-pressed={selectedImageAttrs?.align === "center"}
+            disabled={!isImageSelected}
+            onClick={() => setImageAlign("center")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+          >
+            C
+          </button>
+          <button
+            type="button"
+            aria-label={t("composer.imageAlignRight")}
+            aria-pressed={selectedImageAttrs?.align === "right"}
+            disabled={!isImageSelected}
+            onClick={() => setImageAlign("right")}
+            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+          >
+            R
+          </button>
+        </div>
         {imageError && <p className="text-xs text-warn">{imageError}</p>}
       </div>
       <div className="relative">
