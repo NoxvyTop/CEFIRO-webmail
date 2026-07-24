@@ -9,6 +9,7 @@ import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
+import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
@@ -291,6 +292,20 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
       <p role="alert" className="p-4 text-sm text-warn">
         {t(mailErrorKey(threadQuery.error))}
       </p>
+    );
+  }
+
+  // GH #94: branded loading state, mounted on top of the thread query's
+  // already-existing pending state — no data-flow change, this only decides
+  // what renders while `threadQuery` has no data yet. Once the query settles
+  // (success or error) without ever having produced a `lastEmail` — e.g. a
+  // thread that genuinely has no messages — the reader stays blank, same as
+  // before this change.
+  if (!lastEmail && threadQuery.isLoading) {
+    return (
+      <div data-testid="thread-loading" className="flex h-full items-center justify-center">
+        <CefiroLoader size={56} label />
+      </div>
     );
   }
 

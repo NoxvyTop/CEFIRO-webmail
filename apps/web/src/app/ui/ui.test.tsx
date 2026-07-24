@@ -64,4 +64,17 @@ describe("components", () => {
     expect(svg).toHaveAttribute("aria-hidden", "true");
     expect(svg).toHaveAttribute("width", "72");
   });
+
+  it("keeps the ambient 28s ring spin by default, unaffected by loading-indicator usage (GH #94)", () => {
+    const { container } = render(<CefiroLogo size={40} />);
+    const spinningGroup = container.querySelector("g");
+    expect(spinningGroup?.getAttribute("style")).toContain("28s");
+  });
+
+  it("accepts a spinSeconds override so a faster loading-pace spin can reuse the same mark (GH #94)", () => {
+    const { container } = render(<CefiroLogo size={40} spinSeconds={1.2} />);
+    const spinningGroup = container.querySelector("g");
+    expect(spinningGroup?.getAttribute("style")).toContain("1.2s");
+    expect(spinningGroup?.getAttribute("style")).not.toContain("28s");
+  });
 });

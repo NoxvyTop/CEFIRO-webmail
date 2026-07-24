@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
+import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import {
   CloseIcon,
   FileArchiveIcon,
@@ -133,6 +134,12 @@ export function AttachmentCard({ attachment, onRemove }: AttachmentCardProps) {
           blobId={attachment.blobId}
           name={name}
           type={attachment.type}
+          // GH #94: a slow-rendering PDF thumbnail shows the branded Céfiro
+          // loader (compact, no label — this card is small) while pdf.js is
+          // still working. A PERMANENTLY failed PDF instead keeps the plain
+          // static file icon (fallback, the error state) — never the
+          // animated loader, so a failed PDF doesn't spin forever.
+          loadingFallback={<CefiroLoader size={20} />}
           fallback={<Icon size={32} />}
         />
       )}

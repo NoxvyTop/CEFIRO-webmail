@@ -1073,6 +1073,53 @@ describe("ThreadView", () => {
     });
   });
 
+  // GH #94: branded (Céfiro logo) loading indicator mounted ON TOP of the
+  // thread query's already-existing pending state — before this change the
+  // reader pane just rendered blank (`return null`) while the thread loaded.
+  describe("loading state (branded Céfiro loader, GH #94)", () => {
+    it("shows the CefiroLoader, centered in the reader pane, while the thread query is still loading", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+      renderThread();
+
+      const loading = await screen.findByTestId("thread-loading");
+      const status = within(loading).getByRole("status");
+      expect(status).toHaveAccessibleName(i18n.t("mail.loading"));
+      expect(within(loading).getByText(i18n.t("mail.loading"))).toBeInTheDocument();
+    });
+
+    it("hides the loader once the thread data has arrived", async () => {
+      stubFetch();
+      renderThread();
+
+      await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      // Scoped to the ThreadView-level loader specifically (not just any
+      // role="status" in the tree) — the loaded thread's attachment renders
+      // its own compact CefiroLoader as PdfThumbnail's fallback, which stays
+      // visible here since pdf.js never actually resolves in this test.
+      expect(screen.queryByTestId("thread-loading")).not.toBeInTheDocument();
+    });
+
+    it("does not show the loader once the thread query has errored (keeps the existing alert branch)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) {
+            return new Response(
+              JSON.stringify({ code: "mail_not_configured", message: "x", traceId: "t1" }),
+              { status: 503 },
+            );
+          }
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      await screen.findByRole("alert");
+      expect(screen.queryByTestId("thread-loading")).not.toBeInTheDocument();
+    });
+  });
+
   // GH #92: the last message gets a subtle visual highlight — a real border
   // on an elevated bg-panel card with shadow-card — so it stands out from
   // earlier (or collapsed) messages above it.

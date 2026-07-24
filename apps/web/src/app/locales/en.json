@@ -165,6 +165,7 @@
     "empty": "No mail here.",
     "noSubject": "(no subject)",
     "selectMessage": "Select an email",
+    "loading": "Loading…",
     "loadImages": "Load images",
     "emailContent": "Email content",
     "emptyBody": "(no content)",

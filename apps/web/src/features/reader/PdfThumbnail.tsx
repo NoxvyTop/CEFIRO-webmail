@@ -15,11 +15,25 @@ interface PdfThumbnailProps {
   name: string;
   type: string;
   /**
-   * Rendered while the PDF is loading, and again if anything along the way
-   * fails — this component only ever shows the real rendered thumbnail or
-   * this fallback, never a broken image.
+   * Rendered if the PDF permanently fails to load or render — network
+   * failure, corrupt/encrypted PDF, no canvas support, etc. This component
+   * only ever shows the real rendered thumbnail, `loadingFallback`, or this
+   * error fallback, never a broken image.
+   *
+   * Also used while loading when `loadingFallback` is omitted, matching this
+   * component's original (pre GH #94) behavior of a single placeholder
+   * throughout.
    */
   fallback: ReactNode;
+  /**
+   * Rendered while the PDF is actively loading (fetching/parsing/rendering),
+   * before it has either succeeded or permanently failed. GH #94: kept
+   * distinct from `fallback` (the error state) so a caller can point this at
+   * an animated "loading" indicator without that indicator spinning forever
+   * on a PDF that has actually failed — this component already tracks that
+   * distinction internally, this prop just exposes it.
+   */
+  loadingFallback?: ReactNode;
 }
 
 function blobFetchUrl(blobId: string, name: string, type: string): string {
@@ -55,14 +69,19 @@ const MAX_HEIGHT = 160;
  * component unmounts or the attachment changes before rendering gets that
  * far.
  */
-export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps) {
+export function PdfThumbnail({ blobId, name, type, fallback, loadingFallback }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const taskRef = useRef<PDFDocumentLoadingTask | null>(null);
-  const [ready, setReady] = useState(false);
+  // GH #94: was a plain `ready` boolean — widened to a 3-state status so the
+  // render below can tell "still loading" apart from "permanently failed"
+  // (both used to collapse into the same `!ready` fallback). The underlying
+  // fetch/render/cleanup pipeline below is unchanged; only the state it sets
+  // gained a name for its failure case instead of folding back to false.
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     let isCurrent = true;
-    setReady(false);
+    setStatus("loading");
     taskRef.current = null;
 
     async function renderThumbnail() {
@@ -97,7 +116,7 @@ export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps
 
         await page.render({ canvas, viewport }).promise;
         if (!isCurrent) return;
-        setReady(true);
+        setStatus("ready");
 
         // The rendered bitmap is all this component ever needed — release
         // the document (and its worker-side resources) right away instead
@@ -106,9 +125,10 @@ export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps
         await loadingTask.destroy();
       } catch {
         // Network failure, corrupt/encrypted PDF, no canvas support,
-        // whatever — stay on the fallback icon rather than ever showing a
-        // broken preview.
-        if (isCurrent) setReady(false);
+        // whatever — this is a permanent failure for this attachment (no
+        // further state change coming), so it renders the error fallback,
+        // never the loading one and never a broken image.
+        if (isCurrent) setStatus("error");
       }
     }
 
@@ -123,13 +143,18 @@ export function PdfThumbnail({ blobId, name, type, fallback }: PdfThumbnailProps
     };
   }, [blobId, name, type]);
 
+  // Falls back to `fallback` while loading too when `loadingFallback` isn't
+  // given — matches this component's original single-placeholder behavior
+  // for callers that don't need the two states told apart.
+  const pendingNode = status === "loading" ? (loadingFallback ?? fallback) : fallback;
+
   return (
     <div className="relative flex h-full w-full items-center justify-center">
-      {!ready && fallback}
+      {status !== "ready" && pendingNode}
       <canvas
         ref={canvasRef}
         aria-hidden="true"
-        className={ready ? "max-h-full max-w-full object-contain" : "hidden"}
+        className={status === "ready" ? "max-h-full max-w-full object-contain" : "hidden"}
       />
     </div>
   );

@@ -165,6 +165,7 @@
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un correo",
+    "loading": "Cargando…",
     "loadImages": "Cargar imágenes",
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
