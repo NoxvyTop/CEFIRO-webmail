@@ -213,6 +213,9 @@
     "toMeAndTeam": "para mí y el equipo",
     "sentTo": "Para:",
     "yesterday": "Ayer",
+    "expandMessage": "Mostrar mensaje completo de {{sender}}",
+    "showQuotedContent": "Mostrar contenido citado",
+    "hideQuotedContent": "Ocultar contenido citado",
     "folders": {
       "inbox": "Recibidos",
       "sent": "Enviados",

@@ -949,4 +949,154 @@ describe("ThreadView", () => {
       expect(screen.queryByTestId("sent-with-footer")).not.toBeInTheDocument();
     });
   });
+
+  // GH #90: opening a thread used to show every message fully expanded and
+  // stacked. Previous, already-read messages now collapse into a one-line
+  // stub; the last message and any still-unread message stay expanded.
+  describe("message collapse (GH #90)", () => {
+    function threeMessageThread(): ThreadDetail {
+      return {
+        id: "t2",
+        emails: [
+          {
+            id: "m1",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Kickoff",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Let's get started",
+            // Read, not the last message — collapses into a stub.
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 100,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Let's get started with the quarterly plan and align on next steps together.",
+            attachments: [],
+          },
+          {
+            id: "m2",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Alice", email: "alice@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T10:00:00.000Z",
+            preview: "Sounds good",
+            // Unread ($seen absent), not the last message — stays expanded.
+            keywords: {},
+            hasAttachment: false,
+            size: 80,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Sounds good, I am unread still.",
+            attachments: [],
+          },
+          {
+            id: "m3",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T11:00:00.000Z",
+            preview: "Final message",
+            // Read, but IS the last message — always stays expanded.
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 60,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This is the last message in the thread.",
+            attachments: [],
+          },
+        ],
+      };
+    }
+
+    function stubThreeMessageThread() {
+      const state = threeMessageThread();
+      return vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("collapses a read, non-last message into a stub — its EmailBody is not rendered while collapsed", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      const stub = await screen.findByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+      expect(within(stub).getByText(/Let's get started/)).toBeInTheDocument();
+
+      // The collapsed message's own full body text is not in the document.
+      expect(
+        screen.queryByText("Let's get started with the quarterly plan and align on next steps together."),
+      ).not.toBeInTheDocument();
+    });
+
+    it("keeps the last message and an unread non-last message expanded by default", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      // m2 is unread and not last — expanded by default.
+      expect(await screen.findByText("Sounds good, I am unread still.")).toBeInTheDocument();
+      // m3 is the last message — always expanded, regardless of $seen.
+      expect(await screen.findByText("This is the last message in the thread.")).toBeInTheDocument();
+    });
+
+    it("expands a collapsed message's full body when its stub is clicked", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      const stub = await screen.findByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+      fireEvent.click(stub);
+
+      expect(
+        await screen.findByText("Let's get started with the quarterly plan and align on next steps together."),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // GH #92: the last message gets a subtle visual highlight — a real border
+  // on an elevated bg-panel card with shadow-card — so it stands out from
+  // earlier (or collapsed) messages above it.
+  describe("last-message highlight (GH #92)", () => {
+    it("gives the last message's container a border + panel + shadow-card treatment", async () => {
+      stubFetch();
+      renderThread();
+
+      const lastBody = await screen.findByText("Thanks, looks good!");
+      const article = lastBody.closest("article");
+      expect(article).not.toBeNull();
+      expect(article?.className).toMatch(/\bshadow-card\b/);
+      expect(article?.className).toMatch(/\bbg-panel\b/);
+      expect(article?.className).toMatch(/\bborder\b/);
+    });
+
+    it("does not apply the highlight treatment to an earlier (non-last) message", async () => {
+      stubFetch();
+      renderThread();
+
+      const attachmentText = await screen.findByText(/report\.pdf/);
+      const article = attachmentText.closest("article");
+      expect(article).not.toBeNull();
+      expect(article?.className).not.toMatch(/shadow-card/);
+    });
+  });
 });

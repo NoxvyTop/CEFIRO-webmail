@@ -213,6 +213,9 @@
     "toMeAndTeam": "me and the team",
     "sentTo": "To:",
     "yesterday": "Yesterday",
+    "expandMessage": "Expand message from {{sender}}",
+    "showQuotedContent": "Show quoted content",
+    "hideQuotedContent": "Hide quoted content",
     "folders": {
       "inbox": "Inbox",
       "sent": "Sent",

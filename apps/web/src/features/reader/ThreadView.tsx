@@ -30,6 +30,17 @@ function addressLabel(address: EmailAddress | undefined) {
   return address.name || address.email;
 }
 
+// GH #90: the one-line stub shown for a collapsed (previous, already-read)
+// message. bodyText is the primary source per the spec — falls back to the
+// server-provided `preview` field (used elsewhere for the same purpose, see
+// MessageList's conversation rows) for HTML-only messages that carry no
+// bodyText at all, so a collapsed stub is never left blank.
+function bodySnippet(email: EmailDetail, maxLength = 80): string {
+  const source = (email.bodyText ?? email.preview ?? "").replace(/\s+/g, " ").trim();
+  if (source.length <= maxLength) return source;
+  return `${source.slice(0, maxLength).trimEnd()}…`;
+}
+
 // Gmail shows "Reply all" when there is at least one other recipient besides
 // the account itself and the original sender — plain reply already goes to
 // the sender, so reply-all is only meaningful once it would add someone.
@@ -240,6 +251,41 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastEmail]);
 
+  // GH #90: previous, already-read messages collapse into one-line stubs;
+  // the last message and any still-unread message stay expanded. This is a
+  // one-time snapshot taken when the thread's messages first load — a Set
+  // of expandable ids, grown only by the user clicking a stub open. It's
+  // deliberately NOT recomputed on every refetch (star/label/archive
+  // mutations all invalidate and refetch this same thread query): once the
+  // user has opened a stub, a later refetch must not re-collapse it. The
+  // ref guards that — it only (re)seeds the set the first time a given
+  // threadId's data arrives, so switching to a different thread does get a
+  // fresh snapshot.
+  const initializedThreadIdRef = useRef<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const currentEmails = threadQuery.data?.emails;
+    if (!currentEmails || currentEmails.length === 0) return;
+    if (initializedThreadIdRef.current === threadId) return;
+
+    const last = currentEmails[currentEmails.length - 1];
+    const initial = new Set<string>();
+    for (const email of currentEmails) {
+      if (email.id === last?.id || !email.keywords.$seen) initial.add(email.id);
+    }
+    setExpandedIds(initial);
+    initializedThreadIdRef.current = threadId;
+  }, [threadQuery.data, threadId]);
+
+  function expandMessage(emailId: string) {
+    setExpandedIds((previous) => {
+      const next = new Set(previous);
+      next.add(emailId);
+      return next;
+    });
+  }
+
   if (threadQuery.isError) {
     return (
       <p role="alert" className="p-4 text-sm text-warn">
@@ -401,8 +447,38 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
             ))}
           </div>
           {emails.map((email) => {
-            const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             const sender = email.from[0];
+            const isLast = email.id === lastEmail.id;
+            // GH #90: previous, already-read messages collapse into a
+            // one-line stub. A single-message thread is always fully
+            // expanded — there's nothing to collapse "away from".
+            const isExpanded = emails.length === 1 || isLast || expandedIds.has(email.id);
+            const dateLabel = formatRelativeTime(email.receivedAt, {
+              yesterdayLabel: t("mail.yesterday"),
+              locale: i18n.language,
+            });
+
+            if (!isExpanded) {
+              return (
+                <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
+                  <button
+                    type="button"
+                    onClick={() => expandMessage(email.id)}
+                    aria-label={t("mail.expandMessage", { sender: addressLabel(sender) })}
+                    className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition hover:bg-hover"
+                  >
+                    <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={28} />
+                    <span className="min-w-0 flex-1 truncate text-[13.5px]">
+                      <span className="font-semibold text-ink">{addressLabel(sender)}</span>
+                      <span className="text-muted"> — {bodySnippet(email)}</span>
+                    </span>
+                    <span className="shrink-0 text-[12px] text-muted">{dateLabel}</span>
+                  </button>
+                </article>
+              );
+            }
+
+            const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             // A message counts as "sent" when its `from` matches one of the
             // account's own identities — this stays correct no matter which
             // mailbox/folder the thread is currently being viewed from.
@@ -422,7 +498,18 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
             );
 
             return (
-              <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
+              <article
+                key={email.id}
+                // GH #92: the last (active) message gets a subtle elevated-card
+                // treatment — a real border, the panel surface, and shadow-card
+                // — so it visually stands out from the collapsed stubs / earlier
+                // messages above it, in both the light and night themes.
+                className={
+                  isLast
+                    ? "mt-6 rounded-[14px] border border-line bg-panel p-5 shadow-card"
+                    : "mt-6 border-b border-line pb-6"
+                }
+              >
                 <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
                   <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
                   <div className="min-w-0 flex-1">
@@ -433,11 +520,9 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                       </div>
                     )}
                   </div>
-                  <span className="shrink-0 text-[12.5px] text-muted">
-                    {formatRelativeTime(email.receivedAt, { yesterdayLabel: t("mail.yesterday"), locale: i18n.language })}
-                  </span>
+                  <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
                 </div>
-                {email.id === lastEmail.id && (
+                {isLast && (
                   <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
                 )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
@@ -455,7 +540,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                     </div>
                   </div>
                 )}
-                {email.id === lastEmail.id && (
+                {isLast && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>
