@@ -290,6 +290,12 @@
     "title": "Settings",
     "signatures": "Signatures",
     "back": "Back",
+    "nav": {
+      "label": "Settings sections",
+      "signatures": "Signatures",
+      "filters": "Filters",
+      "vacation": "Vacation"
+    },
     "newSignature": "New signature",
     "name": "Name",
     "default": "Default",

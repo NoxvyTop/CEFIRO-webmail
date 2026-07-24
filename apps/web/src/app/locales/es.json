@@ -290,6 +290,12 @@
     "title": "Ajustes",
     "signatures": "Firmas",
     "back": "Volver",
+    "nav": {
+      "label": "Secciones de ajustes",
+      "signatures": "Firmas",
+      "filters": "Filtros",
+      "vacation": "Ausencia"
+    },
     "newSignature": "Nueva firma",
     "name": "Nombre",
     "default": "Predeterminada",

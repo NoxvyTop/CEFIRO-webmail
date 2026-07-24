@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("Ajustes navigates to /settings and renders its sections inside the shell", async ({ page }) => {
+test("Ajustes navigates to /settings and renders its sectioned console inside the shell", async ({ page }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: /Sesión iniciada como/ }).click();
@@ -8,9 +8,24 @@ test("Ajustes navigates to /settings and renders its sections inside the shell",
 
   await expect(page).toHaveURL("/settings");
   await expect(page.locator("header").getByText("CÉFIRO")).toBeVisible();
+
+  // The settings console opens on the Firmas section by default; the section
+  // nav lists all three sections, mirroring the /admin sectioned console.
+  const nav = page.getByRole("navigation", { name: "Secciones de ajustes" });
+  await expect(nav.getByRole("button", { name: "Firmas" })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("button", { name: "Filtros" })).toBeVisible();
+  await expect(nav.getByRole("button", { name: "Ausencia" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Firmas" })).toBeVisible();
+
+  // Switching to Filtros hides Firmas and shows the Filtros section.
+  await nav.getByRole("button", { name: "Filtros" }).click();
   await expect(page.getByRole("heading", { name: "Filtros" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Firmas" })).not.toBeVisible();
+
+  // Switching to Ausencia hides Filtros and shows the automatic-reply section.
+  await nav.getByRole("button", { name: "Ausencia" }).click();
   await expect(page.getByRole("heading", { name: "Respuestas automáticas" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Filtros" })).not.toBeVisible();
 });
 
 test("Administración navigates to /admin and renders the users table inside the shell", async ({ page }) => {
