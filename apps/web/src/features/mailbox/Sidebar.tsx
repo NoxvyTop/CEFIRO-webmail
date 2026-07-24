@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, type ComponentType, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import type { CustomLabel, Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
-import {
-  CUSTOM_LABEL_PALETTE, isLabelNameTaken, labelColor, labelDisplayName, mergeLabels, slugifyLabelName,
-} from "../../app/ui/labels";
+import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
+import { NewLabelModal } from "./NewLabelModal";
 
 // Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
 // four primary rows carry an icon. Secondary folders (trash/junk/drafts)
@@ -49,10 +48,9 @@ export function Sidebar({
   const displayLabels = mergeLabels(labels, customLabels.map((custom) => custom.slug));
   const customLabelSlugs = new Set(customLabels.map((custom) => custom.slug.toLowerCase()));
 
+  // GH #109: "Nueva etiqueta" opens a centered modal (NewLabelModal) instead
+  // of an inline form — this flag just toggles the modal's mount state.
   const [creatingLabel, setCreatingLabel] = useState(false);
-  const [newLabelName, setNewLabelName] = useState("");
-  const [newLabelColor, setNewLabelColor] = useState(CUSTOM_LABEL_PALETTE[0]!);
-  const [createError, setCreateError] = useState<string | null>(null);
   // GH #103: a single click on the delete "x" must never delete outright —
   // it switches that one row into an inline confirm prompt instead. Tracking
   // just the slug (not a per-row boolean map) keeps at most one row in the
@@ -71,34 +69,6 @@ export function Sidebar({
       cancelDeleteButtonRef.current?.focus();
     }
   }, [confirmingDeleteSlug]);
-
-  function openCreateForm() {
-    setCreatingLabel(true);
-    setNewLabelName("");
-    setNewLabelColor(CUSTOM_LABEL_PALETTE[0]!);
-    setCreateError(null);
-  }
-
-  function closeCreateForm() {
-    setCreatingLabel(false);
-    setCreateError(null);
-  }
-
-  function handleCreateSubmit(event: FormEvent) {
-    event.preventDefault();
-    const name = newLabelName.trim();
-    const slug = slugifyLabelName(name);
-    if (slug.length === 0) {
-      setCreateError(t("mail.labelNameRequired"));
-      return;
-    }
-    if (isLabelNameTaken(name, customLabels)) {
-      setCreateError(t("mail.labelNameDuplicate"));
-      return;
-    }
-    onCreateLabel({ slug, name, color: newLabelColor });
-    closeCreateForm();
-  }
 
   // Fixed nav order (docs/design/cefiro/README.md): Recibidos, Destacados,
   // Enviados, Archivados, then secondary folders grouped after. Destacados is
@@ -259,68 +229,23 @@ export function Sidebar({
           })}
         </ul>
         <div className="mt-1 px-3">
-          {!creatingLabel ? (
-            <button
-              type="button"
-              onClick={openCreateForm}
-              className="flex h-8 items-center gap-1.5 text-[12.5px] font-semibold text-muted hover:text-ink"
-            >
-              <PlusIcon size={13} />
-              {t("mail.newLabel")}
-            </button>
-          ) : (
-            <form onSubmit={handleCreateSubmit} className="flex flex-col gap-2 rounded-[10px] border border-line p-2.5">
-              <input
-                type="text"
-                value={newLabelName}
-                onChange={(event) => {
-                  setNewLabelName(event.target.value);
-                  setCreateError(null);
-                }}
-                placeholder={t("mail.labelNamePlaceholder")}
-                aria-label={t("mail.labelNamePlaceholder")}
-                autoFocus
-                className="h-8 rounded-[8px] border border-line bg-transparent px-2 text-[13px] text-ink field-focus"
-              />
-              <div className="flex flex-wrap gap-1.5">
-                {CUSTOM_LABEL_PALETTE.map((hex) => (
-                  <button
-                    key={hex}
-                    type="button"
-                    aria-label={t("mail.chooseLabelColor", { hex })}
-                    aria-pressed={newLabelColor === hex}
-                    onClick={() => setNewLabelColor(hex)}
-                    className={`h-5 w-5 shrink-0 rounded-full border-2 ${
-                      newLabelColor === hex ? "border-accent" : "border-transparent"
-                    }`}
-                    style={{ background: hex }}
-                  />
-                ))}
-              </div>
-              {createError && (
-                <p role="alert" className="text-[11.5px] text-warn">
-                  {createError}
-                </p>
-              )}
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  className="flex h-7 flex-1 items-center justify-center rounded-[8px] bg-accent text-[12.5px] font-semibold text-accent-ink"
-                >
-                  {t("mail.createLabel")}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeCreateForm}
-                  className="flex h-7 items-center justify-center rounded-[8px] px-2 text-[12.5px] text-muted hover:text-ink"
-                >
-                  {t("mail.cancelNewLabel")}
-                </button>
-              </div>
-            </form>
-          )}
+          <button
+            type="button"
+            onClick={() => setCreatingLabel(true)}
+            className="flex h-8 items-center gap-1.5 text-[12.5px] font-semibold text-muted hover:text-ink"
+          >
+            <PlusIcon size={13} />
+            {t("mail.newLabel")}
+          </button>
         </div>
       </nav>
+      {creatingLabel && (
+        <NewLabelModal
+          customLabels={customLabels}
+          onCreateLabel={onCreateLabel}
+          onClose={() => setCreatingLabel(false)}
+        />
+      )}
       {groups.length > 0 && (
         <nav aria-label={t("groups.title")} className="text-sm">
           <p aria-hidden="true" className="mb-1 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">

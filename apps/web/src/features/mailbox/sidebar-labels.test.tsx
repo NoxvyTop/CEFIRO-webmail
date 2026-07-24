@@ -159,14 +159,25 @@ describe("sidebar custom labels (Gmail-model: create/list/delete)", () => {
     expect(buttons.indexOf("Ventas Q3")).toBeLessThan(buttons.indexOf("important"));
   });
 
-  it("shows a 'Nueva etiqueta' affordance that reveals an inline create form", () => {
+  // GH #109: "Nueva etiqueta" now opens a CENTERED MODAL (role="dialog"),
+  // not an inline form appended under the labels list.
+  it("shows a 'Nueva etiqueta' affordance that opens a centered dialog, not an inline form", () => {
     renderSidebar();
 
-    expect(screen.queryByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: i18n.t("mail.newLabel") })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
 
-    expect(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: i18n.t("mail.newLabel") });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).toBeInTheDocument();
+    for (const hex of CUSTOM_LABEL_PALETTE) {
+      expect(
+        within(dialog).getByRole("button", { name: i18n.t("mail.chooseLabelColor", { hex }) }),
+      ).toBeInTheDocument();
+    }
+    expect(within(dialog).getByRole("button", { name: i18n.t("mail.createLabel") })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: i18n.t("mail.cancelNewLabel") })).toBeInTheDocument();
   });
 
   it("creating a label slugifies the name, uses the picked color, and calls onCreateLabel", () => {
@@ -227,7 +238,7 @@ describe("sidebar custom labels (Gmail-model: create/list/delete)", () => {
     expect(onCreateLabel).not.toHaveBeenCalled();
   });
 
-  it("clicking cancel hides the form without calling onCreateLabel", () => {
+  it("clicking Cancelar closes the dialog without calling onCreateLabel", () => {
     const onCreateLabel = vi.fn();
     renderSidebar({ onCreateLabel });
 
@@ -237,8 +248,42 @@ describe("sidebar custom labels (Gmail-model: create/list/delete)", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.cancelNewLabel") }));
 
-    expect(screen.queryByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: i18n.t("mail.newLabel") })).not.toBeInTheDocument();
     expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("pressing Escape closes the dialog without calling onCreateLabel", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    expect(screen.getByRole("dialog", { name: i18n.t("mail.newLabel") })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog", { name: i18n.t("mail.newLabel") })).not.toBeInTheDocument();
+    expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("clicking the backdrop closes the dialog without calling onCreateLabel", () => {
+    const onCreateLabel = vi.fn();
+    renderSidebar({ onCreateLabel });
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+    const dialog = screen.getByRole("dialog", { name: i18n.t("mail.newLabel") });
+
+    fireEvent.click(dialog);
+
+    expect(screen.queryByRole("dialog", { name: i18n.t("mail.newLabel") })).not.toBeInTheDocument();
+    expect(onCreateLabel).not.toHaveBeenCalled();
+  });
+
+  it("the name input is autofocused when the dialog opens", () => {
+    renderSidebar();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+
+    expect(screen.getByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).toHaveFocus();
   });
 
   it("shows a delete affordance on a custom label row", () => {
