@@ -111,5 +111,28 @@ describe("loadConfig", () => {
       expect(config.aiApiKey).toBe("sk-ant-secret");
       expect(config.aiModel).toBe("claude-custom-model");
     });
+
+    it("leaves aiBaseUrl undefined when AI_BASE_URL is absent", () => {
+      expect(loadConfig(validEnv).aiBaseUrl).toBeUndefined();
+    });
+
+    it("treats an empty AI_BASE_URL as undefined", () => {
+      expect(loadConfig({ ...validEnv, AI_BASE_URL: "" }).aiBaseUrl).toBeUndefined();
+    });
+
+    it("reads AI_BASE_URL, including a /v1 suffix, verbatim", () => {
+      const config = loadConfig({
+        ...validEnv,
+        AI_PROVIDER: "openai-compat",
+        AI_BASE_URL: "https://api.moonshot.cn/v1",
+      });
+      expect(config.aiBaseUrl).toBe("https://api.moonshot.cn/v1");
+    });
+
+    it("accepts openai-compat as an explicit aiProvider value", () => {
+      expect(loadConfig({ ...validEnv, AI_PROVIDER: "openai-compat" }).aiProvider).toBe(
+        "openai-compat",
+      );
+    });
   });
 });

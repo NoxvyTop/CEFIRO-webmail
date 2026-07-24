@@ -6,6 +6,7 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createAuditRepo } from "../../infra/repos/audit";
 import { createSsoConfigRepo } from "../../infra/repos/sso-config";
+import { createInstanceSettingsRepo } from "../../infra/repos/instance-settings";
 import { importMasterKey } from "../credentials/crypto";
 import { createApp } from "../../app";
 import { createSessionStore } from "../auth/sessions";
@@ -20,6 +21,7 @@ const users = createUsersRepo(sql);
 const audit = createAuditRepo(sql);
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
 let ssoConfig: ReturnType<typeof createSsoConfigRepo>;
+let instanceSettings: ReturnType<typeof createInstanceSettingsRepo>;
 let app: ReturnType<typeof createApp>;
 
 async function createAdmin() {
@@ -48,9 +50,10 @@ beforeAll(async () => {
   );
   mailCredentials = createMailCredentialsRepo(sql, masterKey);
   ssoConfig = createSsoConfigRepo(sql, masterKey);
+  instanceSettings = createInstanceSettingsRepo(sql);
   app = createApp({
     authRouter: createAuthRouter({ sessions }),
-    adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
+    adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   });
 });
 afterAll(() => sql.end());

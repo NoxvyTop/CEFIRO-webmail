@@ -13,6 +13,48 @@ body {
   outline-offset: 2px;
 }
 
+/* Unified, subtle focus for BOXED form fields (border + rounded inputs across
+   settings, admin, auth, setup, the banner search, the link popover): an accent
+   border + soft ring, replacing the hard global outline. Buttons and links keep
+   the outline above for keyboard accessibility. */
+.field-focus {
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.field-focus:focus,
+.field-focus:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* Wrapper variant of .field-focus, for boxed fields whose border+radius live on
+   a container around the actual <input> (e.g. the banner search bar, which wraps
+   an icon + a transparent input + a shortcut hint). The accent border and ring
+   react to focus landing anywhere inside; the inner input itself carries
+   .field-focus-line so its own hard outline is suppressed. */
+.field-focus-within {
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.field-focus-within:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* Focus for UNDERLINE / borderless fields (the composer's Gmail-style rows:
+   From/To/CC/BCC, Subject, Signature, and the body editor). A box ring would
+   fight that language, so here we only suppress the hard global outline — the
+   visible affordance is the field's own accent underline (focus/focus-within
+   border-accent) or, for the borderless body, the text caret. */
+.field-focus-line {
+  outline: none;
+  transition: border-color 150ms ease;
+}
+.field-focus-line:focus,
+.field-focus-line:focus-visible {
+  outline: none;
+}
+
 ::selection {
   background: var(--sel);
 }

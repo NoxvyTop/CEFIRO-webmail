@@ -87,7 +87,7 @@ export function UserRow({ user }: { user: AdminUser }) {
           aria-label={t("admin.actions.role")}
           value={user.role}
           onChange={(event) => roleMutation.mutate(event.target.value as "employee" | "admin")}
-          className="h-8 rounded-[8px] border border-line bg-soft px-2 text-xs font-medium text-ink outline-none focus:border-accent"
+          className="h-8 rounded-[8px] border border-line bg-soft px-2 text-xs font-medium text-ink field-focus"
         >
           <option value="employee">{t("admin.roles.employee")}</option>
           <option value="admin">{t("admin.roles.admin")}</option>
@@ -127,7 +127,7 @@ export function UserRow({ user }: { user: AdminUser }) {
                 required
                 value={mailPassword}
                 onChange={(event) => setMailPassword(event.target.value)}
-                className="h-8 rounded-[9px] border border-line bg-soft px-3 text-xs text-ink outline-none focus:border-accent"
+                className="h-8 rounded-[9px] border border-line bg-soft px-3 text-xs text-ink field-focus"
               />
               <button type="submit" className={compactSecondaryButtonClass}>
                 {t("admin.actions.saveCredential")}

@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { fetchThread, updateMessage } from "../mailbox/api";
+import { fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
-import { ArchiveIcon, ArrowLeftIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
-import { CANONICAL_LABELS, labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
+import { CefiroLoader } from "../../app/ui/CefiroLoader";
+import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
+import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -21,11 +23,23 @@ import { extractReferencedCids } from "./sanitize";
 interface ThreadViewProps {
   threadId: string;
   archiveMailboxId: string | null;
+  inboxMailboxId: string | null;
 }
 
 function addressLabel(address: EmailAddress | undefined) {
   if (!address) return "";
   return address.name || address.email;
+}
+
+// GH #90: the one-line stub shown for a collapsed (previous, already-read)
+// message. bodyText is the primary source per the spec — falls back to the
+// server-provided `preview` field (used elsewhere for the same purpose, see
+// MessageList's conversation rows) for HTML-only messages that carry no
+// bodyText at all, so a collapsed stub is never left blank.
+function bodySnippet(email: EmailDetail, maxLength = 80): string {
+  const source = (email.bodyText ?? email.preview ?? "").replace(/\s+/g, " ").trim();
+  if (source.length <= maxLength) return source;
+  return `${source.slice(0, maxLength).trimEnd()}…`;
 }
 
 // Gmail shows "Reply all" when there is at least one other recipient besides
@@ -48,7 +62,7 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
   return others.size >= 1;
 }
 
-export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
+export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -77,20 +91,56 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     queryKey: ["mail", "preferences"],
     queryFn: fetchPreferences,
   });
+
+  // Instance-level branding toggle (GH #86, admin console "Ajustes"): off
+  // by default so a fresh instance shows no footer until an admin enables
+  // it. Non-sensitive, so it's read from the public /api/instance endpoint.
+  const instanceQuery = useQuery({
+    queryKey: ["instance"],
+    queryFn: fetchInstanceSettings,
+  });
+  const sentWithFooter = instanceQuery.data?.sentWithFooter ?? false;
   const customLabels = preferencesQuery.data?.customLabels ?? [];
-  // Only the registry of "known" labels (canonical + user-defined custom
-  // ones) is toggleable from this menu, mirroring Gmail's "Label as" list —
-  // an arbitrary keyword applied by some other client still shows read-only
-  // as a subject-line chip, it just isn't offered as a checkbox here.
-  const applyLabelSlugs = [...CANONICAL_LABELS, ...customLabels.map((custom) => custom.slug)];
+  // GH #102: only the user's own custom labels are toggleable from this
+  // menu — there is no more canonical/seeded registry, so a fresh user with
+  // no custom labels sees an empty menu (the empty-state hint below) instead
+  // of 4 names they never created. An arbitrary keyword applied by some
+  // other client still shows read-only as a subject-line chip (userLabels()
+  // below), it just isn't offered as a checkbox here.
+  const applyLabelSlugs = customLabels.map((custom) => custom.slug);
 
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  // GH #93: thread-actions-bar has overflow-x-hidden, and per the CSS spec a
+  // non-"visible" value on one overflow axis forces the other axis to
+  // compute as "auto" too — so overflow-y clips right along with it. That
+  // clipped the apply-menu, which opens below the button. The menu is
+  // rendered in a document.body portal (see below) so it escapes the bar's
+  // overflow instead of trying to fight it. labelButtonRef is the trigger
+  // (used for both the click-outside check and computing the portal's
+  // position); labelMenuRef now refers to the portaled menu element itself
+  // so click-outside can still recognize a click inside it as "inside".
+  const labelButtonRef = useRef<HTMLButtonElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
+  function toggleLabelMenu() {
+    setLabelMenuOpen((open) => {
+      const next = !open;
+      if (next) {
+        const rect = labelButtonRef.current?.getBoundingClientRect();
+        if (rect) setMenuPosition({ top: rect.bottom + 8, left: rect.left });
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!labelMenuOpen) return;
     function handleMouseDown(event: MouseEvent) {
-      if (labelMenuRef.current && !labelMenuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const insideButton = labelButtonRef.current?.contains(target) ?? false;
+      const insideMenu = labelMenuRef.current?.contains(target) ?? false;
+      if (!insideButton && !insideMenu) {
         setLabelMenuOpen(false);
       }
     }
@@ -105,6 +155,22 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     };
   }, [labelMenuOpen]);
 
+  // The portal escapes the action bar's layout, so its fixed position can't
+  // reflow with the trigger on scroll/resize — closing on either is a
+  // deliberate simplification over tracking the button's position live.
+  useEffect(() => {
+    if (!labelMenuOpen) return;
+    function closeOnViewportChange() {
+      setLabelMenuOpen(false);
+    }
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    window.addEventListener("resize", closeOnViewportChange);
+    return () => {
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+      window.removeEventListener("resize", closeOnViewportChange);
+    };
+  }, [labelMenuOpen]);
+
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
@@ -113,6 +179,21 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail"] });
       showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
+      backToList();
+    },
+  });
+
+  // Inverse of archiveMutation: moves the email back into Recibidos. Same
+  // single-mailbox move (JMAP mailboxIds is a full set, so this drops the
+  // archive membership and adds the inbox), same post-success flow.
+  const unarchiveMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!inboxMailboxId) throw new Error("no inbox mailbox");
+      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      showToast(t("mail.unarchived"));
       backToList();
     },
   });
@@ -171,11 +252,60 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastEmail]);
 
+  // GH #90: previous, already-read messages collapse into one-line stubs;
+  // the last message and any still-unread message stay expanded. This is a
+  // one-time snapshot taken when the thread's messages first load — a Set
+  // of expandable ids, grown only by the user clicking a stub open. It's
+  // deliberately NOT recomputed on every refetch (star/label/archive
+  // mutations all invalidate and refetch this same thread query): once the
+  // user has opened a stub, a later refetch must not re-collapse it. The
+  // ref guards that — it only (re)seeds the set the first time a given
+  // threadId's data arrives, so switching to a different thread does get a
+  // fresh snapshot.
+  const initializedThreadIdRef = useRef<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const currentEmails = threadQuery.data?.emails;
+    if (!currentEmails || currentEmails.length === 0) return;
+    if (initializedThreadIdRef.current === threadId) return;
+
+    const last = currentEmails[currentEmails.length - 1];
+    const initial = new Set<string>();
+    for (const email of currentEmails) {
+      if (email.id === last?.id || !email.keywords.$seen) initial.add(email.id);
+    }
+    setExpandedIds(initial);
+    initializedThreadIdRef.current = threadId;
+  }, [threadQuery.data, threadId]);
+
+  function expandMessage(emailId: string) {
+    setExpandedIds((previous) => {
+      const next = new Set(previous);
+      next.add(emailId);
+      return next;
+    });
+  }
+
   if (threadQuery.isError) {
     return (
       <p role="alert" className="p-4 text-sm text-warn">
         {t(mailErrorKey(threadQuery.error))}
       </p>
+    );
+  }
+
+  // GH #94: branded loading state, mounted on top of the thread query's
+  // already-existing pending state — no data-flow change, this only decides
+  // what renders while `threadQuery` has no data yet. Once the query settles
+  // (success or error) without ever having produced a `lastEmail` — e.g. a
+  // thread that genuinely has no messages — the reader stays blank, same as
+  // before this change.
+  if (!lastEmail && threadQuery.isLoading) {
+    return (
+      <div data-testid="thread-loading" className="flex h-full items-center justify-center">
+        <CefiroLoader size={56} label />
+      </div>
     );
   }
 
@@ -186,6 +316,9 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
     lastEmail.mailboxIds.length === 1 &&
     lastEmail.mailboxIds[0] === archiveMailboxId;
   const showArchive = archiveMailboxId !== null && !isOnlyInArchive;
+  // Mutually exclusive with showArchive: only an archived email offers the way
+  // back to Recibidos, and only when we know which mailbox that is.
+  const showUnarchive = isOnlyInArchive && inboxMailboxId !== null;
   const starred = Boolean(lastEmail.keywords.$flagged);
   const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
 
@@ -215,6 +348,16 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
           >
             <ArchiveIcon size={15} />
             {t("mail.archive")}
+          </button>
+        )}
+        {showUnarchive && (
+          <button
+            type="button"
+            onClick={() => unarchiveMutation.mutate(lastEmail)}
+            className={actionButtonClass}
+          >
+            <InboxIcon size={15} />
+            {t("mail.unarchive")}
           </button>
         )}
         <button
@@ -250,24 +393,29 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
         >
           {t("composer.forward")}
         </button>
-        <div ref={labelMenuRef} className="relative shrink-0">
-          <button
-            type="button"
-            aria-label={t("mail.labels")}
-            aria-haspopup="menu"
-            aria-expanded={labelMenuOpen}
-            onClick={() => setLabelMenuOpen((open) => !open)}
-            className={actionButtonClass}
+        <button
+          ref={labelButtonRef}
+          type="button"
+          aria-label={t("mail.labels")}
+          aria-haspopup="menu"
+          aria-expanded={labelMenuOpen}
+          onClick={toggleLabelMenu}
+          className={actionButtonClass}
+        >
+          <TagIcon size={15} />
+          {t("mail.labels")}
+        </button>
+        {labelMenuOpen && menuPosition && createPortal(
+          <div
+            ref={labelMenuRef}
+            role="menu"
+            style={{ position: "fixed", top: menuPosition.top, left: menuPosition.left }}
+            className="z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
           >
-            <TagIcon size={15} />
-            {t("mail.labels")}
-          </button>
-          {labelMenuOpen && (
-            <div
-              role="menu"
-              className="absolute left-0 top-[calc(100%+8px)] z-50 flex min-w-[190px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
-            >
-              {applyLabelSlugs.map((slug) => {
+            {applyLabelSlugs.length === 0 ? (
+              <p className="px-3 py-2.5 text-[12.5px] text-muted">{t("mail.noLabelsToApply")}</p>
+            ) : (
+              applyLabelSlugs.map((slug) => {
                 const checked = Boolean(lastEmail.keywords[slug]);
                 return (
                   <button
@@ -290,10 +438,11 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     </span>
                   </button>
                 );
-              })}
-            </div>
-          )}
-        </div>
+              })
+            )}
+          </div>,
+          document.body,
+        )}
         <span className="ml-auto hidden min-w-0 truncate text-xs text-muted md:block">{t("shortcuts.hint")}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -313,8 +462,38 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
             ))}
           </div>
           {emails.map((email) => {
-            const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             const sender = email.from[0];
+            const isLast = email.id === lastEmail.id;
+            // GH #90: previous, already-read messages collapse into a
+            // one-line stub. A single-message thread is always fully
+            // expanded — there's nothing to collapse "away from".
+            const isExpanded = emails.length === 1 || isLast || expandedIds.has(email.id);
+            const dateLabel = formatRelativeTime(email.receivedAt, {
+              yesterdayLabel: t("mail.yesterday"),
+              locale: i18n.language,
+            });
+
+            if (!isExpanded) {
+              return (
+                <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
+                  <button
+                    type="button"
+                    onClick={() => expandMessage(email.id)}
+                    aria-label={t("mail.expandMessage", { sender: addressLabel(sender) })}
+                    className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition hover:bg-hover"
+                  >
+                    <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={28} />
+                    <span className="min-w-0 flex-1 truncate text-[13.5px]">
+                      <span className="font-semibold text-ink">{addressLabel(sender)}</span>
+                      <span className="text-muted"> — {bodySnippet(email)}</span>
+                    </span>
+                    <span className="shrink-0 text-[12px] text-muted">{dateLabel}</span>
+                  </button>
+                </article>
+              );
+            }
+
+            const toCcLabel = [...email.to, ...email.cc].map(addressLabel).filter(Boolean).join(", ");
             // A message counts as "sent" when its `from` matches one of the
             // account's own identities — this stays correct no matter which
             // mailbox/folder the thread is currently being viewed from.
@@ -334,7 +513,18 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
             );
 
             return (
-              <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
+              <article
+                key={email.id}
+                // GH #92: the last (active) message gets a subtle elevated-card
+                // treatment — a real border, the panel surface, and shadow-card
+                // — so it visually stands out from the collapsed stubs / earlier
+                // messages above it, in both the light and night themes.
+                className={
+                  isLast
+                    ? "mt-6 rounded-[14px] border border-line bg-panel p-5 shadow-card"
+                    : "mt-6 border-b border-line pb-6"
+                }
+              >
                 <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
                   <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
                   <div className="min-w-0 flex-1">
@@ -345,11 +535,11 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                       </div>
                     )}
                   </div>
-                  <span className="shrink-0 text-[12.5px] text-muted">
-                    {formatRelativeTime(email.receivedAt, { yesterdayLabel: t("mail.yesterday"), locale: i18n.language })}
-                  </span>
+                  <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
                 </div>
-                {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
+                {isLast && (
+                  <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
+                )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
                   <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} attachments={email.attachments} />
                 </div>
@@ -365,22 +555,27 @@ export function ThreadView({ threadId, archiveMailboxId }: ThreadViewProps) {
                     </div>
                   </div>
                 )}
-                {email.id === lastEmail.id && (
+                {isLast && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>
-                      <p className="mt-4 flex items-center gap-2 text-[11.5px] text-muted">
-                        <svg width="14" height="14" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true" className="text-accent">
-                          <path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" />
-                          <path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" />
-                          <path d="M9 27h10" />
-                        </svg>
-                        <span>
-                          {t("app.sentWith")}{" "}
-                          <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> ·{" "}
-                          {t("app.sealMotto")}
-                        </span>
-                      </p>
+                      {sentWithFooter && (
+                        <p
+                          data-testid="sent-with-footer"
+                          className="mt-4 flex items-center gap-2 text-[11.5px] text-muted"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true" className="text-accent">
+                            <path d="M9 15h13a3.6 3.6 0 1 0-3.6-6.3" />
+                            <path d="M7 21h19a3.6 3.6 0 1 1 3.6 6.3" />
+                            <path d="M9 27h10" />
+                          </svg>
+                          <span>
+                            {t("app.sentWith")}{" "}
+                            <span className="font-bold tracking-[0.14em] text-accent-text">CÉFIRO</span> ·{" "}
+                            {t("app.sealMotto")}
+                          </span>
+                        </p>
+                      )}
                     </div>
                     <div data-testid="thread-footer-actions" className="mt-[26px] flex gap-2.5">
                       <button

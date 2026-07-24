@@ -3,9 +3,11 @@ import { MailApiError } from "../mailbox/api";
 import {
   createFilterRule,
   fetchFilterRules,
+  fetchProfile,
   fetchVacationSettings,
   reorderFilterRules,
   syncFilters,
+  updateProfile,
 } from "./api";
 import { settingsErrorKey } from "./errors";
 
@@ -95,6 +97,39 @@ describe("settings api", () => {
     );
     const settings = await fetchVacationSettings();
     expect(settings.intervalDays).toBe(7);
+  });
+
+  it("fetches and parses the profile", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ displayName: "Carla", email: "carla@noxvytop.com", avatarDataUrl: null }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const profile = await fetchProfile();
+    expect(profile.displayName).toBe("Carla");
+    expect(profile.avatarDataUrl).toBeNull();
+  });
+
+  it("PATCHes only the given fields on the profile and returns the updated view", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ displayName: "New", email: "carla@noxvytop.com", avatarDataUrl: null }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await updateProfile({ displayName: "New" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/profile");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ displayName: "New" });
+    expect(result.displayName).toBe("New");
   });
 });
 

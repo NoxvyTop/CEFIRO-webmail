@@ -71,7 +71,7 @@ export function RecipientField({ label, placeholder = label, value, onChange }: 
             setInvalid(false);
           }}
           onKeyDown={handleKeyDown}
-          className="min-w-24 flex-1 border-none bg-transparent px-0.5 text-[14px] text-ink outline-none placeholder:text-muted"
+          className="min-w-24 flex-1 border-none bg-transparent px-0.5 text-[14px] text-ink field-focus-line placeholder:text-muted"
         />
       </div>
       {invalid && <p className="text-[12.5px] text-danger">{t("composer.invalidEmail")}</p>}

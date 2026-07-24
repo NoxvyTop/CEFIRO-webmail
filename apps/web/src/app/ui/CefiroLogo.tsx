@@ -1,6 +1,17 @@
-type CefiroLogoProps = { size?: number };
+type CefiroLogoProps = {
+  size?: number;
+  /**
+   * Duration of the outer ring's rotation, in seconds. Defaults to the slow
+   * 28s ambient spin used by the banner/idle placements. A loading indicator
+   * (see CefiroLoader.tsx, GH #94) passes a much smaller value for a
+   * noticeably faster "working" pace, reusing this same mark instead of a
+   * separate spinner asset — the banner's own usage never passes this prop,
+   * so its ambient behavior is unchanged.
+   */
+  spinSeconds?: number;
+};
 
-export function CefiroLogo({ size = 32 }: CefiroLogoProps) {
+export function CefiroLogo({ size = 32, spinSeconds = 28 }: CefiroLogoProps) {
   return (
     <svg
       width={size}
@@ -13,7 +24,13 @@ export function CefiroLogo({ size = 32 }: CefiroLogoProps) {
       {/* transform-box:fill-box scopes the rotation to the circle's own bounding
           box (matches the hi-fi prototype) instead of the full 40x40 viewport,
           which is what keeps the rotation from showing a faint GPU-layer box. */}
-      <g style={{ transformOrigin: "center", transformBox: "fill-box", animation: "logoSpin 28s linear infinite" }}>
+      <g
+        style={{
+          transformOrigin: "center",
+          transformBox: "fill-box",
+          animation: `logoSpin ${spinSeconds}s linear infinite`,
+        }}
+      >
         <circle
           cx="20"
           cy="20"

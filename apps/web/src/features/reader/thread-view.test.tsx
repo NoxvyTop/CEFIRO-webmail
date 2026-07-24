@@ -89,6 +89,7 @@ function stubFetch(identities = NO_IDENTITIES, customLabels: CustomLabel[] = [])
     if (url.includes("/api/mail/preferences")) {
       return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels }));
     }
+    if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
     return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
   });
@@ -104,18 +105,44 @@ function ComposeParamProbe() {
   return <div data-testid="compose-param">{params.get("compose") ?? ""}</div>;
 }
 
-function renderThread(threadId = "t1", archiveMailboxId: string | null = null) {
+function renderThread(
+  threadId = "t1",
+  archiveMailboxId: string | null = null,
+  inboxMailboxId: string | null = null,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <ToastProvider>
-          <ThreadView threadId={threadId} archiveMailboxId={archiveMailboxId} />
+          <ThreadView
+            threadId={threadId}
+            archiveMailboxId={archiveMailboxId}
+            inboxMailboxId={inboxMailboxId}
+          />
           <ComposeParamProbe />
         </ToastProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+// Builds a fetch mock whose thread endpoint returns a thread whose last email
+// (e2) sits ONLY in the archive mailbox — the state where the reader should
+// offer "move back to inbox" instead of "archive".
+function stubArchivedThread() {
+  const state = structuredClone(thread);
+  state.emails[1]!.mailboxIds = ["arch1"];
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.includes("/api/mail/messages/") && method === "PATCH") {
+      return new Response(null, { status: 204 });
+    }
+    if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+    if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+    return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+  });
 }
 
 describe("ThreadView", () => {
@@ -348,6 +375,53 @@ describe("ThreadView", () => {
     await screen.findByRole("button", { name: i18n.t("mail.star") });
     expect(screen.queryByRole("button", { name: i18n.t("mail.archive") })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("mail.star") })).toBeInTheDocument();
+  });
+
+  it("shows Mover a Recibidos (and hides Archivar) when the last email is only in the archive", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", "mb-inbox");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    expect(
+      within(actionsBar).getByRole("button", { name: i18n.t("mail.unarchive") }),
+    ).toBeInTheDocument();
+    expect(
+      within(actionsBar).queryByRole("button", { name: i18n.t("mail.archive") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Mover a Recibidos moves the last email back to the inbox mailbox", async () => {
+    const fetchMock = stubArchivedThread();
+    vi.stubGlobal("fetch", fetchMock);
+    renderThread("t1", "arch1", "mb-inbox");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    const unarchiveButton = within(actionsBar).getByRole("button", {
+      name: i18n.t("mail.unarchive"),
+    });
+    fireEvent.click(unarchiveButton);
+
+    const patchCall = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/mail/messages/e2" &&
+          (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(call).toBeTruthy();
+      return call;
+    });
+    const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { "mb-inbox": true } });
+  });
+
+  it("hides Mover a Recibidos when there is no inbox mailbox", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", null);
+
+    await screen.findByRole("button", { name: i18n.t("mail.star") });
+    expect(
+      screen.queryByRole("button", { name: i18n.t("mail.unarchive") }),
+    ).not.toBeInTheDocument();
   });
 
   describe("attachments", () => {
@@ -613,28 +687,33 @@ describe("ThreadView", () => {
   });
 
   describe("label apply menu (mirrors the star toggle, applies/removes a keyword on the last email)", () => {
-    it("opens a menu listing the canonical labels as unchecked checkboxes when none are applied", async () => {
-      stubFetch();
+    // GH #102: the apply menu offers only the user's own custom labels now —
+    // there is no more canonical/seeded registry, so a name the user never
+    // created (e.g. "urgente") must not appear as an option.
+    it("opens a menu listing the user's custom labels as unchecked checkboxes, not a former-canonical name", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const soporte: CustomLabel = { slug: "soporte", name: "Soporte", color: "#2FB8C4" };
+      stubFetch(NO_IDENTITIES, [ventas, soporte]);
       renderThread("t1", "arch1");
 
       const labelsButton = await screen.findByRole("button", { name: i18n.t("mail.labels") });
       fireEvent.click(labelsButton);
 
       const menu = await screen.findByRole("menu");
-      const urgente = within(menu).getByRole("menuitemcheckbox", { name: "urgente" });
-      expect(urgente).toHaveAttribute("aria-checked", "false");
-      expect(within(menu).getByRole("menuitemcheckbox", { name: "producto" })).toBeInTheDocument();
-      expect(within(menu).getByRole("menuitemcheckbox", { name: "Diseño" })).toBeInTheDocument();
-      expect(within(menu).getByRole("menuitemcheckbox", { name: "finanzas" })).toBeInTheDocument();
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      expect(ventasItem).toHaveAttribute("aria-checked", "false");
+      expect(within(menu).getByRole("menuitemcheckbox", { name: "Soporte" })).toBeInTheDocument();
+      expect(within(menu).queryByRole("menuitemcheckbox", { name: "urgente" })).not.toBeInTheDocument();
     });
 
-    it("toggling a canonical label applies the keyword and shows it as a chip next to the subject", async () => {
-      const fetchMock = stubFetch();
+    it("toggling a custom label applies the keyword and shows it as a chip next to the subject", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const fetchMock = stubFetch(NO_IDENTITIES, [ventas]);
       renderThread("t1", "arch1");
 
       fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
       const menu = await screen.findByRole("menu");
-      fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "urgente" }));
+      fireEvent.click(await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" }));
 
       const patchCall = await vi.waitFor(() => {
         const call = fetchMock.mock.calls.find(
@@ -645,15 +724,16 @@ describe("ThreadView", () => {
         return call;
       });
       const [, init] = patchCall as [RequestInfo | URL, RequestInit];
-      expect(JSON.parse(String(init.body))).toEqual({ keywords: { urgente: true } });
+      expect(JSON.parse(String(init.body))).toEqual({ keywords: { ventas: true } });
 
       const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
-      expect(within(heading.parentElement!).getByText("urgente")).toBeInTheDocument();
+      expect(within(heading.parentElement!).getByText("Ventas")).toBeInTheDocument();
     });
 
     it("unchecking an applied label removes the keyword and its chip", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
       const state = structuredClone(thread);
-      state.emails[1]!.keywords = { urgente: true };
+      state.emails[1]!.keywords = { ventas: true };
       vi.stubGlobal(
         "fetch",
         vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -666,7 +746,7 @@ describe("ThreadView", () => {
           }
           if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
           if (url.includes("/api/mail/preferences")) {
-            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [ventas] }));
           }
           if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
           return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
@@ -676,19 +756,30 @@ describe("ThreadView", () => {
 
       const heading = await screen.findByRole("heading", { name: "Re: Quarterly report" });
       const chipContainer = heading.parentElement!;
-      expect(within(chipContainer).getByText("urgente")).toBeInTheDocument();
+      expect(within(chipContainer).getByText("Ventas")).toBeInTheDocument();
 
       fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
       const menu = await screen.findByRole("menu");
-      const urgenteItem = within(menu).getByRole("menuitemcheckbox", { name: "urgente" });
-      expect(urgenteItem).toHaveAttribute("aria-checked", "true");
-      fireEvent.click(urgenteItem);
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      expect(ventasItem).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(ventasItem);
 
       // The menu stays open (Gmail-style multi-select) and still lists
-      // "urgente" as an option — only the subject-line chip should disappear.
+      // "Ventas" as an option — only the subject-line chip should disappear.
       await waitFor(() => {
-        expect(within(chipContainer).queryByText("urgente")).not.toBeInTheDocument();
+        expect(within(chipContainer).queryByText("Ventas")).not.toBeInTheDocument();
       });
+    });
+
+    it("shows an empty-state hint and no menuitemcheckbox items for a fresh user with no custom labels (GH #102)", async () => {
+      stubFetch(); // defaults to customLabels: []
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+      const menu = await screen.findByRole("menu");
+
+      expect(await within(menu).findByText(i18n.t("mail.noLabelsToApply"))).toBeInTheDocument();
+      expect(within(menu).queryAllByRole("menuitemcheckbox")).toHaveLength(0);
     });
 
     it("lists custom labels with their stored display name and color, and applies them like canonical labels", async () => {
@@ -733,6 +824,326 @@ describe("ThreadView", () => {
       await waitFor(() => {
         expect(screen.queryByRole("menu")).not.toBeInTheDocument();
       });
+    });
+
+    // GH #93: thread-actions-bar has overflow-x-hidden — per the CSS spec, a
+    // non-"visible" value on one overflow axis forces the other axis to
+    // compute as "auto" too, so overflow-y clips right along with it. That
+    // clipped the menu, which opens BELOW the button and needs the bar to
+    // allow vertical overflow it never gets. The fix renders the menu into a
+    // document.body portal so it escapes the bar's overflow entirely.
+    describe("portal rendering (GH #93: overflow-x-hidden on thread-actions-bar was clipping the menu)", () => {
+      it("renders the open menu outside thread-actions-bar, directly under document.body, while role=menu and its checkboxes keep working", async () => {
+        const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+        stubFetch(NO_IDENTITIES, [ventas]);
+        renderThread("t1", "arch1");
+
+        const actionsBar = await screen.findByTestId("thread-actions-bar");
+        fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.labels") }));
+
+        const menu = await screen.findByRole("menu");
+        expect(actionsBar.contains(menu)).toBe(false);
+        expect(menu.parentElement).toBe(document.body);
+
+        // Portaling changes only where the menu lives in the DOM, not its
+        // accessible role/content or the keyword toggle wired to it.
+        expect(within(menu).getByRole("menuitemcheckbox", { name: "Ventas" })).toBeInTheDocument();
+      });
+
+      it("keeps aria-haspopup and aria-expanded on the trigger button even though the menu itself now renders elsewhere", async () => {
+        stubFetch();
+        renderThread("t1", "arch1");
+
+        const actionsBar = await screen.findByTestId("thread-actions-bar");
+        const labelsButton = within(actionsBar).getByRole("button", { name: i18n.t("mail.labels") });
+        expect(labelsButton).toHaveAttribute("aria-haspopup", "menu");
+        expect(labelsButton).toHaveAttribute("aria-expanded", "false");
+
+        fireEvent.click(labelsButton);
+        await screen.findByRole("menu");
+        expect(labelsButton).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("keeps the portaled menu open when mousedown lands on a menu item (click-outside must treat the portal as inside, not just the button)", async () => {
+        const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+        stubFetch(NO_IDENTITIES, [ventas]);
+        renderThread("t1", "arch1");
+
+        fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+        const menu = await screen.findByRole("menu");
+        const ventasItem = within(menu).getByRole("menuitemcheckbox", { name: "Ventas" });
+
+        fireEvent.mouseDown(ventasItem);
+
+        expect(screen.getByRole("menu")).toBeInTheDocument();
+      });
+
+      it("still shows the empty-state hint with no menuitemcheckbox items when portaled, for a fresh user with no custom labels", async () => {
+        stubFetch(); // defaults to customLabels: []
+        renderThread("t1", "arch1");
+
+        fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+        const menu = await screen.findByRole("menu");
+
+        expect(menu.parentElement).toBe(document.body);
+        expect(await within(menu).findByText(i18n.t("mail.noLabelsToApply"))).toBeInTheDocument();
+        expect(within(menu).queryAllByRole("menuitemcheckbox")).toHaveLength(0);
+      });
+    });
+  });
+
+  // Gated by the instance-level "sent with footer" setting (GitHub #86) — off
+  // by default so a fresh instance shows no footer until an admin enables it.
+  describe("sent-with-footer notice (instance setting, GH #86)", () => {
+    function stubThreadWithInstanceFlag(sentWithFooter: boolean) {
+      const state = structuredClone(thread);
+      return vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("hides the footer notice when /api/instance reports sentWithFooter:false (default)", async () => {
+      vi.stubGlobal("fetch", stubThreadWithInstanceFlag(false));
+      renderThread();
+
+      await screen.findByTestId("thread-footer-actions");
+      expect(screen.queryByTestId("sent-with-footer")).not.toBeInTheDocument();
+    });
+
+    it("shows the footer notice when /api/instance reports sentWithFooter:true", async () => {
+      vi.stubGlobal("fetch", stubThreadWithInstanceFlag(true));
+      renderThread();
+
+      const footer = await screen.findByTestId("sent-with-footer");
+      expect(within(footer).getByText("CÉFIRO")).toBeInTheDocument();
+    });
+
+    it("keeps the footer notice hidden when /api/instance fails (never flashes on for an errored instance)", async () => {
+      const state = structuredClone(thread);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) {
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      // Reader renders fully; the branding footer stays hidden on the errored flag.
+      await screen.findByTestId("thread-footer-actions");
+      expect(screen.queryByTestId("sent-with-footer")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #90: opening a thread used to show every message fully expanded and
+  // stacked. Previous, already-read messages now collapse into a one-line
+  // stub; the last message and any still-unread message stay expanded.
+  describe("message collapse (GH #90)", () => {
+    function threeMessageThread(): ThreadDetail {
+      return {
+        id: "t2",
+        emails: [
+          {
+            id: "m1",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Kickoff",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Let's get started",
+            // Read, not the last message — collapses into a stub.
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 100,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Let's get started with the quarterly plan and align on next steps together.",
+            attachments: [],
+          },
+          {
+            id: "m2",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Alice", email: "alice@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T10:00:00.000Z",
+            preview: "Sounds good",
+            // Unread ($seen absent), not the last message — stays expanded.
+            keywords: {},
+            hasAttachment: false,
+            size: 80,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Sounds good, I am unread still.",
+            attachments: [],
+          },
+          {
+            id: "m3",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T11:00:00.000Z",
+            preview: "Final message",
+            // Read, but IS the last message — always stays expanded.
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 60,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This is the last message in the thread.",
+            attachments: [],
+          },
+        ],
+      };
+    }
+
+    function stubThreeMessageThread() {
+      const state = threeMessageThread();
+      return vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("collapses a read, non-last message into a stub — its EmailBody is not rendered while collapsed", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      const stub = await screen.findByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+      expect(within(stub).getByText(/Let's get started/)).toBeInTheDocument();
+
+      // The collapsed message's own full body text is not in the document.
+      expect(
+        screen.queryByText("Let's get started with the quarterly plan and align on next steps together."),
+      ).not.toBeInTheDocument();
+    });
+
+    it("keeps the last message and an unread non-last message expanded by default", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      // m2 is unread and not last — expanded by default.
+      expect(await screen.findByText("Sounds good, I am unread still.")).toBeInTheDocument();
+      // m3 is the last message — always expanded, regardless of $seen.
+      expect(await screen.findByText("This is the last message in the thread.")).toBeInTheDocument();
+    });
+
+    it("expands a collapsed message's full body when its stub is clicked", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      const stub = await screen.findByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+      fireEvent.click(stub);
+
+      expect(
+        await screen.findByText("Let's get started with the quarterly plan and align on next steps together."),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // GH #94: branded (Céfiro logo) loading indicator mounted ON TOP of the
+  // thread query's already-existing pending state — before this change the
+  // reader pane just rendered blank (`return null`) while the thread loaded.
+  describe("loading state (branded Céfiro loader, GH #94)", () => {
+    it("shows the CefiroLoader, centered in the reader pane, while the thread query is still loading", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+      renderThread();
+
+      const loading = await screen.findByTestId("thread-loading");
+      const status = within(loading).getByRole("status");
+      expect(status).toHaveAccessibleName(i18n.t("mail.loading"));
+      expect(within(loading).getByText(i18n.t("mail.loading"))).toBeInTheDocument();
+    });
+
+    it("hides the loader once the thread data has arrived", async () => {
+      stubFetch();
+      renderThread();
+
+      await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      // Scoped to the ThreadView-level loader specifically (not just any
+      // role="status" in the tree) — the loaded thread's attachment renders
+      // its own compact CefiroLoader as PdfThumbnail's fallback, which stays
+      // visible here since pdf.js never actually resolves in this test.
+      expect(screen.queryByTestId("thread-loading")).not.toBeInTheDocument();
+    });
+
+    it("does not show the loader once the thread query has errored (keeps the existing alert branch)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) {
+            return new Response(
+              JSON.stringify({ code: "mail_not_configured", message: "x", traceId: "t1" }),
+              { status: 503 },
+            );
+          }
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      await screen.findByRole("alert");
+      expect(screen.queryByTestId("thread-loading")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #92: the last message gets a subtle visual highlight — a real border
+  // on an elevated bg-panel card with shadow-card — so it stands out from
+  // earlier (or collapsed) messages above it.
+  describe("last-message highlight (GH #92)", () => {
+    it("gives the last message's container a border + panel + shadow-card treatment", async () => {
+      stubFetch();
+      renderThread();
+
+      const lastBody = await screen.findByText("Thanks, looks good!");
+      const article = lastBody.closest("article");
+      expect(article).not.toBeNull();
+      expect(article?.className).toMatch(/\bshadow-card\b/);
+      expect(article?.className).toMatch(/\bbg-panel\b/);
+      expect(article?.className).toMatch(/\bborder\b/);
+    });
+
+    it("does not apply the highlight treatment to an earlier (non-last) message", async () => {
+      stubFetch();
+      renderThread();
+
+      const attachmentText = await screen.findByText(/report\.pdf/);
+      const article = attachmentText.closest("article");
+      expect(article).not.toBeNull();
+      expect(article?.className).not.toMatch(/shadow-card/);
     });
   });
 });

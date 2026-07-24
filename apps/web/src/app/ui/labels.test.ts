@@ -109,45 +109,44 @@ describe("userLabels", () => {
   });
 });
 
-describe("mergeLabels (CLARO-08/OSCURO-07: ETIQUETAS always shows the taxonomy)", () => {
-  it("returns just the 4 canonical labels, in spec order, when there are no real labels", () => {
-    expect(mergeLabels([])).toEqual(CANONICAL_LABELS);
-    // The stored/filter value is the ASCII-safe JMAP keyword slug "diseno" —
-    // NOT the accented "diseño" — because that's what real mail is tagged
-    // with (hasKeyword is passed verbatim to JMAP, no accent folding on the
-    // server). The accented spelling is a display-only concern, see
-    // labelDisplayName() below.
-    expect(CANONICAL_LABELS).toEqual(["urgente", "producto", "diseno", "finanzas"]);
+describe("mergeLabels (#102/#83: no seeded taxonomy — every label is user-owned)", () => {
+  it("returns an empty array for a fresh user: no custom labels, no real labels (#102)", () => {
+    expect(mergeLabels([])).toEqual([]);
+    expect(mergeLabels([], [])).toEqual([]);
   });
 
-  it("appends real labels not covered by the canonical set after the canonical ones", () => {
-    expect(mergeLabels(["important", "urgent"])).toEqual([
-      "urgente", "producto", "diseno", "finanzas", "important", "urgent",
-    ]);
+  it("does not auto-inject the former-canonical names — they are ordinary, optional labels now (#83)", () => {
+    expect(mergeLabels([])).not.toEqual(expect.arrayContaining(["urgente"]));
+    expect(mergeLabels([])).not.toEqual(expect.arrayContaining(CANONICAL_LABELS));
   });
 
-  it("dedupes case-insensitively so a real label matching a canonical one isn't repeated", () => {
-    expect(mergeLabels(["Urgente", "PRODUCTO"])).toEqual(["urgente", "producto", "diseno", "finanzas"]);
+  it("returns just the user's custom labels, in stored order, when there are no real labels", () => {
+    expect(mergeLabels([], ["ventas", "urgente"])).toEqual(["ventas", "urgente"]);
   });
 
-  it("keeps canonical labels first and preserves the caller's order for extras", () => {
+  it("appends real labels not covered by the custom set after the custom ones", () => {
+    expect(mergeLabels(["important", "urgent"], ["ventas"])).toEqual(["ventas", "important", "urgent"]);
+  });
+
+  it("dedupes case-insensitively so a real label matching a custom one isn't repeated", () => {
+    expect(mergeLabels(["Ventas", "URGENTE"], ["ventas", "urgente"])).toEqual(["ventas", "urgente"]);
+  });
+
+  it("keeps custom labels first and preserves the caller's order for extras", () => {
     // Callers (MailPage) already hand mergeLabels a sorted list of real
     // labels, so this only guards that mergeLabels itself doesn't reorder.
-    expect(mergeLabels(["zeta", "alpha"])).toEqual([
-      "urgente", "producto", "diseno", "finanzas", "zeta", "alpha",
-    ]);
+    expect(mergeLabels(["zeta", "alpha"], ["ventas"])).toEqual(["ventas", "zeta", "alpha"]);
   });
 
-  // Regression coverage for the fresh-review MAJOR: canonical "diseño" used
-  // to be stored accented, so a real diseno-tagged mail (1) didn't dedupe
-  // against it (two chips: "Diseño" and "diseno") and (2) the canonical chip
-  // filtered by hasKeyword=diseño, matching zero real mail. Both are wrong.
-  it("dedupes the real JMAP slug 'diseno' into the canonical entry (no duplicate chip)", () => {
-    expect(mergeLabels(["diseno"])).toEqual(CANONICAL_LABELS);
+  // Regression coverage carried over from the old canonical-scaffolding
+  // suite: a real accented label must still dedupe against its ASCII-slug
+  // custom-label counterpart instead of showing as two separate chips.
+  it("dedupes an accented real label against its ASCII custom-label slug (diacritic-insensitive)", () => {
+    expect(mergeLabels(["Diseño"], ["diseno"])).toEqual(["diseno"]);
   });
 
-  it("also dedupes an accented real label 'Diseño' via diacritic-insensitive normalization", () => {
-    expect(mergeLabels(["Diseño"])).toEqual(CANONICAL_LABELS);
+  it("is backward compatible: omitting customLabelSlugs is a plain real-labels passthrough", () => {
+    expect(mergeLabels(["important", "urgent"])).toEqual(["important", "urgent"]);
   });
 });
 
@@ -205,13 +204,13 @@ describe("CUSTOM_LABEL_PALETTE (small brand-safe color picker)", () => {
   });
 });
 
-describe("isLabelNameTaken (dedupe custom vs canonical, CLARO-08/OSCURO-07 style)", () => {
+describe("isLabelNameTaken (dedupe against the user's own custom labels; #83: no reserved canonical names)", () => {
   const existing: CustomLabel[] = [{ slug: "ventas", name: "Ventas", color: "#9B6BDB" }];
 
-  it("is taken when the name slugifies to a canonical label, accented or not", () => {
-    expect(isLabelNameTaken("Urgente", [])).toBe(true);
-    expect(isLabelNameTaken("Diseño", [])).toBe(true);
-    expect(isLabelNameTaken("diseno", [])).toBe(true);
+  it("is NOT taken for the former-canonical names — #83 they're no longer reserved/special", () => {
+    expect(isLabelNameTaken("Urgente", [])).toBe(false);
+    expect(isLabelNameTaken("Diseño", [])).toBe(false);
+    expect(isLabelNameTaken("diseno", [])).toBe(false);
   });
 
   it("is taken when the name slugifies to an existing custom label's slug (case/diacritic-insensitive)", () => {
@@ -264,7 +263,10 @@ describe("labelDisplayName with a custom label list", () => {
     expect(labelDisplayName("ventas", custom)).toBe("Ventas Q3");
   });
 
-  it("still prefers the canonical display override over any (impossible, but defensive) collision", () => {
+  it("falls back to the fixed display override for a slug absent from this particular customLabels list", () => {
+    // `custom` here only has "ventas" — no actual collision with "diseno". A
+    // REAL collision (a custom label whose own slug is "diseno") now takes
+    // the opposite precedence — see the reordered-precedence suite below.
     expect(labelDisplayName("diseno", custom)).toBe("Diseño");
   });
 
@@ -273,27 +275,55 @@ describe("labelDisplayName with a custom label list", () => {
   });
 });
 
-describe("mergeLabels with custom label slugs (always visible in the nav, like canonical)", () => {
-  it("appends custom labels after canonical ones even with zero matching mail", () => {
-    expect(mergeLabels([], ["ventas"])).toEqual([...CANONICAL_LABELS, "ventas"]);
+// Review finding #1: GH #83 made the 4 former-canonical names ordinary,
+// user-creatable custom labels — so a custom label's OWN stored color/name
+// must win over FIXED_LABEL_STYLE/LABEL_DISPLAY_OVERRIDES, or a user who
+// picks their own color for "Urgente" gets it silently overridden by the
+// fixed brand red. The fixed styling now only applies to a label with NO
+// custom definition — i.e. a real, discovered JMAP keyword nobody has
+// "claimed" as a custom label.
+describe("labelColor/labelBackground/labelDisplayName precedence: a custom label's own definition wins (review finding #1)", () => {
+  it("a custom label named 'Urgente' (slug 'urgente') keeps its own picked color and typed name", () => {
+    const custom: CustomLabel[] = [{ slug: "urgente", name: "Urgente", color: "#9B6BDB" }];
+    expect(labelColor("urgente", custom)).toBe("#9B6BDB");
+    expect(labelBackground("urgente", custom)).toBe("rgba(155, 107, 219, 0.14)");
+    expect(labelDisplayName("urgente", custom)).toBe("Urgente");
   });
 
-  it("dedupes a custom label slug against real labels found in mail (no duplicate chip)", () => {
-    expect(mergeLabels(["ventas"], ["ventas"])).toEqual([...CANONICAL_LABELS, "ventas"]);
+  it("a discovered 'urgente' keyword with NO custom definition still gets the fixed brand red", () => {
+    expect(labelColor("urgente", [])).toBe("#F26565");
+    expect(labelBackground("urgente", [])).toBe("rgba(242, 101, 101, 0.14)");
+    // No display override for "urgente" — CSS `capitalize` renders it
+    // "Urgente" visually (see labelDisplayName's own unit tests above).
+    expect(labelDisplayName("urgente", [])).toBe("urgente");
   });
 
-  it("dedupes a custom label slug that collides with a canonical one (defensive)", () => {
-    expect(mergeLabels([], ["urgente"])).toEqual(CANONICAL_LABELS);
+  it("a custom label named 'Diseño' (slug 'diseno') keeps its own color/name over the fixed accent override", () => {
+    const custom: CustomLabel[] = [{ slug: "diseno", name: "Diseño", color: "#2FB8C4" }];
+    expect(labelColor("diseno", custom)).toBe("#2FB8C4");
+    expect(labelDisplayName("diseno", custom)).toBe("Diseño");
   });
 
-  it("keeps real, unregistered extras after canonical + custom", () => {
-    expect(mergeLabels(["important"], ["ventas"])).toEqual([...CANONICAL_LABELS, "ventas", "important"]);
+  it("a discovered 'diseno' keyword with NO custom definition still uses the fixed color and 'Diseño' override", () => {
+    expect(labelColor("diseno", [])).toBe("#E5A13D");
+    expect(labelDisplayName("diseno", [])).toBe("Diseño");
+  });
+});
+
+describe("mergeLabels: custom label slugs are always visible in the nav (#102/#83 taxonomy = the user's own labels)", () => {
+  it("shows custom labels even with zero matching mail", () => {
+    expect(mergeLabels([], ["ventas"])).toEqual(["ventas"]);
   });
 
-  it("is backward compatible: omitting customLabelSlugs behaves exactly as before", () => {
-    expect(mergeLabels([])).toEqual(CANONICAL_LABELS);
-    expect(mergeLabels(["important", "urgent"])).toEqual([
-      "urgente", "producto", "diseno", "finanzas", "important", "urgent",
-    ]);
+  it("dedupes a custom label slug against a real label found in mail (no duplicate chip)", () => {
+    expect(mergeLabels(["ventas"], ["ventas"])).toEqual(["ventas"]);
+  });
+
+  it("keeps real, unregistered extras after the custom labels", () => {
+    expect(mergeLabels(["important"], ["ventas"])).toEqual(["ventas", "important"]);
+  });
+
+  it("a custom label named after a former-canonical slug (e.g. 'urgente') behaves like any other custom label", () => {
+    expect(mergeLabels([], ["urgente"])).toEqual(["urgente"]);
   });
 });

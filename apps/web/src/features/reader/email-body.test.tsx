@@ -365,4 +365,208 @@ describe("EmailBody", () => {
       expect(srcDoc).not.toContain("cid:first123");
     });
   });
+
+  // GH #91: each reply used to show the full quoted trail inline, repeating
+  // the previous message's text down the thread. It's now hidden behind a
+  // toggle — detected and split out of the raw body before sanitizing.
+  describe("quoted trail (GH #91)", () => {
+    const QUOTED_HTML_BODY =
+      '<p style="margin:0">New reply content</p>' +
+      '<div class="gmail_quote">' +
+      '<div class="gmail_attr">On Mon, Jul 20, 2026 at 10:00 AM John Doe &lt;john@example.com&gt; wrote:<br></div>' +
+      '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">' +
+      '<p style="margin:0">Original message</p>' +
+      "</blockquote>" +
+      "</div>";
+
+    it("renders only the new content by default and hides the quoted trail behind a toggle", async () => {
+      render(<EmailBody bodyHtml={QUOTED_HTML_BODY} bodyText={null} />);
+
+      expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(1);
+      const mainSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(mainSrcDoc).toContain("New reply content");
+      expect(mainSrcDoc).not.toContain("Original message");
+
+      expect(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") })).toBeInTheDocument();
+    });
+
+    it("reveals the quoted trail (through the same sanitized iframe path) when the toggle is clicked", async () => {
+      render(<EmailBody bodyHtml={QUOTED_HTML_BODY} bodyText={null} />);
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+      await waitFor(() => {
+        expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(2);
+      });
+      const srcDocs = screen
+        .getAllByTitle(i18n.t("mail.emailContent"))
+        .map((el) => el.getAttribute("srcdoc") ?? "");
+      expect(srcDocs.some((doc) => doc.includes("Original message"))).toBe(true);
+
+      expect(screen.getByRole("button", { name: i18n.t("mail.hideQuotedContent") })).toBeInTheDocument();
+    });
+
+    it("hides the quoted trail again when the toggle is clicked a second time", async () => {
+      render(<EmailBody bodyHtml={QUOTED_HTML_BODY} bodyText={null} />);
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+      await screen.findByRole("button", { name: i18n.t("mail.hideQuotedContent") });
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.hideQuotedContent") }));
+
+      expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(1);
+      expect(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") })).toBeInTheDocument();
+    });
+
+    it("shows no quoted-content toggle for a body with no detected quote", () => {
+      render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
+
+      expect(screen.queryByRole("button", { name: i18n.t("mail.showQuotedContent") })).not.toBeInTheDocument();
+    });
+
+    it("splits a plain-text body at the first '>'-quoted line and hides it behind the same toggle", async () => {
+      const plainBody =
+        "New reply content\n\nOn Mon, Jul 20, 2026 at 10:00 AM John Doe wrote:\n> Original message\n> more quoted text";
+      render(<EmailBody bodyHtml={null} bodyText={plainBody} />);
+
+      expect(screen.getByText("New reply content")).toBeInTheDocument();
+      expect(screen.queryByText(/Original message/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+      expect(await screen.findByText(/Original message/)).toBeInTheDocument();
+    });
+
+    it("shows no toggle for a plain-text body with no quoted trail", () => {
+      render(<EmailBody bodyHtml={null} bodyText="Just a normal message, nothing quoted here." />);
+
+      expect(screen.queryByRole("button", { name: i18n.t("mail.showQuotedContent") })).not.toBeInTheDocument();
+    });
+
+    // Follow-up fixes to the boundary heuristic — a real reviewer found two
+    // ways the naive "first blockquote/gmail_quote, climb to the top-level
+    // ancestor" split could hide genuine new content, plus an over-eager
+    // plain-text '>' match.
+    describe("boundary heuristic (does not hide genuine new content)", () => {
+      it("does not hide new content that follows an inline blockquote that isn't actually a trailing quote", () => {
+        // A <blockquote> used inline (Gmail's own "quote" composer button, or
+        // a pasted quote) with real new content on BOTH sides — the naive
+        // "first blockquote onward" rule would wrongly swallow the paragraph
+        // that follows it.
+        const inlineBlockquoteBody =
+          "<p>Quoting something below:</p>" +
+          "<blockquote>inline quoted note</blockquote>" +
+          "<p>This is new content after the quote.</p>";
+
+        render(<EmailBody bodyHtml={inlineBlockquoteBody} bodyText={null} />);
+
+        expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(1);
+        const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+        expect(srcDoc).toContain("This is new content after the quote.");
+        // Not a trailing quote (real content follows it) — nothing to
+        // toggle, the whole body renders exactly as it does today.
+        expect(screen.queryByRole("button", { name: i18n.t("mail.showQuotedContent") })).not.toBeInTheDocument();
+      });
+
+      it("splits inside a shared wrapper div so the reply text before the quote stays visible as new content", async () => {
+        // Real client markup: ONE body-level wrapper (<div dir="ltr">) holds
+        // both the reply text and the .gmail_quote — climbing to the
+        // top-level ancestor (the wrapper) would empty newHtml entirely.
+        const wrappedBody =
+          '<div dir="ltr">This is my reply text.' +
+          '<div class="gmail_quote">' +
+          '<div class="gmail_attr">On Mon, Jul 20, 2026 wrote:<br></div>' +
+          '<blockquote class="gmail_quote">Original quoted text</blockquote>' +
+          "</div></div>";
+
+        render(<EmailBody bodyHtml={wrappedBody} bodyText={null} />);
+
+        const mainSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+        expect(mainSrcDoc).toContain("This is my reply text.");
+        expect(mainSrcDoc).not.toContain("Original quoted text");
+
+        fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+        await waitFor(() => {
+          expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(2);
+        });
+        const srcDocs = screen
+          .getAllByTitle(i18n.t("mail.emailContent"))
+          .map((el) => el.getAttribute("srcdoc") ?? "");
+        expect(srcDocs.some((doc) => doc.includes("Original quoted text"))).toBe(true);
+      });
+
+      it("renders an all-quote body normally instead of an empty iframe behind a toggle that hides everything", () => {
+        const allQuoteBody = '<blockquote class="gmail_quote">Entirely quoted content, no new text at all.</blockquote>';
+
+        render(<EmailBody bodyHtml={allQuoteBody} bodyText={null} />);
+
+        expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(1);
+        const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+        expect(srcDoc).toContain("Entirely quoted content, no new text at all.");
+        expect(screen.queryByRole("button", { name: i18n.t("mail.showQuotedContent") })).not.toBeInTheDocument();
+      });
+
+      it("does not truncate plain text at a lone '>' line that isn't actually a trailing quote", () => {
+        // "> a quoted-looking line" here is a red herring (a code snippet, a
+        // shell prompt, a numeric comparison) — real new content follows it,
+        // so it must not be treated as a quote boundary.
+        const body = "New content here.\n> a quoted-looking line\nMore new content after.";
+
+        render(<EmailBody bodyHtml={null} bodyText={body} />);
+
+        expect(screen.getByText(/New content here\./)).toBeInTheDocument();
+        expect(screen.getByText(/a quoted-looking line/)).toBeInTheDocument();
+        expect(screen.getByText(/More new content after\./)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: i18n.t("mail.showQuotedContent") })).not.toBeInTheDocument();
+      });
+    });
+
+    // Security regression lock: the split that decides where the quote
+    // starts happens on RAW html in a detached document (never executed),
+    // but the quoted trail itself must still go through sanitizeEmailHtml
+    // and the same sandbox="" iframe as the main body once revealed — a
+    // dangerous payload hidden inside the quote must be neutralized exactly
+    // like it already is in the main body.
+    it("sanitizes the quoted trail before rendering it — a dangerous payload inside the quote is neutralized once revealed", async () => {
+      const dangerousBody =
+        '<p style="margin:0">New content</p>' +
+        '<blockquote class="gmail_quote">' +
+        "<script>window.__pwned = true;</script>" +
+        '<img src="https://evil.test/track.png">' +
+        '<div style="background:url(https://evil.test/bg.png)">quoted payload marker</div>' +
+        "</blockquote>";
+
+      render(<EmailBody bodyHtml={dangerousBody} bodyText={null} />);
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+      await waitFor(() => {
+        expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(2);
+      });
+      const srcDocs = screen
+        .getAllByTitle(i18n.t("mail.emailContent"))
+        .map((el) => el.getAttribute("srcdoc") ?? "");
+      const quotedSrcDoc = srcDocs.find((doc) => doc.includes("quoted payload marker"));
+      expect(quotedSrcDoc).toBeTruthy();
+
+      expect(quotedSrcDoc).not.toContain("<script");
+      expect(quotedSrcDoc).not.toContain("window.__pwned");
+      // Matches sanitize.test.ts's own convention: a blocked remote <img>'s
+      // URL is kept percent-encoded (recoverable for a future "load
+      // images" opt-in — see sanitizeEmailHtml's data-blocked-src comment),
+      // so it's the live, fetchable "https://evil.test" URL that must never
+      // appear, not every character of the domain name.
+      expect(quotedSrcDoc).not.toContain("https://evil.test");
+      // The live `src` was neutralized (removed), leaving only the inert,
+      // percent-encoded data-blocked-src the "load images" toggle can
+      // later recover — never a fetchable src attribute.
+      expect(quotedSrcDoc).not.toMatch(/<img[^>]*\ssrc="https/);
+
+      // The remote image/CSS url() inside the quote are blocked the same
+      // way the main body already blocks them — revealing the quote must
+      // not bypass the "load images" gate.
+      expect(screen.getByRole("button", { name: i18n.t("mail.loadImages") })).toBeInTheDocument();
+    });
+  });
 });

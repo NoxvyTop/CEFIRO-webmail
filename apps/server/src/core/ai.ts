@@ -10,6 +10,12 @@
 export type AiClient = {
   /** Summarizes an email body into a short list of bullet points. */
   summarize(body: string): Promise<string[]>;
+  /**
+   * Summarizes a whole conversation (thread messages, in order, sender +
+   * already-cleaned body — no dragged quote trail) into bullet points
+   * covering who said what, decisions made, and pending/action items.
+   */
+  summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]>;
   /** Drafts a reply body (in Spanish) from a subject and optional short context. */
   draftReply(subject: string, context?: string): Promise<string>;
 };

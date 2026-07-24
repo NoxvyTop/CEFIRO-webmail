@@ -1,6 +1,6 @@
 {
   "app": {
-    "tagline": "correo del ecosistema",
+    "home": "Ir al inicio",
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",
@@ -30,7 +30,11 @@
       "unlinkedCount": "{{count}} sin vincular"
     },
     "settings": {
-      "comingSoon": "Próximamente"
+      "title": "Ajustes de la instancia",
+      "footer": {
+        "label": "Pie \"Enviado con CÉFIRO\"",
+        "description": "Muestra la frase de marca CÉFIRO debajo de los botones Responder y Reenviar en cada correo del lector. Desactivado por defecto."
+      }
     },
     "mailbox": {
       "linked": "Buzón vinculado",
@@ -156,10 +160,12 @@
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount": "{{count}} correos",
+    "conversationCount": "{{count}} mensajes",
     "searchPlaceholder": "Buscar en el correo…",
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un correo",
+    "loading": "Cargando…",
     "loadImages": "Cargar imágenes",
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
@@ -181,6 +187,7 @@
       "hint": "Pide a un administrador que lo vincule."
     },
     "summarizeWithAi": "✦ Resumir con IA",
+    "summarizeConversation": "✦ Resumir conversación",
     "aiSummaryTitle": "Resumen IA",
     "aiSummaryLoading": "Analizando el mensaje…",
     "backToList": "Volver a la lista",
@@ -189,6 +196,8 @@
     "unstar": "Quitar destacado",
     "archived": "Correo archivado",
     "archivedHint": "pulsa e para archivar más rápido",
+    "unarchive": "Mover a Recibidos",
+    "unarchived": "Movido a Recibidos",
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta",
     "newLabel": "Nueva etiqueta",
@@ -197,11 +206,17 @@
     "createLabel": "Crear etiqueta",
     "cancelNewLabel": "Cancelar",
     "deleteLabel": "Eliminar etiqueta {{name}}",
+    "confirmDeleteLabel": "¿Eliminar «{{name}}»?",
+    "confirmDelete": "Confirmar",
     "labelNameRequired": "Escribe un nombre para la etiqueta",
     "labelNameDuplicate": "Ya existe una etiqueta con ese nombre",
+    "noLabelsToApply": "Todavía no tienes etiquetas. Crea una desde la barra lateral",
     "toMeAndTeam": "para mí y el equipo",
     "sentTo": "Para:",
     "yesterday": "Ayer",
+    "expandMessage": "Mostrar mensaje completo de {{sender}}",
+    "showQuotedContent": "Mostrar contenido citado",
+    "hideQuotedContent": "Ocultar contenido citado",
     "folders": {
       "inbox": "Recibidos",
       "sent": "Enviados",
@@ -210,10 +225,6 @@
       "junk": "Spam",
       "drafts": "Borradores"
     }
-  },
-  "modules": {
-    "title": "Módulos",
-    "mail": "Correo"
   },
   "groups": {
     "title": "Grupos",
@@ -247,14 +258,24 @@
     "bold": "Negrita",
     "italic": "Cursiva",
     "bulletList": "Lista con viñetas",
+    "textAlignLeft": "Alinear texto a la izquierda",
+    "textAlignCenter": "Centrar texto",
+    "textAlignRight": "Alinear texto a la derecha",
     "link": "Enlace",
     "linkUrl": "URL del enlace",
     "image": "Imagen",
     "insertImage": "Insertar imagen",
     "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
     "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG, GIF o WebP)",
+    "imageSizeSmall": "Imagen pequeña",
+    "imageSizeMedium": "Imagen mediana",
+    "imageSizeLarge": "Imagen grande",
+    "imageAlignLeft": "Alinear imagen a la izquierda",
+    "imageAlignCenter": "Centrar imagen",
+    "imageAlignRight": "Alinear imagen a la derecha",
     "removeRecipient": "Quitar {{email}}",
-    "removeAttachment": "Quitar {{name}}",
+    "dropHint": "Suelta para adjuntar",
+    "duplicateAttachment": "{{name}} ya fue adjuntado",
     "errors": {
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
@@ -274,6 +295,7 @@
     "download": "Descargar",
     "view": "Ver",
     "viewNamed": "Ver {{name}}",
+    "remove": "Quitar {{name}}",
     "print": "Imprimir",
     "close": "Cerrar",
     "previewLoading": "Cargando vista previa…",
@@ -283,12 +305,25 @@
   },
   "settings": {
     "title": "Ajustes",
+    "profile": "Perfil",
     "signatures": "Firmas",
     "back": "Volver",
+    "nav": {
+      "label": "Secciones de ajustes",
+      "profile": "Perfil",
+      "signatures": "Firmas",
+      "filters": "Filtros",
+      "vacation": "Ausencia"
+    },
     "newSignature": "Nueva firma",
     "name": "Nombre",
+    "displayName": "Nombre para mostrar",
+    "photo": "Foto de perfil",
+    "changePhoto": "Cambiar foto",
+    "removePhoto": "Quitar foto",
     "default": "Predeterminada",
     "save": "Guardar",
+    "saved": "Guardado",
     "delete": "Eliminar",
     "edit": "Editar",
     "errors": {
@@ -299,6 +334,8 @@
       "sieve_sync_failed": "Guardado, pero aún no aplicado en el servidor de correo",
       "vacationMessageRequired": "Escribe un mensaje para la respuesta automática",
       "vacationDateOrder": "La fecha de fin no puede ser anterior a la de inicio",
+      "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG o WebP)",
+      "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
       "generic": "Algo salió mal"
     }
   },

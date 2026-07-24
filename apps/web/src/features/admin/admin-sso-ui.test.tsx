@@ -8,11 +8,13 @@ import i18n from "../../app/i18n";
 import { AdminPage } from "./AdminPage";
 
 const {
-  fetchAdminUsers, fetchAdminSso, updateAdminSso,
+  fetchAdminUsers, fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 } = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   fetchAdminSso: vi.fn(),
   updateAdminSso: vi.fn(),
+  fetchAdminInstance: vi.fn().mockResolvedValue({ sentWithFooter: false }),
+  updateAdminInstance: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -23,6 +25,8 @@ vi.mock("./api", () => ({
   setUserCredential: vi.fn(),
   fetchAdminSso,
   updateAdminSso,
+  fetchAdminInstance,
+  updateAdminInstance,
 }));
 
 const configuredSso: AdminSsoView = {

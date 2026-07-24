@@ -22,6 +22,11 @@ const configSchema = z.object({
   aiProvider: z.string().min(1).default("anthropic"),
   aiApiKey: z.string().min(1).optional(),
   aiModel: z.string().min(1).default("claude-opus-4-8"),
+  // API root for OpenAI-compatible providers (MiniMax, Kimi/Moonshot, a local
+  // Ollama/vLLM/LiteLLM server, ...), INCLUDING any `/v1` segment the
+  // provider requires (OpenAI-SDK convention). Only consulted when
+  // aiProvider is "openai-compat" — see infra/ai/openai-compatible.ts.
+  aiBaseUrl: z.string().min(1).optional(),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -42,5 +47,6 @@ export function loadConfig(
     aiProvider: env.AI_PROVIDER || undefined,
     aiApiKey: env.AI_API_KEY || undefined,
     aiModel: env.AI_MODEL || undefined,
+    aiBaseUrl: env.AI_BASE_URL || undefined,
   });
 }

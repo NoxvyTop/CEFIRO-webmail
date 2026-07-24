@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
 import { fetchIdentities, fetchSignatures } from "./api";
-import { useComposer } from "./useComposer";
+import { useComposer, type PendingUpload } from "./useComposer";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import type { ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
 import { CloseIcon } from "../../app/ui/icons";
 import { useToast } from "../../app/ui/toast";
+import { AttachmentCard } from "../reader/AttachmentCard";
 
 interface ComposerProps {
   initial: ComposerDraft;
@@ -20,8 +21,34 @@ interface ComposerProps {
   trashMailboxId?: string | null;
 }
 
-function formatSizeKb(size: number): string {
-  return `${(size / 1024).toFixed(1)} KB`;
+// True only for a drag carrying actual OS files (dataTransfer.types includes
+// "Files") — guards against hijacking normal text drag/selection inside form
+// fields (e.g. dragging selected recipient/subject text around).
+function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  return Array.from(dataTransfer.types ?? []).includes("Files");
+}
+
+// Pending uploads have no blobId yet, so they can't use AttachmentCard's
+// server-blob preview — this is a compact placeholder shown in the same
+// grid until the upload resolves (or errors) into a real attachment.
+function PendingUploadCard({ upload }: { upload: PendingUpload }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="composer-pending-upload"
+      className="flex w-[172px] shrink-0 flex-col justify-center gap-1 rounded-xl border border-line-strong bg-soft px-2.5 py-2 text-xs"
+    >
+      <span className="truncate">{upload.name}</span>
+      {upload.error ? (
+        <span role="alert" className="text-warn">
+          {t("composer.errors.generic")}
+        </span>
+      ) : (
+        <progress value={upload.progress} max={1} className="w-full" />
+      )}
+    </div>
+  );
 }
 
 export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
@@ -33,6 +60,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   );
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Guards the default-signature auto-apply so it only runs once per composer
   // session (on open), not on every render once signatures finish loading.
@@ -72,10 +100,45 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     }
   }
 
+  // Shared by both the hidden file input and drag&drop — addFiles already
+  // dedups (name+size) and enforces the existing upload limits; this just
+  // surfaces the dedup outcome as a toast, reusing the composer's existing
+  // toast mechanism (also used for the "sent" confirmation above).
+  function attachFiles(files: File[]) {
+    const { skipped } = addFiles(files);
+    if (skipped.length > 0) {
+      showToast(t("composer.duplicateAttachment", { name: skipped[0] }));
+    }
+  }
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const files = event.target.files ? Array.from(event.target.files) : [];
-    if (files.length > 0) addFiles(files);
+    if (files.length > 0) attachFiles(files);
     event.target.value = "";
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    // Prevents the browser's default "open file" navigation anywhere over
+    // the dialog, and signals to the browser that a drop is allowed here.
+    event.preventDefault();
+    setIsDraggingFiles(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    // Ignore leaves into a child element (still inside the dialog) so the
+    // overlay doesn't flicker while the pointer moves across nested nodes.
+    const related = event.relatedTarget as Node | null;
+    if (related && event.currentTarget.contains(related)) return;
+    setIsDraggingFiles(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    setIsDraggingFiles(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length > 0) attachFiles(files);
   }
 
   return (
@@ -83,11 +146,22 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
       role="dialog"
       aria-label={t("composer.newMessage")}
       className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <div
-        className="flex max-h-full w-full max-w-[640px] flex-col overflow-y-auto rounded-[14px] border border-line bg-panel shadow-pop"
+        className="relative flex max-h-full w-full max-w-[640px] flex-col overflow-y-auto rounded-[14px] border border-line bg-panel shadow-pop"
         style={{ animation: "popIn 0.18s ease" }}
       >
+        {isDraggingFiles && (
+          <div
+            data-testid="composer-drop-overlay"
+            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[14px] border-2 border-dashed border-accent bg-accent/10 text-[15px] font-semibold text-accent-text"
+          >
+            {t("composer.dropHint")}
+          </div>
+        )}
         <div className="flex h-12 shrink-0 items-center gap-2.5 rounded-t-[14px] border-b border-line bg-soft px-[18px]">
           <h2 className="flex-1 text-[14px] font-[650]">{t("composer.newMessage")}</h2>
           <button
@@ -107,7 +181,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               aria-label={t("composer.from")}
               value={state.draft.identityId}
               onChange={(event) => setField("identityId", event.target.value)}
-              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink outline-none"
+              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
             >
               {identities.map((identity) => (
                 <option key={identity.id} value={identity.id}>
@@ -152,7 +226,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             placeholder={t("composer.subject")}
             value={state.draft.subject}
             onChange={(event) => setField("subject", event.target.value)}
-            className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink outline-none placeholder:font-normal placeholder:text-muted focus:border-accent"
+            className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink field-focus-line focus:border-accent placeholder:font-normal placeholder:text-muted"
           />
 
           <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
@@ -161,7 +235,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               aria-label={t("composer.signature")}
               value={appliedSignatureId}
               onChange={(event) => handleSignatureChange(event.target.value)}
-              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink outline-none"
+              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
             >
               <option value="">{t("composer.noSignature")}</option>
               {signatures.map((signature) => (
@@ -197,35 +271,18 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               </button>
             </div>
             {(state.attachments.length > 0 || state.uploads.length > 0) && (
-              <ul className="flex flex-col gap-1">
+              <div className="flex flex-wrap gap-2">
                 {state.attachments.map((attachment) => (
-                  <li key={attachment.blobId} className="flex items-center justify-between gap-2 text-xs">
-                    <span>
-                      {attachment.name} ({formatSizeKb(attachment.size)})
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={t("composer.removeAttachment", { name: attachment.name })}
-                      onClick={() => removeAttachment(attachment.blobId)}
-                      className="text-muted"
-                    >
-                      <CloseIcon size={14} />
-                    </button>
-                  </li>
+                  <AttachmentCard
+                    key={attachment.blobId}
+                    attachment={{ ...attachment, cid: null }}
+                    onRemove={() => removeAttachment(attachment.blobId)}
+                  />
                 ))}
                 {state.uploads.map((upload) => (
-                  <li key={upload.id} className="flex items-center justify-between gap-2 text-xs">
-                    <span>{upload.name}</span>
-                    {upload.error ? (
-                      <span role="alert" className="text-warn">
-                        {t("composer.errors.generic")}
-                      </span>
-                    ) : (
-                      <progress value={upload.progress} max={1} />
-                    )}
-                  </li>
+                  <PendingUploadCard key={upload.id} upload={upload} />
                 ))}
-              </ul>
+              </div>
             )}
           </div>
 

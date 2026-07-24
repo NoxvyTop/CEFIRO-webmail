@@ -1,12 +1,13 @@
 import { serveStatic } from "hono/bun";
 import { fileURLToPath } from "node:url";
 import { createApp } from "./app";
-import { loadConfig } from "./core/config";
+import { loadConfig, type AppConfig } from "./core/config";
 import { log } from "./core/logger";
 import { createDb } from "./infra/db/client";
 import { checkDb } from "./infra/db/health";
 import { migrate } from "./infra/db/migrate";
 import { createAuditRepo } from "./infra/repos/audit";
+import { createInstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { createMailCredentialsRepo } from "./infra/repos/mail-credentials";
 import { createSignaturesRepo } from "./infra/repos/signatures";
 import { createSsoConfigRepo } from "./infra/repos/sso-config";
@@ -21,13 +22,15 @@ import { createJmapClient } from "./infra/stalwart/jmap";
 import { createMailRouter } from "./modules/mail/router";
 import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
+import { createProfileRouter } from "./modules/profile/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
 import { createAiRouter } from "./modules/ai/router";
 import { createAnthropicAiClient } from "./infra/ai/anthropic";
+import { createOpenAiCompatibleClient } from "./infra/ai/openai-compatible";
 import type { AiClient } from "./core/ai";
 
-let config;
+let config: AppConfig;
 try {
   config = loadConfig(process.env);
 } catch (error) {
@@ -43,6 +46,7 @@ const users = createUsersRepo(db);
 const audit = createAuditRepo(db);
 const sessions = createSessionStore(db);
 const ssoConfig = createSsoConfigRepo(db, masterKey);
+const instanceSettings = createInstanceSettingsRepo(db);
 const mailCredentials = createMailCredentialsRepo(db, masterKey);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
@@ -59,10 +63,30 @@ log("info", "mail proxy", { configured: jmap !== null });
 // enabled AND an API key is configured. See docs/ARCHITECTURE.md ("IA —
 // funciones opt-in") — any further network-level restriction is a
 // deployment-specific choice outside this software's contract.
-const aiClient: AiClient | null =
-  config.aiEnabled && config.aiApiKey
-    ? createAnthropicAiClient({ apiKey: config.aiApiKey, model: config.aiModel })
-    : null;
+//
+// Provider selection: "openai-compat" covers any provider speaking the
+// OpenAI-compatible `/v1/chat/completions` API (MiniMax, Kimi/Moonshot, or a
+// self-hosted Ollama/vLLM/LiteLLM server) via a single adapter configured
+// with `aiBaseUrl`. Anything else (default) uses the Anthropic adapter.
+// Both tasks currently reuse the same `config.aiModel` — per-task model
+// selection is a future enhancement (see GitHub issue #115 "consider").
+function buildAiClient(): AiClient | null {
+  if (!config.aiEnabled || !config.aiApiKey) return null;
+  if (config.aiProvider === "openai-compat") {
+    if (!config.aiBaseUrl) {
+      log("warn", "ai provider openai-compat requires aiBaseUrl (AI_BASE_URL); AI features disabled", {});
+      return null;
+    }
+    return createOpenAiCompatibleClient({
+      apiKey: config.aiApiKey,
+      model: config.aiModel,
+      baseUrl: config.aiBaseUrl,
+    });
+  }
+  return createAnthropicAiClient({ apiKey: config.aiApiKey, model: config.aiModel });
+}
+
+const aiClient: AiClient | null = buildAiClient();
 
 log("info", "ai features", { enabled: aiClient !== null, provider: config.aiProvider });
 
@@ -75,6 +99,7 @@ if (bootstrap.enabled) {
 
 const app = createApp({
   checks: { postgres: () => checkDb(db) },
+  instanceSettings,
   authRouter: createAuthRouter({
     sessions,
     users,
@@ -88,8 +113,9 @@ const app = createApp({
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap }),
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
-  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig }),
+  adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
+  profileRouter: createProfileRouter({ sessions, users, audit }),
 });
 
 if (process.env.NODE_ENV === "production") {

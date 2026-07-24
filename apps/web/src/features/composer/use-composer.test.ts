@@ -62,6 +62,91 @@ describe("useComposer", () => {
     expect(result.current.state.uploads[0]?.name).toBe("b.png");
   });
 
+  describe("addFiles: dedup (#114)", () => {
+    // These tests assert exact uploadAttachment call counts, so the shared
+    // mock (accumulated across earlier tests in this file) must start clean.
+    beforeEach(() => {
+      uploadAttachment.mockReset();
+    });
+
+    it("skips a file that duplicates an already-uploaded attachment (same name+size) and reports it as skipped", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "blob1", type: "image/png", size: 5 });
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "dup.png", { type: "image/png" })]);
+      });
+      await waitFor(() => expect(result.current.state.attachments).toHaveLength(1));
+
+      let outcome: { skipped: string[] } | undefined;
+      act(() => {
+        outcome = result.current.addFiles([new File(["hello"], "dup.png", { type: "image/png" })]);
+      });
+
+      expect(outcome?.skipped).toEqual(["dup.png"]);
+      expect(uploadAttachment).toHaveBeenCalledTimes(1);
+      expect(result.current.state.attachments).toHaveLength(1);
+      expect(result.current.state.uploads).toHaveLength(0);
+    });
+
+    it("skips a file that duplicates an already-pending upload (same name+size, not yet resolved)", async () => {
+      uploadAttachment.mockReturnValueOnce(new Promise(() => {})); // never resolves — stays pending
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "pending.png", { type: "image/png" })]);
+      });
+      expect(result.current.state.uploads).toHaveLength(1);
+
+      let outcome: { skipped: string[] } | undefined;
+      act(() => {
+        outcome = result.current.addFiles([new File(["hello"], "pending.png", { type: "image/png" })]);
+      });
+
+      expect(outcome?.skipped).toEqual(["pending.png"]);
+      expect(uploadAttachment).toHaveBeenCalledTimes(1);
+      expect(result.current.state.uploads).toHaveLength(1);
+    });
+
+    it("skips a duplicate within the same addFiles call (two identical files selected at once)", () => {
+      uploadAttachment.mockReturnValueOnce(new Promise(() => {}));
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      let outcome: { skipped: string[] } | undefined;
+      act(() => {
+        outcome = result.current.addFiles([
+          new File(["hello"], "same.png", { type: "image/png" }),
+          new File(["hello"], "same.png", { type: "image/png" }),
+        ]);
+      });
+
+      expect(outcome?.skipped).toEqual(["same.png"]);
+      expect(uploadAttachment).toHaveBeenCalledTimes(1);
+      expect(result.current.state.uploads).toHaveLength(1);
+    });
+
+    it("does not skip files with the same name but a different size", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "blob1", type: "image/png", size: 5 });
+      uploadAttachment.mockResolvedValueOnce({ blobId: "blob2", type: "image/png", size: 9 });
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "same-name.png", { type: "image/png" })]);
+      });
+      await waitFor(() => expect(result.current.state.attachments).toHaveLength(1));
+
+      let outcome: { skipped: string[] } | undefined;
+      act(() => {
+        outcome = result.current.addFiles([
+          new File(["hello world"], "same-name.png", { type: "image/png" }),
+        ]);
+      });
+
+      expect(outcome?.skipped).toEqual([]);
+      await waitFor(() => expect(result.current.state.attachments).toHaveLength(2));
+    });
+  });
+
   it("send: without a recipient sets noRecipients error and does not call sendEmail", async () => {
     const { result } = renderHook(() => useComposer(baseDraft()));
 

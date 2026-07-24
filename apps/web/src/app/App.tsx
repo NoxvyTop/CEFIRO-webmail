@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
+import { useProfile } from "../features/settings/useProfile";
 import { CefiroLogo } from "./ui/CefiroLogo";
 import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { isPlainShortcut } from "./ui/shortcuts";
@@ -23,6 +24,7 @@ function currentNotificationPermission(): NotificationPermission | null {
 export function App() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const profile = useProfile();
   const { theme, toggleTheme } = useTheme();
   const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
   const location = useLocation();
@@ -84,15 +86,16 @@ export function App() {
       <div className="flex h-screen flex-col">
         {/* no overflow clipping here: it would cut off the absolutely-positioned user menu */}
         <header className="flex h-[60px] shrink-0 items-center gap-5 border-b border-line bg-panel px-5 text-ink">
-          <div className="flex shrink-0 items-center gap-[11px] md:min-w-[210px]">
+          <Link
+            to="/"
+            aria-label={t("app.home")}
+            className="flex shrink-0 items-center justify-center gap-[11px] rounded-md transition hover:opacity-80 md:min-w-[210px]"
+          >
             <CefiroLogo size={32} />
-            <div className="hidden flex-col md:flex">
-              <span className="text-[15px] font-bold tracking-[0.32em]">CÉFIRO</span>
-              <span className="text-[10.5px] tracking-[0.08em] text-muted">{t("app.tagline")}</span>
-            </div>
-          </div>
+            <span className="hidden text-[15px] font-bold tracking-[0.32em] md:block">CÉFIRO</span>
+          </Link>
           <form onSubmit={handleSearchSubmit} className="min-w-0 max-w-[560px] flex-1">
-            <div className="flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2">
+            <div className="field-focus-within flex h-10 items-center gap-2.5 rounded-input border border-line bg-soft px-3.5">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0 opacity-50">
                 <circle cx="11" cy="11" r="7" />
                 <path d="m20 20-3.5-3.5" />
@@ -104,7 +107,7 @@ export function App() {
                 onChange={(event) => setSearchValue(event.target.value)}
                 placeholder={t("mail.searchPlaceholder")}
                 aria-label={t("mail.searchPlaceholder")}
-                className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted"
+                className="w-full bg-transparent text-sm text-ink field-focus-line placeholder:text-muted"
               />
               <kbd aria-hidden="true" className="rounded-[5px] border border-line bg-panel px-[7px] py-[2px] text-[11px] text-muted">/</kbd>
             </div>
@@ -125,6 +128,7 @@ export function App() {
               </button>
               <UserMenu
                 user={user}
+                avatarUrl={profile.data?.avatarDataUrl}
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onLogout={() => void logout()}

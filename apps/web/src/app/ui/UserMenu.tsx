@@ -12,6 +12,9 @@ interface UserMenuUser {
 
 interface UserMenuProps {
   user: UserMenuUser;
+  // Profile photo (data: URL), fetched separately from /api/profile — see
+  // useProfile in features/settings. Absent/null keeps the initials fallback.
+  avatarUrl?: string | null;
   theme: "night" | "light";
   onToggleTheme: () => void;
   onLogout: () => void;
@@ -24,6 +27,7 @@ const menuItemClass =
 
 export function UserMenu({
   user,
+  avatarUrl,
   theme,
   onToggleTheme,
   onLogout,
@@ -62,7 +66,13 @@ export function UserMenu({
         aria-expanded={open}
         title={user.email}
       >
-        <Avatar name={user.displayName ?? null} email={user.email} size={36} tone="accent" />
+        <Avatar
+          name={user.displayName ?? null}
+          email={user.email}
+          size={36}
+          tone="accent"
+          imageUrl={avatarUrl}
+        />
       </button>
       {open && (
         <div

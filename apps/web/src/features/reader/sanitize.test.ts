@@ -1,4 +1,8 @@
+import { Editor } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
+import TiptapTextAlign from "@tiptap/extension-text-align";
 import { describe, expect, it } from "vitest";
+import { ResizableImage } from "../composer/resizableImageExtension";
 import { extractReferencedCids, sanitizeEmailHtml } from "./sanitize";
 
 // HTML attribute serialization escapes "&" to "&amp;", so a multi-query-param
@@ -195,6 +199,87 @@ describe("sanitizeEmailHtml", () => {
       // remote-image tests above): the live src is stripped, so only the
       // percent-encoded data-blocked-src remains.
       expect(out.html).not.toContain("https://tracker.evil");
+    });
+  });
+
+  describe("composer image size/alignment and text-align (RichTextEditor)", () => {
+    // Builds the HTML the same way RichTextEditor's toolbar actually would —
+    // through a real TipTap editor with the exact same extensions — instead
+    // of a hand-typed HTML string, so this test would fail if a future
+    // change to the extensions ever emitted markup sanitizeEmailHtml can no
+    // longer preserve.
+    function composerGeneratedHtml(): string {
+      const editor = new Editor({
+        extensions: [
+          StarterKit,
+          ResizableImage.configure({ allowBase64: true }),
+          TiptapTextAlign.configure({ types: ["heading", "paragraph"] }),
+        ],
+        content: "<p>Hello</p>",
+      });
+      try {
+        editor.commands.setTextAlign("center");
+        editor.commands.insertContentAt(editor.state.doc.content.size, {
+          type: "image",
+          attrs: { src: "data:image/png;base64,AAAA", width: "50%", align: "left" },
+        });
+        return editor.getHTML();
+      } finally {
+        editor.destroy();
+      }
+    }
+
+    it("survives DOMPurify with the width/alignment/text-align styles intact", () => {
+      const html = composerGeneratedHtml();
+      // Sanity check on the fixture itself: if this fails, the assertions
+      // below on `out.html` would be meaningless (testing that sanitize
+      // preserves content it never received).
+      expect(html).toContain("text-align: center");
+      expect(html).toContain("width: 50%");
+      expect(html).toContain("margin-right: auto"); // align: "left"
+
+      const out = sanitizeEmailHtml(html, { allowRemoteImages: false });
+
+      expect(out.html).toContain("text-align: center");
+      expect(out.html).toContain("width: 50%");
+      expect(out.html).toContain("margin-right: auto");
+      expect(out.hasRemoteImages).toBe(false);
+    });
+
+    // Adversarial counterpart to the round-trip test above: locks in that
+    // sanitizeEmailHtml's EXISTING remote-url style guard (CSS_REMOTE_URL_PATTERN,
+    // unmodified here) still neutralizes a crafted style attribute that
+    // smuggles a `url(http...)` payload alongside a legitimate width/align
+    // or text-align declaration. Doesn't require any change to sanitize.ts —
+    // this is a regression lock against a *future* sanitize.ts change ever
+    // narrowing that guard (e.g. someone "fixing" it to only strip the
+    // specific bad declaration instead of the whole attribute) in a way that
+    // would let the payload through.
+    it("strips a crafted image style that smuggles a remote background:url() next to a legitimate width", () => {
+      const html = '<img src="data:image/png;base64,AAAA" style="width:50%;background:url(http://evil.com/x)">';
+
+      const out = sanitizeEmailHtml(html, { allowRemoteImages: false });
+
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.com");
+      expect(out.html).not.toContain("url(");
+      // sanitize.ts is conservative: the whole `style` attribute is dropped
+      // rather than surgically removing just the bad declaration, so the
+      // safe `width: 50%` sitting next to it is lost too — that's the
+      // existing, intentional tradeoff this test locks in, not a gap.
+      expect(out.html).not.toContain("style=");
+    });
+
+    it("strips a crafted paragraph style that smuggles a remote url() next to a legitimate text-align", () => {
+      const html = '<p style="text-align:center;background:url(http://evil.com/y)">Hi</p>';
+
+      const out = sanitizeEmailHtml(html, { allowRemoteImages: false });
+
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.com");
+      expect(out.html).not.toContain("url(");
+      expect(out.html).not.toContain("style=");
+      expect(out.html).toContain("Hi");
     });
   });
 });

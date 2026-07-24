@@ -48,6 +48,55 @@ function extractBodyText(email: JmapEmailBody): string {
   return html ? stripHtml(html) : "";
 }
 
+// Lines that mark the start of a dragged-in quoted reply trail — the client
+// inserts one of these right before quoting the previous message(s). Not an
+// exhaustive email-quote parser, just the handful of variants Gmail/Outlook
+// actually produce.
+const REPLY_SEPARATOR_PATTERNS: RegExp[] = [
+  /^el .+ escribió:\s*$/i, // Gmail (es): "El <date>, <name> <email> escribió:"
+  /^on .+ wrote:\s*$/i, // Gmail (en): "On <date>, <name> <email> wrote:"
+  /^-{3,}\s*original\s+message\s*-{3,}$/i, // Outlook: "-----Original Message-----"
+  /^_{8,}$/, // Outlook's underscore divider above the quoted headers
+];
+
+function isReplySeparatorLine(line: string): boolean {
+  const trimmed = line.trim();
+  return REPLY_SEPARATOR_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/**
+ * Strips the dragged quoted-reply trail from a message body so thread
+ * summarization only sees what this particular message actually says, not
+ * the previous messages it re-quotes. Truncates at the first line that looks
+ * like a client-inserted reply separator, then drops any remaining `>`-quoted
+ * lines (top-posted quote blocks sometimes have no separator line at all).
+ */
+export function stripQuotedTrail(text: string): string {
+  const lines = text.split("\n");
+  const cutIndex = lines.findIndex(isReplySeparatorLine);
+  const kept = cutIndex === -1 ? lines : lines.slice(0, cutIndex);
+  return kept
+    .filter((line) => !line.trim().startsWith(">"))
+    .join("\n")
+    .trim();
+}
+
+type JmapThreadEmailAddress = { name?: string | null; email: string };
+
+type JmapThreadEmail = JmapEmailBody & {
+  from?: JmapThreadEmailAddress[];
+  receivedAt?: string;
+};
+
+type JmapThread = { id: string; emailIds: string[] };
+
+/** "Name <email>" when a display name is present, otherwise just the email. */
+function formatSender(from: JmapThreadEmailAddress[] | undefined): string {
+  const first = from?.[0];
+  if (!first) return "";
+  return first.name ? `${first.name} <${first.email}>` : first.email;
+}
+
 /**
  * Router for the AI features (summarize / draft-with-AI). Both routes fail
  * fast with `ai_disabled` when deps.aiClient is null (software-level gate is
@@ -84,6 +133,58 @@ export function createAiRouter(deps: AiDeps) {
       );
     }
     const bullets = await deps.aiClient!.summarize(extractBodyText(email));
+    return c.json({ bullets });
+  });
+
+  // Thread/conversation summary (GH #116): the single-message route above
+  // stays as-is for standalone messages — the reader picks between the two
+  // client-side based on the thread's message count. This route fetches
+  // every message in the thread (same Thread/get -> Email/get chained
+  // pattern as GET /threads/:threadId in modules/mail/router.ts), strips
+  // each message's dragged quote trail so the previous messages aren't
+  // double-counted, and asks for one conversation-level summary.
+  //
+  // Note on token cost: a long thread means more input tokens (no
+  // truncation is applied here) — acceptable for now, revisit if long
+  // threads become a cost/latency problem in practice.
+  router.post("/threads/:threadId/summarize", requireAiEnabled(deps), requireMail(deps), async (c) => {
+    const threadId = c.req.param("threadId");
+    const session = c.get("jmapSession");
+    const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
+      ["Thread/get", { accountId: session.accountId, ids: [threadId] }, "t"],
+      [
+        "Email/get",
+        {
+          accountId: session.accountId,
+          "#ids": { resultOf: "t", name: "Thread/get", path: "/list/*/emailIds" },
+          properties: ["id", "from", "receivedAt", "textBody", "htmlBody", "bodyValues"],
+          fetchTextBodyValues: true,
+          fetchHTMLBodyValues: true,
+          maxBodyValueBytes: 524288,
+        },
+        "g",
+      ],
+    ]);
+
+    const threadResult = (responses[0]?.[1] ?? {}) as { list?: JmapThread[] };
+    const getResult = (responses[1]?.[1] ?? {}) as { list?: JmapThreadEmail[] };
+    const emails = getResult.list ?? [];
+    if (threadResult.list?.length === 0 || emails.length === 0) {
+      return c.json(
+        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+        404,
+      );
+    }
+
+    const ordered = [...emails].sort(
+      (a, b) => Date.parse(a.receivedAt ?? "") - Date.parse(b.receivedAt ?? ""),
+    );
+    const messages = ordered.map((email) => ({
+      from: formatSender(email.from),
+      body: stripQuotedTrail(extractBodyText(email)),
+    }));
+
+    const bullets = await deps.aiClient!.summarizeThread(messages);
     return c.json({ bullets });
   });
 

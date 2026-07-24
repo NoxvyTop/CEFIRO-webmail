@@ -7,7 +7,7 @@ import type { ComposerDraft } from "./reply";
 import { stripSignatureMarkers } from "./signature";
 
 export type Attachment = { blobId: string; name: string; type: string; size: number };
-export type PendingUpload = { id: string; name: string; progress: number; error: boolean };
+export type PendingUpload = { id: string; name: string; size: number; progress: number; error: boolean };
 
 export type ComposerState = {
   draft: ComposerDraft;
@@ -124,7 +124,7 @@ export function useComposer(
 ): {
   state: ComposerState;
   setField<K extends keyof ComposerDraft>(key: K, value: ComposerDraft[K]): void;
-  addFiles(files: File[]): void;
+  addFiles(files: File[]): { skipped: string[] };
   removeAttachment(blobId: string): void;
   send(): Promise<boolean>;
   draftWithAi(): Promise<void>;
@@ -135,10 +135,34 @@ export function useComposer(
     dispatch({ type: "setField", key, value });
   }
 
-  function addFiles(files: File[]): void {
+  // Cheap, reliable dedup heuristic: name+size. Checked against both
+  // already-uploaded attachments and still-pending uploads, and against
+  // files already accepted earlier in the *same* addFiles call (so
+  // selecting/dropping the same file twice at once is also caught).
+  function fileSignature(name: string, size: number): string {
+    return `${name}␟${size}`;
+  }
+
+  function addFiles(files: File[]): { skipped: string[] } {
+    const seen = new Set<string>();
+    for (const attachment of state.attachments) seen.add(fileSignature(attachment.name, attachment.size));
+    for (const upload of state.uploads) seen.add(fileSignature(upload.name, upload.size));
+
+    const skipped: string[] = [];
+
     for (const file of files) {
+      const signature = fileSignature(file.name, file.size);
+      if (seen.has(signature)) {
+        skipped.push(file.name);
+        continue;
+      }
+      seen.add(signature);
+
       const id = crypto.randomUUID();
-      dispatch({ type: "addPendingUpload", upload: { id, name: file.name, progress: 0, error: false } });
+      dispatch({
+        type: "addPendingUpload",
+        upload: { id, name: file.name, size: file.size, progress: 0, error: false },
+      });
 
       uploadAttachment(file, (fraction) => {
         dispatch({ type: "setUploadProgress", id, progress: fraction });
@@ -154,6 +178,8 @@ export function useComposer(
           dispatch({ type: "uploadFailed", id });
         });
     }
+
+    return { skipped };
   }
 
   function removeAttachment(blobId: string): void {

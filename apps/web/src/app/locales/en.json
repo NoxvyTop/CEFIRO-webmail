@@ -1,6 +1,6 @@
 {
   "app": {
-    "tagline": "correo del ecosistema",
+    "home": "Go to home",
     "themeLight": "Switch to light theme",
     "themeNight": "Switch to night theme",
     "sentWith": "Sent with",
@@ -30,7 +30,11 @@
       "unlinkedCount": "{{count}} not linked"
     },
     "settings": {
-      "comingSoon": "Coming soon"
+      "title": "Instance settings",
+      "footer": {
+        "label": "\"Sent with CÉFIRO\" footer",
+        "description": "Shows the CÉFIRO branding line below the Reply and Forward buttons on every email in the reader. Off by default."
+      }
     },
     "mailbox": {
       "linked": "Mailbox linked",
@@ -156,10 +160,12 @@
     "starredView": "Starred",
     "unread": "{{count}} unread",
     "messageCount": "{{count}} messages",
+    "conversationCount": "{{count}} messages",
     "searchPlaceholder": "Search mail…",
     "empty": "No mail here.",
     "noSubject": "(no subject)",
     "selectMessage": "Select an email",
+    "loading": "Loading…",
     "loadImages": "Load images",
     "emailContent": "Email content",
     "emptyBody": "(no content)",
@@ -181,6 +187,7 @@
       "hint": "Ask an administrator to link it."
     },
     "summarizeWithAi": "✦ Summarize with AI",
+    "summarizeConversation": "✦ Summarize conversation",
     "aiSummaryTitle": "AI Summary",
     "aiSummaryLoading": "Analyzing the message…",
     "backToList": "Back to messages",
@@ -189,6 +196,8 @@
     "unstar": "Unstar",
     "archived": "Email archived",
     "archivedHint": "press e to archive faster",
+    "unarchive": "Move to Inbox",
+    "unarchived": "Moved to Inbox",
     "labels": "Labels",
     "clearLabel": "Clear label filter",
     "newLabel": "New label",
@@ -197,11 +206,17 @@
     "createLabel": "Create label",
     "cancelNewLabel": "Cancel",
     "deleteLabel": "Delete label {{name}}",
+    "confirmDeleteLabel": "Delete \"{{name}}\"?",
+    "confirmDelete": "Confirm",
     "labelNameRequired": "Enter a name for the label",
     "labelNameDuplicate": "A label with that name already exists",
+    "noLabelsToApply": "No labels yet. Create one from the sidebar",
     "toMeAndTeam": "me and the team",
     "sentTo": "To:",
     "yesterday": "Yesterday",
+    "expandMessage": "Expand message from {{sender}}",
+    "showQuotedContent": "Show quoted content",
+    "hideQuotedContent": "Hide quoted content",
     "folders": {
       "inbox": "Inbox",
       "sent": "Sent",
@@ -210,10 +225,6 @@
       "junk": "Spam",
       "drafts": "Drafts"
     }
-  },
-  "modules": {
-    "title": "Modules",
-    "mail": "Mail"
   },
   "groups": {
     "title": "Groups",
@@ -247,14 +258,24 @@
     "bold": "Bold",
     "italic": "Italic",
     "bulletList": "Bulleted list",
+    "textAlignLeft": "Align text left",
+    "textAlignCenter": "Center text",
+    "textAlignRight": "Align text right",
     "link": "Link",
     "linkUrl": "Link URL",
     "image": "Image",
     "insertImage": "Insert image",
     "imageTooLarge": "Image is too large (max 1 MB)",
     "imageInvalidType": "Unsupported image type (use PNG, JPEG, GIF, or WebP)",
+    "imageSizeSmall": "Small image",
+    "imageSizeMedium": "Medium image",
+    "imageSizeLarge": "Large image",
+    "imageAlignLeft": "Align image left",
+    "imageAlignCenter": "Center image",
+    "imageAlignRight": "Align image right",
     "removeRecipient": "Remove {{email}}",
-    "removeAttachment": "Remove {{name}}",
+    "dropHint": "Drop to attach",
+    "duplicateAttachment": "{{name}} was already attached",
     "errors": {
       "noRecipients": "Add at least one recipient",
       "invalid_identity": "Invalid identity",
@@ -274,6 +295,7 @@
     "download": "Download",
     "view": "View",
     "viewNamed": "View {{name}}",
+    "remove": "Remove {{name}}",
     "print": "Print",
     "close": "Close",
     "previewLoading": "Loading preview…",
@@ -283,12 +305,25 @@
   },
   "settings": {
     "title": "Settings",
+    "profile": "Profile",
     "signatures": "Signatures",
     "back": "Back",
+    "nav": {
+      "label": "Settings sections",
+      "profile": "Profile",
+      "signatures": "Signatures",
+      "filters": "Filters",
+      "vacation": "Vacation"
+    },
     "newSignature": "New signature",
     "name": "Name",
+    "displayName": "Display name",
+    "photo": "Profile photo",
+    "changePhoto": "Change photo",
+    "removePhoto": "Remove photo",
     "default": "Default",
     "save": "Save",
+    "saved": "Saved",
     "delete": "Delete",
     "edit": "Edit",
     "errors": {
@@ -299,6 +334,8 @@
       "sieve_sync_failed": "Saved, but not applied to the mail server yet",
       "vacationMessageRequired": "Write a message for the automatic reply",
       "vacationDateOrder": "The end date must not be before the start date",
+      "imageInvalidType": "Unsupported image type (use PNG, JPEG, or WebP)",
+      "imageTooLarge": "Image is too large (max 1 MB)",
       "generic": "Something went wrong"
     }
   },

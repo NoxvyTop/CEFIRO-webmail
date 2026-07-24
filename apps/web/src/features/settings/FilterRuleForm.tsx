@@ -87,7 +87,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
           value={name}
           maxLength={100}
           onChange={(event) => setName(event.target.value)}
-          className="h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+          className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
         />
       </label>
 
@@ -97,7 +97,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
           id="filter-match"
           value={matchType}
           onChange={(event) => setMatchType(event.target.value as FilterRuleInput["matchType"])}
-          className="self-start h-11 rounded-input border border-line bg-soft px-3 text-ink outline-none focus:border-accent"
+          className="self-start h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
         >
           <option value="all">{t("filters.matchAll")}</option>
           <option value="any">{t("filters.matchAny")}</option>
@@ -114,7 +114,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               onChange={(event) =>
                 updateCondition(index, { field: event.target.value as FilterCondition["field"] })
               }
-              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             >
               {FIELD_OPTIONS.map((field) => (
                 <option key={field} value={field}>
@@ -128,7 +128,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               onChange={(event) =>
                 updateCondition(index, { op: event.target.value as FilterCondition["op"] })
               }
-              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             >
               {OP_OPTIONS.map((op) => (
                 <option key={op} value={op}>
@@ -141,7 +141,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               value={condition.value}
               maxLength={500}
               onChange={(event) => updateCondition(index, { value: event.target.value })}
-              className="min-w-40 flex-1 h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink outline-none focus:border-accent"
+              className="min-w-40 flex-1 h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             />
             <button
               type="button"
@@ -182,7 +182,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
                   ),
                 )
               }
-              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             >
               {ACTION_OPTIONS.map((type) => (
                 <option key={type} value={type}>
@@ -201,7 +201,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
                     ),
                   )
                 }
-                className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink outline-none focus:border-accent"
+                className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
               >
                 {folders.map((folder) => (
                   <option key={folder} value={folder}>
@@ -227,7 +227,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
                     ),
                   )
                 }
-                className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink outline-none focus:border-accent"
+                className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
               />
             )}
             <button

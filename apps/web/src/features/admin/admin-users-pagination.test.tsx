@@ -9,7 +9,7 @@ import { AdminPage } from "./AdminPage";
 
 const {
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
-  fetchAdminSso, updateAdminSso,
+  fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 } = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   createAdminUser: vi.fn(),
@@ -18,11 +18,13 @@ const {
   setUserCredential: vi.fn(),
   fetchAdminSso: vi.fn(),
   updateAdminSso: vi.fn(),
+  fetchAdminInstance: vi.fn().mockResolvedValue({ sentWithFooter: false }),
+  updateAdminInstance: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
-  fetchAdminSso, updateAdminSso,
+  fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 }));
 
 function makeUsers(count: number): AdminUser[] {

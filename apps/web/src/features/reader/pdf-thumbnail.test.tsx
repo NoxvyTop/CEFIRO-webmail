@@ -53,7 +53,33 @@ afterEach(() => {
 });
 
 describe("PdfThumbnail", () => {
-  it("shows the fallback while the PDF is still loading", () => {
+  // GH #94 regression fix: `loadingFallback` and `fallback` are now two
+  // distinct render states. `fallback` used to double as both "still
+  // loading" and "permanently failed" — which broke once a caller pointed it
+  // at an animated branded loader, because a genuinely failed PDF would then
+  // spin forever instead of settling into a static error state. PdfThumbnail
+  // already tracks this distinction internally (the try/catch around the
+  // load/render pipeline); these tests pin that the two props are wired to
+  // the two states correctly.
+  it("shows loadingFallback (not the error fallback) while the PDF is still loading", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    mockPdfjs();
+
+    render(
+      <PdfThumbnail
+        blobId="b1"
+        name="report.pdf"
+        type="application/pdf"
+        loadingFallback={<span>loading-icon</span>}
+        fallback={<span>error-icon</span>}
+      />,
+    );
+
+    expect(screen.getByText("loading-icon")).toBeInTheDocument();
+    expect(screen.queryByText("error-icon")).not.toBeInTheDocument();
+  });
+
+  it("falls back to fallback (not loadingFallback) when loadingFallback is omitted, matching prior behavior", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     mockPdfjs();
 
@@ -64,18 +90,25 @@ describe("PdfThumbnail", () => {
     expect(screen.getByText("fallback-icon")).toBeInTheDocument();
   });
 
-  it("falls back to the icon (never a broken image) when the blob fetch fails", async () => {
+  it("shows the error fallback (never the loading fallback, never a broken image) when the blob fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 500 })));
     mockPdfjs();
 
     render(
-      <PdfThumbnail blobId="b1" name="report.pdf" type="application/pdf" fallback={<span>fallback-icon</span>} />,
+      <PdfThumbnail
+        blobId="b1"
+        name="report.pdf"
+        type="application/pdf"
+        loadingFallback={<span>loading-icon</span>}
+        fallback={<span>error-icon</span>}
+      />,
     );
 
-    await waitFor(() => expect(screen.getByText("fallback-icon")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("error-icon")).toBeInTheDocument());
+    expect(screen.queryByText("loading-icon")).not.toBeInTheDocument();
   });
 
-  it("falls back to the icon when pdf.js fails to parse the document", async () => {
+  it("shows the error fallback (never the loading fallback) when pdf.js fails to parse the document", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(PDF_BYTES, { status: 200 })));
     mockPdfjs({
       getDocument: vi.fn(() => ({
@@ -85,10 +118,17 @@ describe("PdfThumbnail", () => {
     });
 
     render(
-      <PdfThumbnail blobId="b1" name="report.pdf" type="application/pdf" fallback={<span>fallback-icon</span>} />,
+      <PdfThumbnail
+        blobId="b1"
+        name="report.pdf"
+        type="application/pdf"
+        loadingFallback={<span>loading-icon</span>}
+        fallback={<span>error-icon</span>}
+      />,
     );
 
-    await waitFor(() => expect(screen.getByText("fallback-icon")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("error-icon")).toBeInTheDocument());
+    expect(screen.queryByText("loading-icon")).not.toBeInTheDocument();
   });
 
   it("fetches the blob credentialed, without a download flag", async () => {

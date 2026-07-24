@@ -47,6 +47,81 @@ function rowClassName(selected: boolean) {
   return [base, highlight].join(" ");
 }
 
+// Base row height (avatar + 3 text lines + vertical padding) — the original
+// flat estimateSize constant, still correct for a row with no label chips.
+const ROW_HEIGHT = 84;
+// GH #87: a row with at least one label chip renders an extra
+// "mt-1 flex gap-1" line below the preview. Without this, every row got the
+// same fixed ROW_HEIGHT box from the virtualizer regardless of content, so a
+// labeled row's chip line overflowed its absolutely-positioned box and bled
+// into the next row's box — which paints later in DOM order, so an opaque
+// selected background on the row below covered the chip. Growing the box for
+// labeled rows keeps their content fully inside their own box, so there's
+// nothing left to overlap.
+const ROW_LABEL_EXTRA_HEIGHT = 26;
+
+function rowHasLabelChip(keywords: Record<string, boolean>): boolean {
+  return userLabels(keywords).length > 0;
+}
+
+// GH #89: one row per conversation (thread) instead of one row per email,
+// Gmail-style. `representative` is the message shown in the row (sender,
+// subject, preview, date) and the one passed to onSelect/handleSelect —
+// opening a conversation still opens the full thread in ThreadView via its
+// threadId, so any loaded message from that thread would do; the latest one
+// is the most useful preview. `unread` is an aggregate: true if ANY loaded
+// message in the thread is unread, so a thread doesn't look "read" just
+// because its newest loaded message happens to be seen. Label chips
+// deliberately use only the representative's keywords (not a union) — the
+// task calls for keeping aggregation simple, and the representative's chips
+// are what a Gmail-style client shows for a collapsed thread.
+interface ConversationRow {
+  threadId: string;
+  representative: EmailSummary;
+  messages: EmailSummary[];
+  count: number;
+  unread: boolean;
+}
+
+// Groups the currently-loaded (paginated) emails by threadId.
+//
+// LIMITATION (accepted, not fixed here): this only groups messages already
+// loaded via pagination. A thread whose other messages live on a
+// not-yet-fetched page shows a partial count until that page loads. The
+// fully-correct fix is server-side thread collapsing (JMAP collapseThreads);
+// that's a deliberate follow-up, out of scope for this client-side pass —
+// fine for the seeded/demo data and typical folder sizes.
+function groupIntoConversations(emails: EmailSummary[]): ConversationRow[] {
+  const byThread = new Map<string, ConversationRow>();
+  // Row order follows each thread's FIRST occurrence in `emails`. Since the
+  // query returns messages newest-first, that's normally already the
+  // thread's latest message, so grouping doesn't reshuffle the list — and
+  // because this only depends on `emails` (via the caller's useMemo), the
+  // order stays stable across unrelated re-renders.
+  const order: string[] = [];
+  for (const email of emails) {
+    const existing = byThread.get(email.threadId);
+    if (!existing) {
+      byThread.set(email.threadId, {
+        threadId: email.threadId,
+        representative: email,
+        messages: [email],
+        count: 1,
+        unread: !email.keywords.$seen,
+      });
+      order.push(email.threadId);
+      continue;
+    }
+    existing.messages.push(email);
+    existing.count += 1;
+    if (!email.keywords.$seen) existing.unread = true;
+    if (new Date(email.receivedAt).getTime() > new Date(existing.representative.receivedAt).getTime()) {
+      existing.representative = email;
+    }
+  }
+  return order.map((threadId) => byThread.get(threadId)!);
+}
+
 export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
@@ -88,6 +163,8 @@ export function MessageList({
     [messagesQuery.data],
   );
 
+  const conversations = useMemo(() => groupIntoConversations(emails), [emails]);
+
   const total = messagesQuery.data?.pages[0]?.total ?? 0;
 
   useEffect(() => {
@@ -104,9 +181,19 @@ export function MessageList({
     }
   }, [emails, onLabels]);
 
+  // GH #89 follow-up fix: `unread` on a conversation row is a THREAD
+  // AGGREGATE (true if ANY loaded message in the thread is unread — see
+  // groupIntoConversations), so marking only the representative $seen would
+  // leave a thread permanently bold whenever its unread message wasn't the
+  // representative. Opening a conversation must mark every currently-unread
+  // LOADED message of that thread as seen — messages on not-yet-fetched
+  // pages aren't part of the aggregate anyway, so this is complete for what
+  // the row currently shows. There's no batch JMAP-set endpoint exposed by
+  // the server, so this fires one PATCH per id via updateMessage.
   const markSeenMutation = useMutation({
-    mutationFn: (email: EmailSummary) => updateMessage(email.id, { keywords: { $seen: true } }),
-    onMutate: async (email) => {
+    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => updateMessage(id, { keywords: { $seen: true } }))),
+    onMutate: async (ids) => {
+      const idSet = new Set(ids);
       queryClient.setQueryData<InfiniteData<MessagesPage>>(queryKey, (old) => {
         if (!old) return old;
         return {
@@ -114,7 +201,7 @@ export function MessageList({
           pages: old.pages.map((page) => ({
             ...page,
             emails: page.emails.map((e) =>
-              e.id === email.id ? { ...e, keywords: { ...e.keywords, $seen: true } } : e),
+              idSet.has(e.id) ? { ...e, keywords: { ...e.keywords, $seen: true } } : e),
           })),
         };
       });
@@ -162,10 +249,11 @@ export function MessageList({
     },
   });
 
-  function handleSelect(email: EmailSummary) {
-    onSelect(email);
-    if (!email.keywords.$seen) {
-      markSeenMutation.mutate(email);
+  function handleSelect(conversation: ConversationRow) {
+    onSelect(conversation.representative);
+    const unreadIds = conversation.messages.filter((message) => !message.keywords.$seen).map((message) => message.id);
+    if (unreadIds.length > 0) {
+      markSeenMutation.mutate(unreadIds);
     }
   }
 
@@ -181,18 +269,20 @@ export function MessageList({
 
       if (event.key === "j") {
         event.preventDefault();
-        const currentIndex = emails.findIndex((email) => email.threadId === selectedThreadId);
-        const nextEmail = currentIndex === -1 ? emails[0] : emails[currentIndex + 1];
-        if (nextEmail) handleSelect(nextEmail);
+        // Moves by CONVERSATION, not by raw email — one step skips the whole
+        // thread instead of landing on its next loaded message.
+        const currentIndex = conversations.findIndex((conversation) => conversation.threadId === selectedThreadId);
+        const nextConversation = currentIndex === -1 ? conversations[0] : conversations[currentIndex + 1];
+        if (nextConversation) handleSelect(nextConversation);
         return;
       }
 
       if (event.key === "k") {
         event.preventDefault();
-        const currentIndex = emails.findIndex((email) => email.threadId === selectedThreadId);
+        const currentIndex = conversations.findIndex((conversation) => conversation.threadId === selectedThreadId);
         if (currentIndex <= 0) return;
-        const previousEmail = emails[currentIndex - 1];
-        if (previousEmail) handleSelect(previousEmail);
+        const previousConversation = conversations[currentIndex - 1];
+        if (previousConversation) handleSelect(previousConversation);
         return;
       }
 
@@ -214,12 +304,17 @@ export function MessageList({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emails, selectedThreadId, archiveMailboxId]);
+  }, [emails, conversations, selectedThreadId, archiveMailboxId]);
 
   const rowVirtualizer = useVirtualizer({
-    count: emails.length,
+    count: conversations.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 84,
+    estimateSize: (index) => {
+      const conversation = conversations[index];
+      return conversation && rowHasLabelChip(conversation.representative.keywords)
+        ? ROW_HEIGHT + ROW_LABEL_EXTRA_HEIGHT
+        : ROW_HEIGHT;
+    },
     overscan: 10,
   });
 
@@ -229,11 +324,16 @@ export function MessageList({
     if (!virtualized) return;
     const lastItem = virtualItems[virtualItems.length - 1];
     if (!lastItem) return;
-    if (lastItem.index >= emails.length - 1 && messagesQuery.hasNextPage && !messagesQuery.isFetchingNextPage) {
+    // Compare against conversations.length, not emails.length: the
+    // virtualizer's item count is now the grouped row count, which is <=
+    // emails.length once threads collapse, so comparing against the raw
+    // email count would stop triggering fetchNextPage before the visible
+    // window actually reaches the end of the loaded (grouped) list.
+    if (lastItem.index >= conversations.length - 1 && messagesQuery.hasNextPage && !messagesQuery.isFetchingNextPage) {
       messagesQuery.fetchNextPage();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [virtualized, virtualItems, emails.length, messagesQuery.hasNextPage, messagesQuery.isFetchingNextPage]);
+  }, [virtualized, virtualItems, conversations.length, messagesQuery.hasNextPage, messagesQuery.isFetchingNextPage]);
 
   useEffect(() => {
     if (virtualized) return;
@@ -252,9 +352,10 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [virtualized, messagesQuery.hasNextPage, messagesQuery.isFetchingNextPage, emails.length]);
 
-  function renderRow(email: EmailSummary) {
-    const unread = !email.keywords.$seen;
-    const selected = email.threadId === selectedThreadId;
+  function renderRow(conversation: ConversationRow) {
+    const email = conversation.representative;
+    const unread = conversation.unread;
+    const selected = conversation.threadId === selectedThreadId;
     const fromLabel = email.from[0]?.name || email.from[0]?.email || "";
     const subjectLabel = email.subject || t("mail.noSubject");
     const dateLabel = formatRelativeTime(email.receivedAt, {
@@ -266,13 +367,13 @@ export function MessageList({
 
     return (
       <div
-        key={email.id}
+        key={conversation.threadId}
         role="option"
         aria-selected={selected}
         tabIndex={0}
-        onClick={() => handleSelect(email)}
+        onClick={() => handleSelect(conversation)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") handleSelect(email);
+          if (event.key === "Enter" || event.key === " ") handleSelect(conversation);
         }}
         className={rowClassName(selected)}
       >
@@ -286,6 +387,14 @@ export function MessageList({
             <span className={`min-w-0 flex-1 truncate text-[14px] ${unread ? "font-bold" : "font-medium"}`}>
               {fromLabel}
             </span>
+            {conversation.count > 1 && (
+              <span
+                aria-label={t("mail.conversationCount", { count: conversation.count })}
+                className="shrink-0 text-xs font-semibold text-muted"
+              >
+                {conversation.count}
+              </span>
+            )}
             <span className="shrink-0 text-xs text-muted">{dateLabel}</span>
           </div>
           <div className={`truncate text-[13.5px] ${unread ? "font-[650]" : "font-[420]"}`}>{subjectLabel}</div>
@@ -331,8 +440,8 @@ export function MessageList({
       <div ref={parentRef} role="listbox" className="min-h-0 flex-1 overflow-y-auto">
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
           {virtualItems.map((virtualRow) => {
-            const email = emails[virtualRow.index];
-            if (!email) return null;
+            const conversation = conversations[virtualRow.index];
+            if (!conversation) return null;
             return (
               <div
                 key={virtualRow.key}
@@ -345,7 +454,7 @@ export function MessageList({
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                {renderRow(email)}
+                {renderRow(conversation)}
               </div>
             );
           })}
@@ -355,7 +464,7 @@ export function MessageList({
   } else {
     content = (
       <div role="listbox" className="min-h-0 flex-1 overflow-y-auto">
-        {emails.map((email) => renderRow(email))}
+        {conversations.map((conversation) => renderRow(conversation))}
         {messagesQuery.hasNextPage && <div ref={sentinelRef} aria-hidden="true" data-testid="load-more-sentinel" />}
       </div>
     );

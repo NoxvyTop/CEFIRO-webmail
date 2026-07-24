@@ -18,3 +18,12 @@ export async function fetchSummary(messageId: string): Promise<string[]> {
   if (!res.ok) return parseError(res);
   return summaryResultSchema.parse(await res.json()).bullets;
 }
+
+/** Conversation-level summary (GH #116) — used instead of fetchSummary when a thread has more than one message. */
+export async function summarizeThread(threadId: string): Promise<string[]> {
+  const res = await fetch(`/api/mail/threads/${encodeURIComponent(threadId)}/summarize`, {
+    method: "POST",
+  });
+  if (!res.ok) return parseError(res);
+  return summaryResultSchema.parse(await res.json()).bullets;
+}

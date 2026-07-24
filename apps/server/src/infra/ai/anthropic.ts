@@ -2,6 +2,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AiClient } from "../../core/ai";
 import { DomainError } from "../../core/errors";
 import { log } from "../../core/logger";
+import {
+  DRAFT_REPLY_SYSTEM_PROMPT,
+  SUMMARIZE_SYSTEM_PROMPT,
+  SUMMARY_BULLET_COUNT,
+  THREAD_SUMMARY_BULLET_COUNT,
+  THREAD_SUMMARY_SYSTEM_PROMPT,
+  buildDraftReplyPrompt,
+  buildThreadSummaryPrompt,
+  parseBullets,
+} from "./prompts";
 
 // Minimal shape of the SDK's `messages` resource we depend on — lets tests
 // inject a fake instead of hitting the network, same DI pattern as
@@ -16,18 +26,9 @@ export type AnthropicMessagesApi = {
 };
 
 const MAX_TOKENS = 1024;
-const SUMMARY_BULLET_COUNT = 3;
 
 function firstTextBlock(content: Array<{ type: string; text?: string }>): string {
   return content.find((block) => block.type === "text")?.text ?? "";
-}
-
-function parseBullets(text: string, limit: number): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.replace(/^[\s\-*•\d.]+/, "").trim())
-    .filter((line) => line.length > 0)
-    .slice(0, limit);
 }
 
 export function createAnthropicAiClient(input: {
@@ -44,9 +45,7 @@ export function createAnthropicAiClient(input: {
         const response = await messagesApi.create({
           model: input.model,
           max_tokens: MAX_TOKENS,
-          system:
-            `Summarize the email below into exactly ${SUMMARY_BULLET_COUNT} short bullet points, ` +
-            "one per line, each starting with '- '. Reply with nothing else.",
+          system: SUMMARIZE_SYSTEM_PROMPT,
           messages: [{ role: "user", content: body }],
         });
         const text = firstTextBlock(response.content);
@@ -58,18 +57,30 @@ export function createAnthropicAiClient(input: {
       }
     },
 
-    async draftReply(subject: string, context?: string): Promise<string> {
-      const prompt = context
-        ? `Asunto: ${subject}\nContexto adicional: ${context}`
-        : `Asunto: ${subject}`;
+    async summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]> {
       try {
         const response = await messagesApi.create({
           model: input.model,
           max_tokens: MAX_TOKENS,
-          system:
-            "Redacta el cuerpo de un correo de respuesta en español, breve y profesional, " +
-            "a partir del asunto (y contexto opcional) provisto por el usuario. " +
-            "Responde solo con el cuerpo del correo, sin asunto ni firma.",
+          system: THREAD_SUMMARY_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: buildThreadSummaryPrompt(messages) }],
+        });
+        const text = firstTextBlock(response.content);
+        return parseBullets(text, THREAD_SUMMARY_BULLET_COUNT);
+      } catch (error) {
+        // Never include email content in logs — only the failure itself.
+        log("error", "ai summarizeThread failed", { error: error instanceof Error ? error.message : "unknown" });
+        throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+      }
+    },
+
+    async draftReply(subject: string, context?: string): Promise<string> {
+      const prompt = buildDraftReplyPrompt(subject, context);
+      try {
+        const response = await messagesApi.create({
+          model: input.model,
+          max_tokens: MAX_TOKENS,
+          system: DRAFT_REPLY_SYSTEM_PROMPT,
           messages: [{ role: "user", content: prompt }],
         });
         return firstTextBlock(response.content).trim();

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { sanitizeEmailHtml } from "../reader/sanitize";
@@ -291,5 +291,146 @@ describe("RichTextEditor image insertion", () => {
     // correct code — it mirrors TipTap's own internal convention (`if
     // (!editor.isDestroyed)`) and avoids running a command against — and
     // setting React state from — a component instance mid-teardown.
+  });
+});
+
+describe("RichTextEditor text alignment toolbar", () => {
+  it("renders left/center/right text align buttons with accessible labels", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("composer.textAlignLeft") }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.textAlignCenter") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.textAlignRight") })).toBeInTheDocument();
+  });
+
+  it("applies text-align: center to the current paragraph when the center button is clicked", async () => {
+    const handleChange = vi.fn();
+    render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
+
+    const centerButton = await screen.findByRole("button", { name: i18n.t("composer.textAlignCenter") });
+    fireEvent.click(centerButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain("text-align: center");
+    });
+  });
+
+  it("applies text-align: right to the current paragraph when the right button is clicked", async () => {
+    const handleChange = vi.fn();
+    render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
+
+    const rightButton = await screen.findByRole("button", { name: i18n.t("composer.textAlignRight") });
+    fireEvent.click(rightButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain("text-align: right");
+    });
+  });
+
+  it("marks the clicked alignment button as pressed via aria-pressed, and others as not pressed", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const leftButton = await screen.findByRole("button", { name: i18n.t("composer.textAlignLeft") });
+    const centerButton = screen.getByRole("button", { name: i18n.t("composer.textAlignCenter") });
+
+    expect(centerButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(centerButton);
+
+    await waitFor(() => expect(centerButton).toHaveAttribute("aria-pressed", "true"));
+    expect(leftButton).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+describe("RichTextEditor image size/alignment toolbar", () => {
+  it("renders size and alignment buttons with accessible labels", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("composer.imageSizeSmall") }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeMedium") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeLarge") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignLeft") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignRight") })).toBeInTheDocument();
+  });
+
+  it("disables size/alignment buttons when no image is selected, even if an image exists in the doc", async () => {
+    // No trailing ` />` self-close: must match TipTap's own getHTML()
+    // serialization for a void element (`<img ...>`) exactly. RichTextEditor's
+    // html-prop-resync effect (`if (html !== editor.getHTML())`) does a plain
+    // string comparison — a formatting-only mismatch (e.g. the self-closing
+    // slash) makes it re-run setContent() right after mount, which replaces
+    // the whole doc and forces ProseMirror to re-resolve the selection. For a
+    // doc ending in an atom node (no trailing paragraph to place a cursor
+    // in), that re-resolution can itself land on a NodeSelection of the
+    // image — a real, separately-noteworthy quirk, but not what this test is
+    // about, so it's avoided here by keeping the initial html byte-for-byte
+    // stable across the mount round-trip.
+    render(
+      <RichTextEditor
+        html='<p>Hello</p><img src="data:image/png;base64,AAAA">'
+        onChange={() => {}}
+        ariaLabel="Message"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: i18n.t("composer.imageSizeSmall") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeMedium") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeLarge") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignLeft") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignRight") })).toBeDisabled();
+  });
+
+  it("disables size/alignment buttons when the document has no image at all", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    expect(await screen.findByRole("button", { name: i18n.t("composer.imageSizeMedium") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") })).toBeDisabled();
+  });
+
+  // ProseMirror resolves the initial `Selection.atStart(doc)` to a
+  // NodeSelection when the very first node in the document is a leaf/atom
+  // node (an image can't hold a text cursor) — confirmed by inspecting the
+  // rendered DOM (`class="ProseMirror-selectednode"` appears on the <img>
+  // with no click simulated at all). That gives a real, click-free way to
+  // exercise the full "image is selected -> toolbar enables -> clicking
+  // applies the attribute" path in jsdom, sidestepping the coordinate-based
+  // hit-testing that fireEvent.click on a specific node cannot reliably
+  // drive here (see the placeholder describe block above for the same
+  // jsdom/ProseMirror caveat on typing simulation).
+  it("enables size/align controls for an image that is the sole (and thus auto-selected) doc content, and applies clicks to it", async () => {
+    const handleChange = vi.fn();
+    render(
+      <RichTextEditor
+        html='<img src="data:image/png;base64,AAAA" />'
+        onChange={handleChange}
+        ariaLabel="Message"
+      />,
+    );
+
+    const mediumButton = await screen.findByRole("button", { name: i18n.t("composer.imageSizeMedium") });
+    expect(mediumButton).not.toBeDisabled();
+
+    fireEvent.click(mediumButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain("width: 50%");
+    });
+
+    const centerButton = screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") });
+    fireEvent.click(centerButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain("margin-left: auto");
+    });
   });
 });

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AttachmentMeta } from "@webmail/shared";
@@ -7,10 +8,27 @@ import { AttachmentCard, attachmentThumbnailKind } from "./AttachmentCard";
 
 // PdfThumbnail itself does real pdf.js work (covered separately, with its
 // own dynamic-import mocking, in pdf-thumbnail.test.tsx) — here we only care
-// that AttachmentCard *chooses* PdfThumbnail for pdf attachments, so it's
-// swapped for a cheap marker.
+// that AttachmentCard *chooses* PdfThumbnail for pdf attachments, and *what
+// it passes as the loading vs. error fallback* (GH #94: a compact branded
+// Céfiro loader while loading, the plain file icon on permanent failure —
+// two distinct props/states, so a failed PDF never spins forever), so it's
+// swapped for a cheap marker that renders both fallbacks into their own
+// slots for the tests to inspect independently.
 vi.mock("./PdfThumbnail", () => ({
-  PdfThumbnail: ({ blobId }: { blobId: string }) => <div data-testid="pdf-thumbnail" data-blob-id={blobId} />,
+  PdfThumbnail: ({
+    blobId,
+    fallback,
+    loadingFallback,
+  }: {
+    blobId: string;
+    fallback: ReactNode;
+    loadingFallback?: ReactNode;
+  }) => (
+    <div data-testid="pdf-thumbnail" data-blob-id={blobId}>
+      <div data-testid="pdf-thumbnail-loading-fallback">{loadingFallback}</div>
+      <div data-testid="pdf-thumbnail-error-fallback">{fallback}</div>
+    </div>
+  ),
 }));
 
 // AttachmentViewer itself (the in-app preview overlay) is covered in its own
@@ -86,6 +104,21 @@ describe("AttachmentCard", () => {
 
     expect(screen.getByTestId("pdf-thumbnail")).toHaveAttribute("data-blob-id", "b1");
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("passes a compact branded CefiroLoader as PdfThumbnail's loading fallback (GH #94)", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "report.pdf", type: "application/pdf" })} />);
+
+    const loadingFallback = screen.getByTestId("pdf-thumbnail-loading-fallback");
+    expect(within(loadingFallback).getByRole("status")).toBeInTheDocument();
+  });
+
+  it("keeps the static file icon as PdfThumbnail's error fallback, so a permanently failed PDF never spins forever (GH #94 regression)", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "report.pdf", type: "application/pdf" })} />);
+
+    const errorFallback = screen.getByTestId("pdf-thumbnail-error-fallback");
+    expect(within(errorFallback).queryByRole("status")).not.toBeInTheDocument();
+    expect(errorFallback.querySelector("svg")).toBeTruthy();
   });
 
   it("renders a blank icon card (no img, no PdfThumbnail) for a non-previewable type", () => {
@@ -198,5 +231,27 @@ describe("AttachmentCard", () => {
 
     expect(within(thumbnail).queryByRole("img")).not.toBeInTheDocument();
     expect(thumbnail.querySelector("svg")).toBeTruthy();
+  });
+
+  describe("onRemove (optional)", () => {
+    it("renders no remove button when onRemove is not provided — unchanged reader behavior", () => {
+      render(<AttachmentCard attachment={makeAttachment({ name: "photo.png" })} />);
+
+      expect(screen.queryByTestId("attachment-card-remove")).not.toBeInTheDocument();
+    });
+
+    it("renders a remove button with a named aria-label and calls onRemove when clicked, when provided", () => {
+      const onRemove = vi.fn();
+      render(
+        <AttachmentCard attachment={makeAttachment({ name: "photo.png" })} onRemove={onRemove} />,
+      );
+
+      const removeButton = screen.getByTestId("attachment-card-remove");
+      expect(removeButton).toHaveAttribute("aria-label", i18n.t("attachments.remove", { name: "photo.png" }));
+
+      fireEvent.click(removeButton);
+
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
   });
 });

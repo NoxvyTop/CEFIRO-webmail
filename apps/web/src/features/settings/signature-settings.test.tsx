@@ -62,6 +62,17 @@ describe("SignatureSettings", () => {
     expect(createSignature.mock.calls[0]?.[0]).toMatchObject({ name: "New" });
   });
 
+  it("applies the unified field-focus class to the name input", async () => {
+    renderSettings();
+
+    await screen.findByText("Default");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.newSignature") }));
+
+    const nameInput = screen.getByLabelText(i18n.t("settings.name"));
+
+    expect(nameInput).toHaveClass("field-focus");
+  });
+
   it("deletes a signature via the delete button", async () => {
     deleteSignature.mockResolvedValueOnce(undefined);
     renderSettings();

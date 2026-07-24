@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  MailApiError, fetchMailboxes, fetchMessages, fetchThread, updateMessage,
+  MailApiError, fetchInstanceSettings, fetchMailboxes, fetchMessages, fetchThread, updateMessage,
 } from "./api";
 
 const mailbox = {
@@ -51,5 +51,13 @@ describe("mail api client", () => {
   it("rejects invalid response shapes", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ nope: 1 }))));
     await expect(fetchThread("t1")).rejects.toThrow();
+  });
+
+  it("fetches the public instance settings flag from /api/instance", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ sentWithFooter: true }))) as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", fetchMock);
+    const settings = await fetchInstanceSettings();
+    expect(settings.sentWithFooter).toBe(true);
+    expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/instance");
   });
 });
