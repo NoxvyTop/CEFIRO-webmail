@@ -6,7 +6,10 @@ import {
   DRAFT_REPLY_SYSTEM_PROMPT,
   SUMMARIZE_SYSTEM_PROMPT,
   SUMMARY_BULLET_COUNT,
+  THREAD_SUMMARY_BULLET_COUNT,
+  THREAD_SUMMARY_SYSTEM_PROMPT,
   buildDraftReplyPrompt,
+  buildThreadSummaryPrompt,
   parseBullets,
 } from "./prompts";
 
@@ -50,6 +53,23 @@ export function createAnthropicAiClient(input: {
       } catch (error) {
         // Never include email content in logs — only the failure itself.
         log("error", "ai summarize failed", { error: error instanceof Error ? error.message : "unknown" });
+        throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+      }
+    },
+
+    async summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]> {
+      try {
+        const response = await messagesApi.create({
+          model: input.model,
+          max_tokens: MAX_TOKENS,
+          system: THREAD_SUMMARY_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: buildThreadSummaryPrompt(messages) }],
+        });
+        const text = firstTextBlock(response.content);
+        return parseBullets(text, THREAD_SUMMARY_BULLET_COUNT);
+      } catch (error) {
+        // Never include email content in logs — only the failure itself.
+        log("error", "ai summarizeThread failed", { error: error instanceof Error ? error.message : "unknown" });
         throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
       }
     },

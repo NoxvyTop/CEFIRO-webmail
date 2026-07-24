@@ -64,6 +64,56 @@ describe("createAnthropicAiClient", () => {
     });
   });
 
+  describe("summarizeThread", () => {
+    it("sends all thread messages as one user turn, in order, and returns parsed bullets", async () => {
+      const api = fakeMessagesApi(() => ({
+        content: [
+          {
+            type: "text",
+            text: "- Ana propuso empezar el lunes\n- Beto confirmó\n- Pendiente: enviar el cronograma",
+          },
+        ],
+      }));
+      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+
+      const result = await client.summarizeThread([
+        { from: "Ana <ana@x.com>", body: "Propongo arrancar el lunes." },
+        { from: "Beto <beto@x.com>", body: "Confirmado." },
+      ]);
+
+      expect(result).toEqual([
+        "Ana propuso empezar el lunes",
+        "Beto confirmó",
+        "Pendiente: enviar el cronograma",
+      ]);
+      expect(api.calls).toHaveLength(1);
+      const call = api.calls[0] as { messages: { content: string }[] };
+      // Both messages, in order, land in the single user turn.
+      const content = call.messages[0]!.content;
+      expect(content.indexOf("Ana <ana@x.com>")).toBeLessThan(content.indexOf("Beto <beto@x.com>"));
+      expect(content).toContain("Propongo arrancar el lunes.");
+      expect(content).toContain("Confirmado.");
+    });
+
+    it("wraps a provider failure in a DomainError without leaking message content", async () => {
+      const api: AnthropicMessagesApi = {
+        async create() {
+          throw new Error("network exploded");
+        },
+      };
+      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(
+        client.summarizeThread([{ from: "Ana <ana@x.com>", body: "super secret body content" }]),
+      ).rejects.toBeInstanceOf(DomainError);
+      for (const call of logSpy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("super secret body content");
+      }
+      logSpy.mockRestore();
+    });
+  });
+
   describe("draftReply", () => {
     it("asks the model for a Spanish draft from the subject and optional context", async () => {
       const api = fakeMessagesApi(() => ({

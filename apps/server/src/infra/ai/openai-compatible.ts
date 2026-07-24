@@ -5,7 +5,10 @@ import {
   DRAFT_REPLY_SYSTEM_PROMPT,
   SUMMARIZE_SYSTEM_PROMPT,
   SUMMARY_BULLET_COUNT,
+  THREAD_SUMMARY_BULLET_COUNT,
+  THREAD_SUMMARY_SYSTEM_PROMPT,
   buildDraftReplyPrompt,
+  buildThreadSummaryPrompt,
   parseBullets,
 } from "./prompts";
 
@@ -74,6 +77,20 @@ export function createOpenAiCompatibleClient(input: {
       } catch (error) {
         // Never include email content in logs — only the failure itself.
         log("error", "ai summarize failed", { error: error instanceof Error ? error.message : "unknown" });
+        throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+      }
+    },
+
+    async summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]> {
+      try {
+        const content = await chatComplete([
+          { role: "system", content: THREAD_SUMMARY_SYSTEM_PROMPT },
+          { role: "user", content: buildThreadSummaryPrompt(messages) },
+        ]);
+        return parseBullets(content, THREAD_SUMMARY_BULLET_COUNT);
+      } catch (error) {
+        // Never include email content in logs — only the failure itself.
+        log("error", "ai summarizeThread failed", { error: error instanceof Error ? error.message : "unknown" });
         throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
       }
     },

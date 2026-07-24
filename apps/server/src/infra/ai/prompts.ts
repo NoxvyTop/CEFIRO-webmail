@@ -14,6 +14,31 @@ export const SUMMARIZE_SYSTEM_PROMPT =
   `Summarize the email below into exactly ${SUMMARY_BULLET_COUNT} short bullet points, ` +
   "one per line, each starting with '- '. Reply with nothing else.";
 
+// A conversation naturally needs more room than a single email: one bullet
+// per participant's contribution plus decisions and pending items can
+// easily exceed SUMMARY_BULLET_COUNT.
+export const THREAD_SUMMARY_BULLET_COUNT = 6;
+
+export const THREAD_SUMMARY_SYSTEM_PROMPT =
+  "A continuación tienes los mensajes de una conversación de correo, en orden, cada uno " +
+  "precedido por su remitente. Resume la conversación en hasta " +
+  `${THREAD_SUMMARY_BULLET_COUNT} viñetas breves, en español: quién dijo qué, qué se decidió ` +
+  "y qué queda pendiente o como próxima acción. Responde solo con las viñetas, una por línea, " +
+  "cada una comenzando con '- '.";
+
+const THREAD_MESSAGE_DIVIDER = "---";
+
+/**
+ * Assembles ordered thread messages into a single user-turn string for
+ * summarizeThread — one `De: <from>` + body block per message, separated by
+ * a divider, in the same order the caller provides them (chronological).
+ */
+export function buildThreadSummaryPrompt(messages: Array<{ from: string; body: string }>): string {
+  return messages
+    .map((message) => `De: ${message.from}\n${message.body}`)
+    .join(`\n${THREAD_MESSAGE_DIVIDER}\n`);
+}
+
 export const DRAFT_REPLY_SYSTEM_PROMPT =
   "Redacta el cuerpo de un correo de respuesta en español, breve y profesional, " +
   "a partir del asunto (y contexto opcional) provisto por el usuario. " +

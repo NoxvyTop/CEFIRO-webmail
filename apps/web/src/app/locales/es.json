@@ -185,6 +185,7 @@
       "hint": "Pide a un administrador que lo vincule."
     },
     "summarizeWithAi": "✦ Resumir con IA",
+    "summarizeConversation": "✦ Resumir conversación",
     "aiSummaryTitle": "Resumen IA",
     "aiSummaryLoading": "Analizando el mensaje…",
     "backToList": "Volver a la lista",

@@ -185,6 +185,7 @@
       "hint": "Ask an administrator to link it."
     },
     "summarizeWithAi": "✦ Summarize with AI",
+    "summarizeConversation": "✦ Summarize conversation",
     "aiSummaryTitle": "AI Summary",
     "aiSummaryLoading": "Analyzing the message…",
     "backToList": "Back to messages",

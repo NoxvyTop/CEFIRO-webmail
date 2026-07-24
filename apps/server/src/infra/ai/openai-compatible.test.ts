@@ -107,6 +107,54 @@ describe("createOpenAiCompatibleClient", () => {
     });
   });
 
+  describe("summarizeThread", () => {
+    it("POSTs the assembled conversation as a single user message and parses bullets", async () => {
+      const fetchFn = fetchReturning({
+        choices: [{ message: { content: "- Ana propuso empezar el lunes\n- Beto confirmó" } }],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "moonshot-v1-8k",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const result = await client.summarizeThread([
+        { from: "Ana <ana@x.com>", body: "Propongo arrancar el lunes." },
+        { from: "Beto <beto@x.com>", body: "Confirmado." },
+      ]);
+
+      expect(result).toEqual(["Ana propuso empezar el lunes", "Beto confirmó"]);
+      const [, init] = calls(fetchFn)[0]!;
+      const requestBody = JSON.parse(init.body as string);
+      expect(requestBody.messages[0].role).toBe("system");
+      expect(requestBody.messages[1].role).toBe("user");
+      const content = requestBody.messages[1].content as string;
+      expect(content.indexOf("Ana <ana@x.com>")).toBeLessThan(content.indexOf("Beto <beto@x.com>"));
+      expect(content).toContain("Propongo arrancar el lunes.");
+      expect(content).toContain("Confirmado.");
+    });
+
+    it("wraps a non-OK HTTP response in a DomainError without leaking message content", async () => {
+      const fetchFn = fetchReturning({ error: "boom" }, 500);
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(
+        client.summarizeThread([{ from: "Ana <ana@x.com>", body: "super secret body content" }]),
+      ).rejects.toBeInstanceOf(DomainError);
+      for (const call of logSpy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("super secret body content");
+      }
+      logSpy.mockRestore();
+    });
+  });
+
   describe("draftReply", () => {
     it("asks the model for a Spanish draft from the subject and optional context", async () => {
       const fetchFn = fetchReturning({

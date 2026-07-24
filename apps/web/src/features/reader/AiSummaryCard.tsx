@@ -1,10 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { MailApiError } from "../mailbox/api";
-import { fetchSummary } from "./aiApi";
+import { fetchSummary, summarizeThread } from "./aiApi";
 
 interface AiSummaryCardProps {
   messageId: string;
+  /** Id of the thread `messageId` belongs to — only used when `messageCount > 1`. */
+  threadId: string;
+  /**
+   * Total messages in the thread. `> 1` switches the card to a whole-thread
+   * conversation summary (GH #116) instead of summarizing just this one
+   * message — a single email's summarize route would otherwise only see the
+   * last message, quoted trail and all.
+   */
+  messageCount: number;
 }
 
 // Returns the i18n key for the inline error, or null when the card should
@@ -18,15 +27,16 @@ function aiErrorKey(error: unknown): string | null {
   return "mail.errors.generic";
 }
 
-export function AiSummaryCard({ messageId }: AiSummaryCardProps) {
+export function AiSummaryCard({ messageId, threadId, messageCount }: AiSummaryCardProps) {
   const { t } = useTranslation();
+  const isThread = messageCount > 1;
 
   // Cached under a stable key so the summary persists across re-renders /
   // re-visits of the thread within the session, without being regenerated —
   // enabled:false means it only runs when explicitly triggered via refetch().
   const query = useQuery({
-    queryKey: ["ai", "summary", messageId],
-    queryFn: () => fetchSummary(messageId),
+    queryKey: isThread ? ["ai", "summary", "thread", threadId] : ["ai", "summary", messageId],
+    queryFn: () => (isThread ? summarizeThread(threadId) : fetchSummary(messageId)),
     enabled: false,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -57,7 +67,7 @@ export function AiSummaryCard({ messageId }: AiSummaryCardProps) {
           className="flex items-center gap-2 bg-transparent text-[13.5px] font-semibold text-accent-text transition hover:opacity-80"
         >
           <span aria-hidden="true" className="text-[15px]">✦</span>
-          {t("mail.summarizeWithAi")}
+          {t(isThread ? "mail.summarizeConversation" : "mail.summarizeWithAi")}
         </button>
       )}
       {query.isFetching && (

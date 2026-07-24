@@ -437,7 +437,9 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                     {formatRelativeTime(email.receivedAt, { yesterdayLabel: t("mail.yesterday"), locale: i18n.language })}
                   </span>
                 </div>
-                {email.id === lastEmail.id && <AiSummaryCard messageId={email.id} />}
+                {email.id === lastEmail.id && (
+                  <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
+                )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
                   <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} attachments={email.attachments} />
                 </div>

@@ -7,7 +7,7 @@ import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
-import { createAiRouter } from "./router";
+import { createAiRouter, stripQuotedTrail } from "./router";
 import type { AiClient } from "../../core/ai";
 import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
 
@@ -72,21 +72,80 @@ function stubJmap(bodyText: string | null): { client: JmapClient; calls: JmapMet
   return { client, calls };
 }
 
-function fakeAiClient(overrides: Partial<AiClient> = {}): AiClient & { summarizeCalls: string[]; draftCalls: { subject: string; context?: string }[] } {
+function fakeAiClient(overrides: Partial<AiClient> = {}): AiClient & {
+  summarizeCalls: string[];
+  summarizeThreadCalls: Array<{ from: string; body: string }[]>;
+  draftCalls: { subject: string; context?: string }[];
+} {
   const summarizeCalls: string[] = [];
+  const summarizeThreadCalls: Array<{ from: string; body: string }[]> = [];
   const draftCalls: { subject: string; context?: string }[] = [];
   return {
     summarizeCalls,
+    summarizeThreadCalls,
     draftCalls,
     async summarize(body: string) {
       summarizeCalls.push(body);
       return overrides.summarize ? overrides.summarize(body) : ["one", "two", "three"];
+    },
+    async summarizeThread(messages: { from: string; body: string }[]) {
+      summarizeThreadCalls.push(messages);
+      return overrides.summarizeThread ? overrides.summarizeThread(messages) : ["t-one", "t-two"];
     },
     async draftReply(subject: string, context?: string) {
       draftCalls.push({ subject, context });
       return overrides.draftReply ? overrides.draftReply(subject, context) : "Borrador generado.";
     },
   };
+}
+
+type StubThreadMessage = {
+  id: string;
+  from?: { name?: string | null; email: string }[];
+  receivedAt: string;
+  bodyText: string;
+};
+
+function stubThreadJmap(
+  thread: { id: string; messages: StubThreadMessage[] } | null,
+): { client: JmapClient; calls: JmapMethodCall[] } {
+  const calls: JmapMethodCall[] = [];
+  const client: JmapClient = {
+    getSession: async () => ({
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "",
+      uploadUrl: "",
+      downloadUrl: "",
+    }),
+    request: async (_auth, _session, methodCalls) => {
+      calls.push(...methodCalls);
+      if (thread === null) {
+        return [
+          ["Thread/get", { list: [] }, "t"],
+          ["Email/get", { list: [] }, "g"],
+        ];
+      }
+      return [
+        ["Thread/get", { list: [{ id: thread.id, emailIds: thread.messages.map((m) => m.id) }] }, "t"],
+        [
+          "Email/get",
+          {
+            list: thread.messages.map((m) => ({
+              id: m.id,
+              from: m.from,
+              receivedAt: m.receivedAt,
+              textBody: [{ partId: "t", type: "text/plain" }],
+              bodyValues: { t: { value: m.bodyText } },
+            })),
+          },
+          "g",
+        ],
+      ];
+    },
+    uploadBlob: async () => "blob-id",
+  };
+  return { client, calls };
 }
 
 function makeApp(aiClient: AiClient | null, jmap: JmapClient | null) {
@@ -121,6 +180,19 @@ describe("ai router — software-level gate", () => {
     const json = (await res.json()) as { code: string };
     expect(json.code).toBe("ai_disabled");
   });
+
+  it("returns ai_disabled for thread summarize without attempting any JMAP call when aiClient is null", async () => {
+    const { client, calls } = stubThreadJmap({
+      id: "th1",
+      messages: [{ id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "hi" }],
+    });
+    const app = makeApp(null, client);
+    const res = await post(app, "/api/mail/threads/th1/summarize", {});
+    expect(res.status).toBe(501);
+    const json = (await res.json()) as { code: string };
+    expect(json.code).toBe("ai_disabled");
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("ai router — summarize", () => {
@@ -141,6 +213,89 @@ describe("ai router — summarize", () => {
     const app = makeApp(ai, client);
     const res = await post(app, "/api/mail/messages/missing/summarize", {});
     expect(res.status).toBe(404);
+  });
+});
+
+describe("ai router — summarize thread", () => {
+  it("fetches all thread messages, strips dragged quotes, and calls summarizeThread with the assembled in-order messages", async () => {
+    // Messages arrive from JMAP out of chronological order on purpose — this
+    // asserts the route re-sorts by receivedAt itself (mirrors GET /threads/:id).
+    const { client } = stubThreadJmap({
+      id: "th1",
+      messages: [
+        {
+          id: "e2",
+          from: [{ name: "Beto", email: "beto@x.com" }],
+          receivedAt: "2026-07-21T09:00:00Z",
+          bodyText:
+            "Perfecto, confirmo.\n\nEl 20/07/2026, Ana <ana@x.com> escribió:\n> Hola equipo, arrancamos el proyecto mañana.",
+        },
+        {
+          id: "e1",
+          from: [{ name: "Ana", email: "ana@x.com" }],
+          receivedAt: "2026-07-20T10:00:00Z",
+          bodyText: "Hola equipo, arrancamos el proyecto mañana.",
+        },
+      ],
+    });
+    const ai = fakeAiClient();
+    const app = makeApp(ai, client);
+
+    const res = await post(app, "/api/mail/threads/th1/summarize", {});
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { bullets: string[] };
+    expect(json.bullets).toEqual(["t-one", "t-two"]);
+    expect(ai.summarizeThreadCalls).toEqual([
+      [
+        { from: "Ana <ana@x.com>", body: "Hola equipo, arrancamos el proyecto mañana." },
+        { from: "Beto <beto@x.com>", body: "Perfecto, confirmo." },
+      ],
+    ]);
+  });
+
+  it("returns 404 when the thread has no messages", async () => {
+    const { client } = stubThreadJmap(null);
+    const ai = fakeAiClient();
+    const app = makeApp(ai, client);
+
+    const res = await post(app, "/api/mail/threads/missing/summarize", {});
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("stripQuotedTrail", () => {
+  it("removes '>'-quoted lines from a reply body", () => {
+    const body = "Suena bien, avancemos.\n> Propongo arrancar el lunes.\n> Saludos,\n> Ana";
+    expect(stripQuotedTrail(body)).toBe("Suena bien, avancemos.");
+  });
+
+  it("truncates at the Spanish Gmail separator 'El ... escribió:'", () => {
+    const body =
+      "Confirmado, gracias.\n\nEl mar., 21 de jul. de 2026 a las 10:00, Ana <ana@x.com> escribió:\n> Arrancamos el lunes.";
+    expect(stripQuotedTrail(body)).toBe("Confirmado, gracias.");
+  });
+
+  it("truncates at the English Gmail separator 'On ... wrote:'", () => {
+    const body =
+      "Confirmed, thanks.\n\nOn Tue, Jul 21, 2026 at 10:00 AM Ana <ana@x.com> wrote:\n> We start Monday.";
+    expect(stripQuotedTrail(body)).toBe("Confirmed, thanks.");
+  });
+
+  it("truncates at an Outlook '-----Original Message-----' banner", () => {
+    const body = "Sounds good.\n\n-----Original Message-----\nFrom: Ana\nSent: Monday";
+    expect(stripQuotedTrail(body)).toBe("Sounds good.");
+  });
+
+  it("truncates at an Outlook underscore divider", () => {
+    const body = "Sounds good.\n\n________________________________\nFrom: Ana <ana@x.com>";
+    expect(stripQuotedTrail(body)).toBe("Sounds good.");
+  });
+
+  it("leaves a clean single-message body intact", () => {
+    const body = "Hola equipo,\nArrancamos el proyecto el lunes.\nSaludos.";
+    expect(stripQuotedTrail(body)).toBe(body);
   });
 });
 

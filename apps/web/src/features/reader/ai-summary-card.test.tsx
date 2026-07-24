@@ -5,11 +5,15 @@ import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AiSummaryCard } from "./AiSummaryCard";
 
-function renderCard(messageId = "e1") {
+function renderCard(props: { messageId?: string; threadId?: string; messageCount?: number } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <AiSummaryCard messageId={messageId} />
+      <AiSummaryCard
+        messageId={props.messageId ?? "e1"}
+        threadId={props.threadId ?? "t1"}
+        messageCount={props.messageCount ?? 1}
+      />
     </QueryClientProvider>,
   );
 }
@@ -74,5 +78,33 @@ describe("AiSummaryCard", () => {
     fireEvent.click(button);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.ai_provider_error"));
+  });
+});
+
+describe("AiSummaryCard — thread mode", () => {
+  it("calls the thread summarize endpoint and labels itself as a conversation summary when there is more than one message", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["x", "y"] })));
+    vi.stubGlobal("fetch", fetchMock);
+    renderCard({ threadId: "t1", messageCount: 3 });
+
+    const button = await screen.findByRole("button", { name: i18n.t("mail.summarizeConversation") });
+    expect(screen.queryByRole("button", { name: i18n.t("mail.summarizeWithAi") })).not.toBeInTheDocument();
+    fireEvent.click(button);
+
+    expect(await screen.findByText("x")).toBeInTheDocument();
+    expect(screen.getByText("y")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mail/threads/t1/summarize", { method: "POST" });
+  });
+
+  it("uses the single-message endpoint and label when there is only one message", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["z"] })));
+    vi.stubGlobal("fetch", fetchMock);
+    renderCard({ messageId: "e1", messageCount: 1 });
+
+    const button = await screen.findByRole("button", { name: i18n.t("mail.summarizeWithAi") });
+    fireEvent.click(button);
+
+    expect(await screen.findByText("z")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mail/messages/e1/summarize", { method: "POST" });
   });
 });
