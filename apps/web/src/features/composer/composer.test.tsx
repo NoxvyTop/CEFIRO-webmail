@@ -9,15 +9,16 @@ import { ToastProvider } from "../../app/ui/toast";
 import { MailApiError } from "../mailbox/api";
 import { Composer } from "./Composer";
 
-const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft } = vi.hoisted(() => ({
+const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft, saveDraft } = vi.hoisted(() => ({
   fetchIdentities: vi.fn(),
   fetchSignatures: vi.fn(),
   sendEmail: vi.fn(),
   uploadAttachment: vi.fn(),
   fetchAiDraft: vi.fn(),
+  saveDraft: vi.fn(),
 }));
 
-vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment }));
+vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, saveDraft }));
 vi.mock("./aiApi", () => ({ fetchAiDraft }));
 
 const identities: Identity[] = [
@@ -72,6 +73,7 @@ describe("Composer", () => {
   beforeEach(() => {
     fetchAiDraft.mockReset();
     uploadAttachment.mockReset();
+    saveDraft.mockReset();
   });
 
   it("renders a dialog with identities in the From select", async () => {
@@ -594,6 +596,241 @@ describe("Composer", () => {
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: i18n.t("composer.draftWithAi") })).not.toBeInTheDocument(),
       );
+    });
+  });
+
+  // GH #125: Escape closes the composer immediately when the draft is empty,
+  // otherwise shows a discard-confirmation dialog offering Discard / Save to
+  // drafts / keep editing.
+  describe("Escape-to-close (#125)", () => {
+    function pressEscape() {
+      fireEvent.keyDown(window, { key: "Escape" });
+    }
+
+    it("closes immediately on Escape when the composer is untouched (brand-new, empty draft)", async () => {
+      const { onClose } = renderComposer();
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("closes immediately on Escape for an untouched reply (quote + auto-applied signature present, nothing typed)", async () => {
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        bodyHtml: '<div data-cefiro-quote="true"><blockquote><p>Original message</p></blockquote></div>',
+      });
+
+      // Wait for the default-signature auto-apply effect to settle so the
+      // body genuinely carries both a quote AND a signature wrapper, as a
+      // freshly opened reply would.
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+      expect(body.textContent).toContain("Original message");
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("shows the discard confirmation on Escape when a recipient is present", async () => {
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: null, email: "bob@example.com" }],
+      });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when a subject is present", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when the body has been typed into", async () => {
+      const { onClose } = renderComposer();
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      fireEvent.input(body, { target: { innerHTML: "<p>hello there</p>" } });
+      await waitFor(() => expect(body.textContent).toContain("hello there"));
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when an attachment has been uploaded and nothing else was typed", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "image/png", size: 5 });
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "photo.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(await screen.findByTestId("attachment-card-thumbnail")).toBeInTheDocument();
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when an upload is still in flight and nothing else was typed", async () => {
+      uploadAttachment.mockReturnValueOnce(new Promise(() => {})); // never resolves — stays pending
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "uploading.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      expect(await screen.findByText(/uploading\.png/)).toBeInTheDocument();
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("returns to empty once the only attachment is removed, so Escape closes immediately again", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "image/png", size: 5 });
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "photo.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(await screen.findByTestId("attachment-card-thumbnail")).toBeInTheDocument();
+
+      const removeButton = screen.getByRole("button", {
+        name: i18n.t("attachments.remove", { name: "photo.png" }),
+      });
+      fireEvent.click(removeButton);
+      await waitFor(() =>
+        expect(screen.queryAllByTestId("attachment-card-thumbnail")).toHaveLength(0),
+      );
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("Discard closes the composer without saving", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const discardButton = await screen.findByRole("button", { name: i18n.t("composer.discardConfirm.discard") });
+      fireEvent.click(discardButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(saveDraft).not.toHaveBeenCalled();
+    });
+
+    it("Save to drafts calls the API with the composer's payload and closes on success", async () => {
+      saveDraft.mockResolvedValueOnce({ id: "draft-1" });
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+        subject: "Hello there",
+      });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const saveButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      fireEvent.click(saveButton);
+
+      await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+      expect(saveDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identityId: "id1",
+          to: [{ name: "Bob", email: "bob@example.com" }],
+          subject: "Hello there",
+        }),
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it("keeps the composer open and surfaces an error when saving to drafts fails, without losing the draft", async () => {
+      saveDraft.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+      });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const saveButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      fireEvent.click(saveButton);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("composer.errors.save_draft_failed"));
+      expect(onClose).not.toHaveBeenCalled();
+
+      // The draft itself must still be intact — return to editing and check
+      // the recipient chip entered earlier is still there.
+      const keepEditingButton = screen.getByRole("button", {
+        name: i18n.t("composer.discardConfirm.keepEditing"),
+      });
+      fireEvent.click(keepEditingButton);
+      // The recipient chip renders the address's name (see RecipientField.tsx).
+      expect(await screen.findByText("Bob")).toBeInTheDocument();
+    });
+
+    it("Escape inside the confirmation dismisses it and returns to editing, without closing the composer", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+      await screen.findByRole("alertdialog");
+
+      pressEscape();
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
+    });
+
+    it("cannot trigger the save action twice while the first save is still in flight", async () => {
+      let resolveSave: (value: { id: string }) => void = () => {};
+      saveDraft.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSave = resolve;
+          }),
+      );
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const saveButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      fireEvent.click(saveButton);
+      fireEvent.click(saveButton);
+
+      expect(saveDraft).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveSave({ id: "draft-1" });
+      });
     });
   });
 });

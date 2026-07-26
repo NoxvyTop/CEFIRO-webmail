@@ -1,6 +1,6 @@
-import type { SendEmailInput } from "@webmail/shared";
-import { useReducer } from "react";
-import { sendEmail, uploadAttachment } from "./api";
+import type { SaveDraftInput, SendEmailInput } from "@webmail/shared";
+import { useReducer, useRef } from "react";
+import { saveDraft as saveDraftRequest, sendEmail, uploadAttachment } from "./api";
 import { fetchAiDraft } from "./aiApi";
 import { MailApiError, updateMessage } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
@@ -15,6 +15,10 @@ export type ComposerState = {
   uploads: PendingUpload[];
   sending: boolean;
   sendError: string | null;
+  // GH #125: mirrors sending/sendError, but for the "Save to drafts" action
+  // offered by the Escape-to-close discard confirmation.
+  savingDraft: boolean;
+  saveDraftError: string | null;
   aiDrafting: boolean;
   aiDraftError: string | null;
   aiDraftNotice: boolean;
@@ -31,6 +35,9 @@ type Action =
   | { type: "sendStart" }
   | { type: "sendFailed"; error: string }
   | { type: "sendSucceeded" }
+  | { type: "saveDraftStart" }
+  | { type: "saveDraftFailed"; error: string }
+  | { type: "saveDraftSucceeded" }
   | { type: "aiDraftStart" }
   | { type: "aiDraftNeedsSubject" }
   | { type: "aiDraftSucceeded"; bodyHtml: string }
@@ -73,6 +80,12 @@ function reducer(state: ComposerState, action: Action): ComposerState {
       return { ...state, sending: false, sendError: action.error };
     case "sendSucceeded":
       return { ...state, sending: false, sendError: null };
+    case "saveDraftStart":
+      return { ...state, savingDraft: true, saveDraftError: null };
+    case "saveDraftFailed":
+      return { ...state, savingDraft: false, saveDraftError: action.error };
+    case "saveDraftSucceeded":
+      return { ...state, savingDraft: false, saveDraftError: null };
     case "aiDraftStart":
       return { ...state, aiDrafting: true, aiDraftError: null, aiDraftNotice: false };
     case "aiDraftNeedsSubject":
@@ -99,6 +112,8 @@ function initState(draft: ComposerDraft): ComposerState {
     uploads: [],
     sending: false,
     sendError: null,
+    savingDraft: false,
+    saveDraftError: null,
     aiDrafting: false,
     aiDraftError: null,
     aiDraftNotice: false,
@@ -114,6 +129,33 @@ function htmlToPlainText(html: string): string {
     .trim();
 }
 
+// Shared by send() and saveDraft() (GH #125): both submit the same compose
+// fields (identity, recipients, subject, body, attachments, threading
+// headers) to structurally identical schemas (see
+// packages/shared/src/api/compose.ts's composeEmailFieldsSchema) — saveDraft
+// additionally carries originalDraftId, layered on by its own caller below.
+// Kept as the single place that strips the composer's internal
+// signature/quote marker divs (see composer/signature.ts) before they'd
+// otherwise reach a recipient's inbox or a saved draft.
+function buildComposePayload(draft: ComposerDraft, attachments: Attachment[]): SendEmailInput {
+  const outgoingBodyHtml = stripSignatureMarkers(draft.bodyHtml);
+
+  return {
+    identityId: draft.identityId,
+    to: draft.to,
+    cc: draft.cc,
+    bcc: draft.bcc,
+    subject: draft.subject,
+    textBody: htmlToPlainText(outgoingBodyHtml),
+    htmlBody: outgoingBodyHtml,
+    attachments: attachments.map((attachment) => ({
+      blobId: attachment.blobId, name: attachment.name, type: attachment.type,
+    })),
+    inReplyTo: draft.inReplyTo,
+    references: draft.references,
+  };
+}
+
 export function useComposer(
   initial: ComposerDraft,
   // Present when editing an existing draft (compose=draft:<id>, see
@@ -127,9 +169,18 @@ export function useComposer(
   addFiles(files: File[]): { skipped: string[] };
   removeAttachment(blobId: string): void;
   send(): Promise<boolean>;
+  saveDraft(): Promise<boolean>;
   draftWithAi(): Promise<void>;
 } {
   const [state, dispatch] = useReducer(reducer, initial, initState);
+  // Synchronous re-entrancy lock for saveDraft (GH #125): React state
+  // updates from dispatch don't apply until the next render, so two
+  // saveDraft() calls issued back-to-back within the same synchronous tick
+  // (e.g. a double-click before the button's disabled state can commit)
+  // would both still see the OLD state.savingDraft value and both proceed.
+  // A ref is mutated immediately, so it correctly blocks the second call
+  // regardless of render timing.
+  const savingDraftRef = useRef(false);
 
   function setField<K extends keyof ComposerDraft>(key: K, value: ComposerDraft[K]): void {
     dispatch({ type: "setField", key, value });
@@ -193,27 +244,7 @@ export function useComposer(
       return false;
     }
 
-    // The composer's internal signature/quote marker divs (see
-    // composer/signature.ts) are an implementation detail for finding,
-    // replacing, and removing the signature block in the editor — they must
-    // never reach a recipient's inbox, so strip them right before building
-    // the outgoing payload.
-    const outgoingBodyHtml = stripSignatureMarkers(draft.bodyHtml);
-
-    const input: SendEmailInput = {
-      identityId: draft.identityId,
-      to: draft.to,
-      cc: draft.cc,
-      bcc: draft.bcc,
-      subject: draft.subject,
-      textBody: htmlToPlainText(outgoingBodyHtml),
-      htmlBody: outgoingBodyHtml,
-      attachments: attachments.map((attachment) => ({
-        blobId: attachment.blobId, name: attachment.name, type: attachment.type,
-      })),
-      inReplyTo: draft.inReplyTo,
-      references: draft.references,
-    };
+    const input = buildComposePayload(draft, attachments);
 
     dispatch({ type: "sendStart" });
     try {
@@ -235,6 +266,34 @@ export function useComposer(
       const error = err instanceof MailApiError ? `composer.errors.${err.code || "generic"}` : "composer.errors.generic";
       dispatch({ type: "sendFailed", error });
       return false;
+    }
+  }
+
+  // GH #125: "Save to drafts" from the Escape-to-close discard confirmation.
+  // Unlike send(), a draft is deliberately allowed to be incomplete — no
+  // recipient/subject guard here (see packages/shared/src/api/compose.ts's
+  // saveDraftSchema, GH #149) — and originalDraftId is layered onto the
+  // shared payload so saving an already-open draft replaces it server-side
+  // instead of creating a duplicate.
+  async function saveDraft(): Promise<boolean> {
+    if (savingDraftRef.current) return false;
+    savingDraftRef.current = true;
+    dispatch({ type: "saveDraftStart" });
+    try {
+      const { draft, attachments } = state;
+      const input: SaveDraftInput = {
+        ...buildComposePayload(draft, attachments),
+        originalDraftId: draft.originalDraftId,
+      };
+      await saveDraftRequest(input);
+      dispatch({ type: "saveDraftSucceeded" });
+      return true;
+    } catch (err) {
+      const error = err instanceof MailApiError ? `composer.errors.${err.code || "generic"}` : "composer.errors.generic";
+      dispatch({ type: "saveDraftFailed", error });
+      return false;
+    } finally {
+      savingDraftRef.current = false;
     }
   }
 
@@ -261,5 +320,5 @@ export function useComposer(
     }
   }
 
-  return { state, setField, addFiles, removeAttachment, send, draftWithAi };
+  return { state, setField, addFiles, removeAttachment, send, saveDraft, draftWithAi };
 }

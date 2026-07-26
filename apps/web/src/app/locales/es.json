@@ -292,7 +292,15 @@
     "draftingWithAi": "Redactando…",
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
     "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
-    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos"
+    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos",
+    "discardConfirm": {
+      "title": "¿Descartar este mensaje?",
+      "description": "Tu mensaje tiene contenido sin guardar.",
+      "discard": "Descartar de todos modos",
+      "saveToDrafts": "Guardar en borradores",
+      "savingToDrafts": "Guardando…",
+      "keepEditing": "Seguir editando"
+    }
   },
   "attachments": {
     "download": "Descargar",
