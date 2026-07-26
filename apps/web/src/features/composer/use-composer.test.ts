@@ -213,6 +213,60 @@ describe("useComposer", () => {
     expect(sentHtml).not.toContain("data-cefiro-quote");
   });
 
+  // GH #120: guards the wire seam between the composer draft and the send
+  // payload — deleting the inReplyTo/references mapping in useComposer.send
+  // would otherwise make the whole threading feature a silent no-op. The
+  // assertions read the captured argument directly rather than through
+  // expect.objectContaining, which also matches when a key is absent.
+  describe("send: RFC 5322 threading headers reach the sendEmail payload", () => {
+    beforeEach(() => {
+      sendEmail.mockReset();
+    });
+
+    it("forwards the draft's inReplyTo and references verbatim", async () => {
+      sendEmail.mockResolvedValueOnce(undefined);
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+        inReplyTo: ["parent@example.com"],
+        references: ["grandparent@example.com", "parent@example.com"],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.send();
+      });
+
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      const payload = sendEmail.mock.calls[0]?.[0] as {
+        inReplyTo?: string[];
+        references?: string[];
+      };
+      expect(payload.inReplyTo).toEqual(["parent@example.com"]);
+      expect(payload.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+    });
+
+    it("leaves both undefined on the payload for a non-reply draft", async () => {
+      sendEmail.mockResolvedValueOnce(undefined);
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.send();
+      });
+
+      const payload = sendEmail.mock.calls[0]?.[0] as {
+        inReplyTo?: string[];
+        references?: string[];
+      };
+      expect(payload.inReplyTo).toBeUndefined();
+      expect(payload.references).toBeUndefined();
+    });
+  });
+
   it("send: maps MailApiError to a namespaced error code and returns false", async () => {
     sendEmail.mockRejectedValueOnce(new MailApiError(503, "mail_not_configured"));
     const draft: ComposerDraft = {

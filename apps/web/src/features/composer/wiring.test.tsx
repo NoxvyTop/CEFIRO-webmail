@@ -43,6 +43,9 @@ const thread = {
       bodyHtml: "<p>Hi</p>",
       bodyText: null,
       attachments: [{ blobId: "b1", name: "doc.pdf", type: "application/pdf", size: 2048, cid: null }],
+      messageId: ["e1@x.com"],
+      references: null,
+      inReplyTo: null,
     },
   ],
 };

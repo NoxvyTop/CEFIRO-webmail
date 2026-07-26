@@ -60,6 +60,9 @@ const stubJmap: JmapClient = {
                 "1": { value: "<p>Hello " },
                 "2": { value: "World</p>" },
               },
+              messageId: null,
+              references: null,
+              inReplyTo: null,
             },
             {
               id: "e1",
@@ -81,6 +84,11 @@ const stubJmap: JmapClient = {
                 { blobId: "blob1", name: "file.pdf", type: "application/pdf", size: 100, cid: "logo123" },
                 { blobId: "blob2", name: "image.png", type: "image/png", size: 50 },
               ],
+              // RFC 8621: JMAP returns message ids in parsed form — angle
+              // brackets and CFWS removed.
+              messageId: ["e1@x.com"],
+              references: ["root@x.com"],
+              inReplyTo: ["root@x.com"],
             },
           ],
         },
@@ -139,6 +147,11 @@ describe("GET /api/mail/threads/:threadId", () => {
     expect(e2?.bodyHtml).toBe("<p>Hello World</p>");
     expect(e2?.bodyText).toBeNull();
     expect(e2?.attachments).toEqual([]);
+    // e2 carries no Message-ID/References/In-Reply-To headers in the stub —
+    // JMAP models that as null (GH #120).
+    expect(e2?.messageId).toBeNull();
+    expect(e2?.references).toBeNull();
+    expect(e2?.inReplyTo).toBeNull();
 
     const e1 = body.emails.find((e) => e.id === "e1");
     expect(e1?.bodyHtml).toBeNull();
@@ -149,6 +162,9 @@ describe("GET /api/mail/threads/:threadId", () => {
     ]);
     expect(e1?.cc).toEqual([]);
     expect(e1?.replyTo).toEqual([]);
+    expect(e1?.messageId).toEqual(["e1@x.com"]);
+    expect(e1?.references).toEqual(["root@x.com"]);
+    expect(e1?.inReplyTo).toEqual(["root@x.com"]);
 
     const [threadCall, getCall] = calls;
     expect(threadCall?.[0]).toBe("Thread/get");
@@ -162,6 +178,9 @@ describe("GET /api/mail/threads/:threadId", () => {
     expect((getCall?.[1] as { fetchHTMLBodyValues: boolean }).fetchHTMLBodyValues).toBe(true);
     expect((getCall?.[1] as { fetchTextBodyValues: boolean }).fetchTextBodyValues).toBe(true);
     expect((getCall?.[1] as { maxBodyValueBytes: number }).maxBodyValueBytes).toBe(524288);
+    expect((getCall?.[1] as { properties: string[] }).properties).toEqual(
+      expect.arrayContaining(["messageId", "references", "inReplyTo"]),
+    );
   });
 
   it("returns 404 when the thread is not found", async () => {

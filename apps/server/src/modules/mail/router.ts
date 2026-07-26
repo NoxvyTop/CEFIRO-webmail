@@ -63,6 +63,13 @@ type JmapEmailDetail = JmapEmail & {
   textBody?: JmapBodyPart[];
   bodyValues?: Record<string, JmapBodyValue>;
   attachments?: JmapAttachment[];
+  // RFC 5322 threading headers (this message's own Message-ID, the
+  // Message-IDs of its ancestors, and the Message-ID it replied to) — see
+  // EmailDetail.messageId/.references/.inReplyTo in @webmail/shared for how
+  // the composer uses these to build a reply's In-Reply-To/References.
+  messageId?: string[] | null;
+  references?: string[] | null;
+  inReplyTo?: string[] | null;
 };
 
 type JmapThread = { id: string; emailIds: string[] };
@@ -162,6 +169,9 @@ function toEmailDetail(email: JmapEmailDetail): EmailDetail {
     bodyHtml: concatBodyValues(email.htmlBody, email.bodyValues),
     bodyText: concatBodyValues(email.textBody, email.bodyValues),
     attachments: toAttachments(email.attachments),
+    messageId: email.messageId ?? null,
+    references: email.references ?? null,
+    inReplyTo: email.inReplyTo ?? null,
   };
 }
 
@@ -602,6 +612,9 @@ export function createMailRouter(deps: MailDeps) {
             "textBody",
             "bodyValues",
             "attachments",
+            "messageId",
+            "references",
+            "inReplyTo",
           ],
           fetchHTMLBodyValues: true,
           fetchTextBodyValues: true,
@@ -758,8 +771,11 @@ export function createMailRouter(deps: MailDeps) {
             })),
           }
         : {}),
-      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
-      ...(input.references ? { references: input.references } : {}),
+      // Guard on length, not truthiness: [] is truthy in JavaScript, so a
+      // plain `input.inReplyTo ? ...` would forward an empty array to
+      // Email/set instead of omitting the property entirely.
+      ...(input.inReplyTo?.length ? { inReplyTo: input.inReplyTo } : {}),
+      ...(input.references?.length ? { references: input.references } : {}),
     };
 
     const sendResponses = await deps.jmap!.request(auth, session, [

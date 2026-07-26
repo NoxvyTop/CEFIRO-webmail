@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { EmailDetail, Identity } from "@webmail/shared";
-import { buildEditDraft, emptyDraft, replyDraft, forwardDraft } from "./reply";
+import {
+  MAX_MESSAGE_ID_COUNT,
+  MAX_MESSAGE_ID_LENGTH,
+  sendEmailSchema,
+  type EmailDetail,
+  type Identity,
+} from "@webmail/shared";
+import { buildEditDraft, emptyDraft, replyDraft, forwardDraft, type ComposerDraft } from "./reply";
 import { QUOTE_MARKER_ATTR } from "./signature";
 
 const identities: Identity[] = [
@@ -29,6 +35,9 @@ function makeEmail(overrides: Partial<EmailDetail> = {}): EmailDetail {
     bodyHtml: '<p>Hello <img src="http://evil.test/track.png"></p>',
     bodyText: null,
     attachments: [],
+    messageId: ["parent@example.com"],
+    references: null,
+    inReplyTo: null,
     ...overrides,
   };
 }
@@ -124,10 +133,243 @@ describe("replyDraft", () => {
     expect(draft.bodyHtml).toContain("Plain &lt;script&gt; text");
   });
 
-  it("leaves inReplyTo and references undefined for F1", () => {
-    const draft = replyDraft(makeEmail(), identities, false);
+  // GH #120: threading headers per RFC 5322 §3.6.4 — In-Reply-To is the
+  // parent's own Message-ID, References is the parent's References followed
+  // by the parent's own Message-ID. The two fields are independently
+  // optional, so each is asserted on its own below.
+  it("sets inReplyTo to the parent's own Message-ID", () => {
+    const email = makeEmail({ messageId: ["parent@example.com"], references: null });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.inReplyTo).toEqual(["parent@example.com"]);
+  });
+
+  it("sets references to the parent's references followed by the parent's Message-ID, in that order", () => {
+    const email = makeEmail({
+      messageId: ["parent@example.com"],
+      references: ["grandparent@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+  });
+
+  it("yields a single-element references chain when the parent has no prior references", () => {
+    const email = makeEmail({ messageId: ["parent@example.com"], references: null });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.references).toEqual(["parent@example.com"]);
+  });
+
+  it("omits inReplyTo but still emits references when the parent has no Message-ID of its own", () => {
+    const email = makeEmail({ messageId: null, references: ["grandparent@example.com"] });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toEqual(["grandparent@example.com"]);
+  });
+
+  it("also omits inReplyTo (not an empty array) when the parent's messageId is an empty array", () => {
+    const email = makeEmail({ messageId: [], references: ["grandparent@example.com"] });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toEqual(["grandparent@example.com"]);
+  });
+
+  // RFC 5322 §3.6.4, second clause: a parent with no References of its own
+  // but with an In-Reply-To containing *a single* message identifier
+  // contributes that In-Reply-To in place of the missing References. The
+  // single-identifier qualifier is part of the rule, so both arities are
+  // asserted.
+  it("falls back to the parent's In-Reply-To when it holds a single identifier and the parent has no references", () => {
+    const email = makeEmail({
+      messageId: ["parent@example.com"],
+      references: null,
+      inReplyTo: ["grandparent@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+  });
+
+  it("does not fall back to the parent's In-Reply-To when it holds more than one identifier", () => {
+    const email = makeEmail({
+      messageId: ["parent@example.com"],
+      references: null,
+      inReplyTo: ["a@example.com", "b@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.references).toEqual(["parent@example.com"]);
+  });
+
+  it("emits no references at all when a multi-identifier In-Reply-To is the parent's only threading header", () => {
+    const email = makeEmail({
+      messageId: null,
+      references: null,
+      inReplyTo: ["a@example.com", "b@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
     expect(draft.inReplyTo).toBeUndefined();
     expect(draft.references).toBeUndefined();
+  });
+
+  it("prefers the parent's references over its In-Reply-To when both are present", () => {
+    const email = makeEmail({
+      messageId: ["parent@example.com"],
+      references: ["grandparent@example.com"],
+      inReplyTo: ["ignored@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+  });
+
+  it("emits references from the parent's In-Reply-To alone when the parent has neither references nor a Message-ID", () => {
+    const email = makeEmail({
+      messageId: null,
+      references: null,
+      inReplyTo: ["grandparent@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toEqual(["grandparent@example.com"]);
+  });
+
+  it("omits both fields when the parent has none of references, In-Reply-To, or Message-ID", () => {
+    const email = makeEmail({ messageId: null, references: null, inReplyTo: null });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toBeUndefined();
+  });
+
+  it("omits both fields when all three parent header arrays are empty", () => {
+    const email = makeEmail({ messageId: [], references: [], inReplyTo: [] });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toBeUndefined();
+  });
+
+  // Discriminating input: first-seen dedupe yields [b, a], last-seen yields
+  // [a, b]. Only first-seen preserves the documented ancestry order.
+  it("dedupes repeated ids in the references chain while preserving first-seen order", () => {
+    const email = makeEmail({
+      messageId: ["b@example.com"],
+      references: ["b@example.com", "a@example.com"],
+    });
+    const draft = replyDraft(email, identities, false);
+    expect(draft.references).toEqual(["b@example.com", "a@example.com"]);
+  });
+
+  it("reply-all produces the same threading headers as a plain reply", () => {
+    const email = makeEmail({
+      messageId: ["parent@example.com"],
+      references: ["grandparent@example.com"],
+    });
+    const replyOnly = replyDraft(email, identities, false);
+    const replyAll = replyDraft(email, identities, true);
+    expect(replyAll.inReplyTo).toEqual(replyOnly.inReplyTo);
+    expect(replyAll.references).toEqual(replyOnly.references);
+  });
+
+  // GH #120 regression guard. replyDraft inherits the parent's chain, so a
+  // long-lived thread (or a hostile sender) can hand it more ids — or longer
+  // ids — than sendEmailSchema accepts. Without trimming here the draft only
+  // fails at send time, client-side in composer/api.ts, as an opaque generic
+  // error after the user has already written the whole reply.
+  describe("threading header trimming", () => {
+    const CRLF = String.fromCharCode(0x0d) + String.fromCharCode(0x0a);
+
+    function chainOf(length: number, prefix = "m"): string[] {
+      return Array.from({ length }, (_, i) => `${prefix}-${i}@example.com`);
+    }
+
+    // Mirrors the payload useComposer.send() builds from a draft, so this
+    // asserts the real end-to-end path into sendEmailSchema.
+    function sendPayload(draft: ComposerDraft) {
+      return {
+        identityId: draft.identityId,
+        to: draft.to,
+        cc: draft.cc,
+        bcc: draft.bcc,
+        subject: draft.subject,
+        textBody: "reply body",
+        htmlBody: draft.bodyHtml,
+        inReplyTo: draft.inReplyTo,
+        references: draft.references,
+      };
+    }
+
+    it("trims an over-long inherited chain to the entry-count limit", () => {
+      const email = makeEmail({
+        messageId: ["parent@example.com"],
+        references: chainOf(MAX_MESSAGE_ID_COUNT + 50),
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.references).toHaveLength(MAX_MESSAGE_ID_COUNT);
+    });
+
+    it("keeps the thread anchor and the most recent ids, dropping the middle", () => {
+      const email = makeEmail({
+        messageId: ["parent@example.com"],
+        references: chainOf(MAX_MESSAGE_ID_COUNT + 50),
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.references?.[0]).toBe("m-0@example.com");
+      expect(draft.references?.at(-1)).toBe("parent@example.com");
+      expect(draft.references?.at(-2)).toBe(`m-${MAX_MESSAGE_ID_COUNT + 49}@example.com`);
+      expect(draft.references).not.toContain("m-1@example.com");
+    });
+
+    it("produces a draft that validates against sendEmailSchema instead of throwing", () => {
+      const email = makeEmail({
+        messageId: ["parent@example.com"],
+        references: chainOf(MAX_MESSAGE_ID_COUNT + 50),
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(sendEmailSchema.safeParse(sendPayload(draft)).success).toBe(true);
+    });
+
+    it("leaves a chain at or under the limit untouched", () => {
+      const references = chainOf(MAX_MESSAGE_ID_COUNT - 1);
+      const email = makeEmail({ messageId: ["parent@example.com"], references });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.references).toEqual([...references, "parent@example.com"]);
+    });
+
+    it("drops a single over-long inherited id rather than losing the whole send", () => {
+      const email = makeEmail({
+        messageId: ["parent@example.com"],
+        references: ["grandparent@example.com", "x".repeat(MAX_MESSAGE_ID_LENGTH + 1)],
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+      expect(sendEmailSchema.safeParse(sendPayload(draft)).success).toBe(true);
+    });
+
+    it("drops an inherited id carrying a header-injecting control character", () => {
+      const email = makeEmail({
+        messageId: ["parent@example.com"],
+        references: ["grandparent@example.com", `evil@example.com${CRLF}Bcc: attacker@evil.test`],
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+    });
+
+    it("drops an unusable parent Message-ID from both fields instead of failing the send", () => {
+      const email = makeEmail({
+        messageId: ["y".repeat(MAX_MESSAGE_ID_LENGTH + 1)],
+        references: ["grandparent@example.com"],
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.inReplyTo).toBeUndefined();
+      expect(draft.references).toEqual(["grandparent@example.com"]);
+      expect(sendEmailSchema.safeParse(sendPayload(draft)).success).toBe(true);
+    });
+
+    it("drops an unusable In-Reply-To fallback id instead of failing the send", () => {
+      const email = makeEmail({
+        messageId: ["parent@example.com"],
+        references: null,
+        inReplyTo: ["z".repeat(MAX_MESSAGE_ID_LENGTH + 1)],
+      });
+      const draft = replyDraft(email, identities, false);
+      expect(draft.references).toEqual(["parent@example.com"]);
+      expect(sendEmailSchema.safeParse(sendPayload(draft)).success).toBe(true);
+    });
   });
 });
 
@@ -180,6 +422,19 @@ describe("forwardDraft", () => {
 
   it("picks the identity that received the original", () => {
     expect(forwardDraft(makeEmail(), identities).identityId).toBe("id1");
+  });
+
+  // GH #120: a forward starts a new conversation, not a reply — it must not
+  // carry the original message's threading headers even though EmailDetail
+  // now exposes messageId/references.
+  it("does not set inReplyTo or references — a forward starts a new conversation", () => {
+    const email = makeEmail({
+      messageId: ["parent@example.com"],
+      references: ["grandparent@example.com"],
+    });
+    const draft = forwardDraft(email, identities);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toBeUndefined();
   });
 });
 
@@ -273,5 +528,21 @@ describe("buildEditDraft", () => {
       { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048 },
       { blobId: "b2", name: "attachment", type: "image/png", size: 512 },
     ]);
+  });
+
+  // GH #120, KNOWN LIMITATION: reopening a draft does not reconstruct
+  // inReplyTo/references. email.messageId is the draft's own id, not its
+  // parent's, so it must not be reused as inReplyTo here. EmailDetail now
+  // exposes the draft's own In-Reply-To header too, but wiring it into the
+  // draft-edit path is a separate behavior change, out of scope here.
+  it("leaves inReplyTo and references unset when reopening a draft (documented limitation)", () => {
+    const email = makeEmail({
+      messageId: ["draft@example.com"],
+      references: ["parent@example.com"],
+      inReplyTo: ["grandparent@example.com"],
+    });
+    const draft = buildEditDraft(email, identities);
+    expect(draft.inReplyTo).toBeUndefined();
+    expect(draft.references).toBeUndefined();
   });
 });

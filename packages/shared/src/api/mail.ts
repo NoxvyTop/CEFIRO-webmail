@@ -57,6 +57,25 @@ export const emailDetailSchema = emailSummarySchema.extend({
   bodyHtml: z.string().nullable(),
   bodyText: z.string().nullable(),
   attachments: z.array(attachmentMetaSchema),
+  // JMAP Email properties carrying RFC 5322 threading headers: messageId is
+  // this message's own Message-ID(s), references is the Message-ID(s) of its
+  // ancestors, and inReplyTo is the Message-ID(s) of the message this one
+  // replied to. All three are String[]|null in JMAP — null when the message
+  // has no such header — and carry the parsed form, with surrounding angle
+  // brackets and CFWS removed (RFC 8621 §4.1.3). Used by composer/reply.ts
+  // to build In-Reply-To/References on the outgoing reply so it threads
+  // correctly in the recipient's client; inReplyTo covers the RFC 5322
+  // §3.6.4 clause where a parent without References contributes its own
+  // In-Reply-To to the reply's References chain instead.
+  //
+  // All three default to null (same reasoning as userPreferences.customLabels
+  // below) so a response from a server that predates these fields still
+  // parses. emailDetailSchema is parsed as part of threadDetailSchema, so
+  // throwing here would take down the entire thread view rather than just
+  // degrading reply threading.
+  messageId: z.array(z.string()).nullable().default(null),
+  references: z.array(z.string()).nullable().default(null),
+  inReplyTo: z.array(z.string()).nullable().default(null),
 });
 export type EmailDetail = z.infer<typeof emailDetailSchema>;
 

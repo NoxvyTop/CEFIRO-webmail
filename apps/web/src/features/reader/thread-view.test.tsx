@@ -35,6 +35,9 @@ const thread: ThreadDetail = {
       bodyHtml: `<p>Here is the report.</p><img src="${REMOTE_IMAGE_URL}">`,
       bodyText: null,
       attachments: [{ blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null }],
+      messageId: ["e1@example.com"],
+      references: null,
+      inReplyTo: null,
     },
     {
       id: "e2",
@@ -53,6 +56,9 @@ const thread: ThreadDetail = {
       bodyHtml: null,
       bodyText: "Thanks, looks good!",
       attachments: [],
+      messageId: ["e2@example.com"],
+      references: ["e1@example.com"],
+      inReplyTo: ["e1@example.com"],
     },
   ],
 };
@@ -976,6 +982,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Let's get started with the quarterly plan and align on next steps together.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
           {
             id: "m2",
@@ -995,6 +1004,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Sounds good, I am unread still.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
           {
             id: "m3",
@@ -1014,6 +1026,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "This is the last message in the thread.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
         ],
       };
@@ -1102,6 +1117,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Let's get started with the quarterly plan and align on next steps together.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
           {
             id: "m2",
@@ -1121,6 +1139,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Sounds good, I am unread still.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
           {
             id: "m3",
@@ -1141,6 +1162,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "This is the newest message in the thread.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
         ],
       };
@@ -1238,6 +1262,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "This thread only has one message.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
         ],
       };
@@ -1284,6 +1311,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Here is the budget spreadsheet summary for review.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
           {
             id: "n2",
@@ -1302,6 +1332,9 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "This is the newest message in the second thread.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
           },
         ],
       };
