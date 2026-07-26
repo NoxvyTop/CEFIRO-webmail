@@ -6,6 +6,7 @@ import {
   emailSummarySchema,
   emailUpdateSchema,
   mailboxSchema,
+  senderAuthVerdictSchema,
   threadDetailSchema,
   userPreferencesSchema,
   userPreferencesUpdateSchema,
@@ -183,6 +184,42 @@ describe("emailDetailSchema", () => {
     expect(parsed.messageId).toBeNull();
     expect(parsed.references).toBeNull();
     expect(parsed.inReplyTo).toBeNull();
+  });
+
+  // GH #136: senderAuth is the reader's sender-authenticity verdict, derived
+  // server-side from the message's Authentication-Results header (see
+  // apps/server/src/modules/mail/sender-auth.ts). "unknown" is the safe
+  // default for a server response that predates this field — never "pass":
+  // a client reading a missing field as authenticated would be exactly the
+  // false trust mark this feature exists to avoid.
+  describe("senderAuth", () => {
+    it("accepts explicit pass/fail/unknown values", () => {
+      expect(emailDetailSchema.parse({ ...base, senderAuth: "pass" }).senderAuth).toBe("pass");
+      expect(emailDetailSchema.parse({ ...base, senderAuth: "fail" }).senderAuth).toBe("fail");
+      expect(emailDetailSchema.parse({ ...base, senderAuth: "unknown" }).senderAuth).toBe("unknown");
+    });
+
+    it("defaults senderAuth to 'unknown' when the field is missing (older server response)", () => {
+      const payload: Record<string, unknown> = { ...base };
+      expect(emailDetailSchema.parse(payload).senderAuth).toBe("unknown");
+    });
+
+    it("rejects a senderAuth value outside the pass/fail/unknown enum", () => {
+      expect(() => emailDetailSchema.parse({ ...base, senderAuth: "verified" })).toThrow();
+    });
+  });
+});
+
+describe("senderAuthVerdictSchema", () => {
+  it("accepts pass, fail and unknown", () => {
+    expect(senderAuthVerdictSchema.parse("pass")).toBe("pass");
+    expect(senderAuthVerdictSchema.parse("fail")).toBe("fail");
+    expect(senderAuthVerdictSchema.parse("unknown")).toBe("unknown");
+  });
+
+  it("rejects any other string, e.g. a raw DMARC result value", () => {
+    expect(() => senderAuthVerdictSchema.parse("none")).toThrow();
+    expect(() => senderAuthVerdictSchema.parse("neutral")).toThrow();
   });
 });
 

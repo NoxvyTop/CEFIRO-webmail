@@ -38,6 +38,7 @@ const thread: ThreadDetail = {
       messageId: ["e1@example.com"],
       references: null,
       inReplyTo: null,
+      senderAuth: "unknown",
     },
     {
       id: "e2",
@@ -59,6 +60,7 @@ const thread: ThreadDetail = {
       messageId: ["e2@example.com"],
       references: ["e1@example.com"],
       inReplyTo: ["e1@example.com"],
+      senderAuth: "unknown",
     },
   ],
 };
@@ -1047,6 +1049,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "m2",
@@ -1069,6 +1072,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "m3",
@@ -1091,6 +1095,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
         ],
       };
@@ -1182,6 +1187,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "m2",
@@ -1204,6 +1210,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "m3",
@@ -1227,6 +1234,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
         ],
       };
@@ -1327,6 +1335,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
         ],
       };
@@ -1376,6 +1385,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "n2",
@@ -1397,6 +1407,7 @@ describe("ThreadView", () => {
             messageId: null,
             references: null,
             inReplyTo: null,
+            senderAuth: "unknown",
           },
         ],
       };
@@ -1760,5 +1771,118 @@ describe("ThreadView", () => {
       );
       expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     });
+  });
+});
+
+// GH #136: sender-authenticity indicator, wired into the sender header of
+// the expanded (newest) message. The badge component's own rendering rules
+// (icon choice, accessible name per verdict, nothing for "unknown") are
+// covered in sender-auth-badge.test.tsx — these tests only check that
+// ThreadView actually renders it from the last email's `senderAuth` field.
+describe("sender authentication badge (GH #136)", () => {
+  function stubThreadWithSenderAuth(senderAuth: ThreadDetail["emails"][number]["senderAuth"]) {
+    const state = structuredClone(thread);
+    state.emails[1]!.senderAuth = senderAuth;
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+      if (url.includes("/api/mail/preferences")) {
+        return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  it("shows the pass mark, with its full accessible-name meaning, when the last email's senderAuth is 'pass'", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("pass"));
+    renderThread();
+
+    expect(
+      await screen.findByRole("img", { name: i18n.t("mail.senderAuth.passLabel") }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the warning mark, with its full accessible-name meaning, when the last email's senderAuth is 'fail'", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("fail"));
+    renderThread();
+
+    expect(
+      await screen.findByRole("img", { name: i18n.t("mail.senderAuth.failLabel") }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders each verdict distinctly: pass and fail never share the same accessible name", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("pass"));
+    renderThread();
+    await screen.findByRole("img", { name: i18n.t("mail.senderAuth.passLabel") });
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.failLabel") })).not.toBeInTheDocument();
+  });
+
+  it("shows no authenticity mark at all when senderAuth is 'unknown' — never a positive mark by default", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("unknown"));
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.failLabel") })).not.toBeInTheDocument();
+  });
+
+  // The mark must be impossible for a sender to forge via their own display
+  // name: it renders exclusively from the server-provided senderAuth
+  // verdict, never from `from.name`/addressLabel. A checkmark-like character
+  // in the display name must show up only as plain text, never as (or
+  // instead of) the real authenticity mark.
+  it("does not render a pass mark from a checkmark in the sender's display name when senderAuth is 'unknown'", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.senderAuth = "unknown";
+    state.emails[1]!.from = [{ name: "✓ Verified Sender", email: "carol@example.com" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    // The forged checkmark is visible as ordinary sender-name text...
+    expect(await screen.findByText("✓ Verified Sender")).toBeInTheDocument();
+    // ...but it never produces (or is read as) the real authenticity mark.
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
+  });
+
+  // Same forged-display-name scenario, but with a server-confirmed 'fail' —
+  // proves the forged checkmark can't even mask a genuine warning.
+  it("still shows the real warning mark (not the spoofed checkmark) when a forged display name coincides with senderAuth 'fail'", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.senderAuth = "fail";
+    state.emails[1]!.from = [{ name: "✓ Verified Sender", email: "carol@example.com" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    expect(
+      await screen.findByRole("img", { name: i18n.t("mail.senderAuth.failLabel") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
   });
 });

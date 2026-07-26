@@ -21,6 +21,7 @@ import { requireSession } from "../auth/middleware";
 import { log } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestContacts } from "./contacts-harvest";
+import { deriveSenderAuthVerdict } from "./sender-auth";
 import type { JmapAuth, JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
 
 type JmapMailbox = {
@@ -61,6 +62,14 @@ type JmapAttachment = {
   cid?: string | null;
 };
 
+// GH #136: the full, ordered header list (RFC 8621 §4.1.1) — requested
+// instead of the narrower `header:Authentication-Results:asText` accessor
+// because this server can return the WRONG instance from that accessor when
+// a message carries more than one header with the same name (e.g. a sender-
+// forged one). See sender-auth.ts's file header for the live investigation
+// behind this choice.
+type JmapHeader = { name: string; value: string };
+
 type JmapEmailDetail = JmapEmail & {
   cc?: JmapEmailAddress[];
   replyTo?: JmapEmailAddress[];
@@ -75,6 +84,7 @@ type JmapEmailDetail = JmapEmail & {
   messageId?: string[] | null;
   references?: string[] | null;
   inReplyTo?: string[] | null;
+  headers?: JmapHeader[];
 };
 
 type JmapThread = { id: string; emailIds: string[] };
@@ -177,6 +187,7 @@ function toEmailDetail(email: JmapEmailDetail): EmailDetail {
     messageId: email.messageId ?? null,
     references: email.references ?? null,
     inReplyTo: email.inReplyTo ?? null,
+    senderAuth: deriveSenderAuthVerdict(email.headers),
   };
 }
 
@@ -790,6 +801,11 @@ export function createMailRouter(deps: MailDeps) {
             "messageId",
             "references",
             "inReplyTo",
+            // GH #136: full ordered header list, used to derive the sender-
+            // authenticity verdict — see sender-auth.ts and the JmapHeader
+            // comment above for why the generic `headers` property is
+            // requested instead of a narrower `header:X:asText` accessor.
+            "headers",
           ],
           fetchHTMLBodyValues: true,
           fetchTextBodyValues: true,

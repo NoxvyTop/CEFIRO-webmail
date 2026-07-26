@@ -229,6 +229,10 @@
     "yesterday": "Ayer",
     "expandMessage": "Mostrar mensaje completo de {{sender}}",
     "collapseMessage": "Ocultar mensaje completo de {{sender}}",
+    "senderAuth": {
+      "passLabel": "Autenticación del remitente verificada (SPF/DKIM/DMARC)",
+      "failLabel": "Autenticación del remitente fallida — este mensaje podría ser falsificado"
+    },
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
     "showFullMessage": "Ver todo el mensaje",

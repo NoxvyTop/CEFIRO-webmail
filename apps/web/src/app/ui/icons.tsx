@@ -162,6 +162,26 @@ export function TrashIcon({ size = 16 }: IconProps) {
   );
 }
 
+// GH #136: sender-authenticity indicator icons — see SenderAuthBadge.tsx.
+export function ShieldCheckIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M12 3 5 6v5c0 5 3 8.5 7 10 4-1.5 7-5 7-10V6l-7-3Z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+export function ShieldAlertIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M12 3 5 6v5c0 5 3 8.5 7 10 4-1.5 7-5 7-10V6l-7-3Z" />
+      <path d="M12 8v4" />
+      <path d="M12 15.5h.01" />
+    </svg>
+  );
+}
+
 export function ReplyIcon({ size = 16 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>

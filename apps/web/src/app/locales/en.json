@@ -229,6 +229,10 @@
     "yesterday": "Yesterday",
     "expandMessage": "Expand message from {{sender}}",
     "collapseMessage": "Collapse message from {{sender}}",
+    "senderAuth": {
+      "passLabel": "Sender authentication passed (SPF/DKIM/DMARC verified)",
+      "failLabel": "Sender authentication failed — this message may be spoofed"
+    },
     "showQuotedContent": "Show quoted content",
     "hideQuotedContent": "Hide quoted content",
     "showFullMessage": "View entire message",

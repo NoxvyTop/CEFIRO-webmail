@@ -20,6 +20,7 @@ import { AiSummaryCard } from "./AiSummaryCard";
 import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody, isSafeInlineImage } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
+import { SenderAuthBadge } from "./SenderAuthBadge";
 
 interface ThreadViewProps {
   threadId: string;
@@ -718,7 +719,13 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
               <>
                 <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
                 <span className="block min-w-0 flex-1">
-                  <span className="block text-[14.5px] font-semibold">{addressLabel(sender)}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-[14.5px] font-semibold">{addressLabel(sender)}</span>
+                    {/* GH #136: renders purely from the server-derived
+                        verdict — never from `sender`/addressLabel above, so a
+                        sender cannot forge this mark via their display name. */}
+                    <SenderAuthBadge verdict={email.senderAuth} />
+                  </span>
                   {toCcLabel && (
                     <span className="block truncate text-[12.5px] text-muted">
                       {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}

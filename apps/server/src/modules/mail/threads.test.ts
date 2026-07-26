@@ -191,3 +191,114 @@ describe("GET /api/mail/threads/:threadId", () => {
     expect(((await res.json()) as { code: string }).code).toBe("not_found");
   });
 });
+
+// GH #136: sender-authenticity verdict, wired end to end through the router
+// rather than just deriveSenderAuthVerdict in isolation (see
+// sender-auth.test.ts for the exhaustive parsing/verdict cases). Kept as its
+// own stub/describe block, entirely separate from the fixture above, so the
+// pre-existing GH #120 test and its stub data above are left untouched.
+const senderAuthStubJmap: JmapClient = {
+  getSession: async () => ({
+    apiUrl: "https://mail.test/jmap/",
+    accountId: "acc-1",
+    eventSourceUrl: "https://mail.test/es",
+    uploadUrl: "https://mail.test/upload/{accountId}/",
+    downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+  }),
+  request: async (_auth, _session, methodCalls) => {
+    calls = methodCalls;
+    return [
+      ["Thread/get", { list: [{ id: "t2", emailIds: ["auth-pass", "auth-none"] }] }, "t"],
+      [
+        "Email/get",
+        {
+          list: [
+            {
+              id: "auth-pass",
+              threadId: "t2",
+              mailboxIds: { mb1: true },
+              from: [{ name: "Carla Ibarra", email: "carla@partner.test" }],
+              to: [],
+              subject: "Authenticated sender",
+              receivedAt: "2026-07-06T10:00:00Z",
+              preview: "",
+              keywords: {},
+              hasAttachment: false,
+              size: 10,
+              messageId: null,
+              references: null,
+              inReplyTo: null,
+              // A genuine DMARC pass, positioned first (topmost) as a real
+              // receiving server would add it.
+              headers: [
+                { name: "Received", value: " from mx.partner.test by mail.cefiro.test" },
+                {
+                  name: "Authentication-Results",
+                  value: " mail.cefiro.test; dmarc=pass (p=reject) header.from=partner.test",
+                },
+                { name: "From", value: " Carla Ibarra <carla@partner.test>" },
+              ],
+            },
+            {
+              id: "auth-none",
+              threadId: "t2",
+              mailboxIds: { mb1: true },
+              from: [{ name: "Cefiro Seguridad", email: "cuentas@cefiro-verificacion-segura.test" }],
+              to: [],
+              subject: "Spoofed sender",
+              receivedAt: "2026-07-06T11:00:00Z",
+              preview: "",
+              keywords: {},
+              hasAttachment: false,
+              size: 10,
+              messageId: null,
+              references: null,
+              inReplyTo: null,
+              // Verbatim shape observed on the live e2e Stalwart fixture's
+              // spoofed phishing message (GH #136/#137 investigation):
+              // dmarc=none, never a pass.
+              headers: [
+                {
+                  name: "Authentication-Results",
+                  value:
+                    " mail.cefiro.test; spf=none smtp.mailfrom=cuentas@cefiro-verificacion-segura.test; " +
+                    "dmarc=none header.from=cefiro-verificacion-segura.test policy.dmarc=none",
+                },
+              ],
+            },
+          ],
+        },
+        "g",
+      ],
+    ];
+  },
+  uploadBlob: async () => "blob-id",
+};
+
+describe("GET /api/mail/threads/:threadId — sender authentication (GH #136)", () => {
+  it("requests the headers property and maps a genuine DMARC pass to senderAuth 'pass'", async () => {
+    const res = await makeApp(senderAuthStubJmap).request("/api/mail/threads/t2", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = threadDetailSchema.parse(await res.json());
+
+    const authPass = body.emails.find((e) => e.id === "auth-pass");
+    expect(authPass?.senderAuth).toBe("pass");
+
+    const [, getCall] = calls;
+    expect((getCall?.[1] as { properties: string[] }).properties).toEqual(
+      expect.arrayContaining(["headers"]),
+    );
+  });
+
+  it("maps a non-pass DMARC result (e.g. 'none', the spoofed-sender fixture shape) to senderAuth 'unknown', never 'pass'", async () => {
+    const res = await makeApp(senderAuthStubJmap).request("/api/mail/threads/t2", {
+      headers: { cookie: `session=${token}` },
+    });
+    const body = threadDetailSchema.parse(await res.json());
+
+    const authNone = body.emails.find((e) => e.id === "auth-none");
+    expect(authNone?.senderAuth).toBe("unknown");
+  });
+});

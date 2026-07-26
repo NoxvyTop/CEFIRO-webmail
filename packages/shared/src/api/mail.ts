@@ -51,6 +51,21 @@ export const attachmentMetaSchema = z.object({
 });
 export type AttachmentMeta = z.infer<typeof attachmentMetaSchema>;
 
+// GH #136: an explicit, three-state verdict on whether the message's sender
+// passed email authentication (SPF/DKIM/DMARC) — never a raw pass/fail
+// boolean, because "unknown" must be a distinct, first-class outcome a client
+// can render as neutral. A missing/falsy field must never be silently read as
+// authenticated: a wrong trust mark on a spoofed message is worse than no
+// mark at all. The verdict is keyed off DMARC's own result rather than raw
+// SPF/DKIM results, because DMARC is the only one of the three that checks
+// *alignment* with the visible From domain — SPF or DKIM can legitimately
+// pass for a domain that has nothing to do with the sender the user is shown,
+// which is exactly how spoofing works. See
+// apps/server/src/modules/mail/sender-auth.ts for how this is derived from
+// the message's Authentication-Results header (RFC 8601).
+export const senderAuthVerdictSchema = z.enum(["pass", "fail", "unknown"]);
+export type SenderAuthVerdict = z.infer<typeof senderAuthVerdictSchema>;
+
 export const emailDetailSchema = emailSummarySchema.extend({
   cc: z.array(emailAddressSchema),
   replyTo: z.array(emailAddressSchema),
@@ -76,6 +91,11 @@ export const emailDetailSchema = emailSummarySchema.extend({
   messageId: z.array(z.string()).nullable().default(null),
   references: z.array(z.string()).nullable().default(null),
   inReplyTo: z.array(z.string()).nullable().default(null),
+  // GH #136: see senderAuthVerdictSchema above. Defaults to "unknown" — not
+  // "pass" — so a response from a server that predates this field (or a
+  // hand-written test fixture) parses as "no assertion" rather than either
+  // throwing or, far worse, defaulting to a false trust mark.
+  senderAuth: senderAuthVerdictSchema.default("unknown"),
 });
 export type EmailDetail = z.infer<typeof emailDetailSchema>;
 
