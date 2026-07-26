@@ -1,27 +1,32 @@
 import { connect as connectTls, type ConnectionOptions, type TLSSocket } from "node:tls";
+import { connect as connectPlain, type Socket } from "node:net";
 
-// Minimal SMTP client over implicit TLS ("SMTPS") — no new dependency, just
-// enough of the protocol to inject inbound mail into the Stalwart fixture's
-// admin@cefiro.test mailbox for E2E seeding.
+// Minimal SMTP client — no new dependency, just enough of the protocol to
+// inject inbound mail into the Stalwart fixture's admin@cefiro.test mailbox
+// for E2E seeding. Two delivery paths are exposed (seedInbox / seedJunk)
+// because Stalwart's mailbox placement depends on which one is used:
 //
-// Why TLS + AUTH LOGIN instead of plain, unauthenticated delivery on port 25:
-// unauthenticated MAIL FROM/RCPT TO on port 25 IS accepted (250 on both, no
-// AUTH required for local delivery) — but Stalwart's spam filter still runs
-// on that unauthenticated path and reliably classifies mail from an
-// external, unverified sender domain (no SPF/DKIM) straight into "Junk Mail"
-// instead of "Inbox" (confirmed against the running fixture via a JMAP
-// Mailbox/Email/get round trip). Since the mail-connect spec needs the
-// seeded messages visible in the Inbox the app shows by default, this client
-// authenticates instead: Stalwart skips spam classification for an
-// authenticated session, which reliably lands the mail in Inbox. AUTH itself
+// Authenticated submission over implicit TLS on port 465 (seedInbox): AUTH
 // is only offered over TLS (a plaintext "AUTH LOGIN" on port 25 gets
-// "503 5.5.1 AUTH not allowed"), hence implicit TLS on port 465
-// (docker-compose.e2e.yml publishes it as 8465:465) rather than plain 8025.
-// Authenticated submission also requires the envelope MAIL FROM to match the
-// authenticated identity ("501 5.5.4 You are not allowed to send from this
-// address" otherwise) — so MAIL FROM uses the Stalwart account's own address
-// while each message's RFC5322 "From" header keeps the distinct fixture
-// sender, which is what the reading pane actually displays.
+// "503 5.5.1 AUTH not allowed"), hence implicit TLS (docker-compose.e2e.yml
+// publishes it as 8465:465). Stalwart skips spam classification for an
+// authenticated session, which reliably lands the mail in Inbox. Authenticated
+// submission also requires the envelope MAIL FROM to match the authenticated
+// identity ("501 5.5.4 You are not allowed to send from this address"
+// otherwise) — so MAIL FROM uses the Stalwart account's own address while
+// each message's RFC5322 "From" header keeps the distinct fixture sender,
+// which is what the reading pane actually displays.
+//
+// Plain, unauthenticated delivery on port 25 (seedJunk): unauthenticated
+// MAIL FROM/RCPT TO on port 25 IS accepted (250 on both, no AUTH required
+// for local delivery) — and Stalwart's spam filter runs on that
+// unauthenticated path and reliably classifies mail from an external,
+// unverified sender domain (no SPF/DKIM) straight into "Junk Mail" instead
+// of "Inbox" (confirmed against the running fixture via a live JMAP
+// Mailbox/Email/get round trip — two probe messages delivered this way both
+// landed in the "Junk Mail" mailbox, id role "junk"). This is the path spam/
+// promotional fixtures should use, since it exercises the real classifier
+// instead of forcing a mailbox assignment.
 
 export interface SeedEmail {
   /** RFC5322 From header value, e.g. "Carla Ibarra <carla@partner.test>". */
@@ -29,9 +34,18 @@ export interface SeedEmail {
   /** Envelope + header recipient, e.g. "admin@cefiro.test". */
   to: string;
   subject: string;
+  /** Plain-text body. Used as-is when `html` is absent; used as the
+   * text/plain alternative part when `html` is present. */
   body: string;
-  /** Local-part of the Message-ID, made unique per test run by seedInbox. */
+  /** Local-part of the Message-ID, made unique per test run by seedInbox/seedJunk. */
   messageId: string;
+  /**
+   * Optional HTML body. When set, the message is sent as
+   * multipart/alternative (text/plain from `body` first, text/html from
+   * `html` second) instead of a plain text/plain message — the same MIME
+   * shape real marketing mail uses. Omit for plain-text-only fixtures.
+   */
+  html?: string;
 }
 
 interface SmtpResponse {
@@ -76,6 +90,39 @@ function connectWithRetry(host: string, port: number, tlsOptions: ConnectionOpti
   });
 }
 
+// Plain (non-TLS) counterpart of connectWithRetry, used by seedJunk for the
+// unauthenticated port-25 delivery path — no cert to pin, just a bare TCP
+// connect with the same retry behavior since Stalwart may still be starting
+// up right after `docker compose up`.
+function connectPlainWithRetry(host: string, port: number): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    let attempt = 0;
+
+    function tryConnect() {
+      attempt += 1;
+      const socket = connectPlain({ host, port });
+      const onError = async (err: Error) => {
+        socket.destroy();
+        if (attempt >= CONNECT_RETRIES) {
+          reject(new Error(`could not connect to SMTP ${host}:${port} after ${attempt} attempts: ${err.message}`));
+          return;
+        }
+        await sleep(CONNECT_RETRY_DELAY_MS);
+        tryConnect();
+      };
+      socket.once("error", onError);
+      socket.setTimeout(CONNECT_TIMEOUT_MS, () => onError(new Error("connect timeout")));
+      socket.once("connect", () => {
+        socket.setTimeout(0);
+        socket.removeListener("error", onError);
+        resolve(socket);
+      });
+    }
+
+    tryConnect();
+  });
+}
+
 function derToPem(der: Buffer): string {
   const base64 = der.toString("base64");
   const lines = base64.match(/.{1,64}/g) ?? [base64];
@@ -109,8 +156,11 @@ async function fetchFixtureCertificate(host: string, port: number): Promise<stri
 }
 
 // Reads until a final (non-continuation) SMTP response line, e.g. "250 OK" —
-// as opposed to a continuation line like "250-STARTTLS".
-function readResponse(socket: TLSSocket): Promise<SmtpResponse> {
+// as opposed to a continuation line like "250-STARTTLS". Typed as plain
+// `Socket` (not `TLSSocket`) so it works for both the TLS connection used by
+// seedInbox and the plain connection used by seedJunk — TLSSocket is a
+// subclass of net.Socket, so callers passing either work unchanged.
+function readResponse(socket: Socket): Promise<SmtpResponse> {
   return new Promise((resolve, reject) => {
     let buffer = "";
 
@@ -156,7 +206,7 @@ function readResponse(socket: TLSSocket): Promise<SmtpResponse> {
 // Waits for the next response, then (optionally) writes a command line.
 // Attaching the listener before writing avoids a race where a fast reply
 // arrives before we start listening.
-function sendCommand(socket: TLSSocket, command: string | null): Promise<SmtpResponse> {
+function sendCommand(socket: Socket, command: string | null): Promise<SmtpResponse> {
   const response = readResponse(socket);
   if (command !== null) socket.write(`${command}\r\n`);
   return response;
@@ -167,10 +217,22 @@ function sendCommand(socket: TLSSocket, command: string | null): Promise<SmtpRes
 // already ends with the "\r\n.\r\n" end-of-data terminator built by
 // buildRawMessage. Appending another "\r\n" after that terminator would send
 // a stray empty line the server reads as a new (invalid) command.
-function sendRaw(socket: TLSSocket, payload: string): Promise<SmtpResponse> {
+function sendRaw(socket: Socket, payload: string): Promise<SmtpResponse> {
   const response = readResponse(socket);
   socket.write(payload);
   return response;
+}
+
+// Normalizes to strict CRLF line endings (so fixture bodies/HTML can be
+// authored with ordinary "\n" template literals) and dot-stuffs any line
+// that starts with "." per RFC 5321 §4.5.2, so an accidental leading dot in
+// a fixture body/HTML part can't be mistaken for the end-of-DATA terminator.
+function prepareMimePart(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => (line.startsWith(".") ? `.${line}` : line))
+    .join("\r\n");
 }
 
 function buildRawMessage(message: SeedEmail, runId: string): string {
@@ -182,28 +244,53 @@ function buildRawMessage(message: SeedEmail, runId: string): string {
   // without a fresh `docker compose down && up`) would otherwise re-send the
   // fixtures' literal Message-IDs and have every retry silently no-op
   // against whatever mailbox the *first* delivery landed in. Mixing in a
-  // per-run id keeps every seedInbox() call's Message-IDs unique so retries
-  // always actually (re-)deliver.
-  const headers = [
+  // per-run id keeps every seedInbox()/seedJunk() call's Message-IDs unique
+  // so retries always actually (re-)deliver.
+  const baseHeaders = [
     `From: ${message.from}`,
     `To: ${message.to}`,
     `Subject: ${message.subject}`,
     `Date: ${date}`,
     `Message-ID: <${runId}.${message.messageId}>`,
-    "Content-Type: text/plain; charset=utf-8",
+  ];
+
+  if (message.html === undefined) {
+    const headers = [...baseHeaders, "Content-Type: text/plain; charset=utf-8", "MIME-Version: 1.0"].join("\r\n");
+    return `${headers}\r\n\r\n${prepareMimePart(message.body)}\r\n.\r\n`;
+  }
+
+  // HTML fixtures go out as multipart/alternative (text/plain part first,
+  // text/html part second) — the same shape real marketing mail uses, and it
+  // keeps a plain-text fallback available for any client that renders it.
+  // Boundary is derived from the run + message id (both already unique) so
+  // it needs no extra randomness; sanitized down to the token characters
+  // RFC 2046 allows unescaped in a boundary parameter.
+  const boundary = `seed-${runId}-${message.messageId}`.replace(/[^A-Za-z0-9._-]/g, "-");
+  const headers = [
+    ...baseHeaders,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "MIME-Version: 1.0",
   ].join("\r\n");
-  // Dot-stuff any body line that starts with "." per RFC 5321 §4.5.2, so an
-  // accidental leading dot in a fixture body can't be mistaken for the
-  // end-of-DATA terminator.
-  const stuffedBody = message.body
-    .split("\r\n")
-    .map((line) => (line.startsWith(".") ? `.${line}` : line))
-    .join("\r\n");
-  return `${headers}\r\n\r\n${stuffedBody}\r\n.\r\n`;
+  const textPart = [`--${boundary}`, "Content-Type: text/plain; charset=utf-8", "", prepareMimePart(message.body)].join(
+    "\r\n",
+  );
+  const htmlPart = [`--${boundary}`, "Content-Type: text/html; charset=utf-8", "", prepareMimePart(message.html)].join(
+    "\r\n",
+  );
+  return `${headers}\r\n\r\n${textPart}\r\n${htmlPart}\r\n--${boundary}--\r\n.\r\n`;
 }
 
-async function ehlo(socket: TLSSocket, heloHost: string): Promise<void> {
+// Pulls the bare address out of an RFC5322 mailbox string ("Display Name
+// <addr>" or just "addr") — used by seedJunk to set the envelope MAIL FROM
+// to the message's own (external, unverified) sender address instead of an
+// authenticated identity, which is exactly what makes Stalwart's spam filter
+// classify the delivery into Junk Mail.
+function extractEnvelopeAddress(from: string): string {
+  const match = from.match(/<([^>]+)>/);
+  return match ? match[1]! : from;
+}
+
+async function ehlo(socket: Socket, heloHost: string): Promise<void> {
   await sendCommand(socket, null); // 220 greeting
   const ehloResponse = await sendCommand(socket, `EHLO ${heloHost}`);
   if (ehloResponse.code !== 250) {
@@ -211,7 +298,7 @@ async function ehlo(socket: TLSSocket, heloHost: string): Promise<void> {
   }
 }
 
-async function authLogin(socket: TLSSocket, email: string, password: string): Promise<void> {
+async function authLogin(socket: Socket, email: string, password: string): Promise<void> {
   const authStart = await sendCommand(socket, "AUTH LOGIN");
   if (authStart.code !== 334) {
     throw new Error(`AUTH LOGIN not offered: ${authStart.code} ${authStart.text}`);
@@ -226,7 +313,7 @@ async function authLogin(socket: TLSSocket, email: string, password: string): Pr
   }
 }
 
-async function deliverOne(socket: TLSSocket, message: SeedEmail, envelopeFrom: string, runId: string): Promise<void> {
+async function deliverOne(socket: Socket, message: SeedEmail, envelopeFrom: string, runId: string): Promise<void> {
   const mailFrom = await sendCommand(socket, `MAIL FROM:<${envelopeFrom}>`);
   if (mailFrom.code !== 250) {
     throw new Error(`MAIL FROM rejected: ${mailFrom.code} ${mailFrom.text}`);
@@ -274,6 +361,44 @@ export async function seedInbox(host: string, port: number, messages: SeedEmail[
       await ehlo(socket, heloHost);
       await authLogin(socket, account.email, account.password);
       await deliverOne(socket, message, account.email, runId);
+      await sendCommand(socket, "QUIT").catch(() => undefined);
+    } finally {
+      socket.destroy();
+    }
+  }
+}
+
+/**
+ * Delivers `messages` into Stalwart's Junk Mail folder for the fixture's
+ * test mailbox over plain, UNAUTHENTICATED SMTP (see the file header for why
+ * this is the path that exercises Stalwart's real spam filter). `host`/`port`
+ * should point at Stalwart's plain SMTP listener (docker-compose.e2e.yml
+ * publishes it as localhost:8025).
+ *
+ * Unlike seedInbox, the envelope MAIL FROM here is NOT pinned to an
+ * authenticated account identity — there is no AUTH step at all — it's each
+ * message's own (external, unverified) sender address, extracted from its
+ * RFC5322 "From" header. That's what makes the delivery look like genuine
+ * inbound spam to Stalwart's classifier rather than a locally-authored
+ * message, so it's classified into Junk Mail instead of forced there.
+ *
+ * Each message is delivered in its own connection so a single dropped socket
+ * only affects one seed email, not the whole batch. Connects are retried a
+ * few times since Stalwart may still be starting up right after
+ * `docker compose up`.
+ */
+export async function seedJunk(host: string, port: number, messages: SeedEmail[]): Promise<void> {
+  // Deliberately not "cefiro.test" — this path impersonates external inbound
+  // mail, so it EHLOs as a plausible outside relay rather than the fixture's
+  // own domain.
+  const heloHost = "external-relay.test";
+  const runId = crypto.randomUUID();
+
+  for (const message of messages) {
+    const socket = await connectPlainWithRetry(host, port);
+    try {
+      await ehlo(socket, heloHost);
+      await deliverOne(socket, message, extractEnvelopeAddress(message.from), runId);
       await sendCommand(socket, "QUIT").catch(() => undefined);
     } finally {
       socket.destroy();

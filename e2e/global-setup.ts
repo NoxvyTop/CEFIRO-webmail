@@ -13,8 +13,8 @@ import { createUsersRepo } from "../apps/server/src/infra/repos/users";
 import { createSessionStore } from "../apps/server/src/modules/auth/sessions";
 import { createMailCredentialsRepo } from "../apps/server/src/infra/repos/mail-credentials";
 import { importMasterKey } from "../apps/server/src/modules/credentials/crypto";
-import { seedInbox } from "./smtp-seed";
-import { SEED_EMAILS } from "./fixtures/mail";
+import { seedInbox, seedJunk } from "./smtp-seed";
+import { SEED_EMAILS, SPAM_SEED_EMAILS } from "./fixtures/mail";
 import { ensureArchiveMailbox } from "./jmap-admin";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +32,10 @@ const STALWART_SMTP_HOST = "localhost";
 // authenticated, TLS-only submission is required to land seeded mail in the
 // Inbox instead of Junk Mail.
 const STALWART_SMTP_PORT = 8465;
+// Plain, unauthenticated SMTP listener — used only for SPAM_SEED_EMAILS via
+// seedJunk, which relies on the lack of AUTH/TLS to trigger Stalwart's spam
+// classifier (see smtp-seed.ts's file header).
+const STALWART_SMTP_PLAIN_PORT = 8025;
 
 export default async function globalSetup() {
   const url =
@@ -105,6 +109,15 @@ export default async function globalSetup() {
       await createMailCredentialsRepo(sql, key).set(user.id, STALWART_ACCOUNT_PASSWORD);
 
       await seedInbox(STALWART_SMTP_HOST, STALWART_SMTP_PORT, SEED_EMAILS);
+
+      // Spam/promotional fixtures (GH #137) — delivered unauthenticated on
+      // plain port 25 so Stalwart's real spam filter classifies them into
+      // Junk Mail instead of forcing a mailbox assignment. Unblocks manual
+      // and future E2E coverage of the Junk folder, long-message truncation
+      // (GH #135), and the sender-authenticity indicator (GH #136). Kept
+      // separate from seedInbox above so SEED_EMAILS/mail-connect.spec.ts's
+      // Inbox assertions are unaffected.
+      await seedJunk(STALWART_SMTP_HOST, STALWART_SMTP_PLAIN_PORT, SPAM_SEED_EMAILS);
 
       // The mail-actions spec needs an "Archivar" target mailbox, but this
       // fixture's baked-in account has no archive-role mailbox by default —
