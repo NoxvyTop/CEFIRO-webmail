@@ -58,3 +58,16 @@ body {
 ::selection {
   background: var(--sel);
 }
+
+/* Composer: draws a visual boundary between the message body and the
+   auto-applied signature (issue #121) — a top border on the signature
+   marker wrapper, keyed off the existing data-cefiro-signature attribute
+   (composer/signature.ts). Editor-only chrome: that attribute (and this
+   rule's hook) is stripped from the body HTML before it's sent — see
+   stripSignatureMarkers, used by useComposer's send() — so recipients only
+   ever see the signature content itself, never this rule. */
+[data-cefiro-signature] {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
