@@ -569,4 +569,136 @@ describe("EmailBody", () => {
       expect(screen.getByRole("button", { name: i18n.t("mail.loadImages") })).toBeInTheDocument();
     });
   });
+
+  // GH #135: Gmail-style clipping for very long HTML messages (typically
+  // marketing/newsletter mail) — clipped with a "View entire message"
+  // control, expanding through the same sanitized, sandboxed iframe path.
+  describe("message truncation (GH #135)", () => {
+    // Comfortably over BODY_TRUNCATE_TEXT_THRESHOLD (1000 chars of visible
+    // text) on plain <p> markup alone — proves the trigger is real reading
+    // content, not markup bulk (a table-heavy fixture is covered by the
+    // "quoted trail" tests' reuse of long content too).
+    function longHtmlBody(paragraphCount = 10): string {
+      const sentence =
+        "This is a sufficiently long paragraph of newsletter-style marketing copy to push the visible text length well past the truncation threshold.";
+      return Array.from({ length: paragraphCount }, (_, i) => `<p style="margin:0 0 8px">${sentence} Paragraph ${i + 1}.</p>`).join(
+        "",
+      );
+    }
+
+    const CLIPPED_HEIGHT = "min(35vh, 260px)";
+
+    it("renders a short message fully with no truncation control", () => {
+      render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
+
+      expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("Hello");
+    });
+
+    it("clips an over-long message and shows the reveal control", () => {
+      render(<EmailBody bodyHtml={longHtmlBody()} bodyText={null} />);
+
+      const button = screen.getByRole("button", { name: i18n.t("mail.showFullMessage") });
+      expect(button).toBeInTheDocument();
+      expect(button).toHaveAttribute("aria-expanded", "false");
+
+      // Still the SAME sandboxed iframe/srcDoc carrying the FULL sanitized
+      // content — only the visible height is clipped, never a smaller HTML
+      // subset.
+      const iframe = getIframe();
+      const srcDoc = iframe.getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toContain("Paragraph 10");
+      expect(iframe.style.height).toBe(CLIPPED_HEIGHT);
+      // No internal scrollbar sneak-peek at the rest while clipped.
+      expect(iframe.getAttribute("scrolling")).toBe("no");
+    });
+
+    it("reveals the full content in the same iframe when the control is activated", () => {
+      render(<EmailBody bodyHtml={longHtmlBody()} bodyText={null} />);
+
+      const beforeSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showFullMessage") }));
+
+      // Gmail-style one-way reveal: the control itself is gone once expanded.
+      expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+
+      const iframe = getIframe();
+      expect(iframe.style.height).not.toBe(CLIPPED_HEIGHT);
+      expect(iframe.getAttribute("scrolling")).not.toBe("no");
+      // Exactly the same sanitized document as before — expanding only ever
+      // changes the iframe's presentation, never swaps in different markup.
+      expect(iframe.getAttribute("srcdoc")).toBe(beforeSrcDoc);
+    });
+
+    it("keeps stripping dangerous content in both the clipped and expanded states — no second, unsanitized render path", () => {
+      const dangerousLongBody = `${longHtmlBody()}<script>window.__pwned = true;</script>`;
+      render(<EmailBody bodyHtml={dangerousLongBody} bodyText={null} />);
+
+      const beforeSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(beforeSrcDoc).not.toContain("<script");
+      expect(beforeSrcDoc).not.toContain("__pwned");
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showFullMessage") }));
+
+      const afterSrcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(afterSrcDoc).not.toContain("<script");
+      expect(afterSrcDoc).not.toContain("__pwned");
+    });
+
+    it("is a real, keyboard-reachable button with an accessible name", () => {
+      render(<EmailBody bodyHtml={longHtmlBody()} bodyText={null} />);
+
+      const button = screen.getByRole("button", { name: i18n.t("mail.showFullMessage") });
+      expect(button.tagName).toBe("BUTTON");
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).not.toHaveAttribute("tabindex", "-1");
+      expect(button).not.toBeDisabled();
+    });
+
+    it("does not truncate the plain-text (<pre>) path — truncation targets HTML marketing mail specifically", () => {
+      const longText = "Line of plain text content. ".repeat(100);
+      render(<EmailBody bodyHtml={null} bodyText={longText} />);
+
+      expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+    });
+
+    // Interaction with the existing quoted-trail collapse (GH #91): two
+    // overlapping collapse mechanisms on the same content would be
+    // confusing, so truncation only ever measures/clips the NEW-content
+    // half of the split — the quoted trail keeps its single existing
+    // show/hide toggle and is never itself truncated, however long it is.
+    describe("interaction with the quoted-trail collapse (GH #91)", () => {
+      it("never shows a truncation control for the quoted trail, even once revealed", () => {
+        const longQuotedBody =
+          '<p style="margin:0">Short new reply.</p>' + `<blockquote class="gmail_quote">${longHtmlBody()}</blockquote>`;
+        render(<EmailBody bodyHtml={longQuotedBody} bodyText={null} />);
+
+        // The new content is short — no truncation control for the main body.
+        expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+
+        // Revealing the (long) quoted trail must not introduce a second
+        // truncation control for it either.
+        fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+        expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+      });
+
+      it("keeps the truncation control and the quote-reveal toggle independent when both the new content and the quote are long", async () => {
+        const body = `${longHtmlBody()}<blockquote class="gmail_quote">${longHtmlBody()}</blockquote>`;
+        render(<EmailBody bodyHtml={body} bodyText={null} />);
+
+        expect(screen.getByRole("button", { name: i18n.t("mail.showFullMessage") })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+        await waitFor(() => {
+          expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(2);
+        });
+        // Still exactly one truncation control total — for the new-content
+        // iframe only, never duplicated onto the now-visible quoted iframe.
+        expect(screen.getAllByRole("button", { name: i18n.t("mail.showFullMessage") })).toHaveLength(1);
+      });
+    });
+  });
 });

@@ -231,6 +231,7 @@
     "collapseMessage": "Collapse message from {{sender}}",
     "showQuotedContent": "Show quoted content",
     "hideQuotedContent": "Hide quoted content",
+    "showFullMessage": "View entire message",
     "folders": {
       "inbox": "Inbox",
       "sent": "Sent",

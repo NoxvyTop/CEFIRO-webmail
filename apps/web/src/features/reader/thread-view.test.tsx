@@ -551,6 +551,38 @@ describe("ThreadView", () => {
         expect(screen.getByText(/photo\.png/)).toBeInTheDocument();
       });
 
+      // GH #134: a cid: reference only actually renders inline when EmailBody
+      // considers the attachment's type a "safe inline image" (see
+      // isSafeInlineImage in EmailBody.tsx — a narrow allowlist for security
+      // reasons). A cid: reference to any other type (e.g. a PDF invoice
+      // referenced via cid:, unusual but real) will NEVER resolve to a
+      // rendered image — EmailBody leaves it as a broken <img> icon. Hiding
+      // it from the attachment chip list too, purely because *something*
+      // referenced its cid, makes the file completely unreachable: not
+      // rendered inline, not downloadable. Gmail-style behavior is that an
+      // attachment that can't actually be shown inline must still surface as
+      // a regular, downloadable attachment below the body.
+      it("keeps a cid-referenced attachment in the chip list when its type can never resolve inline", async () => {
+        const state = structuredClone(thread);
+        state.emails[0]!.bodyHtml = `<p>See the invoice below.</p><img src="cid:doc123">`;
+        state.emails[0]!.attachments = [
+          { blobId: "doc-blob", name: "invoice.pdf", type: "application/pdf", size: 2048, cid: "doc123" },
+        ];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+            if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }),
+        );
+        renderThread();
+
+        expect(await screen.findByText(i18n.t("attachments.count", { count: 1 }))).toBeInTheDocument();
+        expect(screen.getByText(/invoice\.pdf/)).toBeInTheDocument();
+      });
+
       it("passes the email's attachments to EmailBody so the inline cid: image itself resolves to a data: URL", async () => {
         // Regression test for the fix: the body renders inside a fully
         // sandboxed (opaque-origin) iframe that can't send the session

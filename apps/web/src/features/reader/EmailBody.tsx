@@ -16,7 +16,12 @@ interface EmailBodyProps {
 // turned into a data: URL.
 const SAFE_INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
-function isSafeInlineImage(type: string): boolean {
+// Exported so ThreadView can decide, up front and synchronously, whether a
+// cid:-referenced attachment will ever actually render inline (see GH #134)
+// — an attachment referenced by an unresolvable cid: must still surface as a
+// downloadable attachment below the body, or the file becomes unreachable
+// entirely (no inline render, no download link).
+export function isSafeInlineImage(type: string): boolean {
   return SAFE_INLINE_IMAGE_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
 }
 
@@ -149,6 +154,45 @@ const EMAIL_PAPER_COLOR_SCHEME = "light";
 // before (was min(60vh, 640px)) since genuine short HTML is the only
 // remaining case that still shows a void while the iframe is unmeasurable.
 const FALLBACK_HEIGHT = "min(50vh, 520px)";
+
+// GH #135: very long HTML messages (typically marketing/newsletter mail)
+// render clipped, with a "View entire message" control that reveals the
+// rest. "Too long" is measured on the message's extracted VISIBLE TEXT
+// length, not raw HTML character count — raw HTML length is a poor proxy
+// for what the reader actually experiences: a table-heavy marketing
+// newsletter can spend most of its bytes on layout markup (nested
+// presentation tables, repeated inline styles, attribute-heavy <img> tags)
+// around a comparatively small amount of actual copy, while a plain-prose
+// email of the same byte size is almost entirely reading material. Raw byte
+// count would treat those as equally "long"; extracted text doesn't. It's
+// also the only measure available from OUTSIDE the sandboxed iframe:
+// contentDocument access (and therefore real rendered pixel height) is
+// blocked in real sandboxed browsers by design — see useContentHeight below
+// — so, unlike FALLBACK_HEIGHT, this can't be based on a post-render
+// measurement at all; it has to be decided up front, before the iframe ever
+// mounts, from the sanitized HTML string itself.
+//
+// 1000 sits with real headroom below this reader's own newsletter fixture
+// (e2e/fixtures/mail.ts's ~14KB Solandra Outlet HTML newsletter, seeded into
+// Junk specifically to exercise this — extracts to roughly 1,570 characters
+// of visible text) and comfortably above an ordinary multi-paragraph human
+// reply (typically a few hundred characters), so everyday correspondence
+// isn't clipped by accident.
+const BODY_TRUNCATE_TEXT_THRESHOLD = 1000;
+
+// Clipped preview height — enough to establish context (subject/opening
+// content) without showing a near-full screen of an unread message.
+// Viewport-proportional, matching FALLBACK_HEIGHT's own pattern.
+const CLIPPED_BODY_HEIGHT = "min(35vh, 260px)";
+
+// Extracts the visible text length from an HTML string via the same safe,
+// detached-document DOMParser pattern used throughout this file
+// (isEffectivelyPlainText, splitQuotedHtml, ...) — reads text content only,
+// never executes anything in the (already-sanitized, here) markup.
+function visibleTextLength(html: string): number {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return (doc.body.textContent ?? "").trim().length;
+}
 
 // Tags that show up when plain text gets wrapped in trivial HTML (line/
 // paragraph breaks) and carry no formatting of their own. This is an
@@ -473,6 +517,10 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
   const [quoteRevealed, setQuoteRevealed] = useState(false);
+  // GH #135: one-way reveal (mirrors Gmail's own "View entire message" —
+  // once you choose to read the whole thing there's no real use case for
+  // re-clipping it), unlike quoteRevealed above which is a genuine toggle.
+  const [bodyExpanded, setBodyExpanded] = useState(false);
 
   // Shared toggle affordance for the quoted trail (GH #91) — a small "•••"
   // button that flips between "Mostrar contenido citado" and "Ocultar
@@ -539,6 +587,18 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const { height: newHeight, onLoad: onNewLoad } = useContentHeight(sanitizedNew?.html ?? "");
   const { height: quotedHeight, onLoad: onQuotedLoad } = useContentHeight(sanitizedQuoted?.html ?? "");
 
+  // GH #135: measured on sanitizedNew only — the new-content half of the
+  // GH #91 split, never the quoted trail. The quoted trail already has its
+  // own single show/hide toggle (renderQuoteToggle); layering a second,
+  // independent clipping control on the same content (hidden by the quote
+  // toggle, then re-clipped by this one once revealed) would be confusing,
+  // so truncation simply never applies there, however long it is.
+  const isBodyTooLong = useMemo(
+    () => (sanitizedNew ? visibleTextLength(sanitizedNew.html) > BODY_TRUNCATE_TEXT_THRESHOLD : false),
+    [sanitizedNew],
+  );
+  const isBodyClipped = isBodyTooLong && !bodyExpanded;
+
   // Plain-text counterpart of the HTML split above — used only when the
   // sandboxed-iframe path isn't taken (see the `if (sanitizedNew)` branch).
   const textSplit = useMemo(() => (bodyText ? splitQuotedText(bodyText) : null), [bodyText]);
@@ -564,16 +624,43 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
         {/* Hairline border + radius so the always-light email "paper" reads
             as an intentional document card rather than a floating white box
             against a dark app panel (most noticeable in night theme). */}
-        <div className="overflow-hidden rounded-[10px] border border-line">
+        <div className="relative overflow-hidden rounded-[10px] border border-line">
+          {/* GH #135: srcDoc is ALWAYS the full sanitized document — clipping
+              is purely a presentational height/scroll change on this SAME
+              iframe, never a second, smaller render of different markup.
+              Expanding therefore can never reveal anything sanitize hasn't
+              already processed. */}
           <iframe
             sandbox=""
             srcDoc={wrapDocument(sanitizedNew.html)}
             onLoad={onNewLoad}
             title={t("mail.emailContent")}
-            style={{ height: newHeight }}
+            style={{ height: isBodyClipped ? CLIPPED_BODY_HEIGHT : newHeight }}
+            scrolling={isBodyClipped ? "no" : "auto"}
             className="block w-full"
           />
+          {isBodyClipped && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-14"
+              // Always fades to the same white "paper" the iframe itself is
+              // painted on (see EMAIL_PAPER_PANEL) — never the app's own
+              // (possibly dark) panel color, or the fade would visibly seam
+              // against the always-light email content underneath it.
+              style={{ background: `linear-gradient(to top, ${EMAIL_PAPER_PANEL}, transparent)` }}
+            />
+          )}
         </div>
+        {isBodyClipped && (
+          <button
+            type="button"
+            onClick={() => setBodyExpanded(true)}
+            aria-expanded={false}
+            className="mt-2 text-xs font-semibold text-accent-text transition hover:underline"
+          >
+            {t("mail.showFullMessage")}
+          </button>
+        )}
         {sanitizedQuoted && (
           <>
             {renderQuoteToggle()}

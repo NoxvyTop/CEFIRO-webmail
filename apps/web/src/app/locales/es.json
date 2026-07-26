@@ -231,6 +231,7 @@
     "collapseMessage": "Ocultar mensaje completo de {{sender}}",
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
+    "showFullMessage": "Ver todo el mensaje",
     "folders": {
       "inbox": "Recibidos",
       "sent": "Enviados",

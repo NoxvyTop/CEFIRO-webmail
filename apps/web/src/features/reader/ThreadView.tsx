@@ -18,7 +18,7 @@ import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { AttachmentCard } from "./AttachmentCard";
-import { EmailBody } from "./EmailBody";
+import { EmailBody, isSafeInlineImage } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
 
 interface ThreadViewProps {
@@ -691,9 +691,19 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
             // downloadable chip below, so they're hidden from the chip list
             // here (Gmail behavior). Attachments not referenced by any cid:
             // image — including images sent as real attachments — stay visible.
+            //
+            // GH #134: a cid: reference is only hidden when it will actually
+            // resolve to a rendered image (isSafeInlineImage — the same
+            // allowlist EmailBody itself uses to decide what to fetch/inline).
+            // A cid: pointing at any other type (e.g. a PDF invoice
+            // referenced via cid:) never renders inline no matter what, so
+            // excluding it here too would make the file completely
+            // unreachable — neither shown inline (broken image icon) nor
+            // downloadable. It must still surface as a regular attachment.
             const referencedCids = extractReferencedCids(email.bodyHtml);
             const visibleAttachments = email.attachments.filter(
-              (attachment) => !(attachment.cid && referencedCids.has(attachment.cid)),
+              (attachment) =>
+                !(attachment.cid && referencedCids.has(attachment.cid) && isSafeInlineImage(attachment.type)),
             );
 
             // GH #119: the header of an expanded, collapsible message is
