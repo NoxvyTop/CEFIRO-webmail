@@ -40,6 +40,16 @@ vi.mock("../mailbox/api", async (importOriginal) => {
   return { ...actual, fetchMailboxes };
 });
 
+// GH #124: the new Contacts section — stubbed the same way the other
+// sections' data fetchers are above, so switching to it doesn't hit a real
+// endpoint.
+const { fetchContacts } = vi.hoisted(() => ({ fetchContacts: vi.fn() }));
+
+vi.mock("../contacts/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../contacts/api")>();
+  return { ...actual, fetchContacts };
+});
+
 const signature: Signature = { id: "sig1", name: "Principal", contentHtml: "<p>Hi</p>", isDefault: true };
 
 const filterRule: FilterRule = {
@@ -88,6 +98,7 @@ function renderPage() {
   fetchVacationSettings.mockResolvedValue(vacation);
   fetchProfile.mockResolvedValue(profile);
   fetchMailboxes.mockResolvedValue([]);
+  fetchContacts.mockResolvedValue([]);
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
@@ -157,6 +168,24 @@ describe("SettingsPage sectioned console", () => {
 
     expect(await screen.findByRole("heading", { name: i18n.t("vacation.title") })).toBeInTheDocument();
     expect(await screen.findByLabelText(i18n.t("vacation.message"))).toHaveValue("Back soon");
+    expect(screen.queryByRole("heading", { name: i18n.t("settings.profile") })).not.toBeInTheDocument();
+  });
+
+  it("switches to Contactos and shows the contacts section (#124)", async () => {
+    renderPage();
+    // renderPage() stubs fetchContacts to [] by default (like every other
+    // section's fetcher above) — override it after, with a contact to assert
+    // on, same ordering the other section-specific tests don't need since
+    // they only assert on renderPage()'s own defaults.
+    fetchContacts.mockResolvedValue([
+      { id: "c1", name: "Ana Lopez", email: "ana@example.com", source: "manual" },
+    ]);
+
+    await screen.findByLabelText(i18n.t("settings.displayName"));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.nav.contacts") }));
+
+    expect(await screen.findByRole("heading", { name: i18n.t("contacts.title") })).toBeInTheDocument();
+    expect(await screen.findByText("Ana Lopez")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: i18n.t("settings.profile") })).not.toBeInTheDocument();
   });
 });

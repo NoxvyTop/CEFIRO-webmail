@@ -18,8 +18,14 @@ const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDr
   saveDraft: vi.fn(),
 }));
 
+// GH #124: RecipientField (used for To/Cc/Bcc) searches contacts for
+// autocomplete suggestions — stubbed here so unrelated tests that type a
+// long-enough address never hit a real endpoint once their debounce fires.
+const { searchContacts } = vi.hoisted(() => ({ searchContacts: vi.fn() }));
+
 vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, saveDraft }));
 vi.mock("./aiApi", () => ({ fetchAiDraft }));
+vi.mock("../contacts/api", () => ({ searchContacts }));
 
 const identities: Identity[] = [
   { id: "id1", name: "Alice", email: "alice@example.com" },
@@ -74,6 +80,8 @@ describe("Composer", () => {
     fetchAiDraft.mockReset();
     uploadAttachment.mockReset();
     saveDraft.mockReset();
+    searchContacts.mockReset();
+    searchContacts.mockResolvedValue([]);
   });
 
   it("renders a dialog with identities in the From select", async () => {
@@ -88,7 +96,11 @@ describe("Composer", () => {
   it("adds a recipient chip when typing an email and pressing Enter in To", async () => {
     renderComposer();
 
-    const toInput = await screen.findByRole("textbox", { name: i18n.t("composer.to") });
+    // RecipientField now implements the WAI-ARIA combobox pattern (GH #124
+    // recipient autocomplete), which changes its accessible role from plain
+    // "textbox" to "combobox" — an input with an associated suggestion
+    // popup is semantically a combobox, not a bare textbox.
+    const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
     fireEvent.change(toInput, { target: { value: "bob@example.com" } });
     fireEvent.keyDown(toInput, { key: "Enter" });
 
@@ -98,7 +110,7 @@ describe("Composer", () => {
   it("shows an inline hint and does not add a chip for an invalid email", async () => {
     renderComposer();
 
-    const toInput = await screen.findByRole("textbox", { name: i18n.t("composer.to") });
+    const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
     fireEvent.change(toInput, { target: { value: "not-an-email" } });
     fireEvent.keyDown(toInput, { key: "Enter" });
 
@@ -132,7 +144,7 @@ describe("Composer", () => {
     sendEmail.mockResolvedValueOnce(undefined);
     const { onClose } = renderComposer();
 
-    const toInput = await screen.findByRole("textbox", { name: i18n.t("composer.to") });
+    const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
     fireEvent.change(toInput, { target: { value: "bob@example.com" } });
     fireEvent.keyDown(toInput, { key: "Enter" });
 
@@ -501,6 +513,12 @@ describe("Composer", () => {
     });
   });
 
+  // GH #124: every RecipientField instance (To/Cc/Bcc share the one
+  // component) now implements the WAI-ARIA combobox pattern for recipient
+  // autocomplete, which changes its accessible role from plain "textbox" to
+  // "combobox" — an input with an associated suggestion popup is
+  // semantically a combobox, not a bare textbox. Queries below were updated
+  // accordingly; the accessible name (aria-label) itself is unchanged.
   describe("independent CC and BCC controls (#123)", () => {
     it("reveals only the CC field when the CC control is clicked, leaving the BCC control available", async () => {
       renderComposer();
@@ -508,8 +526,8 @@ describe("Composer", () => {
       const addCcButton = await screen.findByRole("button", { name: i18n.t("composer.addCc") });
       fireEvent.click(addCcButton);
 
-      expect(await screen.findByRole("textbox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
-      expect(screen.queryByRole("textbox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: i18n.t("composer.addBcc") })).toBeInTheDocument();
     });
@@ -520,8 +538,8 @@ describe("Composer", () => {
       const addBccButton = await screen.findByRole("button", { name: i18n.t("composer.addBcc") });
       fireEvent.click(addBccButton);
 
-      expect(await screen.findByRole("textbox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
-      expect(screen.queryByRole("textbox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: i18n.t("composer.addCc") })).toBeInTheDocument();
     });
@@ -532,8 +550,8 @@ describe("Composer", () => {
         cc: [{ name: null, email: "cc@example.com" }],
       });
 
-      expect(await screen.findByRole("textbox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
-      expect(screen.queryByRole("textbox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: i18n.t("composer.addBcc") })).toBeInTheDocument();
     });
@@ -544,8 +562,8 @@ describe("Composer", () => {
         bcc: [{ name: null, email: "bcc@example.com" }],
       });
 
-      expect(await screen.findByRole("textbox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
-      expect(screen.queryByRole("textbox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: i18n.t("composer.addCc") })).toBeInTheDocument();
     });
@@ -557,8 +575,8 @@ describe("Composer", () => {
         bcc: [{ name: null, email: "bcc@example.com" }],
       });
 
-      expect(await screen.findByRole("textbox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
-      expect(screen.getByRole("textbox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
     });
@@ -831,6 +849,32 @@ describe("Composer", () => {
       await act(async () => {
         resolveSave({ id: "draft-1" });
       });
+    });
+  });
+
+  // GH #124: the recipient autocomplete dropdown must swallow its own
+  // Escape key — otherwise it would bubble up to the composer's own
+  // Escape-to-close handler (GH #125, above) and close (or discard-confirm)
+  // the whole composer out from under a user who only meant to dismiss the
+  // suggestion list.
+  describe("recipient autocomplete does not leak Escape to the composer (#124)", () => {
+    it("closes only the suggestion list on Escape, leaving the composer open and untouched", async () => {
+      searchContacts.mockResolvedValueOnce([
+        { id: "c1", name: "Bob Smith", email: "bob@example.com", source: "manual" },
+      ]);
+      const { onClose } = renderComposer();
+
+      const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
+      fireEvent.change(toInput, { target: { value: "bo" } });
+
+      expect(await screen.findByRole("option", { name: /Bob Smith/ })).toBeInTheDocument();
+
+      fireEvent.keyDown(toInput, { key: "Escape" });
+
+      await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 });

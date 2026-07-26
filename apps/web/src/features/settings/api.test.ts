@@ -147,4 +147,13 @@ describe("settingsErrorKey", () => {
     expect(settingsErrorKey(new Error("boom"))).toBe("settings.errors.generic");
     expect(settingsErrorKey(new MailApiError(500, "internal"))).toBe("settings.errors.generic");
   });
+
+  // GH #124: the contacts create endpoint (POST /api/mail/contacts) returns
+  // this code on a duplicate address — added here since ContactsSettings
+  // reuses settingsErrorKey the same way ProfileSettings/VacationSettings do.
+  it("maps contact_exists to its settings error key", () => {
+    expect(settingsErrorKey(new MailApiError(409, "contact_exists"))).toBe(
+      "settings.errors.contact_exists",
+    );
+  });
 });
