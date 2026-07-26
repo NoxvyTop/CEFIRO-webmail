@@ -215,6 +215,7 @@
     "sentTo": "To:",
     "yesterday": "Yesterday",
     "expandMessage": "Expand message from {{sender}}",
+    "collapseMessage": "Collapse message from {{sender}}",
     "showQuotedContent": "Show quoted content",
     "hideQuotedContent": "Hide quoted content",
     "folders": {

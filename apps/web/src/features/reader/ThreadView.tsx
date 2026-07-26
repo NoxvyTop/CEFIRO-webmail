@@ -253,15 +253,14 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   }, [lastEmail]);
 
   // GH #90: previous, already-read messages collapse into one-line stubs;
-  // the last message and any still-unread message stay expanded. This is a
-  // one-time snapshot taken when the thread's messages first load — a Set
-  // of expandable ids, grown only by the user clicking a stub open. It's
-  // deliberately NOT recomputed on every refetch (star/label/archive
-  // mutations all invalidate and refetch this same thread query): once the
-  // user has opened a stub, a later refetch must not re-collapse it. The
-  // ref guards that — it only (re)seeds the set the first time a given
-  // threadId's data arrives, so switching to a different thread does get a
-  // fresh snapshot.
+  // the newest message and any still-unread message stay expanded. This is
+  // a one-time snapshot taken when the thread's messages first load — a Set
+  // of expanded ids. It's deliberately NOT recomputed on every refetch
+  // (star/label/archive mutations all invalidate and refetch this same
+  // thread query): once the user has changed a message's expand state, a
+  // later refetch must not reset it. The ref guards that — it only
+  // (re)seeds the set the first time a given threadId's data arrives, so
+  // switching to a different thread does get a fresh snapshot.
   const initializedThreadIdRef = useRef<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
 
@@ -270,19 +269,28 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     if (!currentEmails || currentEmails.length === 0) return;
     if (initializedThreadIdRef.current === threadId) return;
 
-    const last = currentEmails[currentEmails.length - 1];
+    const newest = currentEmails[currentEmails.length - 1];
     const initial = new Set<string>();
     for (const email of currentEmails) {
-      if (email.id === last?.id || !email.keywords.$seen) initial.add(email.id);
+      if (email.id === newest?.id || !email.keywords.$seen) initial.add(email.id);
     }
     setExpandedIds(initial);
     initializedThreadIdRef.current = threadId;
   }, [threadQuery.data, threadId]);
 
-  function expandMessage(emailId: string) {
+  // GH #119: a real toggle — clicking a collapsed stub expands it (GH #90)
+  // and clicking an expanded message's header collapses it again. The
+  // newest message starts expanded purely because the seeding effect above
+  // put its id in the initial set, not because of any render-time force —
+  // see the `isExpanded` check below — so it can be collapsed too.
+  function toggleMessage(emailId: string) {
     setExpandedIds((previous) => {
       const next = new Set(previous);
-      next.add(emailId);
+      if (next.has(emailId)) {
+        next.delete(emailId);
+      } else {
+        next.add(emailId);
+      }
       return next;
     });
   }
@@ -321,6 +329,12 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   const showUnarchive = isOnlyInArchive && inboxMailboxId !== null;
   const starred = Boolean(lastEmail.keywords.$flagged);
   const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
+
+  // GH #118: render newest-first (top to bottom). `emails` itself keeps the
+  // query's original oldest-to-newest order — the keyboard shortcut, the
+  // expand-state seeding effect, and `lastEmail` above all depend on that
+  // order, so only this display copy is reversed.
+  const displayEmails = [...emails].reverse();
 
   const actionButtonBaseClass =
     "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
@@ -461,13 +475,20 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
               </span>
             ))}
           </div>
-          {emails.map((email) => {
+          {displayEmails.map((email) => {
             const sender = email.from[0];
-            const isLast = email.id === lastEmail.id;
+            const isNewest = email.id === lastEmail.id;
             // GH #90: previous, already-read messages collapse into a
             // one-line stub. A single-message thread is always fully
-            // expanded — there's nothing to collapse "away from".
-            const isExpanded = emails.length === 1 || isLast || expandedIds.has(email.id);
+            // expanded — there's nothing to collapse "away from". GH #119:
+            // the newest message is no longer forced open here — it starts
+            // expanded via the seeding effect above but, like any other
+            // message, can be collapsed and re-expanded by the user.
+            const isExpanded = emails.length === 1 || expandedIds.has(email.id);
+            // GH #119: only a message that could actually collapse "into"
+            // something gets the collapse affordance on its header — a
+            // single-message thread has nothing else to show.
+            const collapsible = emails.length > 1;
             const dateLabel = formatRelativeTime(email.receivedAt, {
               yesterdayLabel: t("mail.yesterday"),
               locale: i18n.language,
@@ -478,7 +499,8 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                 <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
                   <button
                     type="button"
-                    onClick={() => expandMessage(email.id)}
+                    onClick={() => toggleMessage(email.id)}
+                    aria-expanded={isExpanded}
                     aria-label={t("mail.expandMessage", { sender: addressLabel(sender) })}
                     className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition hover:bg-hover"
                   >
@@ -512,32 +534,59 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
               (attachment) => !(attachment.cid && referencedCids.has(attachment.cid)),
             );
 
+            // GH #119: the header of an expanded, collapsible message is
+            // itself the collapse control — clicking it re-collapses the
+            // message into the GH #90 stub. Built once so both the button
+            // and the plain-div fallback (single-message thread) render
+            // identical content. The button's content model is phrasing
+            // content only, so — like the GH #90 stub above — these are
+            // `<span>`s with an explicit block display rather than `<div>`s,
+            // which would be invalid inside a `<button>`.
+            const senderHeaderContent = (
+              <>
+                <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
+                <span className="block min-w-0 flex-1">
+                  <span className="block text-[14.5px] font-semibold">{addressLabel(sender)}</span>
+                  {toCcLabel && (
+                    <span className="block truncate text-[12.5px] text-muted">
+                      {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
+              </>
+            );
+
             return (
               <article
                 key={email.id}
-                // GH #92: the last (active) message gets a subtle elevated-card
+                // GH #92: the newest (active) message gets a subtle elevated-card
                 // treatment — a real border, the panel surface, and shadow-card
-                // — so it visually stands out from the collapsed stubs / earlier
-                // messages above it, in both the light and night themes.
+                // — so it visually stands out from the collapsed stubs / older
+                // messages below it (GH #118 moved it to the top), in both the
+                // light and night themes.
                 className={
-                  isLast
+                  isNewest
                     ? "mt-6 rounded-[14px] border border-line bg-panel p-5 shadow-card"
                     : "mt-6 border-b border-line pb-6"
                 }
               >
-                <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
-                  <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[14.5px] font-semibold">{addressLabel(sender)}</div>
-                    {toCcLabel && (
-                      <div className="truncate text-[12.5px] text-muted">
-                        {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
-                      </div>
-                    )}
+                {collapsible ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleMessage(email.id)}
+                    aria-expanded={isExpanded}
+                    aria-label={t("mail.collapseMessage", { sender: addressLabel(sender) })}
+                    className="flex w-full items-center gap-3 border-b border-line pb-5 mb-[22px] text-left transition hover:bg-hover"
+                  >
+                    {senderHeaderContent}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
+                    {senderHeaderContent}
                   </div>
-                  <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
-                </div>
-                {isLast && (
+                )}
+                {isNewest && (
                   <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
                 )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
@@ -555,7 +604,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                     </div>
                   </div>
                 )}
-                {isLast && (
+                {isNewest && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>

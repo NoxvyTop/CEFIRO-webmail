@@ -1073,6 +1073,338 @@ describe("ThreadView", () => {
     });
   });
 
+  // GH #118: the reader now shows the newest message at the top (oldest at
+  // the bottom) instead of the old oldest-first order. GH #119: an expanded
+  // message (including the newest one) can be collapsed again by clicking
+  // its header — expandMessage() used to only ever add ids to expandedIds,
+  // and a render-time `|| isLast` force kept the newest message stuck open
+  // regardless of expandedIds.
+  describe("newest-first order and collapsible expansion (GH #118, GH #119)", () => {
+    function threeMessageThread(): ThreadDetail {
+      return {
+        id: "t2",
+        emails: [
+          {
+            id: "m1",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Kickoff",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Let's get started",
+            // Read, not the newest message — collapses into a stub.
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 100,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Let's get started with the quarterly plan and align on next steps together.",
+            attachments: [],
+          },
+          {
+            id: "m2",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Alice", email: "alice@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T10:00:00.000Z",
+            preview: "Sounds good",
+            // Unread ($seen absent), not the newest message — stays expanded.
+            keywords: {},
+            hasAttachment: false,
+            size: 80,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Sounds good, I am unread still.",
+            attachments: [],
+          },
+          {
+            id: "m3",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T11:00:00.000Z",
+            preview: "Final message",
+            // Read, but IS the newest message — expanded by default, must
+            // still be collapsible (the GH #119 regression).
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 60,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This is the newest message in the thread.",
+            attachments: [],
+          },
+        ],
+      };
+    }
+
+    function stubThreeMessageThread() {
+      const state = threeMessageThread();
+      return vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("renders the newest message before older messages in the DOM", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      const newestText = await screen.findByText("This is the newest message in the thread.");
+      const middleText = await screen.findByText("Sounds good, I am unread still.");
+      const oldestStub = await screen.findByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+
+      expect(newestText.compareDocumentPosition(middleText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(middleText.compareDocumentPosition(oldestStub) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("collapses the newest message when its header is clicked, even though it is expanded by default (GH #119 regression)", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      await screen.findByText("This is the newest message in the thread.");
+      // Before collapsing, only m1 (already read, not newest) is a stub.
+      expect(
+        screen.getAllByRole("button", { name: i18n.t("mail.expandMessage", { sender: "Alice" }) }),
+      ).toHaveLength(1);
+
+      const collapseButton = await screen.findByRole("button", {
+        name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+      });
+      fireEvent.click(collapseButton);
+
+      await waitFor(() => {
+        expect(screen.queryByText("This is the newest message in the thread.")).not.toBeInTheDocument();
+      });
+      // Collapsing the newest message turns it into a second "Alice" stub.
+      expect(
+        screen.getAllByRole("button", { name: i18n.t("mail.expandMessage", { sender: "Alice" }) }),
+      ).toHaveLength(2);
+    });
+
+    it("expands a collapsed message again once its stub is re-clicked, restoring its full body", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      await screen.findByText("This is the newest message in the thread.");
+      fireEvent.click(
+        await screen.findByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Alice" }) }),
+      );
+
+      const stubs = await screen.findAllByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+      const newestStub = stubs.find((button) => button.textContent?.includes("This is the newest message"));
+      expect(newestStub).toBeTruthy();
+      fireEvent.click(newestStub!);
+
+      expect(await screen.findByText("This is the newest message in the thread.")).toBeInTheDocument();
+    });
+
+    it("keeps a single-message thread expanded with no collapse affordance", async () => {
+      const state: ThreadDetail = {
+        id: "t4",
+        emails: [
+          {
+            id: "solo",
+            threadId: "t4",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Solo message",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Just me",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 40,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This thread only has one message.",
+            attachments: [],
+          },
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread("t4");
+
+      expect(await screen.findByText("This thread only has one message.")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Alice" }) }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("reseeds expand state fresh when switching to a different thread, so the new thread's newest message is expanded even after collapsing the previous thread's newest message", async () => {
+      const t2 = threeMessageThread();
+      const t3: ThreadDetail = {
+        id: "t3",
+        emails: [
+          {
+            id: "n1",
+            threadId: "t3",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Eve", email: "eve@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Budget",
+            receivedAt: "2026-07-02T09:00:00.000Z",
+            preview: "Numbers attached",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 40,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Here is the budget spreadsheet summary for review.",
+            attachments: [],
+          },
+          {
+            id: "n2",
+            threadId: "t3",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Eve", email: "eve@example.com" }],
+            subject: "Re: Budget",
+            receivedAt: "2026-07-02T10:00:00.000Z",
+            preview: "Looks fine",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 30,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This is the newest message in the second thread.",
+            attachments: [],
+          },
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          if (url.includes("/api/mail/threads/t2")) return new Response(JSON.stringify(t2));
+          if (url.includes("/api/mail/threads/t3")) return new Response(JSON.stringify(t3));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { rerender } = render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <ToastProvider>
+              <ThreadView threadId="t2" archiveMailboxId={null} inboxMailboxId={null} />
+            </ToastProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      await screen.findByText("This is the newest message in the thread.");
+      fireEvent.click(
+        await screen.findByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Alice" }) }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("This is the newest message in the thread.")).not.toBeInTheDocument();
+      });
+
+      rerender(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <ToastProvider>
+              <ThreadView threadId="t3" archiveMailboxId={null} inboxMailboxId={null} />
+            </ToastProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByText("This is the newest message in the second thread.")).toBeInTheDocument();
+    });
+
+    // Both halves of the same collapse/expand disclosure control need to
+    // agree with each other — a screen reader user toggling a message must
+    // hear its state confirmed regardless of which half (stub or header)
+    // they are currently looking at.
+    describe("aria-expanded state", () => {
+      it("exposes aria-expanded=false on a collapsed stub's button", async () => {
+        vi.stubGlobal("fetch", stubThreeMessageThread());
+        renderThread("t2");
+
+        const stub = await screen.findByRole("button", {
+          name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+        });
+        expect(stub).toHaveAttribute("aria-expanded", "false");
+      });
+
+      it("exposes aria-expanded=true on an expanded message's header button", async () => {
+        vi.stubGlobal("fetch", stubThreeMessageThread());
+        renderThread("t2");
+
+        const header = await screen.findByRole("button", {
+          name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+        });
+        expect(header).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("flips aria-expanded on the same logical control as it is collapsed and re-expanded", async () => {
+        vi.stubGlobal("fetch", stubThreeMessageThread());
+        renderThread("t2");
+
+        const header = await screen.findByRole("button", {
+          name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+        });
+        expect(header).toHaveAttribute("aria-expanded", "true");
+
+        fireEvent.click(header);
+
+        const stubs = await screen.findAllByRole("button", {
+          name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+        });
+        const collapsedControl = stubs.find((button) => button.textContent?.includes("This is the newest message"));
+        expect(collapsedControl).toBeTruthy();
+        expect(collapsedControl).toHaveAttribute("aria-expanded", "false");
+
+        fireEvent.click(collapsedControl!);
+
+        const reExpandedHeader = await screen.findByRole("button", {
+          name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+        });
+        expect(reExpandedHeader).toHaveAttribute("aria-expanded", "true");
+      });
+    });
+  });
+
   // GH #94: branded (Céfiro logo) loading indicator mounted ON TOP of the
   // thread query's already-existing pending state — before this change the
   // reader pane just rendered blank (`return null`) while the thread loaded.
