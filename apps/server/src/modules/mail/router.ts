@@ -20,6 +20,7 @@ import {
 import { requireSession } from "../auth/middleware";
 import { log } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
+import { harvestContacts } from "./contacts-harvest";
 import type { JmapAuth, JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
 
 type JmapMailbox = {
@@ -737,6 +738,24 @@ export function createMailRouter(deps: MailDeps) {
       position: queryResult.position ?? 0,
       emails: sorted.map(toEmailSummary),
     };
+
+    // GH #124: best-effort address-book harvest from this page's senders.
+    // Only runs when a contacts repo is wired (deps.contacts is optional —
+    // see context.ts) and never affects this response: harvestContacts logs
+    // and swallows its own failures instead of throwing.
+    if (deps.contacts) {
+      const user = c.get("user");
+      await harvestContacts({
+        contacts: deps.contacts,
+        jmap: deps.jmap!,
+        auth: c.get("jmapAuth"),
+        session,
+        userId: user.userId,
+        ownerEmail: user.email,
+        emails: sorted,
+      });
+    }
+
     return c.json(page);
   });
 

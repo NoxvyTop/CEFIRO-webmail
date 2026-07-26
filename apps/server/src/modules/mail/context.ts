@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono";
+import type { ContactsRepo } from "../../infra/repos/contacts";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SignaturesRepo } from "../../infra/repos/signatures";
 import type { UserPreferencesRepo } from "../../infra/repos/user-preferences";
@@ -13,6 +14,12 @@ export type MailDeps = {
   userPreferences: UserPreferencesRepo;
   jmap: JmapClient | null;
   fetchFn?: typeof fetch;
+  // Optional (GH #124): when wired, GET /messages harvests sender addresses
+  // into the user's contacts after fetching a page — see
+  // modules/mail/contacts-harvest.ts. Left optional, and gated behind an
+  // `if (deps.contacts)` at the one call site, so every existing test/deploy
+  // that constructs MailDeps without it keeps behaving exactly as before.
+  contacts?: ContactsRepo;
 };
 
 // Narrow slice of MailDeps that requireMail actually needs. Extracted so other

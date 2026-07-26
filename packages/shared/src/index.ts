@@ -7,3 +7,4 @@ export * from "./api/admin";
 export * from "./api/profile";
 export * from "./api/sieve";
 export * from "./api/ai";
+export * from "./api/contacts";
