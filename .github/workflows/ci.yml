@@ -5,6 +5,16 @@ on:
     branches: ["init-**", preproduc, main]
   pull_request:
 
+# Successive pushes to the same PR supersede each other: only the newest
+# commit's result is ever looked at, so letting the older runs finish burns
+# Actions minutes to produce an answer nobody reads. Pushes to preproduc and
+# main are deliberately NOT cancelled — those runs gate the publish job, and
+# cancelling one halfway could leave the registry without the image its
+# commit was supposed to produce.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,6 +37,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
+      # Bun's global package cache. Keyed on the lockfile, so it is reused
+      # until a dependency actually changes rather than re-downloading the
+      # whole tree on every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
@@ -54,8 +72,26 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
       - run: bun install --frozen-lockfile
-      - run: cd e2e && bunx playwright install --with-deps chromium
+      # Chromium is a ~150 MB download that only changes when the pinned
+      # Playwright version does, so it is cached on the lockfile. The apt
+      # system libraries it links against are NOT cacheable (they install
+      # outside the workspace), so install-deps still runs on a cache hit —
+      # cheaper than re-downloading the browser alongside it.
+      - uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: cd e2e && bunx playwright install-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd e2e && bunx playwright install --with-deps chromium
       # Brings up the pre-provisioned Stalwart fixture (docker-compose.e2e.yml)
       # so tests/mail-connect.spec.ts has a real JMAP/SMTP backend to talk to.
       # Postgres stays the `services:` container above, not part of this
@@ -93,13 +129,21 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The image build is the most expensive single step in the pipeline and
+      # a runner starts with an empty Docker layer cache, so without this it
+      # rebuilds every layer — dependency install included — on every release.
+      # mode=max caches intermediate stages too, which is what makes the
+      # multi-stage build actually reuse its install layer.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ghcr.io/noxvytop/cefiro-webmail:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
