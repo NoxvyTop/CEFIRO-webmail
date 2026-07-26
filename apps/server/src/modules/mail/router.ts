@@ -875,6 +875,75 @@ export function createMailRouter(deps: MailDeps) {
     );
   });
 
+  // GH #133: permanently destroys a message via Email/set `destroy`. This is
+  // irreversible, so the route does not trust the client's claim that the id
+  // it sends is actually sitting in Trash — the web app only ever offers
+  // "Delete permanently" while viewing Trash, but that's a UI affordance, not
+  // a security boundary, and an id can arrive here from anywhere. The same
+  // lesson as the save-draft route's originalDraftId check above: trusting a
+  // client-supplied id without verifying it server-side let that route trash
+  // an arbitrary message. Here the stakes are higher (destroy, not move), so
+  // the message's mailbox membership is looked up and checked BEFORE the
+  // destroy is ever issued. The cost is one extra JMAP round trip (a batched
+  // Mailbox/get + Email/get) ahead of the Email/set destroy call.
+  //
+  // Email/get is scoped to this session's own accountId, so a message
+  // belonging to a different account never appears in the lookup — it comes
+  // back as an empty list, indistinguishable from "no such message", and is
+  // refused the same way as any id that isn't genuinely in Trash.
+  router.delete("/messages/:id", requireMail(deps), async (c) => {
+    const id = c.req.param("id");
+    const session = c.get("jmapSession");
+    const auth = c.get("jmapAuth");
+
+    const lookup = await deps.jmap!.request(auth, session, [
+      ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
+      ["Email/get", { accountId: session.accountId, ids: [id], properties: ["id", "mailboxIds"] }, "e"],
+    ]);
+
+    const mailboxResult = (lookup[0]?.[1] ?? {}) as { list?: JmapMailbox[] };
+    const trashId = (mailboxResult.list ?? []).find((m) => m.role === "trash")?.id;
+
+    const emailResult = (lookup[1]?.[1] ?? {}) as { list?: JmapEmail[] };
+    const email = (emailResult.list ?? [])[0];
+
+    const isInTrash = Boolean(trashId && email?.mailboxIds?.[trashId] === true);
+    if (!isInTrash) {
+      return c.json(
+        { code: "not_in_trash", message: "errors.not_in_trash", traceId: c.get("traceId") },
+        409,
+      );
+    }
+
+    const responses = await deps.jmap!.request(auth, session, [
+      ["Email/set", { accountId: session.accountId, destroy: [id] }, "d"],
+    ]);
+
+    const setResult = (responses[0]?.[1] ?? {}) as {
+      destroyed?: string[];
+      notDestroyed?: Record<string, unknown>;
+    };
+
+    // Same rigor PATCH /messages/:id applies above: check the negative
+    // (notDestroyed) first, then require a positive confirmation (id present
+    // in `destroyed`) before reporting success — a response that names the
+    // id in neither is not proof anything was actually destroyed.
+    if (setResult.notDestroyed && id in setResult.notDestroyed) {
+      return c.json(
+        { code: "destroy_failed", message: "errors.destroy_failed", traceId: c.get("traceId") },
+        409,
+      );
+    }
+    if (setResult.destroyed && setResult.destroyed.includes(id)) {
+      return c.json({ ok: true });
+    }
+
+    return c.json(
+      { code: "destroy_failed", message: "errors.destroy_failed", traceId: c.get("traceId") },
+      409,
+    );
+  });
+
   router.post("/send", requireMail(deps), async (c) => {
     let body: unknown;
     try {

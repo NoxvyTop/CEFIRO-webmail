@@ -177,6 +177,8 @@
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI summary",
+      "not_in_trash": "The message is no longer in Trash",
+      "destroy_failed": "Could not delete the message",
       "generic": "Mail could not be loaded"
     },
     "unlinked": {
@@ -198,6 +200,17 @@
     "archivedHint": "press e to archive faster",
     "unarchive": "Move to Inbox",
     "unarchived": "Moved to Inbox",
+    "delete": "Delete",
+    "deleted": "Moved to Trash",
+    "deletePermanently": "Delete permanently",
+    "deletedPermanently": "Message permanently deleted",
+    "deletePermanentlyConfirm": {
+      "title": "Delete this message permanently?",
+      "description": "\"{{subject}}\" will be permanently deleted. This can't be undone.",
+      "confirm": "Delete permanently",
+      "deleting": "Deleting…",
+      "cancel": "Cancel"
+    },
     "labels": "Labels",
     "clearLabel": "Clear label filter",
     "newLabel": "New label",

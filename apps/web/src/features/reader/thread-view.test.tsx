@@ -115,6 +115,7 @@ function renderThread(
   threadId = "t1",
   archiveMailboxId: string | null = null,
   inboxMailboxId: string | null = null,
+  trashMailboxId: string | null = null,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -125,6 +126,7 @@ function renderThread(
             threadId={threadId}
             archiveMailboxId={archiveMailboxId}
             inboxMailboxId={inboxMailboxId}
+            trashMailboxId={trashMailboxId}
           />
           <ComposeParamProbe />
         </ToastProvider>
@@ -144,6 +146,34 @@ function stubArchivedThread() {
     const method = init?.method ?? "GET";
     if (url.includes("/api/mail/messages/") && method === "PATCH") {
       return new Response(null, { status: 204 });
+    }
+    if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+    if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+    return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+  });
+}
+
+// GH #133: a thread whose last email (e2) sits ONLY in the Trash mailbox —
+// the state where the reader should offer "Delete permanently" instead of
+// "Delete", mirroring stubArchivedThread() above. Answers DELETE for the
+// destroy request the same way a real server would on success; individual
+// tests override this default via destroyStatus.
+function stubTrashedThread(destroyStatus = 200) {
+  const state = structuredClone(thread);
+  state.emails[1]!.mailboxIds = ["trash1"];
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.includes("/api/mail/messages/") && method === "PATCH") {
+      return new Response(null, { status: 204 });
+    }
+    if (url.includes("/api/mail/messages/") && method === "DELETE") {
+      return destroyStatus === 200
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response(
+            JSON.stringify({ code: "destroy_failed", message: "errors.destroy_failed", traceId: "t1" }),
+            { status: destroyStatus },
+          );
     }
     if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
@@ -1509,6 +1539,194 @@ describe("ThreadView", () => {
       const article = attachmentText.closest("article");
       expect(article).not.toBeNull();
       expect(article?.className).not.toMatch(/shadow-card/);
+    });
+  });
+
+  // GH #133: Delete moves the last email to Trash (recoverable, no
+  // confirmation, just feedback — mirrors archiveMutation). Delete
+  // permanently is offered ONLY while viewing Trash and always requires
+  // explicit confirmation before anything is destroyed.
+  describe("delete and delete permanently (GH #133)", () => {
+    it("hides the Delete action when the account has no trash mailbox", async () => {
+      stubFetch();
+      renderThread("t1", "arch1", null, null);
+
+      await screen.findByTestId("thread-actions-bar");
+      expect(screen.queryByRole("button", { name: i18n.t("mail.delete") })).not.toBeInTheDocument();
+    });
+
+    it("shows the Delete action in the action bar when a trash mailbox exists", async () => {
+      stubFetch();
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(within(actionsBar).getByRole("button", { name: i18n.t("mail.delete") })).toBeInTheDocument();
+    });
+
+    it("clicking Delete moves the last email to the trash mailbox with no confirmation and shows feedback", async () => {
+      const fetchMock = stubFetch();
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.delete") }));
+
+      // No confirmation dialog for a move to Trash — it's recoverable.
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+      const patchCall = await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "PATCH",
+        );
+        expect(call).toBeTruthy();
+        return call;
+      });
+      const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { trash1: true } });
+
+      expect(await screen.findByText(i18n.t("mail.deleted"))).toBeInTheDocument();
+    });
+
+    it("hides Delete permanently when a trash mailbox exists but the thread is not being viewed from Trash", async () => {
+      stubFetch();
+      renderThread("t1", "arch1", null, "trash1");
+
+      await screen.findByTestId("thread-actions-bar");
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.deletePermanently") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows Delete permanently (and hides Delete) when the last email is only in Trash", async () => {
+      vi.stubGlobal("fetch", stubTrashedThread());
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }),
+      ).toBeInTheDocument();
+      expect(
+        within(actionsBar).queryByRole("button", { name: i18n.t("mail.delete") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("clicking Delete permanently opens a confirmation dialog naming the message, without destroying anything yet", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/Re: Quarterly report/)).toBeInTheDocument();
+
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("dismissing the confirmation with Cancel destroys nothing", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.cancel") }),
+      );
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("dismissing the confirmation with Escape destroys nothing", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      await screen.findByRole("alertdialog");
+
+      fireEvent.keyDown(window, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("dismissing the confirmation by clicking the backdrop destroys nothing", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+
+      fireEvent.click(dialog);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("confirming Delete permanently issues the destroy request, closes the dialog and shows feedback", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.confirm") }),
+      );
+
+      await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "DELETE",
+        );
+        expect(call).toBeTruthy();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(await screen.findByText(i18n.t("mail.deletedPermanently"))).toBeInTheDocument();
+    });
+
+    it("keeps the confirmation open and shows an error when the server refuses to destroy the message", async () => {
+      const fetchMock = stubTrashedThread(409);
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.confirm") }),
+      );
+
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+        i18n.t("mail.errors.destroy_failed"),
+      );
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     });
   });
 });

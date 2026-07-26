@@ -177,6 +177,8 @@
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el resumen con IA",
+      "not_in_trash": "El mensaje ya no está en la papelera",
+      "destroy_failed": "No se pudo eliminar el mensaje",
       "generic": "No se pudo cargar el correo"
     },
     "unlinked": {
@@ -198,6 +200,17 @@
     "archivedHint": "pulsa e para archivar más rápido",
     "unarchive": "Mover a Recibidos",
     "unarchived": "Movido a Recibidos",
+    "delete": "Eliminar",
+    "deleted": "Movido a la papelera",
+    "deletePermanently": "Eliminar definitivamente",
+    "deletedPermanently": "Mensaje eliminado definitivamente",
+    "deletePermanentlyConfirm": {
+      "title": "¿Eliminar este mensaje definitivamente?",
+      "description": "«{{subject}}» se eliminará definitivamente. Esta acción no se puede deshacer.",
+      "confirm": "Eliminar definitivamente",
+      "deleting": "Eliminando…",
+      "cancel": "Cancelar"
+    },
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta",
     "newLabel": "Nueva etiqueta",

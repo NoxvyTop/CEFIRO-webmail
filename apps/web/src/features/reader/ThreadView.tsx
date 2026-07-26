@@ -4,13 +4,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
+import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
+import { Button } from "../../app/ui/Button";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
-import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
+import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon, TrashIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
@@ -24,6 +25,90 @@ interface ThreadViewProps {
   threadId: string;
   archiveMailboxId: string | null;
   inboxMailboxId: string | null;
+  // GH #133: optional (defaults to null) so existing callers/tests that don't
+  // care about Trash keep compiling unchanged — mirrors archiveMailboxId's
+  // role, just for the trash-role mailbox instead.
+  trashMailboxId?: string | null;
+}
+
+interface DeletePermanentlyConfirmDialogProps {
+  subject: string;
+  deleting: boolean;
+  deleteError: string | null;
+  onConfirm(): void;
+  onCancel(): void;
+}
+
+// GH #133: shown before a message is permanently destroyed. Mirrors
+// Composer.tsx's DiscardConfirmDialog and NewLabelModal.tsx's existing dialog
+// precedent in this codebase — a full-screen bg-overlay backdrop,
+// backdrop-click dismissal, focus moved in on open and restored on close, and
+// its own Escape-to-dismiss effect scoped to this dialog only. Unlike
+// discarding a draft, this action is irreversible, so the description always
+// names the exact message being destroyed rather than a generic "this
+// message" — and every dismissal path (Escape, backdrop click, Cancel)
+// destroys nothing; only the explicit confirm button does.
+function DeletePermanentlyConfirmDialog({
+  subject, deleting, deleteError, onConfirm, onCancel,
+}: DeletePermanentlyConfirmDialogProps) {
+  const { t } = useTranslation();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+
+    return () => {
+      previouslyFocusedRef.current?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div
+      role="alertdialog"
+      aria-label={t("mail.deletePermanentlyConfirm.title")}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
+      onClick={onCancel}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        className="flex w-full max-w-[360px] flex-col gap-4 rounded-[14px] border border-line bg-panel p-5 shadow-pop outline-none"
+        style={{ animation: "popIn 0.18s ease" }}
+      >
+        <div>
+          <h2 className="text-[14px] font-[650]">{t("mail.deletePermanentlyConfirm.title")}</h2>
+          <p className="mt-1 text-[13px] text-muted">
+            {t("mail.deletePermanentlyConfirm.description", { subject })}
+          </p>
+        </div>
+        {deleteError && (
+          <p role="alert" className="text-[12.5px] text-warn">
+            {t(deleteError)}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={onCancel} disabled={deleting}>
+            {t("mail.deletePermanentlyConfirm.cancel")}
+          </Button>
+          <Button variant="primary" onClick={onConfirm} disabled={deleting}>
+            {deleting ? t("mail.deletePermanentlyConfirm.deleting") : t("mail.deletePermanentlyConfirm.confirm")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function addressLabel(address: EmailAddress | undefined) {
@@ -62,7 +147,7 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
   return others.size >= 1;
 }
 
-export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: ThreadViewProps) {
+export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -198,6 +283,49 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     },
   });
 
+  // GH #133: Delete moves the last email to Trash — the same single-mailbox
+  // move archiveMutation/unarchiveMutation above already use (JMAP
+  // mailboxIds is a full-set replace). Recoverable, so it needs no
+  // confirmation — just feedback, mirroring archiveMutation's toast.
+  const deleteMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!trashMailboxId) throw new Error("no trash mailbox");
+      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      showToast(t("mail.deleted"));
+      backToList();
+    },
+  });
+
+  const [deletePermanentlyConfirmOpen, setDeletePermanentlyConfirmOpen] = useState(false);
+  const [destroyError, setDestroyError] = useState<string | null>(null);
+
+  // GH #133: permanently destroys the last email. Irreversible, so this is
+  // only ever invoked from the explicit confirm button inside
+  // DeletePermanentlyConfirmDialog below — never directly from the action
+  // bar click.
+  const destroyMutation = useMutation({
+    mutationFn: (email: EmailDetail) => destroyMessage(email.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      setDeletePermanentlyConfirmOpen(false);
+      setDestroyError(null);
+      showToast(t("mail.deletedPermanently"));
+      backToList();
+    },
+    onError: (err) => {
+      const error = err instanceof MailApiError ? `mail.errors.${err.code || "generic"}` : "mail.errors.generic";
+      setDestroyError(error);
+    },
+  });
+
+  function handleCancelDeletePermanently() {
+    setDeletePermanentlyConfirmOpen(false);
+    setDestroyError(null);
+  }
+
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
       updateMessage(email.id, { keywords: { $flagged: starred } }),
@@ -327,6 +455,20 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   // Mutually exclusive with showArchive: only an archived email offers the way
   // back to Recibidos, and only when we know which mailbox that is.
   const showUnarchive = isOnlyInArchive && inboxMailboxId !== null;
+
+  // GH #133: same "only in one mailbox" shape as isOnlyInArchive above, for
+  // Trash. Delete moves a message INTO Trash — meaningless once it's already
+  // there, so the two actions are mutually exclusive, mirroring how
+  // showArchive/showUnarchive never both show. Delete permanently is offered
+  // ONLY while genuinely viewing Trash: a destroy control anywhere else would
+  // be a trap the user could hit on an ordinary message by mistake.
+  const isOnlyInTrash =
+    trashMailboxId !== null &&
+    lastEmail.mailboxIds.length === 1 &&
+    lastEmail.mailboxIds[0] === trashMailboxId;
+  const showDelete = trashMailboxId !== null && !isOnlyInTrash;
+  const showDeletePermanently = isOnlyInTrash;
+
   const starred = Boolean(lastEmail.keywords.$flagged);
   const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
 
@@ -372,6 +514,26 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
           >
             <InboxIcon size={15} />
             {t("mail.unarchive")}
+          </button>
+        )}
+        {showDelete && (
+          <button
+            type="button"
+            onClick={() => deleteMutation.mutate(lastEmail)}
+            className={actionButtonClass}
+          >
+            <TrashIcon size={15} />
+            {t("mail.delete")}
+          </button>
+        )}
+        {showDeletePermanently && (
+          <button
+            type="button"
+            onClick={() => setDeletePermanentlyConfirmOpen(true)}
+            className={actionButtonClass}
+          >
+            <TrashIcon size={15} />
+            {t("mail.deletePermanently")}
           </button>
         )}
         <button
@@ -659,6 +821,15 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
           })}
         </div>
       </div>
+      {deletePermanentlyConfirmOpen && (
+        <DeletePermanentlyConfirmDialog
+          subject={lastEmail.subject || t("mail.noSubject")}
+          deleting={destroyMutation.isPending}
+          deleteError={destroyError}
+          onConfirm={() => destroyMutation.mutate(lastEmail)}
+          onCancel={handleCancelDeletePermanently}
+        />
+      )}
     </div>
   );
 }

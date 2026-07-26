@@ -488,6 +488,7 @@ export function MailPage() {
             threadId={threadParam}
             archiveMailboxId={archiveMailboxId}
             inboxMailboxId={inboxMailboxId}
+            trashMailboxId={trashMailboxId}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
