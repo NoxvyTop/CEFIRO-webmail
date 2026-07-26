@@ -1,7 +1,8 @@
 import {
-  blobUploadResultSchema, identitySchema, sendEmailSchema, signatureSchema,
-  signatureInputSchema,
-  type BlobUploadResult, type Identity, type SendEmailInput, type Signature, type SignatureInput,
+  blobUploadResultSchema, identitySchema, saveDraftResultSchema, saveDraftSchema, sendEmailSchema,
+  signatureSchema, signatureInputSchema,
+  type BlobUploadResult, type Identity, type SaveDraftInput, type SaveDraftResult, type SendEmailInput,
+  type Signature, type SignatureInput,
 } from "@webmail/shared";
 import { z } from "zod";
 import { MailApiError } from "../mailbox/api";
@@ -101,4 +102,18 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     body: JSON.stringify(sendEmailSchema.parse(input)),
   });
   if (!res.ok) return parseError(res);
+}
+
+// GH #149: unlike sendEmail, returns the created draft's id — a save-draft
+// call is only useful to a caller that can act on what it created (e.g. set
+// it as originalDraftId on the next save), whereas /send is fire-and-forget
+// once it succeeds.
+export async function saveDraft(input: SaveDraftInput): Promise<SaveDraftResult> {
+  const res = await fetch("/api/mail/drafts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(saveDraftSchema.parse(input)),
+  });
+  if (!res.ok) return parseError(res);
+  return saveDraftResultSchema.parse(await res.json());
 }

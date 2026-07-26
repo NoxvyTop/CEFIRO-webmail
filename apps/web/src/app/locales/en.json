@@ -282,6 +282,7 @@
       "noRecipients": "Add at least one recipient",
       "invalid_identity": "Invalid identity",
       "send_failed": "Could not send",
+      "save_draft_failed": "Could not save the draft",
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI draft",
       "invalid_body": "Write a subject before drafting with AI",

@@ -5,6 +5,8 @@ import {
   signatureInputSchema,
   blobUploadResultSchema,
   sendEmailSchema,
+  saveDraftSchema,
+  saveDraftResultSchema,
 } from "./compose";
 
 describe("identitySchema", () => {
@@ -168,5 +170,93 @@ describe("sendEmailSchema", () => {
       expect(withThreading({ references: ["unicode-ñ@noxvytop.com"] }).success).toBe(true);
       expect(withThreading({ references: ["<already-bracketed@noxvytop.com>"] }).success).toBe(true);
     });
+  });
+});
+
+describe("saveDraftSchema", () => {
+  // GH #149: a draft is work in progress, not a message about to leave the
+  // server — unlike sendEmailSchema it must accept zero recipients and an
+  // empty subject.
+  it("accepts zero recipients and an empty subject", () => {
+    const result = saveDraftSchema.safeParse({
+      identityId: "id-1",
+      textBody: "",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.to).toEqual([]);
+      expect(result.data.cc).toEqual([]);
+      expect(result.data.bcc).toEqual([]);
+      expect(result.data.subject).toBe("");
+    }
+  });
+
+  it("still requires an identityId, the same way sendEmailSchema does", () => {
+    const result = saveDraftSchema.safeParse({ textBody: "hi" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an optional originalDraftId, unset by default", () => {
+    const withoutId = saveDraftSchema.safeParse({ identityId: "id-1", textBody: "hi" });
+    expect(withoutId.success).toBe(true);
+    if (withoutId.success) expect(withoutId.data.originalDraftId).toBeUndefined();
+
+    const withId = saveDraftSchema.safeParse({
+      identityId: "id-1",
+      textBody: "hi",
+      originalDraftId: "draft-1",
+    });
+    expect(withId.success).toBe(true);
+    if (withId.success) expect(withId.data.originalDraftId).toBe("draft-1");
+  });
+
+  it("rejects an empty-string originalDraftId", () => {
+    const result = saveDraftSchema.safeParse({
+      identityId: "id-1",
+      textBody: "hi",
+      originalDraftId: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  // "#" opens JMAP's creation-id reference namespace (RFC 8620 §5.3), and
+  // POST /drafts creates the new draft under the creation id "draft" — so a
+  // "#"-prefixed originalDraftId could aim that route's move-to-Trash cleanup
+  // at the message the same request just created.
+  it("rejects a #-prefixed originalDraftId", () => {
+    for (const originalDraftId of ["#draft", "#", "#sub", "#anything"]) {
+      const result = saveDraftSchema.safeParse({
+        identityId: "id-1",
+        textBody: "hi",
+        originalDraftId,
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("still accepts an id that merely contains a # somewhere after the first character", () => {
+    const result = saveDraftSchema.safeParse({
+      identityId: "id-1",
+      textBody: "hi",
+      originalDraftId: "a#b",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("still accepts recipients, subject and attachments like a normal draft", () => {
+    const result = saveDraftSchema.safeParse({
+      identityId: "id-1",
+      to: [{ name: null, email: "bob@noxvytop.com" }],
+      subject: "Hello",
+      textBody: "hello",
+      attachments: [{ blobId: "blob-1", name: "file.pdf", type: "application/pdf" }],
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("saveDraftResultSchema", () => {
+  it("parses the created draft id", () => {
+    expect(saveDraftResultSchema.parse({ id: "draft-1" })).toEqual({ id: "draft-1" });
   });
 });

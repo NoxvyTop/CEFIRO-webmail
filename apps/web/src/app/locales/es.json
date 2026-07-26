@@ -282,6 +282,7 @@
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
       "send_failed": "No se pudo enviar",
+      "save_draft_failed": "No se pudo guardar el borrador",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el borrador con IA",
       "invalid_body": "Escribe un asunto antes de redactar con IA",
