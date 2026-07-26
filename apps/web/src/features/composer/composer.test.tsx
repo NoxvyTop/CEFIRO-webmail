@@ -479,6 +479,89 @@ describe("Composer", () => {
     });
   });
 
+  describe("discard control (#126)", () => {
+    it("renders the discard control as a clearly bordered button, reachable by its accessible name", async () => {
+      renderComposer();
+
+      const cancelButton = await screen.findByRole("button", { name: i18n.t("composer.cancel") });
+      // The bare text link this replaces had no border/background at all —
+      // the fix is exactly that it now reads as a real, bordered control.
+      expect(cancelButton).toHaveClass("border");
+    });
+
+    it("calls onClose when the discard control is clicked", async () => {
+      const { onClose } = renderComposer();
+
+      const cancelButton = await screen.findByRole("button", { name: i18n.t("composer.cancel") });
+      fireEvent.click(cancelButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("independent CC and BCC controls (#123)", () => {
+    it("reveals only the CC field when the CC control is clicked, leaving the BCC control available", async () => {
+      renderComposer();
+
+      const addCcButton = await screen.findByRole("button", { name: i18n.t("composer.addCc") });
+      fireEvent.click(addCcButton);
+
+      expect(await screen.findByRole("textbox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addBcc") })).toBeInTheDocument();
+    });
+
+    it("reveals only the BCC field when the BCC control is clicked, leaving the CC control available", async () => {
+      renderComposer();
+
+      const addBccButton = await screen.findByRole("button", { name: i18n.t("composer.addBcc") });
+      fireEvent.click(addBccButton);
+
+      expect(await screen.findByRole("textbox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addCc") })).toBeInTheDocument();
+    });
+
+    it("auto-shows CC (not BCC) when the draft arrives with existing CC recipients", async () => {
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        cc: [{ name: null, email: "cc@example.com" }],
+      });
+
+      expect(await screen.findByRole("textbox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addBcc") })).toBeInTheDocument();
+    });
+
+    it("auto-shows BCC (not CC) when the draft arrives with existing BCC recipients", async () => {
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        bcc: [{ name: null, email: "bcc@example.com" }],
+      });
+
+      expect(await screen.findByRole("textbox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addCc") })).toBeInTheDocument();
+    });
+
+    it("auto-shows both fields, with neither reveal control offered, when the draft arrives with both CC and BCC recipients", async () => {
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        cc: [{ name: null, email: "cc@example.com" }],
+        bcc: [{ name: null, email: "bcc@example.com" }],
+      });
+
+      expect(await screen.findByRole("textbox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
+    });
+  });
+
   describe("Redactar con IA", () => {
     it("fills the body and shows the review notice on success", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador solicitado.");

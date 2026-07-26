@@ -8,6 +8,7 @@ import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import type { ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
+import { Button } from "../../app/ui/Button";
 import { CloseIcon } from "../../app/ui/icons";
 import { useToast } from "../../app/ui/toast";
 import { AttachmentCard } from "../reader/AttachmentCard";
@@ -65,7 +66,11 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     initial,
     trashMailboxId,
   );
-  const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
+  // Split into two independent reveal states (#123) — a draft arriving with
+  // CC recipients (e.g. reply-all, see reply.ts's replyDraft) must show CC
+  // without also showing an unrelated, still-empty BCC field, and vice versa.
+  const [showCc, setShowCc] = useState(initial.cc.length > 0);
+  const [showBcc, setShowBcc] = useState(initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -204,28 +209,41 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             onChange={(value) => setField("to", value)}
           />
 
-          {!showCcBcc && (
-            <button
-              type="button"
-              onClick={() => setShowCcBcc(true)}
-              className="self-start text-xs text-accent-text underline"
-            >
-              {t("composer.addCcBcc")}
-            </button>
+          {(!showCc || !showBcc) && (
+            <div className="flex items-center gap-3">
+              {!showCc && (
+                <button
+                  type="button"
+                  onClick={() => setShowCc(true)}
+                  className="self-start text-xs text-accent-text underline"
+                >
+                  {t("composer.addCc")}
+                </button>
+              )}
+              {!showBcc && (
+                <button
+                  type="button"
+                  onClick={() => setShowBcc(true)}
+                  className="self-start text-xs text-accent-text underline"
+                >
+                  {t("composer.addBcc")}
+                </button>
+              )}
+            </div>
           )}
-          {showCcBcc && (
-            <>
-              <RecipientField
-                label={t("composer.cc")}
-                value={state.draft.cc}
-                onChange={(value) => setField("cc", value)}
-              />
-              <RecipientField
-                label={t("composer.bcc")}
-                value={state.draft.bcc}
-                onChange={(value) => setField("bcc", value)}
-              />
-            </>
+          {showCc && (
+            <RecipientField
+              label={t("composer.cc")}
+              value={state.draft.cc}
+              onChange={(value) => setField("cc", value)}
+            />
+          )}
+          {showBcc && (
+            <RecipientField
+              label={t("composer.bcc")}
+              value={state.draft.bcc}
+              onChange={(value) => setField("bcc", value)}
+            />
           )}
 
           <input
@@ -312,18 +330,18 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2.5 px-5 py-4">
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={handleSend}
             disabled={state.sending}
-            className="flex h-[38px] items-center gap-2 rounded-[11px] bg-accent px-[22px] text-[14px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            className="flex h-[38px] items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
           >
             {state.sending ? t("composer.sending") : t("composer.send")}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M22 2 11 13" />
               <path d="M22 2 15 22l-4-9-9-4Z" />
             </svg>
-          </button>
+          </Button>
           {!state.aiUnavailable && (
             <button
               type="button"
@@ -335,13 +353,13 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             </button>
           )}
           <span className="flex-1" />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={onClose}
-            className="rounded-lg px-2.5 py-2 text-[13px] text-muted transition hover:bg-hover"
+            className="rounded-lg px-3 py-2 text-[13px] font-semibold"
           >
             {t("composer.cancel")}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
