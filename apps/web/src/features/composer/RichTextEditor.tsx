@@ -9,6 +9,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { isNodeSelection } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -294,7 +295,67 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
       // `!editor` here would be a no-op; `isDestroyed` is TipTap's actual
       // signal that this Editor instance is no longer safe to command.
       if (editor.isDestroyed) return;
-      editor.chain().focus().setImage({ src: dataUrl }).run();
+
+      // If the current selection is still a NodeSelection sitting on an
+      // image — most likely left there by this very handler on a previous
+      // insertion (see setNodeSelection below) — setImage()'s underlying
+      // insertContent command targets {from: tr.selection.from, to:
+      // tr.selection.to}, which for a NodeSelection spans exactly that
+      // node. Left as-is, inserting a second image would REPLACE the first
+      // one instead of adding a new one alongside it (verified directly
+      // against @tiptap/core 2.27.2: calling setImage() while a
+      // NodeSelection covers a prior image collapses the document back
+      // down to a single image). Insert directly at the position right
+      // after that image instead, so consecutive insertions accumulate —
+      // exactly like before this fix, when the selection was left as a
+      // cursor after the node rather than a NodeSelection on it. (An
+      // earlier version of this fix first collapsed the selection with
+      // setTextSelection(selection.to) and then called plain setImage(),
+      // but that position sits at a boundary between two block nodes —
+      // not inside any textblock's inline content — which is a degenerate
+      // TextSelection ProseMirror only warns about, so insertContentAt
+      // targets that position directly instead of round-tripping through a
+      // TextSelection at all.) Every other case (a plain text cursor, or a
+      // NodeSelection on something other than an image) is untouched and
+      // keeps going through setImage()'s normal current-selection-based
+      // insertion, exactly as before this fix.
+      const { selection } = editor.state;
+      if (isNodeSelection(selection) && selection.node.type.name === "image") {
+        editor
+          .chain()
+          .focus()
+          .insertContentAt(selection.to, { type: "image", attrs: { src: dataUrl } })
+          .run();
+      } else {
+        editor.chain().focus().setImage({ src: dataUrl }).run();
+      }
+
+      // Immediately select the freshly-inserted image as a NodeSelection so
+      // the size/align controls below (gated on isImageSelected) are usable
+      // right away — otherwise the obvious "insert an image, then resize
+      // it" workflow leaves them disabled until the user separately clicks
+      // the image (issue #127).
+      //
+      // Multiple nodes can share the same `src` — the document may already
+      // contain an identical image, or the user can insert the same file
+      // twice — so matching on src alone is ambiguous. `setImage` above
+      // inserts at, and moves the cursor to just after, the current
+      // selection, which places the new node at or after any pre-existing
+      // occurrence of the same image. Walking the document forward and
+      // keeping the LAST matching position (rather than stopping at the
+      // first, like resizableImageExtension.test.ts's `imagePos` helper
+      // does for "the" image) therefore lands on the node that was just
+      // inserted, not an earlier duplicate.
+      let insertedPos = -1;
+      editor.state.doc.descendants((node, nodePos) => {
+        if (node.type.name === "image" && node.attrs.src === dataUrl) {
+          insertedPos = nodePos;
+        }
+      });
+      if (insertedPos !== -1) {
+        editor.commands.setNodeSelection(insertedPos);
+      }
+
       setImageError(null);
     } catch {
       setImageError(t("composer.errors.generic"));

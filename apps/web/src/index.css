@@ -71,3 +71,21 @@ body {
   padding-top: 0.75rem;
   border-top: 1px solid var(--line);
 }
+
+/* Composer: visible affordance for an image selected via the size/align
+   toolbar (issue #127) — ProseMirror-selectednode is the class ProseMirror
+   itself adds directly to a NodeSelection's DOM node (here, always an
+   <img>; see RichTextEditor's handleImageFileSelected and image toolbar).
+   Same accent-border + soft-ring language as .field-focus above, using
+   outline instead of border so toggling selection never shifts the image's
+   box size in the surrounding text flow. Editor-only chrome, same guarantee
+   as [data-cefiro-signature] above: ProseMirror-selectednode is a runtime
+   class the live EditorView applies to its DOM, never a document/schema
+   attribute, so it cannot appear in getHTML() output and is never sent to
+   a recipient. */
+.ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ring);
+  border-radius: 2px;
+}
