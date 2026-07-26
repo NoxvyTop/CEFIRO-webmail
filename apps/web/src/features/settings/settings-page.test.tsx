@@ -125,14 +125,16 @@ describe("SettingsPage sectioned console", () => {
     expect(screen.queryByRole("heading", { name: i18n.t("vacation.title") })).not.toBeInTheDocument();
   });
 
-  it("switches to Firmas and shows the existing signatures list", async () => {
+  it("switches to Firmas and shows the sole signature's editor open (#132 edit-first view)", async () => {
     renderPage();
 
     await screen.findByLabelText(i18n.t("settings.displayName"));
     fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.nav.signatures") }));
 
     expect(await screen.findByRole("heading", { name: i18n.t("settings.signatures") })).toBeInTheDocument();
-    expect(await screen.findByText("Principal")).toBeInTheDocument();
+    // Only one signature is loaded, so per #132 the edit-first view shows its
+    // editor open (name as the input's value) instead of a list.
+    expect(await screen.findByLabelText(i18n.t("settings.name"))).toHaveValue("Principal");
     expect(screen.queryByRole("heading", { name: i18n.t("settings.profile") })).not.toBeInTheDocument();
   });
 

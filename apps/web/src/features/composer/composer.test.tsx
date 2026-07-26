@@ -47,6 +47,27 @@ function renderComposer(onClose = vi.fn(), initial: ComposerDraft = baseDraft())
   return { onClose };
 }
 
+const altSignature: Signature = {
+  id: "sig2",
+  name: "Alt",
+  contentHtml: "<p>Alt sig content</p>",
+  isDefault: false,
+};
+
+function renderWithTwoSignatures(onClose = vi.fn(), initial: ComposerDraft = baseDraft()) {
+  fetchIdentities.mockResolvedValue(identities);
+  fetchSignatures.mockResolvedValue([signatures[0]!, altSignature]);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>
+        <Composer initial={initial} onClose={onClose} />
+      </ToastProvider>
+    </QueryClientProvider>,
+  );
+  return { onClose };
+}
+
 describe("Composer", () => {
   beforeEach(() => {
     fetchAiDraft.mockReset();
@@ -309,27 +330,6 @@ describe("Composer", () => {
   });
 
   describe("default signature auto-apply and switching", () => {
-    const altSignature: Signature = {
-      id: "sig2",
-      name: "Alt",
-      contentHtml: "<p>Alt sig content</p>",
-      isDefault: false,
-    };
-
-    function renderWithTwoSignatures(onClose = vi.fn(), initial: ComposerDraft = baseDraft()) {
-      fetchIdentities.mockResolvedValue(identities);
-      fetchSignatures.mockResolvedValue([signatures[0], altSignature]);
-      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      render(
-        <QueryClientProvider client={client}>
-          <ToastProvider>
-            <Composer initial={initial} onClose={onClose} />
-          </ToastProvider>
-        </QueryClientProvider>,
-      );
-      return { onClose };
-    }
-
     it("auto-applies the default signature on open and pre-selects it in the select", async () => {
       renderWithTwoSignatures();
 
@@ -354,11 +354,17 @@ describe("Composer", () => {
         </QueryClientProvider>,
       );
 
-      const signatureSelect = (await screen.findByRole("combobox", {
-        name: i18n.t("composer.signature"),
-      })) as HTMLSelectElement;
-      await waitFor(() => expect(signatureSelect.querySelectorAll("option")).toHaveLength(2));
-      expect(signatureSelect.value).toBe("");
+      // Only one signature is present (below SIGNATURE_SELECTOR_MIN_COUNT), so
+      // per #132 there is no selector at all here — wait for the From select
+      // to populate as a proxy for "queries have settled" (fetchSignatures
+      // itself isn't reset between tests in this file, so its call count
+      // isn't a reliable readiness signal).
+      const fromSelect = await screen.findByRole("combobox", { name: i18n.t("composer.from") });
+      await waitFor(() => expect(fromSelect.querySelectorAll("option")).toHaveLength(2));
+
+      expect(
+        screen.queryByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).not.toBeInTheDocument();
 
       const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
       expect(body.textContent).not.toContain("Alt sig content");
@@ -429,6 +435,47 @@ describe("Composer", () => {
       expect(body.textContent).not.toContain("Thanks");
       // The typed content in between is untouched.
       expect(body.textContent).toContain("my reply text");
+    });
+  });
+
+  describe("signature selector visibility (#132)", () => {
+    it("renders no signature selector when there are zero signatures", async () => {
+      fetchIdentities.mockResolvedValue(identities);
+      fetchSignatures.mockResolvedValue([]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <Composer initial={baseDraft()} onClose={vi.fn()} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+
+      const fromSelect = await screen.findByRole("combobox", { name: i18n.t("composer.from") });
+      await waitFor(() => expect(fromSelect.querySelectorAll("option")).toHaveLength(2));
+
+      expect(
+        screen.queryByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders no signature selector with exactly one signature, but still auto-applies it as the default", async () => {
+      renderComposer();
+
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      expect(
+        screen.queryByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders the signature selector once there are two or more signatures", async () => {
+      renderWithTwoSignatures();
+
+      expect(
+        await screen.findByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).toBeInTheDocument();
     });
   });
 

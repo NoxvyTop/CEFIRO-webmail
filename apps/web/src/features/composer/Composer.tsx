@@ -12,6 +12,13 @@ import { CloseIcon } from "../../app/ui/icons";
 import { useToast } from "../../app/ui/toast";
 import { AttachmentCard } from "../reader/AttachmentCard";
 
+// A <select> exists to let the user choose between options. With at most one
+// signature there is nothing to choose — it's apply-or-not, a toggle wearing
+// a dropdown's clothes — so the selector only earns its place once there are
+// at least this many signatures. One line to revisit if that threshold ever
+// needs to change.
+export const SIGNATURE_SELECTOR_MIN_COUNT = 2;
+
 interface ComposerProps {
   initial: ComposerDraft;
   onClose(): void;
@@ -229,22 +236,24 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink field-focus-line focus:border-accent placeholder:font-normal placeholder:text-muted"
           />
 
-          <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
-            {t("composer.signature")}
-            <select
-              aria-label={t("composer.signature")}
-              value={appliedSignatureId}
-              onChange={(event) => handleSignatureChange(event.target.value)}
-              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
-            >
-              <option value="">{t("composer.noSignature")}</option>
-              {signatures.map((signature) => (
-                <option key={signature.id} value={signature.id}>
-                  {signature.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {signatures.length >= SIGNATURE_SELECTOR_MIN_COUNT && (
+            <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
+              {t("composer.signature")}
+              <select
+                aria-label={t("composer.signature")}
+                value={appliedSignatureId}
+                onChange={(event) => handleSignatureChange(event.target.value)}
+                className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
+              >
+                <option value="">{t("composer.noSignature")}</option>
+                {signatures.map((signature) => (
+                  <option key={signature.id} value={signature.id}>
+                    {signature.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <RichTextEditor
             html={state.draft.bodyHtml}
