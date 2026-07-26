@@ -88,6 +88,33 @@ describe("admin users api", () => {
     expect(foundAdmin?.mailboxLinked).toBe(false);
   });
 
+  // GH #130: the admin users list must carry each user's uploaded avatar
+  // (users.avatar_data_url) so the console can render it instead of always
+  // falling back to initials.
+  it("GET /users: includes avatarDataUrl (null by default, populated once the user sets one)", async () => {
+    const admin = await createAdmin();
+    const target = await users.create({
+      email: `avatar-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Avatar Target",
+    });
+
+    const before = await app.request("/api/admin/users", {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    const beforeBody = (await before.json()) as Array<{ id: string; avatarDataUrl: string | null }>;
+    expect(beforeBody.find((u) => u.id === target.id)?.avatarDataUrl).toBeNull();
+
+    await users.setAvatar(target.id, "data:image/png;base64,aGVsbG8=");
+
+    const after = await app.request("/api/admin/users", {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    const afterBody = (await after.json()) as Array<{ id: string; avatarDataUrl: string | null }>;
+    expect(afterBody.find((u) => u.id === target.id)?.avatarDataUrl).toBe(
+      "data:image/png;base64,aGVsbG8=",
+    );
+  });
+
   it("POST /users: creates user with credential, hides password, rejects duplicates and invalid body", async () => {
     const admin = await createAdmin();
     const email = `new-${crypto.randomUUID()}@noxvytop.com`;

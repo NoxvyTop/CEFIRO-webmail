@@ -31,7 +31,11 @@ export type AdminDeps = {
 
 type Env = { Variables: AuthVariables };
 
-async function toAdminUser(deps: AdminDeps, user: UserRecord): Promise<AdminUser> {
+async function toAdminUser(
+  deps: AdminDeps,
+  user: UserRecord,
+  avatarDataUrl: string | null,
+): Promise<AdminUser> {
   return {
     id: user.id,
     email: user.email,
@@ -40,6 +44,7 @@ async function toAdminUser(deps: AdminDeps, user: UserRecord): Promise<AdminUser
     locale: user.locale,
     active: user.active,
     mailboxLinked: await deps.mailCredentials.exists(user.id),
+    avatarDataUrl,
   };
 }
 
@@ -65,8 +70,10 @@ export function createAdminRouter(deps: AdminDeps) {
   router.use("*", ...requireAdmin(deps.sessions));
 
   router.get("/users", async (c) => {
-    const users = await deps.users.list();
-    const body: AdminUser[] = await Promise.all(users.map((u) => toAdminUser(deps, u)));
+    const users = await deps.users.listWithAvatar();
+    const body: AdminUser[] = await Promise.all(
+      users.map((u) => toAdminUser(deps, u, u.avatarDataUrl)),
+    );
     return c.json(body);
   });
 
@@ -95,7 +102,8 @@ export function createAdminRouter(deps: AdminDeps) {
       target: user.email,
       detail: { role: user.role },
     });
-    return c.json(await toAdminUser(deps, user));
+    // A just-created user has never uploaded a photo yet.
+    return c.json(await toAdminUser(deps, user, null));
   });
 
   router.put("/users/:id/role", async (c) => {
@@ -142,7 +150,8 @@ export function createAdminRouter(deps: AdminDeps) {
       target: updated.email,
       detail: { role: updated.role },
     });
-    return c.json(await toAdminUser(deps, updated));
+    const profile = await deps.users.getProfile(updated.id);
+    return c.json(await toAdminUser(deps, updated, profile?.avatarDataUrl ?? null));
   });
 
   router.put("/users/:id/credential", async (c) => {
@@ -226,7 +235,8 @@ export function createAdminRouter(deps: AdminDeps) {
         detail: { revokedSessions },
       });
     }
-    return c.json(await toAdminUser(deps, updated));
+    const profile = await deps.users.getProfile(updated.id);
+    return c.json(await toAdminUser(deps, updated, profile?.avatarDataUrl ?? null));
   });
 
   router.get("/sso", async (c) => {

@@ -188,4 +188,16 @@ describe("SettingsPage sectioned console", () => {
     expect(await screen.findByText("Ana Lopez")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: i18n.t("settings.profile") })).not.toBeInTheDocument();
   });
+
+  // GH #129: the console previously capped itself to max-w-3xl and centred
+  // with mx-auto, wasting most of the viewport on wide screens. It should
+  // now follow the same full-width layout precedent as AdminPage.tsx.
+  it("renders the console at full width, matching the admin console's layout (#129)", async () => {
+    renderPage();
+
+    await screen.findByLabelText(i18n.t("settings.displayName"));
+    const main = screen.getByRole("main");
+    expect(main.className).not.toContain("max-w-3xl");
+    expect(main.className).not.toContain("mx-auto");
+  });
 });

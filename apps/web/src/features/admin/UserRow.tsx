@@ -75,7 +75,7 @@ export function UserRow({ user }: { user: AdminUser }) {
     <tr className="border-t border-line transition hover:bg-hover">
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-2.5">
-          <Avatar name={user.displayName} email={user.email} size={30} />
+          <Avatar name={user.displayName} email={user.email} imageUrl={user.avatarDataUrl} size={30} />
           <div className="flex min-w-0 flex-col">
             <span className="truncate text-sm font-medium text-ink">{user.displayName}</span>
             <span className="truncate text-xs text-muted">{user.email}</span>

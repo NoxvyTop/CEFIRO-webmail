@@ -85,6 +85,18 @@ export function createUsersRepo(sql: Db) {
       `;
       return rows.map(toRecord);
     },
+    // Dedicated to the admin users list (GET /api/admin/users): unlike
+    // list(), a general-purpose method other call sites may reasonably
+    // expect to stay lean, this one deliberately includes avatar_data_url
+    // in a single query so the admin console can render each user's photo
+    // without an N+1 lookup per row.
+    async listWithAvatar(): Promise<(UserRecord & { avatarDataUrl: string | null })[]> {
+      const rows = await sql<(UserRow & { avatar_data_url: string | null })[]>`
+        select id, email, display_name, role, locale, active, avatar_data_url
+        from users order by active desc, email asc
+      `;
+      return rows.map((row) => ({ ...toRecord(row), avatarDataUrl: row.avatar_data_url }));
+    },
     async setRole(id: string, role: UserRole): Promise<UserRecord | null> {
       const rows = await sql<UserRow[]>`
         update users set role = ${role} where id = ${id}
