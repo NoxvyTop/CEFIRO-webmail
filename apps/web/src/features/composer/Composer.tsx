@@ -163,10 +163,32 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const composerRootRef = useRef<HTMLDivElement>(null);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
-  // Escape closes the composer immediately when the draft is empty, or opens
-  // the discard confirmation otherwise (isComposerDraftEmpty, see
-  // composer/emptiness.ts). Mirrors shortcuts.ts's isModalOpen reasoning —
-  // a [role="dialog"]/[role="alertdialog"] element marks a keyboard-owning
+  // GH #159: the single decision point every exit route must go through —
+  // "is the user abandoning this draft, or is the composer's work done?"
+  // Closes immediately when the draft is empty, or opens the discard
+  // confirmation otherwise (isComposerDraftEmpty, see composer/emptiness.ts).
+  // Escape (below), the header close (X) button, and the bottom Cancel
+  // button all call this instead of onClose() directly — GH #125 wired the
+  // confirmation to the Escape *gesture* specifically, which left every
+  // other way to close the composer (the X button, first and worst) calling
+  // onClose() straight through with no check at all. Routing every "abandon"
+  // exit through this one function means a future exit route inherits the
+  // protection automatically instead of being born unguarded the same way.
+  //
+  // Exit routes that do NOT call this: handleDiscard (the confirmation's own
+  // resolution, already past the check), handleSaveToDrafts and handleSend
+  // on success (the composer's work is done, not abandoned — nothing to
+  // confirm).
+  function requestClose() {
+    if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
+      onClose();
+      return;
+    }
+    setDiscardConfirmOpen(true);
+  }
+
+  // Escape mirrors shortcuts.ts's isModalOpen reasoning — a
+  // [role="dialog"]/[role="alertdialog"] element marks a keyboard-owning
   // overlay — but isModalOpen itself can't be reused unmodified here: it
   // would always report "a dialog is open" because this composer's own root
   // already carries role="dialog". This handler excludes that one element so
@@ -181,15 +203,29 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
       const hasNestedOverlay = Array.from(overlays).some((overlay) => overlay !== composerRootRef.current);
       if (hasNestedOverlay) return;
 
-      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
-        onClose();
-        return;
-      }
-      setDiscardConfirmOpen(true);
+      requestClose();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestClose closes over the same state.draft/attachments/uploads/onClose already listed below
   }, [state.draft, state.attachments.length, state.uploads.length, onClose]);
+
+  // GH #159: closing the browser tab (or the window) outright bypasses the
+  // composer entirely — same silent-discard hole as the X button, just
+  // through the browser's own exit door. A plain, standards-compliant
+  // beforeunload guard, armed only while the draft actually has content
+  // (mirrors requestClose above) so an untouched compose window never nags.
+  // Setting returnValue (legacy) alongside preventDefault() covers browsers
+  // that still require it to show their native confirmation prompt.
+  useEffect(() => {
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [state.draft, state.attachments.length, state.uploads.length]);
 
   function handleKeepEditing() {
     setDiscardConfirmOpen(false);
@@ -312,7 +348,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           <h2 className="flex-1 text-[14px] font-[650]">{t("composer.newMessage")}</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label={t("composer.close")}
             className="rounded-md px-2 py-1 text-muted transition hover:bg-hover hover:text-ink"
           >
@@ -489,7 +525,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           <span className="flex-1" />
           <Button
             variant="secondary"
-            onClick={onClose}
+            onClick={requestClose}
             className="rounded-lg px-3 py-2 text-[13px] font-semibold"
           >
             {t("composer.cancel")}
