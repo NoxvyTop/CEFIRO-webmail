@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, docker]
     services:
       postgres:
         image: postgres:17-alpine
@@ -52,7 +52,7 @@ jobs:
           DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, docker]
     services:
       postgres:
         image: postgres:17-alpine
@@ -79,19 +79,18 @@ jobs:
           restore-keys: bun-cache-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       # Chromium is a ~150 MB download that only changes when the pinned
-      # Playwright version does, so it is cached on the lockfile. The apt
-      # system libraries it links against are NOT cacheable (they install
-      # outside the workspace), so install-deps still runs on a cache hit —
-      # cheaper than re-downloading the browser alongside it.
+      # Playwright version does, so it is cached on the lockfile.
+      #
+      # `--with-deps` is deliberately absent: it shells out to apt-get, and
+      # the account these jobs run as has no sudo — on purpose, since it
+      # executes workflow code and should not also hold root. The apt
+      # libraries Chromium links against are installed once on the runner
+      # host instead. On a cache hit this step is a no-op.
       - uses: actions/cache@v4
-        id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: cd e2e && bunx playwright install-deps chromium
-      - if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: cd e2e && bunx playwright install --with-deps chromium
+      - run: cd e2e && bunx playwright install chromium
       # Brings up the pre-provisioned Stalwart fixture (docker-compose.e2e.yml)
       # so tests/mail-connect.spec.ts has a real JMAP/SMTP backend to talk to.
       # Postgres stays the `services:` container above, not part of this
@@ -123,7 +122,7 @@ jobs:
   publish:
     if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main')
     needs: [test, e2e]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, docker]
     permissions:
       contents: read
       packages: write
