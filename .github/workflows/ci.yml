@@ -25,8 +25,14 @@ jobs:
           POSTGRES_USER: webmail
           POSTGRES_PASSWORD: webmail
           POSTGRES_DB: webmail
+        # Publish on an ephemeral host port, not a fixed one. Both jobs run
+        # in parallel on the SAME self-hosted machine, so two containers
+        # binding 5432 collide — the second fails with "port is already
+        # allocated". On GitHub's hosted runners each job got its own VM and
+        # the clash could not happen. Docker picks a free port and the job
+        # reads it back from the services context below.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U webmail"
           --health-interval 5s
@@ -49,7 +55,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
         env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
+          DATABASE_URL: postgres://webmail:webmail@localhost:${{ job.services.postgres.ports['5432'] }}/webmail
 
   e2e:
     runs-on: [self-hosted, linux, x64, docker]
@@ -60,8 +66,14 @@ jobs:
           POSTGRES_USER: webmail
           POSTGRES_PASSWORD: webmail
           POSTGRES_DB: webmail
+        # Publish on an ephemeral host port, not a fixed one. Both jobs run
+        # in parallel on the SAME self-hosted machine, so two containers
+        # binding 5432 collide — the second fails with "port is already
+        # allocated". On GitHub's hosted runners each job got its own VM and
+        # the clash could not happen. Docker picks a free port and the job
+        # reads it back from the services context below.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U webmail"
           --health-interval 5s
@@ -108,7 +120,7 @@ jobs:
           exit 1
       - run: cd e2e && bunx playwright test
         env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
+          DATABASE_URL: postgres://webmail:webmail@localhost:${{ job.services.postgres.ports['5432'] }}/webmail
           E2E_STALWART_URL: http://localhost:8096
           CI: "true"
       - if: always()
