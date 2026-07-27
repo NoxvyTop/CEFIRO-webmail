@@ -1,9 +1,20 @@
 import { z } from "zod";
 
+const masterKeySchema = z.string().length(44);
+
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(8080),
   databaseUrl: z.string().min(1),
-  masterKey: z.string().length(44),
+  masterKey: masterKeySchema,
+  // Version stamped on every row `masterKey` encrypts. Deployments that never
+  // rotated leave it at 1, which is what the schema already defaults every
+  // `key_version` column to — so they need no configuration change.
+  masterKeyVersion: z.coerce.number().int().positive().default(1),
+  // Retired keys still needed to read rows that have not been re-encrypted
+  // yet. A retired key may only be dropped once no row carries its version.
+  previousMasterKeys: z
+    .array(z.object({ version: z.number().int().positive(), key: masterKeySchema }))
+    .default([]),
   appUrl: z.string().url(),
   bootstrapMode: z.boolean(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
@@ -27,9 +38,50 @@ const configSchema = z.object({
   // provider requires (OpenAI-SDK convention). Only consulted when
   // aiProvider is "openai-compat" — see infra/ai/openai-compatible.ts.
   aiBaseUrl: z.string().min(1).optional(),
+}).superRefine((config, ctx) => {
+  const declared = new Set<number>();
+  for (const previous of config.previousMasterKeys) {
+    if (previous.version === config.masterKeyVersion) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["previousMasterKeys"],
+        message: `MASTER_KEY_PREVIOUS declares version ${previous.version}, which is the current MASTER_KEY_VERSION`,
+      });
+    }
+    if (declared.has(previous.version)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["previousMasterKeys"],
+        message: `MASTER_KEY_PREVIOUS declares version ${previous.version} more than once`,
+      });
+    }
+    declared.add(previous.version);
+  }
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
+
+/**
+ * `MASTER_KEY_PREVIOUS` lists retired master keys as `version:base64key`,
+ * comma separated — e.g. `1:AAA...,2:BBB...`. Malformed versions are left as
+ * NaN/0 on purpose so the schema reports them alongside every other issue.
+ */
+function parsePreviousMasterKeys(
+  raw: string | undefined,
+): { version: number; key: string }[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const separator = entry.indexOf(":");
+      return {
+        version: separator < 0 ? Number.NaN : Number(entry.slice(0, separator)),
+        key: entry.slice(separator + 1),
+      };
+    });
+}
 
 export function loadConfig(
   env: Record<string, string | undefined>,
@@ -38,6 +90,8 @@ export function loadConfig(
     port: env.PORT ?? undefined,
     databaseUrl: env.DATABASE_URL,
     masterKey: env.MASTER_KEY,
+    masterKeyVersion: env.MASTER_KEY_VERSION ?? undefined,
+    previousMasterKeys: parsePreviousMasterKeys(env.MASTER_KEY_PREVIOUS),
     appUrl: env.APP_URL,
     bootstrapMode: env.BOOTSTRAP_MODE === "true" || env.BOOTSTRAP_MODE === "1",
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,

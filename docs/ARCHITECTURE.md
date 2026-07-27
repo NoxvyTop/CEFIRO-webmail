@@ -116,6 +116,46 @@ Reglas no negociables:
 - El descifrado es por sesión y solo en memoria.
 - TLS en todo el trayecto BFF ↔ Stalwart.
 
+### Rotación de la clave maestra
+
+Cada fila cifrada guarda en `key_version` la versión de la clave con la que se
+selló. El servidor no maneja una clave sino un llavero: la clave actual, que es
+la única que cifra, más las claves retiradas que todavía hacen falta para leer
+filas que aún no se han vuelto a cifrar.
+
+| Variable | Contenido |
+| --- | --- |
+| `MASTER_KEY` | clave actual, base64 de 32 bytes (44 caracteres) |
+| `MASTER_KEY_VERSION` | versión que se estampa al cifrar; por defecto `1` |
+| `MASTER_KEY_PREVIOUS` | claves retiradas como `version:base64key`, separadas por comas |
+
+Un despliegue que solo define `MASTER_KEY` sigue funcionando sin cambios: es la
+versión 1 sin historial, que es justo lo que el esquema pone por defecto en
+todas las columnas `key_version`.
+
+Procedimiento de rotación:
+
+1. Generar la clave nueva y mover la anterior a `MASTER_KEY_PREVIOUS` con la
+   versión que llevan sus filas (por ejemplo `1:<clave anterior>`).
+2. Poner la clave nueva en `MASTER_KEY` y subir `MASTER_KEY_VERSION` a `2`.
+3. Redesplegar. En el arranque el servidor comprueba que el llavero cubre todas
+   las `key_version` presentes en `mail_credentials`, `sso_config` e
+   `integrations`; si falta alguna, **no arranca** y registra qué versión falta.
+4. Las filas se vuelven a cifrar solas: al leerlas con una clave retirada se
+   reescriben con la actual. La reescritura es best-effort — si falla, la
+   lectura sigue siendo válida y solo se registra un aviso, porque el correo del
+   usuario no puede depender de ella.
+5. Cuando ninguna fila conserve la versión antigua se puede retirar la clave de
+   `MASTER_KEY_PREVIOUS`. Para comprobarlo:
+
+   ```sql
+   select key_version, count(*) from mail_credentials group by key_version;
+   select key_version, count(*) from sso_config group by key_version;
+   ```
+
+Mientras queden filas en la versión antigua, su clave debe seguir listada: es
+lo que evita que una rotación deje credenciales indescifrables.
+
 ### Configuración OIDC administrable
 
 La configuración del proveedor SSO (issuer, client_id, client_secret,

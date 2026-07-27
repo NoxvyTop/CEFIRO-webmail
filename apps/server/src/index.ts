@@ -16,7 +16,13 @@ import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { createContactsRepo } from "./infra/repos/contacts";
-import { importMasterKey } from "./modules/credentials/crypto";
+import { findUncoveredKeyVersions } from "./infra/db/key-versions";
+import {
+  createKeyring,
+  importMasterKey,
+  knownKeyVersions,
+  type Keyring,
+} from "./modules/credentials/crypto";
 import { createAuthRouter } from "./modules/auth/router";
 import { createSessionStore } from "./modules/auth/sessions";
 import { createJmapClient } from "./infra/stalwart/jmap";
@@ -43,13 +49,42 @@ try {
 const db = createDb(config.databaseUrl);
 await migrate(db, fileURLToPath(new URL("../migrations", import.meta.url)));
 
-const masterKey = await importMasterKey(config.masterKey);
+// The keyring encrypts with MASTER_KEY at MASTER_KEY_VERSION and keeps the
+// retired keys listed in MASTER_KEY_PREVIOUS so rows written before a rotation
+// stay readable until progressive re-encryption has moved them all over.
+let masterKey: CryptoKey;
+let keyring: Keyring;
+try {
+  masterKey = await importMasterKey(config.masterKey);
+  const previous = new Map<number, CryptoKey>();
+  for (const retired of config.previousMasterKeys) {
+    previous.set(retired.version, await importMasterKey(retired.key));
+  }
+  keyring = createKeyring({ version: config.masterKeyVersion, key: masterKey }, previous);
+} catch (error) {
+  log("error", "invalid master key ring", { error: String(error) });
+  process.exit(1);
+}
+
+// A keyring that cannot decrypt what is already stored must fail here, at
+// boot, instead of failing per user at runtime the first time each one
+// reaches for their mail.
+const uncoveredKeyVersions = await findUncoveredKeyVersions(db, keyring);
+if (uncoveredKeyVersions.length > 0) {
+  log("error", "master key ring cannot decrypt stored rows", {
+    uncovered: uncoveredKeyVersions,
+    configuredKeyVersions: knownKeyVersions(keyring),
+    hint: "list the missing keys in MASTER_KEY_PREVIOUS as version:base64key",
+  });
+  process.exit(1);
+}
+
 const users = createUsersRepo(db);
 const audit = createAuditRepo(db);
 const sessions = createSessionStore(db);
-const ssoConfig = createSsoConfigRepo(db, masterKey);
+const ssoConfig = createSsoConfigRepo(db, keyring);
 const instanceSettings = createInstanceSettingsRepo(db);
-const mailCredentials = createMailCredentialsRepo(db, masterKey);
+const mailCredentials = createMailCredentialsRepo(db, keyring);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
 const filterRules = createFilterRulesRepo(db);
