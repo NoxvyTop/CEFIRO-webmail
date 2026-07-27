@@ -21,7 +21,10 @@ test("compose and send a self-addressed email, then find it in Sent", async ({ p
   const fromSelect = dialog.getByRole("combobox", { name: "De" });
   await expect(fromSelect.locator("option:checked")).toHaveText(/admin@cefiro\.test/);
 
-  const to = dialog.getByRole("textbox", { name: "Para" });
+  // The recipient field is a WAI-ARIA combobox, not a plain textbox: it owns
+  // a contact-suggestion listbox (GH #124). An input with an associated popup
+  // no longer exposes the textbox role, so querying for one finds nothing.
+  const to = dialog.getByRole("combobox", { name: "Para" });
   await to.fill("admin@cefiro.test");
   await to.press("Enter");
 
