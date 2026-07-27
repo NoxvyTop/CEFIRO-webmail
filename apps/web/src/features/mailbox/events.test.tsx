@@ -92,7 +92,7 @@ describe("mail SSE live refresh and notifications", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens an EventSource to /api/mail/events and invalidates mail queries on message", async () => {
+  it("opens an EventSource to /api/mail/events and refetches only what the event says changed", async () => {
     stubFetch();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
@@ -103,11 +103,18 @@ describe("mail SSE live refresh and notifications", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]?.url).toBe("/api/mail/events");
 
-    FakeEventSource.instances[0]?.emitMessage();
-
-    expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: ["mail"] }),
+    FakeEventSource.instances[0]?.emitMessage(
+      JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
     );
+
+    const keys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    expect(keys).toEqual([
+      ["mail", "messages"],
+      ["mail", "thread"],
+    ]);
+    // GH #167: the whole-namespace sweep also refetched mailboxes, identities,
+    // preferences and every loaded page of the infinite listing, on every event.
+    expect(keys).not.toContainEqual(["mail"]);
   });
 
   it("fires a Notification when the tab is hidden and permission is granted", async () => {
