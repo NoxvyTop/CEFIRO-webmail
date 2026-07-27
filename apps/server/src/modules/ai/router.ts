@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { draftInputSchema, isQuoteSeparatorLine } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import { DomainError } from "../../core/errors";
 import { requireSession } from "../auth/middleware";
 import { requireMail } from "../mail/context";
@@ -113,10 +114,7 @@ export function createAiRouter(deps: AiDeps) {
     const list = ((responses[0]?.[1] ?? {}) as { list?: JmapEmailBody[] }).list ?? [];
     const email = list[0];
     if (!email) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const bullets = await deps.aiClient!.summarize(extractBodyText(email));
     return c.json({ bullets });
@@ -156,10 +154,7 @@ export function createAiRouter(deps: AiDeps) {
     const getResult = (responses[1]?.[1] ?? {}) as { list?: JmapThreadEmail[] };
     const emails = getResult.list ?? [];
     if (threadResult.list?.length === 0 || emails.length === 0) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
 
     const ordered = [...emails].sort(
@@ -179,17 +174,11 @@ export function createAiRouter(deps: AiDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = draftInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const draft = await deps.aiClient!.draftReply(parsed.data.subject);
     return c.json({ body: draft });

@@ -217,4 +217,47 @@ describe("loadConfig", () => {
       );
     });
   });
+
+  describe("outbound deadlines (GH #165)", () => {
+    it("defaults every upstream deadline so no deployment has to set one", () => {
+      const config = loadConfig(validEnv);
+      expect(config.stalwartTimeoutMs).toBe(10_000);
+      expect(config.aiTimeoutMs).toBe(60_000);
+      expect(config.oidcTimeoutMs).toBe(10_000);
+    });
+
+    it("gives the AI provider a looser deadline than Stalwart by default", () => {
+      const config = loadConfig(validEnv);
+      expect(config.aiTimeoutMs).toBeGreaterThan(config.stalwartTimeoutMs);
+    });
+
+    it("reads STALWART_TIMEOUT_MS, AI_TIMEOUT_MS and OIDC_TIMEOUT_MS overrides", () => {
+      const config = loadConfig({
+        ...validEnv,
+        STALWART_TIMEOUT_MS: "2500",
+        AI_TIMEOUT_MS: "120000",
+        OIDC_TIMEOUT_MS: "7000",
+      });
+      expect(config.stalwartTimeoutMs).toBe(2500);
+      expect(config.aiTimeoutMs).toBe(120_000);
+      expect(config.oidcTimeoutMs).toBe(7000);
+    });
+
+    it("treats an empty deadline variable as absent", () => {
+      expect(loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "" }).stalwartTimeoutMs).toBe(10_000);
+    });
+
+    it("rejects a non-numeric deadline", () => {
+      expect(() => loadConfig({ ...validEnv, AI_TIMEOUT_MS: "soon" })).toThrow();
+    });
+
+    it("rejects a zero or negative deadline, which would abort every call", () => {
+      expect(() => loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, OIDC_TIMEOUT_MS: "-1" })).toThrow();
+    });
+
+    it("rejects a fractional deadline", () => {
+      expect(() => loadConfig({ ...validEnv, AI_TIMEOUT_MS: "1500.5" })).toThrow();
+    });
+  });
 });

@@ -4,6 +4,7 @@ import {
   filterRuleInputSchema,
   vacationSettingsInputSchema,
 } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import { DomainError } from "../../core/errors";
 import { log } from "../../core/logger";
 import type { FilterRulesRepo } from "../../infra/repos/filter-rules";
@@ -70,7 +71,7 @@ export function createSieveRouter(deps: SieveDeps) {
     const outcome = await trySync(deps, user);
     if (outcome === "failed" || outcome === "invalid") {
       const code = outcome === "invalid" ? "sieve_invalid" : "sieve_sync_failed";
-      return c.json({ code, message: `errors.${code}`, traceId: c.get("traceId") }, 502);
+      return errorResponse(c, code, 502);
     }
     return c.json({ status: outcome });
   });
@@ -81,29 +82,20 @@ export function createSieveRouter(deps: SieveDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = filterOrderSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const reordered = await deps.filterRules.reorder(user.userId, parsed.data.ids);
     if (!reordered) {
-      return c.json(
-        { code: "invalid_order", message: "errors.invalid_order", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_order", 400);
     }
     const outcome = await trySync(deps, user);
     if (outcome === "failed" || outcome === "invalid") {
       const code = outcome === "invalid" ? "sieve_invalid" : "sieve_sync_failed";
-      return c.json({ code, message: `errors.${code}`, traceId: c.get("traceId") }, 502);
+      return errorResponse(c, code, 502);
     }
     return c.json({ ok: true });
   });
@@ -114,23 +106,17 @@ export function createSieveRouter(deps: SieveDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = filterRuleInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const created = await deps.filterRules.create(user.userId, parsed.data);
     const outcome = await trySync(deps, user);
     if (outcome === "failed" || outcome === "invalid") {
       const code = outcome === "invalid" ? "sieve_invalid" : "sieve_sync_failed";
-      return c.json({ code, message: `errors.${code}`, traceId: c.get("traceId") }, 502);
+      return errorResponse(c, code, 502);
     }
     return c.json(created);
   });
@@ -142,29 +128,20 @@ export function createSieveRouter(deps: SieveDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = filterRuleInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const updated = await deps.filterRules.update(user.userId, id, parsed.data);
     if (!updated) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const outcome = await trySync(deps, user);
     if (outcome === "failed" || outcome === "invalid") {
       const code = outcome === "invalid" ? "sieve_invalid" : "sieve_sync_failed";
-      return c.json({ code, message: `errors.${code}`, traceId: c.get("traceId") }, 502);
+      return errorResponse(c, code, 502);
     }
     return c.json(updated);
   });
@@ -174,15 +151,12 @@ export function createSieveRouter(deps: SieveDeps) {
     const id = c.req.param("id");
     const removed = await deps.filterRules.remove(user.userId, id);
     if (!removed) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const outcome = await trySync(deps, user);
     if (outcome === "failed" || outcome === "invalid") {
       const code = outcome === "invalid" ? "sieve_invalid" : "sieve_sync_failed";
-      return c.json({ code, message: `errors.${code}`, traceId: c.get("traceId") }, 502);
+      return errorResponse(c, code, 502);
     }
     return c.json({ ok: true });
   });
@@ -198,23 +172,17 @@ export function createSieveRouter(deps: SieveDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = vacationSettingsInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const saved = await deps.vacationSettings.set(user.userId, parsed.data);
     const outcome = await trySync(deps, user);
     if (outcome === "failed" || outcome === "invalid") {
       const code = outcome === "invalid" ? "sieve_invalid" : "sieve_sync_failed";
-      return c.json({ code, message: `errors.${code}`, traceId: c.get("traceId") }, 502);
+      return errorResponse(c, code, 502);
     }
     return c.json(saved);
   });

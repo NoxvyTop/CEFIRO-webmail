@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import type { SessionUser } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import type { SessionStore } from "./sessions";
 
 export const SESSION_COOKIE = "session";
@@ -14,14 +15,7 @@ export function requireSession(
     const token = getCookie(c, SESSION_COOKIE);
     const user = token ? await store.findUser(token) : null;
     if (!user) {
-      return c.json(
-        {
-          code: "unauthorized",
-          message: "errors.unauthorized",
-          traceId: c.get("traceId"),
-        },
-        401,
-      );
+      return errorResponse(c, "unauthorized", 401);
     }
     c.set("user", user);
     await next();

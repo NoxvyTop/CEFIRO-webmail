@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AI_TIMEOUT_MS } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 import { createAnthropicAiClient, type AnthropicMessagesApi } from "./anthropic";
 
@@ -137,6 +138,132 @@ describe("createAnthropicAiClient", () => {
       const draft = await client.draftReply("Solo asunto");
 
       expect(draft).toBe("Borrador.");
+    });
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    /** Anthropic accepts the request and then never answers. */
+    function silentMessagesApi(): AnthropicMessagesApi & { signals: (AbortSignal | undefined)[] } {
+      const signals: (AbortSignal | undefined)[] = [];
+      return {
+        signals,
+        create(_params, options) {
+          signals.push(options?.signal);
+          return new Promise(() => {});
+        },
+      };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fails summarize with upstream_timeout, not the generic ai_provider_error", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = createAnthropicAiClient({
+        apiKey: "sk-test",
+        model: "claude-opus-4-8",
+        client: silentMessagesApi(),
+      });
+
+      const pending = client.summarize("body");
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "upstream_timeout",
+        httpStatus: 504,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("fails summarizeThread with upstream_timeout when the provider never answers", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = createAnthropicAiClient({
+        apiKey: "sk-test",
+        model: "claude-opus-4-8",
+        client: silentMessagesApi(),
+      });
+
+      const pending = client.summarizeThread([{ from: "Ana <ana@x.com>", body: "hola" }]);
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("fails draftReply with upstream_timeout when the provider never answers", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = createAnthropicAiClient({
+        apiKey: "sk-test",
+        model: "claude-opus-4-8",
+        client: silentMessagesApi(),
+      });
+
+      const pending = client.draftReply("Asunto");
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("cancels the in-flight SDK request instead of only abandoning it", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const api = silentMessagesApi();
+      const client = createAnthropicAiClient({
+        apiKey: "sk-test",
+        model: "claude-opus-4-8",
+        client: api,
+      });
+
+      const pending = client.summarize("body");
+      const assertion = expect(pending).rejects.toBeInstanceOf(DomainError);
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+
+      expect(api.signals[0]?.aborted).toBe(true);
+      logSpy.mockRestore();
+    });
+
+    it("still reports ai_provider_error when the provider fails for any other reason", async () => {
+      const api: AnthropicMessagesApi = {
+        async create() {
+          throw new Error("network exploded");
+        },
+      };
+      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(client.summarize("body")).rejects.toMatchObject({
+        code: "ai_provider_error",
+        httpStatus: 502,
+      });
+      logSpy.mockRestore();
+    });
+
+    it("honours a configured timeoutMs instead of the default", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = createAnthropicAiClient({
+        apiKey: "sk-test",
+        model: "claude-opus-4-8",
+        client: silentMessagesApi(),
+        timeoutMs: 5_000,
+      });
+
+      const pending = client.summarize("body");
+      const settled = vi.fn();
+      pending.then(settled, settled);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).not.toHaveBeenCalled();
+
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+      logSpy.mockRestore();
     });
   });
 });

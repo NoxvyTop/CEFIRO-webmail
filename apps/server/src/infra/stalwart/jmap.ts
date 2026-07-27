@@ -1,3 +1,4 @@
+import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 
 export type JmapAuth = { email: string; password: string };
@@ -36,8 +37,17 @@ export function createJmapClient(input: {
   baseUrl: string;
   fetchFn?: typeof fetch;
   forceBase?: boolean;
+  /** Outbound deadline per JMAP call — see core/deadline.ts (GH #165). */
+  timeoutMs?: number;
 }) {
-  const fetchFn = input.fetchFn ?? fetch;
+  // Every call below goes through the wrapped fetch, so a Stalwart that accepts
+  // the connection and never answers surfaces as `upstream_timeout` instead of
+  // hanging the request forever.
+  const fetchFn = withDeadlineFetch(
+    input.fetchFn ?? fetch,
+    "stalwart",
+    input.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS,
+  );
   const baseUrl = input.baseUrl.replace(/\/$/, "");
   const forceBase = input.forceBase ?? false;
 

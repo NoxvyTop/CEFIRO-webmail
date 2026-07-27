@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { DEFAULT_OIDC_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 
 export type OidcEndpoints = {
@@ -17,9 +18,11 @@ function base64Url(bytes: Uint8Array): string {
 export async function discover(
   issuer: string,
   fetchFn: typeof fetch = fetch,
+  /** Outbound deadline — see core/deadline.ts (GH #165). */
+  timeoutMs: number = DEFAULT_OIDC_TIMEOUT_MS,
 ): Promise<OidcEndpoints> {
   const wellKnown = `${issuer.replace(/\/$/, "")}/.well-known/openid-configuration`;
-  const res = await fetchFn(wellKnown);
+  const res = await withDeadlineFetch(fetchFn, "oidc", timeoutMs)(wellKnown);
   if (!res.ok) {
     throw new DomainError("oidc_discovery_failed", 502, "errors.oidc_discovery_failed");
   }
@@ -71,8 +74,14 @@ export async function exchangeCode(input: {
   redirectUri: string;
   verifier: string;
   fetchFn?: typeof fetch;
+  /** Outbound deadline — see core/deadline.ts (GH #165). */
+  timeoutMs?: number;
 }): Promise<{ idToken: string }> {
-  const fetchFn = input.fetchFn ?? fetch;
+  const fetchFn = withDeadlineFetch(
+    input.fetchFn ?? fetch,
+    "oidc",
+    input.timeoutMs ?? DEFAULT_OIDC_TIMEOUT_MS,
+  );
   const res = await fetchFn(input.tokenEndpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },

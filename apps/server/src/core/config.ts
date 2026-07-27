@@ -1,6 +1,15 @@
 import { z } from "zod";
+import {
+  DEFAULT_AI_TIMEOUT_MS,
+  DEFAULT_OIDC_TIMEOUT_MS,
+  DEFAULT_STALWART_TIMEOUT_MS,
+} from "./deadline";
 
 const masterKeySchema = z.string().length(44);
+
+// A deadline of 0 or a fraction of a millisecond would abort every outbound
+// call before it started, so those are configuration errors, not tuning.
+const timeoutMsSchema = z.coerce.number().int().positive();
 
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(8080),
@@ -24,6 +33,12 @@ const configSchema = z.object({
   // that differs from the reachable base URL. Off by default: existing
   // Stalwart setups that advertise a correct, reachable origin see no change.
   jmapForceBase: z.boolean().default(false),
+  // Outbound deadlines (GH #165). One per upstream rather than one shared
+  // number: see core/deadline.ts for why each default is what it is. Every one
+  // has a default, so no deployment has to set anything.
+  stalwartTimeoutMs: timeoutMsSchema.default(DEFAULT_STALWART_TIMEOUT_MS),
+  aiTimeoutMs: timeoutMsSchema.default(DEFAULT_AI_TIMEOUT_MS),
+  oidcTimeoutMs: timeoutMsSchema.default(DEFAULT_OIDC_TIMEOUT_MS),
   // AI features (summarize / draft-with-AI) are software-level off by default:
   // aiEnabled defaults to false and any call must also have an aiApiKey, or the
   // domain layer fails fast with `ai_disabled` before attempting any network call.
@@ -97,6 +112,9 @@ export function loadConfig(
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
     stalwartUrl: env.STALWART_URL || undefined,
     jmapForceBase: env.JMAP_FORCE_BASE === "true" || env.JMAP_FORCE_BASE === "1",
+    stalwartTimeoutMs: env.STALWART_TIMEOUT_MS || undefined,
+    aiTimeoutMs: env.AI_TIMEOUT_MS || undefined,
+    oidcTimeoutMs: env.OIDC_TIMEOUT_MS || undefined,
     aiEnabled: env.AI_ENABLED === "true" || env.AI_ENABLED === "1",
     aiProvider: env.AI_PROVIDER || undefined,
     aiApiKey: env.AI_API_KEY || undefined,

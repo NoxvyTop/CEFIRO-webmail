@@ -179,6 +179,7 @@
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el resumen con IA",
+      "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
       "not_in_trash": "El mensaje ya no está en la papelera",
       "destroy_failed": "No se pudo eliminar el mensaje",
       "generic": "No se pudo cargar el correo"
@@ -305,6 +306,7 @@
       "save_draft_failed": "No se pudo guardar el borrador",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el borrador con IA",
+      "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
       "invalid_body": "Escribe un asunto antes de redactar con IA",
       "generic": "Ocurrió un error"
     },

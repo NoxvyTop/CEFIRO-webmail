@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { contactInputSchema } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import { requireSession } from "../auth/middleware";
 import type { ContactsDeps, ContactsVariables } from "./context";
 
@@ -41,24 +42,15 @@ export function createContactsRouter(deps: ContactsDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = contactInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const created = await deps.contacts.create(user.userId, parsed.data);
     if (!created) {
-      return c.json(
-        { code: "contact_exists", message: "errors.contact_exists", traceId: c.get("traceId") },
-        409,
-      );
+      return errorResponse(c, "contact_exists", 409);
     }
     return c.json(created);
   });
@@ -73,10 +65,7 @@ export function createContactsRouter(deps: ContactsDeps) {
     const id = c.req.param("id");
     const promoted = await deps.contacts.promote(user.userId, id);
     if (!promoted) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     return c.json(promoted);
   });
@@ -86,10 +75,7 @@ export function createContactsRouter(deps: ContactsDeps) {
     const id = c.req.param("id");
     const removed = await deps.contacts.remove(user.userId, id);
     if (!removed) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     return c.json({ ok: true });
   });

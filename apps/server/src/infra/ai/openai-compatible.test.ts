@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AI_TIMEOUT_MS } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 import { createOpenAiCompatibleClient } from "./openai-compatible";
 
@@ -415,6 +416,108 @@ describe("createOpenAiCompatibleClient", () => {
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
+      logSpy.mockRestore();
+    });
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    /** The provider accepts the connection and then never answers. */
+    function silentFetch(): typeof fetch {
+      return vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    }
+
+    function clientWith(fetchFn: typeof fetch, timeoutMs?: number) {
+      return createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+        timeoutMs,
+      });
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fails summarize with upstream_timeout, not the generic ai_provider_error", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = clientWith(silentFetch());
+
+      const pending = client.summarize("body");
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "upstream_timeout",
+        httpStatus: 504,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("fails summarizeThread with upstream_timeout when the provider never answers", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = clientWith(silentFetch());
+
+      const pending = client.summarizeThread([{ from: "Ana <ana@x.com>", body: "hola" }]);
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("fails draftReply with upstream_timeout when the provider never answers", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = clientWith(silentFetch());
+
+      const pending = client.draftReply("Asunto");
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("still reports ai_provider_error when the provider answers with garbage", async () => {
+      // The timeout must be distinguishable from a bad answer, not replace it.
+      const fetchFn = fetchReturning({ choices: [{ message: { content: null } }] });
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(clientWith(fetchFn).summarize("body")).rejects.toMatchObject({
+        code: "ai_provider_error",
+        httpStatus: 502,
+      });
+      logSpy.mockRestore();
+    });
+
+    it("waits longer than the Stalwart deadline before giving up, by default", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = clientWith(silentFetch());
+
+      const pending = client.summarize("body");
+      const settled = vi.fn();
+      pending.then(settled, settled);
+      // A generation that takes half a minute is normal, not broken.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).not.toHaveBeenCalled();
+
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS - 30_000);
+      await assertion;
+      logSpy.mockRestore();
+    });
+
+    it("honours a configured timeoutMs instead of the default", async () => {
+      vi.useFakeTimers();
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = clientWith(silentFetch(), 5_000);
+
+      const pending = client.summarize("body");
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await assertion;
       logSpy.mockRestore();
     });
   });

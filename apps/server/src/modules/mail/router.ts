@@ -18,6 +18,8 @@ import {
   type ThreadDetail,
 } from "@webmail/shared";
 import { requireSession } from "../auth/middleware";
+import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
+import { errorResponse } from "../../core/error-response";
 import { log } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestContacts } from "./contacts-harvest";
@@ -366,7 +368,17 @@ async function trashSupersededDraft(input: {
 
 export function createMailRouter(deps: MailDeps) {
   const router = new Hono<{ Variables: MailVariables }>();
-  const fetchFn = deps.fetchFn ?? fetch;
+  const rawFetch = deps.fetchFn ?? fetch;
+  // GH #165: these three routes talk to Stalwart directly instead of through
+  // the JMAP client, so they need their own deadline. It only covers
+  // time-to-response-headers, which is what lets the event stream stay open
+  // for as long as the client wants while still failing fast on a Stalwart
+  // that accepts the connection and never answers.
+  const fetchFn = withDeadlineFetch(
+    rawFetch,
+    "stalwart",
+    deps.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS,
+  );
 
   router.use("*", requireSession(deps.sessions));
 
@@ -382,17 +394,11 @@ export function createMailRouter(deps: MailDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = signatureInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const created = await deps.signatures.create(user.userId, parsed.data);
     return c.json(created);
@@ -405,24 +411,15 @@ export function createMailRouter(deps: MailDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = signatureInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const updated = await deps.signatures.update(user.userId, id, parsed.data);
     if (!updated) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     return c.json(updated);
   });
@@ -432,10 +429,7 @@ export function createMailRouter(deps: MailDeps) {
     const id = c.req.param("id");
     const removed = await deps.signatures.remove(user.userId, id);
     if (!removed) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     return c.json({ ok: true });
   });
@@ -452,17 +446,11 @@ export function createMailRouter(deps: MailDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = userPreferencesUpdateSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const preferences = await deps.userPreferences.merge(user.userId, parsed.data);
     return c.json(preferences);
@@ -514,10 +502,7 @@ export function createMailRouter(deps: MailDeps) {
   router.get("/events", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
     if (!session.eventSourceUrl) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     const upstreamUrl = session.eventSourceUrl
@@ -534,10 +519,7 @@ export function createMailRouter(deps: MailDeps) {
     });
 
     if (!upstream.ok || !upstream.body) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     return new Response(upstream.body, {
@@ -552,10 +534,7 @@ export function createMailRouter(deps: MailDeps) {
   router.post("/blobs", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
     if (!session.uploadUrl) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     const uploadUrl = session.uploadUrl.replaceAll(
@@ -564,7 +543,12 @@ export function createMailRouter(deps: MailDeps) {
     );
     const contentType = c.req.header("content-type") ?? "application/octet-stream";
 
-    const upstream = await fetchFn(uploadUrl, {
+    // Deliberately the undeadlined fetch (GH #165): this is the one outbound
+    // call whose response only arrives after the entire attachment has been
+    // relayed upstream, so a fixed time-to-headers ceiling would reject large
+    // attachments on slow uplinks — a worse, user-visible failure than the one
+    // it would prevent. Bounding an upload needs a rate-aware budget, not this.
+    const upstream = await rawFetch(uploadUrl, {
       method: "POST",
       headers: {
         authorization: basicAuthHeader(c.get("jmapAuth")),
@@ -575,10 +559,7 @@ export function createMailRouter(deps: MailDeps) {
     } as RequestInit);
 
     if (!upstream.ok) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     const body = (await upstream.json()) as { blobId?: string; type?: string; size?: number };
@@ -588,10 +569,7 @@ export function createMailRouter(deps: MailDeps) {
       size: body.size ?? 0,
     });
     if (!parsed.success) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     return c.json(parsed.data);
@@ -600,10 +578,7 @@ export function createMailRouter(deps: MailDeps) {
   router.get("/blobs/:blobId", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
     if (!session.downloadUrl) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     const blobId = c.req.param("blobId");
@@ -627,10 +602,7 @@ export function createMailRouter(deps: MailDeps) {
     });
 
     if (!upstream.ok || !upstream.body) {
-      return c.json(
-        { code: "stalwart_unavailable", message: "errors.stalwart_unavailable", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "stalwart_unavailable", 502);
     }
 
     const resolvedContentType = upstream.headers.get("content-type") ?? type;
@@ -672,16 +644,10 @@ export function createMailRouter(deps: MailDeps) {
         .map((s) => s.trim())
         .filter(Boolean) ?? [];
     if (!mailboxId && hasKeywords.length === 0) {
-      return c.json(
-        { code: "invalid_query", message: "errors.invalid_query", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_query", 400);
     }
     if (hasKeywords.some((keyword) => !KEYWORD_PATTERN.test(keyword))) {
-      return c.json(
-        { code: "invalid_query", message: "errors.invalid_query", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_query", 400);
     }
     const query = c.req.query("query");
     const to = c.req.query("to");
@@ -818,10 +784,7 @@ export function createMailRouter(deps: MailDeps) {
     const threadResult = (responses[0]?.[1] ?? {}) as { list?: JmapThread[] };
     const threadList = threadResult.list ?? [];
     if (threadList.length === 0) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
 
     const getResult = (responses[1]?.[1] ?? {}) as { list?: JmapEmailDetail[] };
@@ -842,17 +805,11 @@ export function createMailRouter(deps: MailDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = emailUpdateSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
 
     const patch: Record<string, unknown> = {};
@@ -876,19 +833,13 @@ export function createMailRouter(deps: MailDeps) {
     };
 
     if (setResult.notUpdated && id in setResult.notUpdated) {
-      return c.json(
-        { code: "update_failed", message: "errors.update_failed", traceId: c.get("traceId") },
-        409,
-      );
+      return errorResponse(c, "update_failed", 409);
     }
     if (setResult.updated && id in setResult.updated) {
       return c.json({ ok: true });
     }
 
-    return c.json(
-      { code: "update_failed", message: "errors.update_failed", traceId: c.get("traceId") },
-      409,
-    );
+    return errorResponse(c, "update_failed", 409);
   });
 
   // GH #133: permanently destroys a message via Email/set `destroy`. This is
@@ -925,10 +876,7 @@ export function createMailRouter(deps: MailDeps) {
 
     const isInTrash = Boolean(trashId && email?.mailboxIds?.[trashId] === true);
     if (!isInTrash) {
-      return c.json(
-        { code: "not_in_trash", message: "errors.not_in_trash", traceId: c.get("traceId") },
-        409,
-      );
+      return errorResponse(c, "not_in_trash", 409);
     }
 
     const responses = await deps.jmap!.request(auth, session, [
@@ -945,19 +893,13 @@ export function createMailRouter(deps: MailDeps) {
     // in `destroyed`) before reporting success — a response that names the
     // id in neither is not proof anything was actually destroyed.
     if (setResult.notDestroyed && id in setResult.notDestroyed) {
-      return c.json(
-        { code: "destroy_failed", message: "errors.destroy_failed", traceId: c.get("traceId") },
-        409,
-      );
+      return errorResponse(c, "destroy_failed", 409);
     }
     if (setResult.destroyed && setResult.destroyed.includes(id)) {
       return c.json({ ok: true });
     }
 
-    return c.json(
-      { code: "destroy_failed", message: "errors.destroy_failed", traceId: c.get("traceId") },
-      409,
-    );
+    return errorResponse(c, "destroy_failed", 409);
   });
 
   router.post("/send", requireMail(deps), async (c) => {
@@ -965,17 +907,11 @@ export function createMailRouter(deps: MailDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = sendEmailSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const input = parsed.data;
 
@@ -984,20 +920,14 @@ export function createMailRouter(deps: MailDeps) {
 
     const context = await lookupComposeContext(deps.jmap!, auth, session, input.identityId);
     if (!context) {
-      return c.json(
-        { code: "invalid_identity", message: "errors.invalid_identity", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_identity", 400);
     }
     const { identity, mailboxes } = context;
 
     const draftsId = mailboxes.find((m) => m.role === "drafts")?.id;
     const sentId = mailboxes.find((m) => m.role === "sent")?.id;
     if (!draftsId || !sentId) {
-      return c.json(
-        { code: "mailbox_roles_missing", message: "errors.mailbox_roles_missing", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "mailbox_roles_missing", 502);
     }
 
     const create = buildComposeEmailCreate({
@@ -1044,10 +974,7 @@ export function createMailRouter(deps: MailDeps) {
       (emailSetResult.notCreated && "draft" in emailSetResult.notCreated) ||
       (submissionResult.notCreated && "sub" in submissionResult.notCreated)
     ) {
-      return c.json(
-        { code: "send_failed", message: "errors.send_failed", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "send_failed", 502);
     }
 
     return c.json({ ok: true });
@@ -1061,17 +988,11 @@ export function createMailRouter(deps: MailDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = saveDraftSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const input = parsed.data;
 
@@ -1080,19 +1001,13 @@ export function createMailRouter(deps: MailDeps) {
 
     const context = await lookupComposeContext(deps.jmap!, auth, session, input.identityId);
     if (!context) {
-      return c.json(
-        { code: "invalid_identity", message: "errors.invalid_identity", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_identity", 400);
     }
     const { identity, mailboxes } = context;
 
     const draftsId = mailboxes.find((m) => m.role === "drafts")?.id;
     if (!draftsId) {
-      return c.json(
-        { code: "mailbox_roles_missing", message: "errors.mailbox_roles_missing", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "mailbox_roles_missing", 502);
     }
 
     // The trash role is needed only to clean up a superseded original, and is
@@ -1166,10 +1081,7 @@ export function createMailRouter(deps: MailDeps) {
     const createdId = emailSetResult.created?.draft?.id;
 
     if ((emailSetResult.notCreated && "draft" in emailSetResult.notCreated) || !createdId) {
-      return c.json(
-        { code: "save_draft_failed", message: "errors.save_draft_failed", traceId: c.get("traceId") },
-        502,
-      );
+      return errorResponse(c, "save_draft_failed", 502);
     }
 
     if (replaceTarget) {

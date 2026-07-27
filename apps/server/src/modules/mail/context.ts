@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono";
+import { errorResponse } from "../../core/error-response";
 import type { ContactsRepo } from "../../infra/repos/contacts";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SignaturesRepo } from "../../infra/repos/signatures";
@@ -14,6 +15,12 @@ export type MailDeps = {
   userPreferences: UserPreferencesRepo;
   jmap: JmapClient | null;
   fetchFn?: typeof fetch;
+  /**
+   * Outbound deadline for the routes that bypass the JMAP client and talk to
+   * Stalwart over raw fetch (event stream, blob upload/download). Defaults to
+   * DEFAULT_STALWART_TIMEOUT_MS — see core/deadline.ts (GH #165).
+   */
+  timeoutMs?: number;
   // Optional (GH #124): when wired, GET /messages harvests sender addresses
   // into the user's contacts after fetching a page — see
   // modules/mail/contacts-harvest.ts. Left optional, and gated behind an
@@ -53,18 +60,12 @@ export function requireMail(
 ): MiddlewareHandler<{ Variables: MailVariables }> {
   return async (c, next) => {
     if (!deps.jmap) {
-      return c.json(
-        { code: "mail_not_configured", message: "errors.mail_not_configured", traceId: c.get("traceId") },
-        503,
-      );
+      return errorResponse(c, "mail_not_configured", 503);
     }
     const user = c.get("user");
     const password = await deps.mailCredentials.get(user.userId);
     if (password === null) {
-      return c.json(
-        { code: "mail_credentials_missing", message: "errors.mail_credentials_missing", traceId: c.get("traceId") },
-        503,
-      );
+      return errorResponse(c, "mail_credentials_missing", 503);
     }
     const auth: JmapAuth = { email: user.email, password };
     const cached = sessionCache.get(user.userId);

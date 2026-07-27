@@ -179,6 +179,7 @@
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI summary",
+      "upstream_timeout": "The server took too long to respond. Try again",
       "not_in_trash": "The message is no longer in Trash",
       "destroy_failed": "Could not delete the message",
       "generic": "Mail could not be loaded"
@@ -305,6 +306,7 @@
       "save_draft_failed": "Could not save the draft",
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI draft",
+      "upstream_timeout": "The server took too long to respond. Try again",
       "invalid_body": "Write a subject before drafting with AI",
       "generic": "Something went wrong"
     },

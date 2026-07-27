@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_STALWART_TIMEOUT_MS } from "../../core/deadline";
 import { createJmapClient, type JmapSession } from "./jmap";
 
 const auth = { email: "u@noxvytop.com", password: "mailbox-pw" };
@@ -122,5 +123,91 @@ describe("jmap client", () => {
     await expect(
       client.request(auth, session, [["Mailbox/get", {}, "0"]]),
     ).rejects.toMatchObject({ code: "jmap_error" });
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    const session: JmapSession = {
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    };
+
+    /** Stalwart accepts the connection and then never answers. */
+    function silentFetch(): typeof fetch {
+      return vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fails getSession with upstream_timeout when Stalwart never answers", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: silentFetch() });
+
+      const pending = client.getSession(auth);
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "upstream_timeout",
+        httpStatus: 504,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("fails request with upstream_timeout when Stalwart never answers", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: silentFetch() });
+
+      const pending = client.request(auth, session, [["Mailbox/get", {}, "0"]]);
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("fails uploadBlob with upstream_timeout when Stalwart never answers", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: silentFetch() });
+
+      const pending = client.uploadBlob(auth, session, "script", "application/sieve");
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("honours a configured timeoutMs instead of the default", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: silentFetch(),
+        timeoutMs: 2_000,
+      });
+
+      const pending = client.getSession(auth);
+      const settled = vi.fn();
+      pending.then(settled, settled);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).not.toHaveBeenCalled();
+
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+    });
+
+    it("leaves a response that arrives in time completely untouched", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning(sessionBody),
+      });
+
+      const result = await client.getSession(auth);
+
+      expect(result.accountId).toBe("acc-1");
+      // Well past the deadline: a settled call must never be timed out later.
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS * 10);
+      expect(result.apiUrl).toBe("https://mail.test/jmap/");
+    });
   });
 });

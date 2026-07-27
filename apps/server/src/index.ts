@@ -23,7 +23,13 @@ import {
   knownKeyVersions,
   type Keyring,
 } from "./modules/credentials/crypto";
-import { createAuthRouter } from "./modules/auth/router";
+import { createAuthRouter, type OidcClient } from "./modules/auth/router";
+import {
+  createIdTokenVerifier,
+  discover,
+  exchangeCode,
+  remoteKeySource,
+} from "./modules/auth/oidc";
 import { createSessionStore } from "./modules/auth/sessions";
 import { createJmapClient } from "./infra/stalwart/jmap";
 import { createMailRouter } from "./modules/mail/router";
@@ -92,7 +98,11 @@ const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
 const jmap = config.stalwartUrl
-  ? createJmapClient({ baseUrl: config.stalwartUrl, forceBase: config.jmapForceBase })
+  ? createJmapClient({
+      baseUrl: config.stalwartUrl,
+      forceBase: config.jmapForceBase,
+      timeoutMs: config.stalwartTimeoutMs,
+    })
   : null;
 
 log("info", "mail proxy", { configured: jmap !== null });
@@ -119,14 +129,29 @@ function buildAiClient(): AiClient | null {
       apiKey: config.aiApiKey,
       model: config.aiModel,
       baseUrl: config.aiBaseUrl,
+      timeoutMs: config.aiTimeoutMs,
     });
   }
-  return createAnthropicAiClient({ apiKey: config.aiApiKey, model: config.aiModel });
+  return createAnthropicAiClient({
+    apiKey: config.aiApiKey,
+    model: config.aiModel,
+    timeoutMs: config.aiTimeoutMs,
+  });
 }
 
 const aiClient: AiClient | null = buildAiClient();
 
 log("info", "ai features", { enabled: aiClient !== null, provider: config.aiProvider });
+
+// Same OIDC client the auth router falls back to, built here so the configured
+// outbound deadline reaches it (GH #165). The JWKS fetch behind createVerifier
+// carries jose's own 5s `timeoutDuration` default and needs nothing from us.
+const oidcClient: OidcClient = {
+  discover: (issuer) => discover(issuer, undefined, config.oidcTimeoutMs),
+  exchangeCode: (input) => exchangeCode({ ...input, timeoutMs: config.oidcTimeoutMs }),
+  createVerifier: ({ jwksUri, issuer, clientId }) =>
+    createIdTokenVerifier({ issuer, clientId, keySource: remoteKeySource(jwksUri) }),
+};
 
 if (bootstrap.enabled) {
   log("warn", "bootstrap mode active", {
@@ -147,9 +172,18 @@ const app = createApp({
     appUrl: config.appUrl,
     sessionTtlHours: config.sessionTtlHours,
     bootstrap,
+    oidcClient,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
-  mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap, contacts }),
+  mailRouter: createMailRouter({
+    sessions,
+    mailCredentials,
+    signatures,
+    userPreferences,
+    jmap,
+    contacts,
+    timeoutMs: config.stalwartTimeoutMs,
+  }),
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
