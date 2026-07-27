@@ -175,6 +175,13 @@ jobs:
           --health-retries 20
     steps:
       - uses: actions/checkout@v4
+      # setup-bun extracts a zip, and the Playwright image is slim enough not
+      # to ship unzip. This only surfaced on the second runner: the first had
+      # Bun already in its tool cache and never had to extract anything, so
+      # the job passed there for a reason that had nothing to do with being
+      # correct. Install it explicitly rather than depending on which machine
+      # happens to be warm.
+      - run: apt-get update && apt-get install -y --no-install-recommends unzip
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
