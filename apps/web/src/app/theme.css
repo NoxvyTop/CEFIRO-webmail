@@ -11,10 +11,19 @@
   --muted: #8b90a2;
   --line: #232838;
   /* Interactive-boundary variant of --line, used where an outline/ghost
-     button needs stronger affordance than a plain hairline divider (CLARO-04).
-     Night's hairline already reads fine against the dark panel, so this
-     reuses --line unchanged — only light gets a dedicated stronger value. */
-  --line-strong: #232838;
+     button needs stronger affordance than a plain hairline divider
+     (CLARO-04), and — since #173a — for any divider that must itself clear
+     the ~3:1 WCAG non-text contrast guidance rather than read as a
+     near-invisible hairline (e.g. index.css's composer body/signature
+     separator). Previously reused --line unchanged here on the (untested)
+     assumption that night's hairline "already reads fine" against the dark
+     panel; measured contrast is actually ~1.25:1 (rgb(35,40,56) on
+     rgb(18,20,28)), same failure as light's plain --line below. This value
+     keeps --line's hue (blue-grey) but lightens it enough for ~3.33:1
+     against --panel — a deliberately modest margin over the 3:1 floor,
+     matching light's own ~3.23:1 below rather than jumping to a much
+     louder line. */
+  --line-strong: #606883;
   --accent: #6fe3c1;
   --accent-ink: #07130f;
   /* Text-safe accent variant (CLARO-02). Night's --accent already clears AA
@@ -46,7 +55,10 @@
   --line: #e2e7e9;
   /* CLARO-04: same hue/sat as --line (197°, 14%), darkened to L=55% — 3.23:1
      on #ffffff, clearing the 3:1 non-text/UI-boundary threshold (WCAG 1.4.11)
-     for outline-button borders that need to read as clickable on white. */
+     for outline-button borders that need to read as clickable on white, and
+     — since #173a — for dividers that must clear the same guidance (see
+     night's --line-strong comment above; light's plain --line already
+     measured the same ~1.25:1 failure against #ffffff before this). */
   --line-strong: #7c939c;
   --accent: #0fa383;
   --accent-ink: #ffffff;

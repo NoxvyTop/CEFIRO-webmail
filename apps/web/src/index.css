@@ -65,11 +65,17 @@ body {
    (composer/signature.ts). Editor-only chrome: that attribute (and this
    rule's hook) is stripped from the body HTML before it's sent — see
    stripSignatureMarkers, used by useComposer's send() — so recipients only
-   ever see the signature content itself, never this rule. */
+   ever see the signature content itself, never this rule.
+
+   #173a: was var(--line), which measures ~1.2:1 against the composer's
+   bg-panel in BOTH themes — below WCAG's ~3:1 guidance for a meaningful
+   divider, and in practice invisible. var(--line-strong) is the same token
+   already used for outline/ghost-button borders that need to read as a real
+   boundary rather than a hairline; see its definitions in theme.css. */
 [data-cefiro-signature] {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-strong);
 }
 
 /* Composer: visible affordance for an image selected via the size/align

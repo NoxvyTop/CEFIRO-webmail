@@ -16,6 +16,7 @@ import { labelBackground, labelColor, labelDisplayName, userLabels } from "../..
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody, isSafeInlineImage } from "./EmailBody";
@@ -53,18 +54,12 @@ function DeletePermanentlyConfirmDialog({
   subject, deleting, deleteError, onConfirm, onCancel,
 }: DeletePermanentlyConfirmDialogProps) {
   const { t } = useTranslation();
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    previouslyFocusedRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.focus();
-
-    return () => {
-      previouslyFocusedRef.current?.focus();
-    };
-  }, []);
+  // GH #158/#161: focus-in/Tab-cycling/restore-on-close now come from the
+  // shared useFocusTrap primitive — this dialog used to move focus in and
+  // restore it on close by hand, but never cycled Tab, so focus could walk
+  // out of this still-visible confirmation into the background page (right
+  // next to the irreversible destroy action it's guarding).
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {

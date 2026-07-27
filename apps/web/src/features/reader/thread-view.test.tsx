@@ -1771,6 +1771,31 @@ describe("ThreadView", () => {
       );
       expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     });
+
+    // GH #158: reproduced in the browser as Tab walking off the last button,
+    // through <body>, and into background page elements (the header logo)
+    // while this alertdialog still covers the screen — right next to an
+    // irreversible action. Now backed by the shared useFocusTrap primitive.
+    it("traps Tab focus inside the confirmation instead of letting it escape to the page", async () => {
+      vi.stubGlobal("fetch", stubTrashedThread());
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+
+      expect(dialog.contains(document.activeElement)).toBe(true);
+
+      const confirmButton = within(dialog).getByRole("button", {
+        name: i18n.t("mail.deletePermanentlyConfirm.confirm"),
+      });
+      confirmButton.focus();
+      fireEvent.keyDown(window, { key: "Tab" });
+
+      expect(document.activeElement).toBe(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.cancel") }),
+      );
+    });
   });
 });
 

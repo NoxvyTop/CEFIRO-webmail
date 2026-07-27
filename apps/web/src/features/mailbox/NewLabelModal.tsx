@@ -3,6 +3,7 @@ import type { CustomLabel } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
 import { CloseIcon } from "../../app/ui/icons";
 import { CUSTOM_LABEL_PALETTE, isLabelNameTaken, slugifyLabelName } from "../../app/ui/labels";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
 
 interface NewLabelModalProps {
   customLabels: CustomLabel[];
@@ -23,19 +24,11 @@ export function NewLabelModal({ customLabels, onCreateLabel, onClose }: NewLabel
   const [color, setColor] = useState(CUSTOM_LABEL_PALETTE[0]!);
   const [error, setError] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-
-  // Focus the name input on open, and return focus to whatever triggered
-  // the modal (the "Nueva etiqueta" button) once it closes/unmounts.
-  useEffect(() => {
-    previouslyFocusedRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    nameInputRef.current?.focus();
-
-    return () => {
-      previouslyFocusedRef.current?.focus();
-    };
-  }, []);
+  // GH #158: focuses the name input (not the dialog chrome) on open, cycles
+  // Tab within the dialog — this modal previously never cycled Tab at all —
+  // and restores focus to whatever triggered it (the "Nueva etiqueta"
+  // button) on close/unmount.
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, { initialFocusRef: nameInputRef });
 
   useEffect(() => {
     function handleKey(event: KeyboardEvent) {
@@ -69,7 +62,9 @@ export function NewLabelModal({ customLabels, onCreateLabel, onClose }: NewLabel
       onClick={onClose}
     >
       <div
-        className="flex w-full max-w-[360px] flex-col rounded-[14px] border border-line bg-panel shadow-pop"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="flex w-full max-w-[360px] flex-col rounded-[14px] border border-line bg-panel shadow-pop outline-none"
         style={{ animation: "popIn 0.18s ease" }}
         onClick={(event) => event.stopPropagation()}
       >

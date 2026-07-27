@@ -826,6 +826,29 @@ describe("Composer", () => {
       expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
     });
 
+    // GH #158: reproduced in the browser as Tab walking off the last button,
+    // through <body>, and into background page elements (the header logo)
+    // while this alertdialog still covers the screen. Now backed by the
+    // shared useFocusTrap primitive.
+    it("traps Tab focus inside the discard confirmation instead of letting it escape to the page", async () => {
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.contains(document.activeElement)).toBe(true);
+
+      const saveButton = screen.getByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      saveButton.focus();
+      fireEvent.keyDown(window, { key: "Tab" });
+
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: i18n.t("composer.discardConfirm.keepEditing") }),
+      );
+    });
+
     it("cannot trigger the save action twice while the first save is still in flight", async () => {
       let resolveSave: (value: { id: string }) => void = () => {};
       saveDraft.mockImplementationOnce(
