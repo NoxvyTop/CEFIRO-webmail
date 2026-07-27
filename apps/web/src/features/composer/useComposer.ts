@@ -134,11 +134,27 @@ function htmlToPlainText(html: string): string {
 // headers) to structurally identical schemas (see
 // packages/shared/src/api/compose.ts's composeEmailFieldsSchema) — saveDraft
 // additionally carries originalDraftId, layered on by its own caller below.
-// Kept as the single place that strips the composer's internal
-// signature/quote marker divs (see composer/signature.ts) before they'd
-// otherwise reach a recipient's inbox or a saved draft.
-function buildComposePayload(draft: ComposerDraft, attachments: Attachment[]): SendEmailInput {
-  const outgoingBodyHtml = stripSignatureMarkers(draft.bodyHtml);
+//
+// stripMarkers controls whether the composer's internal signature/quote
+// marker divs (see composer/signature.ts) are stripped from the body:
+//
+//   - send() passes true. A recipient (or another mail client) must never
+//     see this app's internal bookkeeping markup.
+//   - saveDraft() passes false (GH #156). Stripping the marker here used to
+//     be the root cause of a reopened draft's signature duplicating: with
+//     the marker gone, reply.ts's buildEditDraft had no way to recognize
+//     the previously-applied signature on reopen, so the next auto-apply
+//     (Composer.tsx) appended a second, unmarked copy instead of finding
+//     and replacing the first via applySignature's marker-based lookup. A
+//     saved draft is never recipient-facing — it only round-trips back
+//     through this same app — so keeping the marker costs nothing and lets
+//     every later apply/switch/remove cycle stay a clean in-place replace.
+function buildComposePayload(
+  draft: ComposerDraft,
+  attachments: Attachment[],
+  options: { stripMarkers: boolean },
+): SendEmailInput {
+  const outgoingBodyHtml = options.stripMarkers ? stripSignatureMarkers(draft.bodyHtml) : draft.bodyHtml;
 
   return {
     identityId: draft.identityId,
@@ -244,7 +260,7 @@ export function useComposer(
       return false;
     }
 
-    const input = buildComposePayload(draft, attachments);
+    const input = buildComposePayload(draft, attachments, { stripMarkers: true });
 
     dispatch({ type: "sendStart" });
     try {
@@ -282,7 +298,7 @@ export function useComposer(
     try {
       const { draft, attachments } = state;
       const input: SaveDraftInput = {
-        ...buildComposePayload(draft, attachments),
+        ...buildComposePayload(draft, attachments, { stripMarkers: false }),
         originalDraftId: draft.originalDraftId,
       };
       await saveDraftRequest(input);
