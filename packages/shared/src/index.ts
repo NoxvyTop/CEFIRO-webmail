@@ -8,3 +8,4 @@ export * from "./api/profile";
 export * from "./api/sieve";
 export * from "./api/ai";
 export * from "./api/contacts";
+export * from "./quote-detection";

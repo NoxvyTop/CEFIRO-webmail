@@ -152,7 +152,23 @@ export function emptyDraft(identities: Identity[]): ComposerDraft {
   };
 }
 
-export function replyDraft(email: EmailDetail, identities: Identity[], all: boolean): ComposerDraft {
+/**
+ * Who a reply is addressed to, with no body work.
+ *
+ * Split out of replyDraft so the reader can ask "would reply-all actually add
+ * anyone?" without paying for a quoted body — answering that used to mean
+ * running DOMParser and DOMPurify over the whole message on every render.
+ *
+ * It is deliberately the SAME computation replyDraft uses rather than a
+ * second predicate beside it: the two had already drifted once (GH #174),
+ * disagreeing on every message carrying Reply-To, under a comment asserting
+ * they matched.
+ */
+export function replyRecipients(
+  email: EmailDetail,
+  identities: Identity[],
+  all: boolean,
+): { identityId: string; to: EmailAddress[]; cc: EmailAddress[] } {
   const to = dedupeAddresses(email.replyTo.length ? email.replyTo : email.from);
   const identity = pickIdentity(email, identities);
   const identityId = identity?.id ?? identities[0]?.id ?? "";
@@ -168,6 +184,12 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
       return true;
     });
   }
+
+  return { identityId, to, cc };
+}
+
+export function replyDraft(email: EmailDetail, identities: Identity[], all: boolean): ComposerDraft {
+  const { identityId, to, cc } = replyRecipients(email, identities, all);
 
   const draft: ComposerDraft = {
     identityId,

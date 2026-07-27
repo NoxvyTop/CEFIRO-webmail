@@ -754,6 +754,46 @@ describe("ThreadView", () => {
 
       expect(await screen.findByTestId("compose-param")).toHaveTextContent("reply-all:e2");
     });
+
+    // GH #174: hasReplyAllRecipient used to be a hand-rolled predicate that
+    // claimed to mirror composer/reply.ts's replyDraft() but actually
+    // diverged from it whenever a message carried a Reply-To — the old
+    // predicate always excluded email.from[0], while replyDraft's "to" is
+    // replyTo when present, else from. Every fixture above leaves replyTo
+    // empty, so that divergence was never exercised. These two cover both
+    // directions of the drift on mailing-list mail (From != Reply-To).
+    it("hides Responder a todos when Reply-To is a mailing list and To only repeats that list — reply-all would be identical to plain reply (GH #174)", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.from = [{ name: "Alice", email: "alice@example.com" }];
+      state.emails[1]!.replyTo = [{ name: null, email: "list@example.com" }];
+      state.emails[1]!.to = [{ name: null, email: "list@example.com" }];
+      state.emails[1]!.cc = [];
+      stubThreadState(state, [{ id: "id1", name: "Me", email: "me@example.com" }]);
+      renderThread("t1", "arch1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).queryByRole("button", { name: i18n.t("composer.replyAll") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows Responder a todos when Reply-To is a mailing list but the original sender is still a genuine reply-all recipient (GH #174)", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.from = [{ name: "Alice", email: "alice@example.com" }];
+      state.emails[1]!.replyTo = [{ name: null, email: "list@example.com" }];
+      state.emails[1]!.to = [
+        { name: "Me", email: "me@example.com" },
+        { name: "Alice", email: "alice@example.com" },
+      ];
+      state.emails[1]!.cc = [];
+      stubThreadState(state, [{ id: "id1", name: "Me", email: "me@example.com" }]);
+      renderThread("t1", "arch1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).getByRole("button", { name: i18n.t("composer.replyAll") }),
+      ).toBeInTheDocument();
+    });
   });
 
   describe("label apply menu (mirrors the star toggle, applies/removes a keyword on the last email)", () => {
@@ -1508,6 +1548,150 @@ describe("ThreadView", () => {
         });
         expect(reExpandedHeader).toHaveAttribute("aria-expanded", "true");
       });
+    });
+  });
+
+  // GH #162: the effect that seeds expandedIds used to bail out early on any
+  // refetch of an already-initialized thread ("if
+  // (initializedThreadIdRef.current === threadId) return;") — meant to stop
+  // a refetch from re-collapsing a message the user had opened, but it also
+  // meant a genuinely new message id (arriving mid-session, e.g. via
+  // useMailEvents' blanket ["mail"] invalidation on every server event) was
+  // never added to expandedIds. Since the reply/reply-all/forward footer,
+  // the AI summary card, and the elevated-card treatment all live behind
+  // isNewest *inside* the isExpanded branch, that silently collapsed the
+  // newest message and took all of them off screen with it.
+  describe("live-arriving messages while the thread stays open (GH #162)", () => {
+    function twoMessageThread(): ThreadDetail {
+      return {
+        id: "t5",
+        emails: [
+          {
+            id: "p1",
+            threadId: "t5",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Ongoing",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Older",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 40,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "The first message in this thread.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+          {
+            id: "p2",
+            threadId: "t5",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Alice", email: "alice@example.com" }],
+            subject: "Re: Ongoing",
+            receivedAt: "2026-07-01T10:00:00.000Z",
+            preview: "Was newest",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 40,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "The second message, newest until p3 lands.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+        ],
+      };
+    }
+
+    function thirdMessage(): ThreadDetail["emails"][number] {
+      return {
+        id: "p3",
+        threadId: "t5",
+        mailboxIds: ["mb-inbox"],
+        from: [{ name: "Carol", email: "carol@example.com" }],
+        to: [{ name: "Alice", email: "alice@example.com" }],
+        subject: "Re: Ongoing",
+        receivedAt: "2026-07-01T11:00:00.000Z",
+        preview: "Just landed",
+        keywords: {},
+        hasAttachment: false,
+        size: 40,
+        cc: [],
+        replyTo: [],
+        bodyHtml: null,
+        bodyText: "A brand new reply that just arrived.",
+        attachments: [],
+        messageId: null,
+        references: null,
+        inReplyTo: null,
+        senderAuth: "unknown",
+      };
+    }
+
+    it("expands a newly arrived newest message on a same-thread refetch — including its reply/reply-all/forward footer — without reopening a message the user explicitly collapsed", async () => {
+      const state = twoMessageThread();
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <ToastProvider>
+              <ThreadView threadId="t5" archiveMailboxId={null} inboxMailboxId={null} />
+            </ToastProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      // p2 starts expanded (it's the newest on initial load) — the user
+      // collapses it by hand, which must survive the refetch below.
+      await screen.findByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Bob" }) });
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Bob" }) }),
+      );
+      await screen.findByRole("button", { name: i18n.t("mail.expandMessage", { sender: "Bob" }) });
+
+      // p3 arrives — same threadId, just a refetch of the same thread query
+      // (mirrors useMailEvents' blanket ["mail"] invalidation firing on
+      // every server event while the thread stays open).
+      state.emails.push(thirdMessage());
+      client.invalidateQueries({ queryKey: ["mail"] });
+
+      // The new message is both newest and unread, so it must auto-expand —
+      // a collapse-header button (only rendered while expanded) proves it
+      // did not land as a collapsed stub.
+      expect(
+        await screen.findByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Carol" }) }),
+      ).toBeInTheDocument();
+      const footer = await screen.findByTestId("thread-footer-actions");
+      expect(within(footer).getByRole("button", { name: i18n.t("composer.reply") })).toBeInTheDocument();
+
+      // p2's user-driven collapse must survive the refetch — the fix only
+      // admits the genuinely new id, it must never re-seed already-known ones.
+      expect(
+        screen.getByRole("button", { name: i18n.t("mail.expandMessage", { sender: "Bob" }) }),
+      ).toBeInTheDocument();
     });
   });
 

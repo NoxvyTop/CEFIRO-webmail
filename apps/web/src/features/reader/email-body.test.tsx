@@ -443,6 +443,40 @@ describe("EmailBody", () => {
       expect(screen.queryByRole("button", { name: i18n.t("mail.showQuotedContent") })).not.toBeInTheDocument();
     });
 
+    // GH #168: quote-separator detection used to be reimplemented
+    // independently here and on the server (apps/server/.../ai/router.ts),
+    // and the two had already drifted apart — this client-side check lacked
+    // the `i` flag the Spanish Gmail separator needs, and required a single
+    // literal space in the Outlook banner where the server accepted any run
+    // of whitespace. Both sides now import the same isQuoteSeparatorLine
+    // from @webmail/shared, so a case/whitespace variant either both split
+    // on, or neither does — these lock in the two cases that used to only
+    // work server-side.
+    it("splits a plain-text body at a lowercase 'el ... escribió:' separator (GH #168: previously only recognized by the server)", async () => {
+      const plainBody =
+        "Confirmado, gracias.\n\nel mar., 21 de jul. de 2026 a las 10:00, Ana <ana@x.com> escribió:\nArrancamos el lunes.";
+      render(<EmailBody bodyHtml={null} bodyText={plainBody} />);
+
+      expect(screen.getByText("Confirmado, gracias.")).toBeInTheDocument();
+      expect(screen.queryByText(/Arrancamos el lunes/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+      expect(await screen.findByText(/Arrancamos el lunes/)).toBeInTheDocument();
+    });
+
+    it("splits a plain-text body at an Outlook banner with extra internal whitespace, '-----Original  Message-----' (GH #168: previously only recognized by the server)", async () => {
+      const plainBody = "Sounds good.\n\n-----Original  Message-----\nFrom: Ana\nSent: Monday";
+      render(<EmailBody bodyHtml={null} bodyText={plainBody} />);
+
+      expect(screen.getByText("Sounds good.")).toBeInTheDocument();
+      expect(screen.queryByText(/From: Ana/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+      expect(await screen.findByText(/From: Ana/)).toBeInTheDocument();
+    });
+
     // Follow-up fixes to the boundary heuristic — a real reviewer found two
     // ways the naive "first blockquote/gmail_quote, climb to the top-level
     // ancestor" split could hide genuine new content, plus an over-eager
@@ -699,6 +733,86 @@ describe("EmailBody", () => {
         // iframe only, never duplicated onto the now-visible quoted iframe.
         expect(screen.getAllByRole("button", { name: i18n.t("mail.showFullMessage") })).toHaveLength(1);
       });
+    });
+  });
+
+  // GH #160: a fixed-width HTML table layout (ordinary marketing mail) can
+  // be wider than the reader's available column — the sandboxed iframe's own
+  // box never grows past its container, so content past its right edge was
+  // simply cut off with no horizontal scrollbar to reach it (GH #135 solved
+  // the orthogonal vertical axis; the horizontal one was never covered).
+  // Real layout (does the table actually overflow visually, is a scrollbar
+  // rendered) can't be exercised in jsdom — see the live-browser evidence
+  // for that — but the scaling MATH and the measurement wiring are pure
+  // logic/DOM-attribute checks that jsdom can verify directly.
+  describe("wide fixed-width layout scaling (GH #160)", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // Stubs window.ResizeObserver so the container-width measurement effect
+    // (which real browsers drive from actual layout) reports a controlled
+    // width synchronously, without needing real layout at all.
+    function stubResizeObserver(width: number) {
+      class FakeResizeObserver {
+        #callback: (entries: { contentRect: { width: number } }[]) => void;
+        constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+          this.#callback = callback;
+        }
+        observe() {
+          this.#callback([{ contentRect: { width } }]);
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+      vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    }
+
+    it("scales a fixed-width table down to fit the measured container via a CSS zoom rule in the iframe srcdoc", () => {
+      stubResizeObserver(400);
+      const wideTableBody = '<table width="900"><tr><td>Wide marketing table</td></tr></table>';
+      render(<EmailBody bodyHtml={wideTableBody} bodyText={null} />);
+
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).toMatch(/zoom:\s*0\.44/);
+    });
+
+    it("applies no zoom rule when the authored table width already fits the measured container", () => {
+      stubResizeObserver(900);
+      const narrowTableBody = '<table width="400"><tr><td>Fits fine</td></tr></table>';
+      render(<EmailBody bodyHtml={narrowTableBody} bodyText={null} />);
+
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).not.toContain("zoom:");
+    });
+
+    it("applies no zoom rule when the container width cannot be measured (no ResizeObserver support) — never scales on a guess", () => {
+      vi.stubGlobal("ResizeObserver", undefined);
+      const wideTableBody = '<table width="900"><tr><td>Wide marketing table</td></tr></table>';
+      render(<EmailBody bodyHtml={wideTableBody} bodyText={null} />);
+
+      const srcDoc = getIframe().getAttribute("srcdoc") ?? "";
+      expect(srcDoc).not.toContain("zoom:");
+    });
+
+    it("scales the quoted-trail iframe independently once revealed, using its own authored width", async () => {
+      stubResizeObserver(400);
+      const body =
+        '<table width="900"><tr><td>New content, wide table</td></tr></table>' +
+        '<blockquote class="gmail_quote"><table width="700"><tr><td>Quoted, narrower wide table</td></tr></table></blockquote>';
+      render(<EmailBody bodyHtml={body} bodyText={null} />);
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.showQuotedContent") }));
+
+      await waitFor(() => {
+        expect(screen.getAllByTitle(i18n.t("mail.emailContent"))).toHaveLength(2);
+      });
+      const [newSrcDoc, quotedSrcDoc] = screen
+        .getAllByTitle(i18n.t("mail.emailContent"))
+        .map((iframe) => iframe.getAttribute("srcdoc") ?? "");
+
+      expect(newSrcDoc).toMatch(/zoom:\s*0\.44/); // 400 / 900
+      expect(quotedSrcDoc).toMatch(/zoom:\s*0\.57/); // 400 / 700
     });
   });
 });

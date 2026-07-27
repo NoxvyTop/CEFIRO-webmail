@@ -1,5 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono";
-import { draftInputSchema } from "@webmail/shared";
+import { draftInputSchema, isQuoteSeparatorLine } from "@webmail/shared";
 import { DomainError } from "../../core/errors";
 import { requireSession } from "../auth/middleware";
 import { requireMail } from "../mail/context";
@@ -48,32 +48,18 @@ function extractBodyText(email: JmapEmailBody): string {
   return html ? stripHtml(html) : "";
 }
 
-// Lines that mark the start of a dragged-in quoted reply trail — the client
-// inserts one of these right before quoting the previous message(s). Not an
-// exhaustive email-quote parser, just the handful of variants Gmail/Outlook
-// actually produce.
-const REPLY_SEPARATOR_PATTERNS: RegExp[] = [
-  /^el .+ escribió:\s*$/i, // Gmail (es): "El <date>, <name> <email> escribió:"
-  /^on .+ wrote:\s*$/i, // Gmail (en): "On <date>, <name> <email> wrote:"
-  /^-{3,}\s*original\s+message\s*-{3,}$/i, // Outlook: "-----Original Message-----"
-  /^_{8,}$/, // Outlook's underscore divider above the quoted headers
-];
-
-function isReplySeparatorLine(line: string): boolean {
-  const trimmed = line.trim();
-  return REPLY_SEPARATOR_PATTERNS.some((pattern) => pattern.test(trimmed));
-}
-
 /**
  * Strips the dragged quoted-reply trail from a message body so thread
  * summarization only sees what this particular message actually says, not
  * the previous messages it re-quotes. Truncates at the first line that looks
- * like a client-inserted reply separator, then drops any remaining `>`-quoted
- * lines (top-posted quote blocks sometimes have no separator line at all).
+ * like a client-inserted reply separator (see isQuoteSeparatorLine, shared
+ * with the reader's own quote split — GH #168), then drops any remaining
+ * `>`-quoted lines (top-posted quote blocks sometimes have no separator line
+ * at all).
  */
 export function stripQuotedTrail(text: string): string {
   const lines = text.split("\n");
-  const cutIndex = lines.findIndex(isReplySeparatorLine);
+  const cutIndex = lines.findIndex(isQuoteSeparatorLine);
   const kept = cutIndex === -1 ? lines : lines.slice(0, cutIndex);
   return kept
     .filter((line) => !line.trim().startsWith(">"))
