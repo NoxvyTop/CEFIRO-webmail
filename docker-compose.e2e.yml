@@ -18,11 +18,22 @@ services:
       # so pointing it at the same published host:port fixes JMAP session URLs
       # without touching the committed seed data or any app/server source.
       STALWART_PUBLIC_URL: "http://localhost:8096"
+    # Probes the three ports the tests use rather than asking the binary its
+    # version — `stalwart --version` answers before any listener is serving, so
+    # it reported healthy while the container could still accept a connection
+    # and drop it without an SMTP greeting. Kept identical in intent to the
+    # `stalwart` service in .github/workflows/ci.yml, where the same probe is
+    # documented at length.
     healthcheck:
-      test: ["CMD", "/usr/local/bin/stalwart", "--version"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sS --max-time 3 -o /dev/null smtp://127.0.0.1:25/cefiro.test && curl -sS --max-time 3 -o /dev/null --insecure smtps://127.0.0.1:465/cefiro.test && curl -sS --max-time 3 -o /dev/null http://127.0.0.1:8080/",
+        ]
+      interval: 3s
+      timeout: 10s
+      start_period: 5s
+      retries: 30
 
 # Postgres is intentionally NOT part of this stack. E2E runs reuse the
 # existing dev/CI Postgres (docker-compose.dev.yml, port 5434) instead of

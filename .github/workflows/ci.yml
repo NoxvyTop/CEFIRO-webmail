@@ -239,11 +239,31 @@ jobs:
           # docker-compose.e2e.yml, which points it at the host-published
           # localhost:8096 because that setup has no shared service network.
           STALWART_PUBLIC_URL: "http://stalwart:8080"
+        # The probe talks to the three ports the tests actually use, instead of
+        # asking the binary its version. `stalwart --version` answers at t=0s,
+        # before a single listener is serving, so the container was reported
+        # healthy while it could still accept a TCP connection and drop it
+        # without sending the SMTP greeting — which is precisely how seeding
+        # failed: "SMTP connection closed before a final response arrived
+        # (buffer: "")". Measured on the runner: version says ok at t=0s, the
+        # ports answer at t≈2s. The suite passed most of the time because job
+        # setup happened to outlast the gap, which is luck, not readiness.
+        #
+        # The `/cefiro.test` path is curl's EHLO domain, not a URL path. Without
+        # it curl greets with the container hostname and Stalwart answers "550
+        # Invalid EHLO domain" — a healthy server refusing a malformed hello,
+        # which would make this probe fail forever against a working container.
+        #
+        # --insecure on 465 because the fixture's certificate is self-signed;
+        # the seeder connects the same way (see e2e/smtp-seed.ts's
+        # trust-on-first-use comment). This is a loopback probe inside the
+        # container, so there is no transport to intercept.
         options: >-
-          --health-cmd "/usr/local/bin/stalwart --version"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+          --health-cmd "curl -sS --max-time 3 -o /dev/null smtp://127.0.0.1:25/cefiro.test && curl -sS --max-time 3 -o /dev/null --insecure smtps://127.0.0.1:465/cefiro.test && curl -sS --max-time 3 -o /dev/null http://127.0.0.1:8080/"
+          --health-interval 3s
+          --health-timeout 10s
+          --health-start-period 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
       # setup-bun extracts a zip, and the Playwright image is slim enough not
