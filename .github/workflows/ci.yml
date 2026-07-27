@@ -18,6 +18,16 @@ concurrency:
 jobs:
   test:
     runs-on: [self-hosted, linux, x64, docker]
+    # The job runs inside a declared image rather than on whatever the runner
+    # host happens to have. That host is shared with other projects, so any
+    # system-level dependency installed for one of them could change this
+    # pipeline's behaviour without a single commit here. Pinning the image
+    # makes the toolchain part of the repository.
+    #
+    # Node comes from the image because vitest's mock-hoisting transform needs
+    # it (see the setup-node step's history); Bun is installed on top by its
+    # own action, so both versions stay declared and independent.
+    container: node:22-bookworm
     services:
       postgres:
         image: postgres:17-alpine
@@ -25,14 +35,9 @@ jobs:
           POSTGRES_USER: webmail
           POSTGRES_PASSWORD: webmail
           POSTGRES_DB: webmail
-        # Publish on an ephemeral host port, not a fixed one. Both jobs run
-        # in parallel on the SAME self-hosted machine, so two containers
-        # binding 5432 collide — the second fails with "port is already
-        # allocated". On GitHub's hosted runners each job got its own VM and
-        # the clash could not happen. Docker picks a free port and the job
-        # reads it back from the services context below.
-        ports:
-          - 5432
+        # No host port is published: a containerised job shares a network with
+        # its services and reaches them by service name, so nothing binds on
+        # the host and parallel jobs cannot collide over a port at all.
         options: >-
           --health-cmd "pg_isready -U webmail"
           --health-interval 5s
@@ -43,17 +48,6 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
-      # Vitest needs Node: its mock-hoisting transform — the static rewrite
-      # that lifts vi.mock() above the imports it has to intercept — does not
-      # apply when the workers fall back to Bun's runtime. Without Node the
-      # factories are never invoked, the real components render, and the
-      # mocked test ids simply do not exist. GitHub's hosted image ships Node
-      # so this was invisible there; declaring it here makes the workflow
-      # self-sufficient on any runner instead of depending on what the host
-      # happens to have installed.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       # Bun's global package cache. Keyed on the lockfile, so it is reused
       # until a dependency actually changes rather than re-downloading the
       # whole tree on every run.
@@ -66,7 +60,9 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
         env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:${{ job.services.postgres.ports['5432'] }}/webmail
+          # Reached by service name, not localhost: the job and its services
+          # share a network, and no port is published on the host.
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
 
   e2e:
     runs-on: [self-hosted, linux, x64, docker]
