@@ -426,6 +426,10 @@
     "name": "Name",
     "email": "Email",
     "add": "Add contact",
+    "harvestedBadge": "Auto-added",
+    "harvestedHint": "Added automatically when you received a message from them",
+    "promote": "Confirm",
+    "promoteLabel": "Confirm \"{{name}}\" as your own contact",
     "confirmDeleteQuestion": "Delete \"{{name}}\"? This can't be undone.",
     "confirmDeleteAction": "Delete permanently",
     "cancelDelete": "Cancel"

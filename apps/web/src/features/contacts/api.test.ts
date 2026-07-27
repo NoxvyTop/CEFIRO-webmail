@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createContact, deleteContact, fetchContacts, searchContacts } from "./api";
+import { createContact, deleteContact, fetchContacts, promoteContact, searchContacts } from "./api";
 
 const contact = { id: "c1", name: "Ana Lopez", email: "ana@example.com", source: "manual" as const };
 
@@ -76,6 +76,28 @@ describe("contacts api client", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/mail/contacts/c1");
     expect(init.method).toBe("DELETE");
+  });
+
+  it("POSTs the promote endpoint and returns the contact as manual", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(contact)));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await promoteContact("c1");
+    expect(result).toEqual(contact);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mail/contacts/c1/promote");
+    expect(init.method).toBe("POST");
+  });
+
+  it("throws MailApiError with not_found when promoting a contact that is gone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ code: "not_found", message: "errors.not_found", traceId: "t1" }), {
+          status: 404,
+        }),
+      ),
+    );
+    await expect(promoteContact("missing")).rejects.toMatchObject({ status: 404, code: "not_found" });
   });
 
   it("rejects invalid response shapes", async () => {

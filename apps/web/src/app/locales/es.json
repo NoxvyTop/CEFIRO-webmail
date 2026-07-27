@@ -426,6 +426,10 @@
     "name": "Nombre",
     "email": "Correo",
     "add": "Añadir contacto",
+    "harvestedBadge": "Automático",
+    "harvestedHint": "Añadido automáticamente al recibir un correo suyo",
+    "promote": "Confirmar",
+    "promoteLabel": "Confirmar «{{name}}» como contacto propio",
     "confirmDeleteQuestion": "¿Eliminar a «{{name}}»? No podrás deshacerlo.",
     "confirmDeleteAction": "Eliminar definitivamente",
     "cancelDelete": "Cancelar"

@@ -63,6 +63,24 @@ export function createContactsRouter(deps: ContactsDeps) {
     return c.json(created);
   });
 
+  // GH #163: the user recognises a sender the harvest added on its own and
+  // adopts it, which clears the "auto-added" mark both surfaces now show.
+  // POST rather than PATCH, with no body: there is exactly one transition this
+  // can perform (see ContactsRepo.promote), so there is nothing for a payload
+  // to describe and nothing a client could get wrong by omitting it.
+  router.post("/contacts/:id/promote", async (c) => {
+    const user = c.get("user");
+    const id = c.req.param("id");
+    const promoted = await deps.contacts.promote(user.userId, id);
+    if (!promoted) {
+      return c.json(
+        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
+        404,
+      );
+    }
+    return c.json(promoted);
+  });
+
   router.delete("/contacts/:id", async (c) => {
     const user = c.get("user");
     const id = c.req.param("id");

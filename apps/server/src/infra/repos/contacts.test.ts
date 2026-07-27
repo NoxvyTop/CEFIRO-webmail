@@ -103,6 +103,51 @@ describe("contacts repo", () => {
     });
   });
 
+  describe("promote", () => {
+    it("turns a harvested contact into a manual one", async () => {
+      const email = `promote-${crypto.randomUUID()}@x.com`;
+      await contacts.harvestSenders(userId, [{ name: "Seen Once", email }]);
+      const harvested = (await contacts.list(userId)).find((c) => c.email === email);
+      expect(harvested?.source).toBe("harvested");
+
+      const promoted = await contacts.promote(userId, harvested!.id);
+      expect(promoted?.source).toBe("manual");
+      // The rest of the row is untouched — promotion only changes provenance.
+      expect(promoted?.name).toBe("Seen Once");
+      expect(promoted?.email).toBe(email);
+
+      const afterPromote = (await contacts.list(userId)).find((c) => c.email === email);
+      expect(afterPromote?.source).toBe("manual");
+    });
+
+    it("is idempotent for a contact that is already manual", async () => {
+      const created = await contacts.create(userId, {
+        name: "Already Mine",
+        email: `already-${crypto.randomUUID()}@x.com`,
+      });
+
+      const promoted = await contacts.promote(userId, created!.id);
+      expect(promoted?.source).toBe("manual");
+      expect(promoted?.id).toBe(created!.id);
+    });
+
+    it("refuses to promote another user's contact", async () => {
+      const email = `foreignpromote-${crypto.randomUUID()}@x.com`;
+      await contacts.harvestSenders(userId, [{ name: "Not Yours", email }]);
+      const harvested = (await contacts.list(userId)).find((c) => c.email === email);
+
+      const promoted = await contacts.promote(otherUserId, harvested!.id);
+      expect(promoted).toBeNull();
+
+      const stillHarvested = (await contacts.list(userId)).find((c) => c.email === email);
+      expect(stillHarvested?.source).toBe("harvested");
+    });
+
+    it("returns null for an unknown id", async () => {
+      expect(await contacts.promote(userId, crypto.randomUUID())).toBeNull();
+    });
+  });
+
   describe("harvestSenders", () => {
     it("bulk-adds new harvested senders in one call", async () => {
       const email1 = `harvest1-${crypto.randomUUID()}@x.com`;

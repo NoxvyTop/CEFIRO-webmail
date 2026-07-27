@@ -44,6 +44,20 @@ export async function createContact(input: ContactInput): Promise<Contact> {
   return contactSchema.parse(await res.json());
 }
 
+// GH #163: adopts a harvested contact as one of the user's own, clearing the
+// "auto-added" mark. No body — the id in the path is the whole request (see
+// apps/server/src/modules/contacts/router.ts). Returns the updated contact so
+// a caller can reflect the new source without refetching; ContactsSettings
+// invalidates the list anyway, since promotion also reorders nothing but must
+// stay consistent with any other tab's view.
+export async function promoteContact(id: string): Promise<Contact> {
+  const res = await fetch(`/api/mail/contacts/${encodeURIComponent(id)}/promote`, {
+    method: "POST",
+  });
+  if (!res.ok) return parseError(res);
+  return contactSchema.parse(await res.json());
+}
+
 // GH #124: the server tombstones the deleted address (contact_suppressions)
 // so a later mail-listing harvest never silently re-adds it — from this
 // client's point of view the deletion is simply irreversible.

@@ -18,6 +18,7 @@ let sessions: ReturnType<typeof createSessionStore>;
 let contacts: ReturnType<typeof createContactsRepo>;
 let token: string;
 let token2: string;
+let userId: string;
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
@@ -29,6 +30,7 @@ beforeAll(async () => {
     email: `contactsrt1-${crypto.randomUUID()}@noxvytop.com`,
     displayName: "Contacts Route User 1",
   });
+  userId = user1.id;
   token = (await sessions.create(user1.id, 1)).token;
 
   const user2 = await users.create({
@@ -149,6 +151,65 @@ describe("contacts routes", () => {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(404);
+  });
+
+  describe("POST /contacts/:id/promote", () => {
+    // The harvest path has no route of its own (it runs off GET /api/mail/messages),
+    // so a harvested row is seeded through the repo directly.
+    async function seedHarvested(name: string): Promise<z.infer<typeof contactSchema>> {
+      const email = `harvestroute-${crypto.randomUUID()}@x.com`;
+      await contacts.harvestSenders(userId, [{ name, email }]);
+      const found = (await contacts.list(userId)).find((c) => c.email === email);
+      expect(found?.source).toBe("harvested");
+      return found!;
+    }
+
+    it("requires a session", async () => {
+      const res = await makeApp().request(`/api/mail/contacts/${crypto.randomUUID()}/promote`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("promotes a harvested contact and returns it as manual", async () => {
+      const app = makeApp();
+      const harvested = await seedHarvested("Promote Me");
+
+      const res = await app.request(`/api/mail/contacts/${harvested.id}/promote`, {
+        method: "POST",
+        headers: { cookie: `session=${token}` },
+      });
+      expect(res.status).toBe(200);
+      const promoted = (await res.json()) as z.infer<typeof contactSchema>;
+      expect(contactSchema.safeParse(promoted).success).toBe(true);
+      expect(promoted.source).toBe("manual");
+      expect(promoted.id).toBe(harvested.id);
+
+      const list = (await (
+        await app.request("/api/mail/contacts", { headers: { cookie: `session=${token}` } })
+      ).json()) as z.infer<typeof contactSchema>[];
+      expect(list.find((c) => c.id === harvested.id)?.source).toBe("manual");
+    });
+
+    it("returns 404 when another user's session tries to promote a contact it does not own", async () => {
+      const app = makeApp();
+      const harvested = await seedHarvested("Not Yours Either");
+
+      const res = await app.request(`/api/mail/contacts/${harvested.id}/promote`, {
+        method: "POST",
+        headers: { cookie: `session=${token2}` },
+      });
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { code: string }).code).toBe("not_found");
+    });
+
+    it("returns 404 promoting a nonexistent contact", async () => {
+      const res = await makeApp().request(
+        `/api/mail/contacts/${crypto.randomUUID()}/promote`,
+        { method: "POST", headers: { cookie: `session=${token}` } },
+      );
+      expect(res.status).toBe(404);
+    });
   });
 
   describe("GET /contacts/search", () => {
