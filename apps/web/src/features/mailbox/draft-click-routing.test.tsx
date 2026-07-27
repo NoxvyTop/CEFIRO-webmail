@@ -83,6 +83,9 @@ const draftThread = {
       bodyHtml: "<p>Draft body in progress</p>",
       bodyText: null,
       attachments: [],
+      messageId: null,
+      references: null,
+      inReplyTo: null,
     },
   ],
 };
@@ -111,6 +114,9 @@ const normalThread = {
       bodyHtml: "<p>Normal body</p>",
       bodyText: null,
       attachments: [],
+      messageId: null,
+      references: null,
+      inReplyTo: null,
     },
   ],
 };

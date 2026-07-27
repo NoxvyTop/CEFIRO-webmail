@@ -61,6 +61,16 @@ export async function updateMessage(id: string, update: EmailUpdate): Promise<vo
   if (!res.ok) return parseError(res);
 }
 
+// GH #133: permanently destroys a message via DELETE /api/mail/messages/:id
+// (Email/set `destroy` on the server). Irreversible — the server refuses
+// unless the message is actually sitting in Trash; the caller must only ever
+// offer this from the Trash view (see ThreadView.tsx's showDeletePermanently)
+// and gate it behind an explicit confirmation.
+export async function destroyMessage(id: string): Promise<void> {
+  const res = await fetch(`/api/mail/messages/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) return parseError(res);
+}
+
 // Public, unauthenticated instance branding flag (see apps/server/src/app.ts
 // GET /api/instance) — read by the reader footer, not admin-gated.
 export async function fetchInstanceSettings(): Promise<InstanceSettingsView> {

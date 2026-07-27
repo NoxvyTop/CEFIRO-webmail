@@ -4,10 +4,52 @@ on:
   push:
     branches: ["init-**", preproduc, main]
   pull_request:
+  # Lets a branch be validated on demand without either opening a placeholder
+  # pull request or widening the automatic push triggers — broadening those
+  # would commit every future branch matching the pattern to consuming a
+  # runner forever, to solve a problem that only exists while iterating.
+  #   gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
 
+# Successive pushes to the same PR supersede each other: only the newest
+# commit's result is ever looked at, so letting the older runs finish burns
+# Actions minutes to produce an answer nobody reads. Pushes to preproduc and
+# main are deliberately NOT cancelled — those runs gate the publish job, and
+# cancelling one halfway could leave the registry without the image its
+# commit was supposed to produce.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Where each job runs is deliberate, not incidental.
+#
+# The self-hosted runner is OUR machine: our kernel, our packages, our Docker.
+# It is excellent for the inner loop — fast, and it costs no Actions minutes —
+# but validating a release against an environment we tuned ourselves is the
+# organisational version of "works on my machine". This pipeline already lost
+# three waves of work to exactly that failure mode: a dependency GitHub's
+# image supplied implicitly went unnoticed until the jobs moved off it.
+#
+# So anything gating `main` runs on GitHub's stock image instead — neutral
+# infrastructure, independent of anything we installed. `main` is reached
+# rarely, so the quota comfortably covers it: minutes get spent precisely
+# where they buy a guarantee.
+#
+# Containerising the jobs is what makes this safe to alternate: the toolchain
+# is declared in this file, so the same job behaves identically on either.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    # The job runs inside a declared image rather than on whatever the runner
+    # host happens to have. That host is shared with other projects, so any
+    # system-level dependency installed for one of them could change this
+    # pipeline's behaviour without a single commit here. Pinning the image
+    # makes the toolchain part of the repository.
+    #
+    # Node comes from the image because vitest's mock-hoisting transform needs
+    # it (see the setup-node step's history); Bun is installed on top by its
+    # own action, so both versions stay declared and independent.
+    container: node:22-bookworm
     services:
       postgres:
         image: postgres:17-alpine
@@ -15,8 +57,9 @@ jobs:
           POSTGRES_USER: webmail
           POSTGRES_PASSWORD: webmail
           POSTGRES_DB: webmail
-        ports:
-          - 5432:5432
+        # No host port is published: a containerised job shares a network with
+        # its services and reaches them by service name, so nothing binds on
+        # the host and parallel jobs cannot collide over a port at all.
         options: >-
           --health-cmd "pg_isready -U webmail"
           --health-interval 5s
@@ -27,14 +70,59 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
+      # Bun's global package cache. Keyed on the lockfile, so it is reused
+      # until a dependency actually changes rather than re-downloading the
+      # whole tree on every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
         env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
+          # Reached by service name, not localhost: the job and its services
+          # share a network, and no port is published on the host.
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
+      # A containerised job runs as root, so everything it writes into the
+      # shared workspace ends up root-owned. On a self-hosted runner that
+      # workspace persists between runs, and the next job that is NOT
+      # containerised cannot even clean its own checkout — git fails with
+      # EACCES on .git/objects, which reads like repository corruption and is
+      # not. Hand ownership back to whoever the runner created the directory
+      # as, rather than hardcoding a uid that only holds on this machine.
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    # The official Playwright image, pinned to the exact @playwright/test
+    # version the lockfile resolves. These two must match: Playwright refuses
+    # to launch a browser from a mismatched image, and it was a caret range
+    # here that produced the mismatch — the declared floor read 1.49.0 while
+    # the lockfile had long since resolved 1.61.1. The dependency is now
+    # pinned exactly so the pair cannot drift apart again silently.
+    #
+    # It ships Chromium and every system library the browser links against,
+    # plus a matching Node.js, so the runner host needs nothing installed for
+    # this job at all — see the `test` job's container comment for why jobs
+    # are containerised in the first place: the host is shared with other
+    # projects. Node itself is still required (not just Bun): Playwright's
+    # test runner always executes global-setup.ts and the test workers under
+    # a real `node` binary, even when the CLI itself is invoked via `bunx`
+    # (see global-setup.ts's own comment on this) — the image's bundled Node
+    # 22 covers that, so no separate actions/setup-node step is needed here.
+    #
+    # --ipc=host avoids Chromium crashing under Docker's default 64MB
+    # /dev/shm, which is too small for a real browser to run reliably
+    # (Playwright's own documented Docker/CI guidance).
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+      options: --ipc=host
+    permissions:
+      contents: read
+      packages: read
     services:
       postgres:
         image: postgres:17-alpine
@@ -42,64 +130,119 @@ jobs:
           POSTGRES_USER: webmail
           POSTGRES_PASSWORD: webmail
           POSTGRES_DB: webmail
-        ports:
-          - 5432:5432
+        # No host port is published: a containerised job shares a network
+        # with its services and reaches them by service name, exactly like
+        # the `test` job.
         options: >-
           --health-cmd "pg_isready -U webmail"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      stalwart:
+        # Pre-provisioned Stalwart fixture, built from ./e2e/stalwart and
+        # published to ghcr.io (see that directory's README for what's baked
+        # in and how to rebuild/republish it). Pinned to an explicit tag,
+        # never :latest, since this is a fixed test fixture, not a moving
+        # target. `services:` needs a pre-built image rather than a build
+        # context, which is why this is no longer `docker compose build`.
+        image: ghcr.io/noxvytop/cefiro-e2e-stalwart:v1
+        # The package is private, like the repository it belongs to — a test
+        # fixture with seeded mailboxes has no reason to be world-readable.
+        # A service container pulls before any step runs, so it needs the
+        # credential inline; the workflow's own token already has read access
+        # to a package its repository published.
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          # Stalwart's baked config advertises "https://mail.cefiro.test/…"
+          # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set
+          # during the original setup wizard run — see
+          # e2e/stalwart/README.md). That host doesn't resolve here, so a
+          # client following the advertised apiUrl verbatim (as
+          # apps/server/src/infra/stalwart/jmap.ts does) cannot reach it.
+          # STALWART_PUBLIC_URL overrides the advertised base URL
+          # (crates/store/src/registry/local.rs); it must point at this
+          # service's own name and container-native port — the only address
+          # reachable from inside the job container's network — unlike
+          # docker-compose.e2e.yml, which points it at the host-published
+          # localhost:8096 because that setup has no shared service network.
+          STALWART_PUBLIC_URL: "http://stalwart:8080"
+        options: >-
+          --health-cmd "/usr/local/bin/stalwart --version"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
+      # setup-bun extracts a zip, and the Playwright image is slim enough not
+      # to ship unzip. This only surfaced on the second runner: the first had
+      # Bun already in its tool cache and never had to extract anything, so
+      # the job passed there for a reason that had nothing to do with being
+      # correct. Install it explicitly rather than depending on which machine
+      # happens to be warm.
+      - run: apt-get update && apt-get install -y --no-install-recommends unzip
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
       - run: bun install --frozen-lockfile
-      - run: cd e2e && bunx playwright install --with-deps chromium
-      # Brings up the pre-provisioned Stalwart fixture (docker-compose.e2e.yml)
-      # so tests/mail-connect.spec.ts has a real JMAP/SMTP backend to talk to.
-      # Postgres stays the `services:` container above, not part of this
-      # compose file (see docker-compose.e2e.yml's own comment on that).
-      - run: docker compose -f docker-compose.e2e.yml up -d --build
-      - name: Wait for Stalwart to be healthy
-        run: |
-          for i in $(seq 1 20); do
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose -f docker-compose.e2e.yml ps -q stalwart)" 2>/dev/null || true)
-            if [ "$status" = "healthy" ]; then exit 0; fi
-            sleep 3
-          done
-          echo "Stalwart did not become healthy in time" >&2
-          docker compose -f docker-compose.e2e.yml logs
-          exit 1
+      # Chromium and its system deps come from the container image now, not
+      # from a lockfile-cached download + `playwright install`.
       - run: cd e2e && bunx playwright test
         env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
-          E2E_STALWART_URL: http://localhost:8096
+          # Reached by service name, not localhost — no port is published on
+          # the host (mirrors the `test` job).
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
+          E2E_STALWART_URL: http://stalwart:8080
+          STALWART_SMTP_HOST: stalwart
+          STALWART_SMTP_PORT: "465"
+          STALWART_SMTP_PLAIN_PORT: "25"
           CI: "true"
-      - if: always()
-        run: docker compose -f docker-compose.e2e.yml down -v
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
           path: e2e/playwright-report
+      # A containerised job runs as root, so everything it writes into the
+      # shared workspace ends up root-owned. On a self-hosted runner that
+      # workspace persists between runs, and the next job that is NOT
+      # containerised cannot even clean its own checkout — git fails with
+      # EACCES on .git/objects, which reads like repository corruption and is
+      # not. Hand ownership back to whoever the runner created the directory
+      # as, rather than hardcoding a uid that only holds on this machine.
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
 
   publish:
     if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main')
     needs: [test, e2e]
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The image build is the most expensive single step in the pipeline and
+      # a runner starts with an empty Docker layer cache, so without this it
+      # rebuilds every layer — dependency install included — on every release.
+      # mode=max caches intermediate stages too, which is what makes the
+      # multi-stage build actually reuse its install layer.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ghcr.io/noxvytop/cefiro-webmail:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

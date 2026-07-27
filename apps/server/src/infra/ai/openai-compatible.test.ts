@@ -105,6 +105,129 @@ describe("createOpenAiCompatibleClient", () => {
       }
       logSpy.mockRestore();
     });
+
+    // Reasoning models (e.g. Mistral Small 4, mistral-small-2603) return
+    // `message.content` as an array of typed chunks instead of a plain
+    // string when reasoning is active. See GitHub issue #138.
+    it("parses content returned as an array of typed chunks, discarding thinking chunks", async () => {
+      const fetchFn = fetchReturning({
+        choices: [
+          {
+            message: {
+              content: [
+                { type: "thinking", text: "internal reasoning trace, never surfaced" },
+                { type: "text", text: "- First point\n- Second point\n- Third point" },
+              ],
+            },
+          },
+        ],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const result = await client.summarize("body");
+
+      expect(result).toEqual(["First point", "Second point", "Third point"]);
+    });
+
+    it("concatenates multiple text chunks in order, ignoring interleaved thinking chunks", async () => {
+      const fetchFn = fetchReturning({
+        choices: [
+          {
+            message: {
+              content: [
+                { type: "text", text: "- First point\n" },
+                { type: "thinking", text: "reasoning noise that must not leak" },
+                { type: "text", text: "- Second point\n- Third point" },
+              ],
+            },
+          },
+        ],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const result = await client.summarize("body");
+
+      expect(result).toEqual(["First point", "Second point", "Third point"]);
+    });
+
+    it("wraps a content array with zero usable text chunks in a DomainError without leaking thinking content", async () => {
+      const fetchFn = fetchReturning({
+        choices: [{ message: { content: [{ type: "thinking", text: "secret internal reasoning" }] } }],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(client.summarize("body")).rejects.toBeInstanceOf(DomainError);
+      for (const call of logSpy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("secret internal reasoning");
+      }
+      logSpy.mockRestore();
+    });
+
+    it("wraps an empty content array in a DomainError", async () => {
+      const fetchFn = fetchReturning({ choices: [{ message: { content: [] } }] });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(client.summarize("body")).rejects.toBeInstanceOf(DomainError);
+      logSpy.mockRestore();
+    });
+
+    it("ignores a text chunk with no usable string payload", async () => {
+      const fetchFn = fetchReturning({
+        choices: [
+          {
+            message: {
+              content: [{ type: "text" }, { type: "text", text: "- First point\n- Second point\n- Third point" }],
+            },
+          },
+        ],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const result = await client.summarize("body");
+
+      expect(result).toEqual(["First point", "Second point", "Third point"]);
+    });
+
+    it("wraps a non-string, non-array content value (e.g. a number) in a DomainError", async () => {
+      const fetchFn = fetchReturning({ choices: [{ message: { content: 42 } }] });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(client.summarize("body")).rejects.toBeInstanceOf(DomainError);
+      logSpy.mockRestore();
+    });
   });
 
   describe("summarizeThread", () => {
@@ -152,6 +275,31 @@ describe("createOpenAiCompatibleClient", () => {
         expect(JSON.stringify(call)).not.toContain("super secret body content");
       }
       logSpy.mockRestore();
+    });
+
+    it("parses content returned as an array of typed chunks, discarding thinking chunks", async () => {
+      const fetchFn = fetchReturning({
+        choices: [
+          {
+            message: {
+              content: [
+                { type: "thinking", text: "internal reasoning trace, never surfaced" },
+                { type: "text", text: "- Ana propuso empezar el lunes\n- Beto confirmó" },
+              ],
+            },
+          },
+        ],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const result = await client.summarizeThread([{ from: "Ana <ana@x.com>", body: "Propongo." }]);
+
+      expect(result).toEqual(["Ana propuso empezar el lunes", "Beto confirmó"]);
     });
   });
 
@@ -207,6 +355,66 @@ describe("createOpenAiCompatibleClient", () => {
       for (const call of logSpy.mock.calls) {
         expect(JSON.stringify(call)).not.toContain("super secret subject");
       }
+      logSpy.mockRestore();
+    });
+
+    it("concatenates multiple text chunks in order and discards thinking content", async () => {
+      const fetchFn = fetchReturning({
+        choices: [
+          {
+            message: {
+              content: [
+                { type: "text", text: "Estimado equipo, " },
+                { type: "thinking", text: "internal reasoning that must never reach the draft" },
+                { type: "text", text: "adjunto el borrador solicitado." },
+              ],
+            },
+          },
+        ],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const draft = await client.draftReply("Reunión de seguimiento");
+
+      expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
+      expect(draft).not.toContain("internal reasoning");
+    });
+
+    it("wraps a content array with zero usable text chunks in a DomainError without leaking thinking content", async () => {
+      const fetchFn = fetchReturning({
+        choices: [{ message: { content: [{ type: "thinking", text: "secret internal reasoning" }] } }],
+      });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
+      for (const call of logSpy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("secret internal reasoning");
+      }
+      logSpy.mockRestore();
+    });
+
+    it("wraps a null content value in a DomainError", async () => {
+      const fetchFn = fetchReturning({ choices: [{ message: { content: null } }] });
+      const client = createOpenAiCompatibleClient({
+        apiKey: "sk-test",
+        model: "m",
+        baseUrl: "https://api.moonshot.cn/v1",
+        fetchFn,
+      });
+
+      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
       logSpy.mockRestore();
     });
   });

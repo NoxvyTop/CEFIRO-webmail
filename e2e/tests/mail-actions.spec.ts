@@ -7,11 +7,14 @@ import { seedInbox } from "../smtp-seed";
 //   docker compose -f docker-compose.e2e.yml up -d --build
 //   cd e2e && E2E_STALWART_URL=http://localhost:8096 bunx playwright test tests/mail-actions.spec.ts
 
-const STALWART_SMTP_HOST = "localhost";
+// Env-overridable with the same defaults and reasoning as
+// global-setup.ts's identically-named constants — see there for why a
+// containerized CI job overrides these to reach the fixture by service name.
+const STALWART_SMTP_HOST = process.env.STALWART_SMTP_HOST ?? "localhost";
 // The TLS ("SMTPS") listener — see e2e/smtp-seed.ts's file header for why
 // authenticated, TLS-only submission is required to land seeded mail in the
 // Inbox instead of Junk Mail.
-const STALWART_SMTP_PORT = 8465;
+const STALWART_SMTP_PORT = Number(process.env.STALWART_SMTP_PORT ?? 8465);
 
 // A dedicated, uniquely-subjected message seeded straight into the Inbox for
 // this spec only — NOT one of fixtures/mail.ts's SEED_EMAILS, so archiving it

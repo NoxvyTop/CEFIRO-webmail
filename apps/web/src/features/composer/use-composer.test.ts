@@ -4,14 +4,15 @@ import { MailApiError } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
 import { useComposer } from "./useComposer";
 
-const { uploadAttachment, sendEmail, fetchAiDraft, updateMessage } = vi.hoisted(() => ({
+const { uploadAttachment, sendEmail, fetchAiDraft, updateMessage, saveDraftApi } = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
   sendEmail: vi.fn(),
   fetchAiDraft: vi.fn(),
   updateMessage: vi.fn(),
+  saveDraftApi: vi.fn(),
 }));
 
-vi.mock("./api", () => ({ uploadAttachment, sendEmail }));
+vi.mock("./api", () => ({ uploadAttachment, sendEmail, saveDraft: saveDraftApi }));
 vi.mock("./aiApi", () => ({ fetchAiDraft }));
 // Preserve the real MailApiError export (used elsewhere in this file) while
 // injecting a mock for updateMessage, which delete-on-send calls.
@@ -213,6 +214,60 @@ describe("useComposer", () => {
     expect(sentHtml).not.toContain("data-cefiro-quote");
   });
 
+  // GH #120: guards the wire seam between the composer draft and the send
+  // payload — deleting the inReplyTo/references mapping in useComposer.send
+  // would otherwise make the whole threading feature a silent no-op. The
+  // assertions read the captured argument directly rather than through
+  // expect.objectContaining, which also matches when a key is absent.
+  describe("send: RFC 5322 threading headers reach the sendEmail payload", () => {
+    beforeEach(() => {
+      sendEmail.mockReset();
+    });
+
+    it("forwards the draft's inReplyTo and references verbatim", async () => {
+      sendEmail.mockResolvedValueOnce(undefined);
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+        inReplyTo: ["parent@example.com"],
+        references: ["grandparent@example.com", "parent@example.com"],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.send();
+      });
+
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      const payload = sendEmail.mock.calls[0]?.[0] as {
+        inReplyTo?: string[];
+        references?: string[];
+      };
+      expect(payload.inReplyTo).toEqual(["parent@example.com"]);
+      expect(payload.references).toEqual(["grandparent@example.com", "parent@example.com"]);
+    });
+
+    it("leaves both undefined on the payload for a non-reply draft", async () => {
+      sendEmail.mockResolvedValueOnce(undefined);
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.send();
+      });
+
+      const payload = sendEmail.mock.calls[0]?.[0] as {
+        inReplyTo?: string[];
+        references?: string[];
+      };
+      expect(payload.inReplyTo).toBeUndefined();
+      expect(payload.references).toBeUndefined();
+    });
+  });
+
   it("send: maps MailApiError to a namespaced error code and returns false", async () => {
     sendEmail.mockRejectedValueOnce(new MailApiError(503, "mail_not_configured"));
     const draft: ComposerDraft = {
@@ -360,6 +415,136 @@ describe("useComposer", () => {
       });
 
       expect(updateMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  // GH #125: saveDraft() wires composer/api.ts's saveDraft into useComposer,
+  // reusing send()'s payload construction (identity, recipients, subject,
+  // stripSignatureMarkers(bodyHtml), plain-text derivation, attachments,
+  // threading headers) so both actions build the outgoing body identically.
+  describe("saveDraft (#125)", () => {
+    beforeEach(() => {
+      saveDraftApi.mockReset();
+    });
+
+    it("happy path calls the saveDraft API with the mapped input and returns true", async () => {
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      let ok: boolean | undefined;
+      await act(async () => {
+        ok = await result.current.saveDraft();
+      });
+
+      expect(ok).toBe(true);
+      expect(result.current.state.savingDraft).toBe(false);
+      expect(result.current.state.saveDraftError).toBeNull();
+      expect(saveDraftApi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identityId: "id1",
+          to: [{ name: "Bob", email: "bob@example.com" }],
+          cc: [],
+          bcc: [],
+          subject: "Hi",
+          attachments: [],
+        }),
+      );
+    });
+
+    it("does not require a recipient — a draft is work in progress (GH #149)", async () => {
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      let ok: boolean | undefined;
+      await act(async () => {
+        ok = await result.current.saveDraft();
+      });
+
+      expect(ok).toBe(true);
+      expect(result.current.state.saveDraftError).toBeNull();
+    });
+
+    it("strips internal signature/quote marker attributes from the outgoing htmlBody, same as send", async () => {
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        bodyHtml:
+          '<p>Hi</p><div data-cefiro-signature="true"><p>Thanks, Alice</p></div>' +
+          '<div data-cefiro-quote="true"><blockquote><p>Original</p></blockquote></div>',
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.saveDraft();
+      });
+
+      const sentHtml = saveDraftApi.mock.calls[0]?.[0]?.htmlBody as string;
+      expect(sentHtml).toBe("<p>Hi</p><p>Thanks, Alice</p><blockquote><p>Original</p></blockquote>");
+      expect(sentHtml).not.toContain("data-cefiro-signature");
+      expect(sentHtml).not.toContain("data-cefiro-quote");
+    });
+
+    it("carries originalDraftId through to the saveDraft payload when editing an existing draft", async () => {
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
+      const draft: ComposerDraft = { ...baseDraft(), originalDraftId: "orig-1" };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.saveDraft();
+      });
+
+      expect(saveDraftApi).toHaveBeenCalledWith(expect.objectContaining({ originalDraftId: "orig-1" }));
+    });
+
+    it("maps MailApiError to a namespaced error code and returns false, keeping the draft intact", async () => {
+      saveDraftApi.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
+      const draft: ComposerDraft = { ...baseDraft(), subject: "Keep me" };
+      const { result } = renderHook(() => useComposer(draft));
+
+      let ok: boolean | undefined;
+      await act(async () => {
+        ok = await result.current.saveDraft();
+      });
+
+      expect(ok).toBe(false);
+      expect(result.current.state.savingDraft).toBe(false);
+      expect(result.current.state.saveDraftError).toBe("composer.errors.save_draft_failed");
+      // The draft itself is untouched by a failed save — losing the user's
+      // work while trying to save it would be the worst possible outcome.
+      expect(result.current.state.draft.subject).toBe("Keep me");
+    });
+
+    it("does not call the API a second time when saveDraft is invoked again while the first call is still in flight", async () => {
+      let resolveFirst: (value: { id: string }) => void = () => {};
+      saveDraftApi.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      );
+      const { result } = renderHook(() => useComposer(baseDraft()));
+
+      let firstResult: Promise<boolean> = Promise.resolve(false);
+      let secondResult: boolean | undefined;
+      act(() => {
+        firstResult = result.current.saveDraft();
+        void result.current.saveDraft().then((value) => {
+          secondResult = value;
+        });
+      });
+
+      expect(saveDraftApi).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveFirst({ id: "draft-1" });
+        await firstResult;
+      });
+
+      expect(secondResult).toBe(false);
     });
   });
 });

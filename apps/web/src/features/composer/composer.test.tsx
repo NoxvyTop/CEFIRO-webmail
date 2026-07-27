@@ -9,16 +9,23 @@ import { ToastProvider } from "../../app/ui/toast";
 import { MailApiError } from "../mailbox/api";
 import { Composer } from "./Composer";
 
-const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft } = vi.hoisted(() => ({
+const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft, saveDraft } = vi.hoisted(() => ({
   fetchIdentities: vi.fn(),
   fetchSignatures: vi.fn(),
   sendEmail: vi.fn(),
   uploadAttachment: vi.fn(),
   fetchAiDraft: vi.fn(),
+  saveDraft: vi.fn(),
 }));
 
-vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment }));
+// GH #124: RecipientField (used for To/Cc/Bcc) searches contacts for
+// autocomplete suggestions — stubbed here so unrelated tests that type a
+// long-enough address never hit a real endpoint once their debounce fires.
+const { searchContacts } = vi.hoisted(() => ({ searchContacts: vi.fn() }));
+
+vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, saveDraft }));
 vi.mock("./aiApi", () => ({ fetchAiDraft }));
+vi.mock("../contacts/api", () => ({ searchContacts }));
 
 const identities: Identity[] = [
   { id: "id1", name: "Alice", email: "alice@example.com" },
@@ -47,10 +54,34 @@ function renderComposer(onClose = vi.fn(), initial: ComposerDraft = baseDraft())
   return { onClose };
 }
 
+const altSignature: Signature = {
+  id: "sig2",
+  name: "Alt",
+  contentHtml: "<p>Alt sig content</p>",
+  isDefault: false,
+};
+
+function renderWithTwoSignatures(onClose = vi.fn(), initial: ComposerDraft = baseDraft()) {
+  fetchIdentities.mockResolvedValue(identities);
+  fetchSignatures.mockResolvedValue([signatures[0]!, altSignature]);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>
+        <Composer initial={initial} onClose={onClose} />
+      </ToastProvider>
+    </QueryClientProvider>,
+  );
+  return { onClose };
+}
+
 describe("Composer", () => {
   beforeEach(() => {
     fetchAiDraft.mockReset();
     uploadAttachment.mockReset();
+    saveDraft.mockReset();
+    searchContacts.mockReset();
+    searchContacts.mockResolvedValue([]);
   });
 
   it("renders a dialog with identities in the From select", async () => {
@@ -65,7 +96,11 @@ describe("Composer", () => {
   it("adds a recipient chip when typing an email and pressing Enter in To", async () => {
     renderComposer();
 
-    const toInput = await screen.findByRole("textbox", { name: i18n.t("composer.to") });
+    // RecipientField now implements the WAI-ARIA combobox pattern (GH #124
+    // recipient autocomplete), which changes its accessible role from plain
+    // "textbox" to "combobox" — an input with an associated suggestion
+    // popup is semantically a combobox, not a bare textbox.
+    const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
     fireEvent.change(toInput, { target: { value: "bob@example.com" } });
     fireEvent.keyDown(toInput, { key: "Enter" });
 
@@ -75,7 +110,7 @@ describe("Composer", () => {
   it("shows an inline hint and does not add a chip for an invalid email", async () => {
     renderComposer();
 
-    const toInput = await screen.findByRole("textbox", { name: i18n.t("composer.to") });
+    const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
     fireEvent.change(toInput, { target: { value: "not-an-email" } });
     fireEvent.keyDown(toInput, { key: "Enter" });
 
@@ -109,7 +144,7 @@ describe("Composer", () => {
     sendEmail.mockResolvedValueOnce(undefined);
     const { onClose } = renderComposer();
 
-    const toInput = await screen.findByRole("textbox", { name: i18n.t("composer.to") });
+    const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
     fireEvent.change(toInput, { target: { value: "bob@example.com" } });
     fireEvent.keyDown(toInput, { key: "Enter" });
 
@@ -309,27 +344,6 @@ describe("Composer", () => {
   });
 
   describe("default signature auto-apply and switching", () => {
-    const altSignature: Signature = {
-      id: "sig2",
-      name: "Alt",
-      contentHtml: "<p>Alt sig content</p>",
-      isDefault: false,
-    };
-
-    function renderWithTwoSignatures(onClose = vi.fn(), initial: ComposerDraft = baseDraft()) {
-      fetchIdentities.mockResolvedValue(identities);
-      fetchSignatures.mockResolvedValue([signatures[0], altSignature]);
-      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      render(
-        <QueryClientProvider client={client}>
-          <ToastProvider>
-            <Composer initial={initial} onClose={onClose} />
-          </ToastProvider>
-        </QueryClientProvider>,
-      );
-      return { onClose };
-    }
-
     it("auto-applies the default signature on open and pre-selects it in the select", async () => {
       renderWithTwoSignatures();
 
@@ -354,11 +368,17 @@ describe("Composer", () => {
         </QueryClientProvider>,
       );
 
-      const signatureSelect = (await screen.findByRole("combobox", {
-        name: i18n.t("composer.signature"),
-      })) as HTMLSelectElement;
-      await waitFor(() => expect(signatureSelect.querySelectorAll("option")).toHaveLength(2));
-      expect(signatureSelect.value).toBe("");
+      // Only one signature is present (below SIGNATURE_SELECTOR_MIN_COUNT), so
+      // per #132 there is no selector at all here — wait for the From select
+      // to populate as a proxy for "queries have settled" (fetchSignatures
+      // itself isn't reset between tests in this file, so its call count
+      // isn't a reliable readiness signal).
+      const fromSelect = await screen.findByRole("combobox", { name: i18n.t("composer.from") });
+      await waitFor(() => expect(fromSelect.querySelectorAll("option")).toHaveLength(2));
+
+      expect(
+        screen.queryByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).not.toBeInTheDocument();
 
       const body = screen.getByRole("textbox", { name: i18n.t("composer.body") });
       expect(body.textContent).not.toContain("Alt sig content");
@@ -432,6 +452,136 @@ describe("Composer", () => {
     });
   });
 
+  describe("signature selector visibility (#132)", () => {
+    it("renders no signature selector when there are zero signatures", async () => {
+      fetchIdentities.mockResolvedValue(identities);
+      fetchSignatures.mockResolvedValue([]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <Composer initial={baseDraft()} onClose={vi.fn()} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      );
+
+      const fromSelect = await screen.findByRole("combobox", { name: i18n.t("composer.from") });
+      await waitFor(() => expect(fromSelect.querySelectorAll("option")).toHaveLength(2));
+
+      expect(
+        screen.queryByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders no signature selector with exactly one signature, but still auto-applies it as the default", async () => {
+      renderComposer();
+
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+
+      expect(
+        screen.queryByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders the signature selector once there are two or more signatures", async () => {
+      renderWithTwoSignatures();
+
+      expect(
+        await screen.findByRole("combobox", { name: i18n.t("composer.signature") }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("discard control (#126)", () => {
+    it("renders the discard control as a clearly bordered button, reachable by its accessible name", async () => {
+      renderComposer();
+
+      const cancelButton = await screen.findByRole("button", { name: i18n.t("composer.cancel") });
+      // The bare text link this replaces had no border/background at all —
+      // the fix is exactly that it now reads as a real, bordered control.
+      expect(cancelButton).toHaveClass("border");
+    });
+
+    it("calls onClose when the discard control is clicked", async () => {
+      const { onClose } = renderComposer();
+
+      const cancelButton = await screen.findByRole("button", { name: i18n.t("composer.cancel") });
+      fireEvent.click(cancelButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // GH #124: every RecipientField instance (To/Cc/Bcc share the one
+  // component) now implements the WAI-ARIA combobox pattern for recipient
+  // autocomplete, which changes its accessible role from plain "textbox" to
+  // "combobox" — an input with an associated suggestion popup is
+  // semantically a combobox, not a bare textbox. Queries below were updated
+  // accordingly; the accessible name (aria-label) itself is unchanged.
+  describe("independent CC and BCC controls (#123)", () => {
+    it("reveals only the CC field when the CC control is clicked, leaving the BCC control available", async () => {
+      renderComposer();
+
+      const addCcButton = await screen.findByRole("button", { name: i18n.t("composer.addCc") });
+      fireEvent.click(addCcButton);
+
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addBcc") })).toBeInTheDocument();
+    });
+
+    it("reveals only the BCC field when the BCC control is clicked, leaving the CC control available", async () => {
+      renderComposer();
+
+      const addBccButton = await screen.findByRole("button", { name: i18n.t("composer.addBcc") });
+      fireEvent.click(addBccButton);
+
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addCc") })).toBeInTheDocument();
+    });
+
+    it("auto-shows CC (not BCC) when the draft arrives with existing CC recipients", async () => {
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        cc: [{ name: null, email: "cc@example.com" }],
+      });
+
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.bcc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addBcc") })).toBeInTheDocument();
+    });
+
+    it("auto-shows BCC (not CC) when the draft arrives with existing BCC recipients", async () => {
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        bcc: [{ name: null, email: "bcc@example.com" }],
+      });
+
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: i18n.t("composer.cc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("composer.addCc") })).toBeInTheDocument();
+    });
+
+    it("auto-shows both fields, with neither reveal control offered, when the draft arrives with both CC and BCC recipients", async () => {
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        cc: [{ name: null, email: "cc@example.com" }],
+        bcc: [{ name: null, email: "bcc@example.com" }],
+      });
+
+      expect(await screen.findByRole("combobox", { name: i18n.t("composer.cc") })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: i18n.t("composer.bcc") })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addCc") })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("composer.addBcc") })).not.toBeInTheDocument();
+    });
+  });
+
   describe("Redactar con IA", () => {
     it("fills the body and shows the review notice on success", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador solicitado.");
@@ -464,6 +614,267 @@ describe("Composer", () => {
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: i18n.t("composer.draftWithAi") })).not.toBeInTheDocument(),
       );
+    });
+  });
+
+  // GH #125: Escape closes the composer immediately when the draft is empty,
+  // otherwise shows a discard-confirmation dialog offering Discard / Save to
+  // drafts / keep editing.
+  describe("Escape-to-close (#125)", () => {
+    function pressEscape() {
+      fireEvent.keyDown(window, { key: "Escape" });
+    }
+
+    it("closes immediately on Escape when the composer is untouched (brand-new, empty draft)", async () => {
+      const { onClose } = renderComposer();
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("closes immediately on Escape for an untouched reply (quote + auto-applied signature present, nothing typed)", async () => {
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        bodyHtml: '<div data-cefiro-quote="true"><blockquote><p>Original message</p></blockquote></div>',
+      });
+
+      // Wait for the default-signature auto-apply effect to settle so the
+      // body genuinely carries both a quote AND a signature wrapper, as a
+      // freshly opened reply would.
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      await waitFor(() => expect(body.textContent).toContain("Thanks"));
+      expect(body.textContent).toContain("Original message");
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("shows the discard confirmation on Escape when a recipient is present", async () => {
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: null, email: "bob@example.com" }],
+      });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when a subject is present", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when the body has been typed into", async () => {
+      const { onClose } = renderComposer();
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      fireEvent.input(body, { target: { innerHTML: "<p>hello there</p>" } });
+      await waitFor(() => expect(body.textContent).toContain("hello there"));
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when an attachment has been uploaded and nothing else was typed", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "image/png", size: 5 });
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "photo.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(await screen.findByTestId("attachment-card-thumbnail")).toBeInTheDocument();
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation on Escape when an upload is still in flight and nothing else was typed", async () => {
+      uploadAttachment.mockReturnValueOnce(new Promise(() => {})); // never resolves — stays pending
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "uploading.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      expect(await screen.findByText(/uploading\.png/)).toBeInTheDocument();
+
+      pressEscape();
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("returns to empty once the only attachment is removed, so Escape closes immediately again", async () => {
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "image/png", size: 5 });
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "photo.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(await screen.findByTestId("attachment-card-thumbnail")).toBeInTheDocument();
+
+      const removeButton = screen.getByRole("button", {
+        name: i18n.t("attachments.remove", { name: "photo.png" }),
+      });
+      fireEvent.click(removeButton);
+      await waitFor(() =>
+        expect(screen.queryAllByTestId("attachment-card-thumbnail")).toHaveLength(0),
+      );
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("Discard closes the composer without saving", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const discardButton = await screen.findByRole("button", { name: i18n.t("composer.discardConfirm.discard") });
+      fireEvent.click(discardButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(saveDraft).not.toHaveBeenCalled();
+    });
+
+    it("Save to drafts calls the API with the composer's payload and closes on success", async () => {
+      saveDraft.mockResolvedValueOnce({ id: "draft-1" });
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+        subject: "Hello there",
+      });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const saveButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      fireEvent.click(saveButton);
+
+      await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+      expect(saveDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identityId: "id1",
+          to: [{ name: "Bob", email: "bob@example.com" }],
+          subject: "Hello there",
+        }),
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it("keeps the composer open and surfaces an error when saving to drafts fails, without losing the draft", async () => {
+      saveDraft.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: "Bob", email: "bob@example.com" }],
+      });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const saveButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      fireEvent.click(saveButton);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("composer.errors.save_draft_failed"));
+      expect(onClose).not.toHaveBeenCalled();
+
+      // The draft itself must still be intact — return to editing and check
+      // the recipient chip entered earlier is still there.
+      const keepEditingButton = screen.getByRole("button", {
+        name: i18n.t("composer.discardConfirm.keepEditing"),
+      });
+      fireEvent.click(keepEditingButton);
+      // The recipient chip renders the address's name (see RecipientField.tsx).
+      expect(await screen.findByText("Bob")).toBeInTheDocument();
+    });
+
+    it("Escape inside the confirmation dismisses it and returns to editing, without closing the composer", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+      await screen.findByRole("alertdialog");
+
+      pressEscape();
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
+    });
+
+    it("cannot trigger the save action twice while the first save is still in flight", async () => {
+      let resolveSave: (value: { id: string }) => void = () => {};
+      saveDraft.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSave = resolve;
+          }),
+      );
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const saveButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      fireEvent.click(saveButton);
+      fireEvent.click(saveButton);
+
+      expect(saveDraft).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveSave({ id: "draft-1" });
+      });
+    });
+  });
+
+  // GH #124: the recipient autocomplete dropdown must swallow its own
+  // Escape key — otherwise it would bubble up to the composer's own
+  // Escape-to-close handler (GH #125, above) and close (or discard-confirm)
+  // the whole composer out from under a user who only meant to dismiss the
+  // suggestion list.
+  describe("recipient autocomplete does not leak Escape to the composer (#124)", () => {
+    it("closes only the suggestion list on Escape, leaving the composer open and untouched", async () => {
+      searchContacts.mockResolvedValueOnce([
+        { id: "c1", name: "Bob Smith", email: "bob@example.com", source: "manual" },
+      ]);
+      const { onClose } = renderComposer();
+
+      const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
+      fireEvent.change(toInput, { target: { value: "bo" } });
+
+      expect(await screen.findByRole("option", { name: /Bob Smith/ })).toBeInTheDocument();
+
+      fireEvent.keyDown(toInput, { key: "Escape" });
+
+      await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 });

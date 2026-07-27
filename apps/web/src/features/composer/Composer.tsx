@@ -4,13 +4,22 @@ import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
 import { fetchIdentities, fetchSignatures } from "./api";
 import { useComposer, type PendingUpload } from "./useComposer";
+import { isComposerDraftEmpty } from "./emptiness";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import type { ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
+import { Button } from "../../app/ui/Button";
 import { CloseIcon } from "../../app/ui/icons";
 import { useToast } from "../../app/ui/toast";
 import { AttachmentCard } from "../reader/AttachmentCard";
+
+// A <select> exists to let the user choose between options. With at most one
+// signature there is nothing to choose — it's apply-or-not, a toggle wearing
+// a dropdown's clothes — so the selector only earns its place once there are
+// at least this many signatures. One line to revisit if that threshold ever
+// needs to change.
+export const SIGNATURE_SELECTOR_MIN_COUNT = 2;
 
 interface ComposerProps {
   initial: ComposerDraft;
@@ -51,20 +60,156 @@ function PendingUploadCard({ upload }: { upload: PendingUpload }) {
   );
 }
 
+interface DiscardConfirmDialogProps {
+  saving: boolean;
+  saveError: string | null;
+  onDiscard(): void;
+  onSaveToDrafts(): void;
+  onKeepEditing(): void;
+}
+
+// GH #125: shown when Escape is pressed on a composer that has content.
+// Mirrors NewLabelModal.tsx/ShortcutsOverlay.tsx's existing dialog precedent
+// in this codebase — a full-screen bg-overlay backdrop, backdrop-click
+// dismissal, focus moved in on open and restored on close, and its own
+// Escape-to-dismiss effect scoped to this dialog only (never the composer
+// itself — see the outer Escape handler in Composer below, which defers to
+// this dialog whenever it's mounted).
+function DiscardConfirmDialog({
+  saving, saveError, onDiscard, onSaveToDrafts, onKeepEditing,
+}: DiscardConfirmDialogProps) {
+  const { t } = useTranslation();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+
+    return () => {
+      previouslyFocusedRef.current?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onKeepEditing();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onKeepEditing]);
+
+  return (
+    <div
+      role="alertdialog"
+      aria-label={t("composer.discardConfirm.title")}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
+      onClick={onKeepEditing}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        className="flex w-full max-w-[360px] flex-col gap-4 rounded-[14px] border border-line bg-panel p-5 shadow-pop outline-none"
+        style={{ animation: "popIn 0.18s ease" }}
+      >
+        <div>
+          <h2 className="text-[14px] font-[650]">{t("composer.discardConfirm.title")}</h2>
+          <p className="mt-1 text-[13px] text-muted">{t("composer.discardConfirm.description")}</p>
+        </div>
+        {saveError && (
+          <p role="alert" className="text-[12.5px] text-warn">
+            {t(saveError)}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={onKeepEditing} disabled={saving}>
+            {t("composer.discardConfirm.keepEditing")}
+          </Button>
+          <Button variant="secondary" onClick={onDiscard} disabled={saving}>
+            {t("composer.discardConfirm.discard")}
+          </Button>
+          <Button variant="primary" onClick={onSaveToDrafts} disabled={saving}>
+            {saving ? t("composer.discardConfirm.savingToDrafts") : t("composer.discardConfirm.saveToDrafts")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send, draftWithAi } = useComposer(
+  const { state, setField, addFiles, removeAttachment, send, saveDraft, draftWithAi } = useComposer(
     initial,
     trashMailboxId,
   );
-  const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
+  // Split into two independent reveal states (#123) — a draft arriving with
+  // CC recipients (e.g. reply-all, see reply.ts's replyDraft) must show CC
+  // without also showing an unrelated, still-empty BCC field, and vice versa.
+  const [showCc, setShowCc] = useState(initial.cc.length > 0);
+  const [showBcc, setShowBcc] = useState(initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Guards the default-signature auto-apply so it only runs once per composer
   // session (on open), not on every render once signatures finish loading.
   const appliedDefaultRef = useRef(false);
+  // GH #125: Escape-to-close. This dialog's own root element, so the outer
+  // Escape handler below can tell its own dialog apart from a nested one
+  // (the discard confirmation) layered on top of it.
+  const composerRootRef = useRef<HTMLDivElement>(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+
+  // Escape closes the composer immediately when the draft is empty, or opens
+  // the discard confirmation otherwise (isComposerDraftEmpty, see
+  // composer/emptiness.ts). Mirrors shortcuts.ts's isModalOpen reasoning —
+  // a [role="dialog"]/[role="alertdialog"] element marks a keyboard-owning
+  // overlay — but isModalOpen itself can't be reused unmodified here: it
+  // would always report "a dialog is open" because this composer's own root
+  // already carries role="dialog". This handler excludes that one element so
+  // a genuinely nested overlay (the discard confirmation below, or any
+  // other dialog layered on top) still gets to own Escape instead of this
+  // outer handler racing it.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+
+      const overlays = document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+      const hasNestedOverlay = Array.from(overlays).some((overlay) => overlay !== composerRootRef.current);
+      if (hasNestedOverlay) return;
+
+      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
+        onClose();
+        return;
+      }
+      setDiscardConfirmOpen(true);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [state.draft, state.attachments.length, state.uploads.length, onClose]);
+
+  function handleKeepEditing() {
+    setDiscardConfirmOpen(false);
+  }
+
+  function handleDiscard() {
+    setDiscardConfirmOpen(false);
+    onClose();
+  }
+
+  async function handleSaveToDrafts() {
+    if (state.savingDraft) return;
+    const ok = await saveDraft();
+    if (ok) {
+      setDiscardConfirmOpen(false);
+      onClose();
+    }
+    // On failure, state.saveDraftError is already set by useComposer and
+    // rendered inside DiscardConfirmDialog — stay open, draft intact.
+  }
 
   const identitiesQuery = useQuery({ queryKey: ["mail", "identities"], queryFn: fetchIdentities });
   const signaturesQuery = useQuery({ queryKey: ["mail", "signatures"], queryFn: fetchSignatures });
@@ -143,6 +288,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
 
   return (
     <div
+      ref={composerRootRef}
       role="dialog"
       aria-label={t("composer.newMessage")}
       className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6"
@@ -197,28 +343,41 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             onChange={(value) => setField("to", value)}
           />
 
-          {!showCcBcc && (
-            <button
-              type="button"
-              onClick={() => setShowCcBcc(true)}
-              className="self-start text-xs text-accent-text underline"
-            >
-              {t("composer.addCcBcc")}
-            </button>
+          {(!showCc || !showBcc) && (
+            <div className="flex items-center gap-3">
+              {!showCc && (
+                <button
+                  type="button"
+                  onClick={() => setShowCc(true)}
+                  className="self-start text-xs text-accent-text underline"
+                >
+                  {t("composer.addCc")}
+                </button>
+              )}
+              {!showBcc && (
+                <button
+                  type="button"
+                  onClick={() => setShowBcc(true)}
+                  className="self-start text-xs text-accent-text underline"
+                >
+                  {t("composer.addBcc")}
+                </button>
+              )}
+            </div>
           )}
-          {showCcBcc && (
-            <>
-              <RecipientField
-                label={t("composer.cc")}
-                value={state.draft.cc}
-                onChange={(value) => setField("cc", value)}
-              />
-              <RecipientField
-                label={t("composer.bcc")}
-                value={state.draft.bcc}
-                onChange={(value) => setField("bcc", value)}
-              />
-            </>
+          {showCc && (
+            <RecipientField
+              label={t("composer.cc")}
+              value={state.draft.cc}
+              onChange={(value) => setField("cc", value)}
+            />
+          )}
+          {showBcc && (
+            <RecipientField
+              label={t("composer.bcc")}
+              value={state.draft.bcc}
+              onChange={(value) => setField("bcc", value)}
+            />
           )}
 
           <input
@@ -229,22 +388,24 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink field-focus-line focus:border-accent placeholder:font-normal placeholder:text-muted"
           />
 
-          <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
-            {t("composer.signature")}
-            <select
-              aria-label={t("composer.signature")}
-              value={appliedSignatureId}
-              onChange={(event) => handleSignatureChange(event.target.value)}
-              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
-            >
-              <option value="">{t("composer.noSignature")}</option>
-              {signatures.map((signature) => (
-                <option key={signature.id} value={signature.id}>
-                  {signature.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {signatures.length >= SIGNATURE_SELECTOR_MIN_COUNT && (
+            <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
+              {t("composer.signature")}
+              <select
+                aria-label={t("composer.signature")}
+                value={appliedSignatureId}
+                onChange={(event) => handleSignatureChange(event.target.value)}
+                className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
+              >
+                <option value="">{t("composer.noSignature")}</option>
+                {signatures.map((signature) => (
+                  <option key={signature.id} value={signature.id}>
+                    {signature.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <RichTextEditor
             html={state.draft.bodyHtml}
@@ -303,18 +464,18 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2.5 px-5 py-4">
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={handleSend}
             disabled={state.sending}
-            className="flex h-[38px] items-center gap-2 rounded-[11px] bg-accent px-[22px] text-[14px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            className="flex h-[38px] items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
           >
             {state.sending ? t("composer.sending") : t("composer.send")}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M22 2 11 13" />
               <path d="M22 2 15 22l-4-9-9-4Z" />
             </svg>
-          </button>
+          </Button>
           {!state.aiUnavailable && (
             <button
               type="button"
@@ -326,15 +487,24 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             </button>
           )}
           <span className="flex-1" />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={onClose}
-            className="rounded-lg px-2.5 py-2 text-[13px] text-muted transition hover:bg-hover"
+            className="rounded-lg px-3 py-2 text-[13px] font-semibold"
           >
             {t("composer.cancel")}
-          </button>
+          </Button>
         </div>
       </div>
+      {discardConfirmOpen && (
+        <DiscardConfirmDialog
+          saving={state.savingDraft}
+          saveError={state.saveDraftError}
+          onDiscard={handleDiscard}
+          onSaveToDrafts={() => void handleSaveToDrafts()}
+          onKeepEditing={handleKeepEditing}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createSignature, deleteSignature, fetchIdentities, fetchSignatures,
-  sendEmail, updateSignature, uploadAttachment,
+  saveDraft, sendEmail, updateSignature, uploadAttachment,
 } from "./api";
 
 const identity = { id: "id1", name: "Alice", email: "alice@example.com" };
@@ -68,6 +68,43 @@ describe("composer api client", () => {
     expect(String(url)).toBe("/api/mail/send");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("POSTs a new draft and returns its id", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "draft-1" }))) as unknown as FetchMock;
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      identityId: "id1", to: [], cc: [], bcc: [],
+      subject: "", textBody: "hello", attachments: [],
+    };
+    const result = await saveDraft(input as never);
+    expect(result).toEqual({ id: "draft-1" });
+    const [url, init] = (fetchMock as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
+    expect(String(url)).toBe("/api/mail/drafts");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("carries originalDraftId through when replacing an existing draft", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "draft-2" }))) as unknown as FetchMock;
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      identityId: "id1", to: [], cc: [], bcc: [],
+      subject: "", textBody: "hello", attachments: [], originalDraftId: "draft-old",
+    };
+    await saveDraft(input as never);
+    const [, init] = (fetchMock as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("throws MailApiError with the envelope code when saving a draft fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ code: "invalid_identity", message: "x", traceId: "t" }), { status: 400 }),
+    ));
+    const input = {
+      identityId: "bad", to: [], cc: [], bcc: [], subject: "", textBody: "hi", attachments: [],
+    };
+    await expect(saveDraft(input as never)).rejects.toMatchObject({ status: 400, code: "invalid_identity" });
   });
 
   class FakeXhrUpload {

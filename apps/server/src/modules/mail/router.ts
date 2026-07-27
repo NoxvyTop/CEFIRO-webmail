@@ -3,6 +3,8 @@ import {
   blobUploadResultSchema,
   emailUpdateSchema,
   identitySchema,
+  saveDraftResultSchema,
+  saveDraftSchema,
   sendEmailSchema,
   signatureInputSchema,
   userPreferencesUpdateSchema,
@@ -16,7 +18,11 @@ import {
   type ThreadDetail,
 } from "@webmail/shared";
 import { requireSession } from "../auth/middleware";
+import { log } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
+import { harvestContacts } from "./contacts-harvest";
+import { deriveSenderAuthVerdict } from "./sender-auth";
+import type { JmapAuth, JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
 
 type JmapMailbox = {
   id: string;
@@ -56,6 +62,14 @@ type JmapAttachment = {
   cid?: string | null;
 };
 
+// GH #136: the full, ordered header list (RFC 8621 §4.1.1) — requested
+// instead of the narrower `header:Authentication-Results:asText` accessor
+// because this server can return the WRONG instance from that accessor when
+// a message carries more than one header with the same name (e.g. a sender-
+// forged one). See sender-auth.ts's file header for the live investigation
+// behind this choice.
+type JmapHeader = { name: string; value: string };
+
 type JmapEmailDetail = JmapEmail & {
   cc?: JmapEmailAddress[];
   replyTo?: JmapEmailAddress[];
@@ -63,6 +77,14 @@ type JmapEmailDetail = JmapEmail & {
   textBody?: JmapBodyPart[];
   bodyValues?: Record<string, JmapBodyValue>;
   attachments?: JmapAttachment[];
+  // RFC 5322 threading headers (this message's own Message-ID, the
+  // Message-IDs of its ancestors, and the Message-ID it replied to) — see
+  // EmailDetail.messageId/.references/.inReplyTo in @webmail/shared for how
+  // the composer uses these to build a reply's In-Reply-To/References.
+  messageId?: string[] | null;
+  references?: string[] | null;
+  inReplyTo?: string[] | null;
+  headers?: JmapHeader[];
 };
 
 type JmapThread = { id: string; emailIds: string[] };
@@ -162,6 +184,10 @@ function toEmailDetail(email: JmapEmailDetail): EmailDetail {
     bodyHtml: concatBodyValues(email.htmlBody, email.bodyValues),
     bodyText: concatBodyValues(email.textBody, email.bodyValues),
     attachments: toAttachments(email.attachments),
+    messageId: email.messageId ?? null,
+    references: email.references ?? null,
+    inReplyTo: email.inReplyTo ?? null,
+    senderAuth: deriveSenderAuthVerdict(email.headers),
   };
 }
 
@@ -184,6 +210,158 @@ function baseMimeType(contentType: string): string {
   const semicolonIndex = contentType.indexOf(";");
   const raw = semicolonIndex === -1 ? contentType : contentType.slice(0, semicolonIndex);
   return raw.trim().toLowerCase();
+}
+
+// Shared by /send and /drafts (GH #149): both need the sending identity
+// resolved and the account's mailbox roles before they can build the
+// Email/set create object below. Each caller picks whichever roles it needs
+// (drafts always; sent/trash depending on the route) out of the returned
+// list — resolving all roles here keeps this lookup reusable instead of
+// baking a specific role requirement into it.
+async function lookupComposeContext(
+  jmap: JmapClient,
+  auth: JmapAuth,
+  session: JmapSession,
+  identityId: string,
+): Promise<{ identity: JmapIdentity; mailboxes: JmapMailbox[] } | null> {
+  const lookup = await jmap.request(auth, session, [
+    ["Identity/get", { accountId: session.accountId, ids: [identityId] }, "i"],
+    ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
+  ]);
+
+  const identityResult = (lookup[0]?.[1] ?? {}) as { list?: JmapIdentity[] };
+  const identity = (identityResult.list ?? [])[0];
+  if (!identity) return null;
+
+  const mailboxResult = (lookup[1]?.[1] ?? {}) as { list?: JmapMailbox[] };
+  return { identity, mailboxes: mailboxResult.list ?? [] };
+}
+
+type ComposeAttachment = { blobId: string; name: string; type: string };
+
+type ComposeEmailInput = {
+  identity: JmapIdentity;
+  draftsMailboxId: string;
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  bcc: EmailAddress[];
+  subject: string;
+  textBody: string;
+  htmlBody?: string;
+  attachments: ComposeAttachment[];
+  inReplyTo?: string[];
+  references?: string[];
+  keywords: Record<string, boolean>;
+};
+
+// Shared by /send and /drafts (GH #149): the Email/set create object is
+// identical between "submit now" and "save for later" — identity,
+// recipients, subject, body values, attachments by blobId and threading
+// headers — so it is built in one place and each route only supplies the
+// mailboxIds/keywords that differ (see keywords/draftsMailboxId above).
+function buildComposeEmailCreate(input: ComposeEmailInput): Record<string, unknown> {
+  return {
+    from: [{ name: input.identity.name || null, email: input.identity.email }],
+    to: input.to,
+    cc: input.cc,
+    bcc: input.bcc,
+    subject: input.subject,
+    keywords: input.keywords,
+    mailboxIds: { [input.draftsMailboxId]: true },
+    bodyValues: {
+      t: { value: input.textBody },
+      ...(input.htmlBody ? { h: { value: input.htmlBody } } : {}),
+    },
+    textBody: [{ partId: "t", type: "text/plain" }],
+    ...(input.htmlBody ? { htmlBody: [{ partId: "h", type: "text/html" }] } : {}),
+    ...(input.attachments.length > 0
+      ? {
+          attachments: input.attachments.map((a) => ({
+            blobId: a.blobId,
+            type: a.type,
+            name: a.name,
+            disposition: "attachment",
+          })),
+        }
+      : {}),
+    // Guard on length, not truthiness: [] is truthy in JavaScript, so a
+    // plain `input.inReplyTo ? ...` would forward an empty array to
+    // Email/set instead of omitting the property entirely.
+    ...(input.inReplyTo?.length ? { inReplyTo: input.inReplyTo } : {}),
+    ...(input.references?.length ? { references: input.references } : {}),
+  };
+}
+
+// Whether `email` is genuinely a draft sitting in the account's Drafts
+// mailbox, and therefore a legitimate target for the move-to-Trash cleanup
+// POST /drafts performs on a superseded original.
+//
+// originalDraftId arrives from the client and proves nothing on its own: the
+// web app routes ?compose=draft:<id> through buildEditDraft for ANY message
+// in the opened thread (see MailPage.tsx), so an inbox or sent message can
+// reach the route as the claimed "original". Without this check, saving from
+// such a composer would move a real received message to Trash and report 200.
+//
+// Both halves are required. The $draft keyword alone would accept a draft the
+// user already moved elsewhere, and membership of Drafts alone would accept
+// any message filed there by a filter.
+function isDraftInMailbox(email: JmapEmail | undefined, draftsMailboxId: string): boolean {
+  if (!email) return false;
+  return email.keywords?.["$draft"] === true && email.mailboxIds?.[draftsMailboxId] === true;
+}
+
+// Moves the draft a newly saved one supersedes into Trash. Called only after
+// the replacement has been confirmed to exist, and never allowed to fail the
+// save — see the call site for why.
+async function trashSupersededDraft(input: {
+  jmap: JmapClient;
+  auth: JmapAuth;
+  session: JmapSession;
+  originalDraftId: string;
+  original: JmapEmail | undefined;
+  draftsMailboxId: string;
+  trashMailboxId: string;
+}): Promise<void> {
+  if (!isDraftInMailbox(input.original, input.draftsMailboxId)) {
+    log("warn", "save draft: original is not a draft in Drafts, not trashing it", {
+      originalDraftId: input.originalDraftId,
+    });
+    return;
+  }
+
+  const responses = await input.jmap.request(input.auth, input.session, [
+    [
+      "Email/set",
+      {
+        accountId: input.session.accountId,
+        update: {
+          [input.originalDraftId]: {
+            [`mailboxIds/${input.draftsMailboxId}`]: null,
+            [`mailboxIds/${input.trashMailboxId}`]: true,
+          },
+        },
+      },
+      "r",
+    ],
+  ]);
+
+  const result = (responses[0]?.[1] ?? {}) as {
+    updated?: Record<string, unknown>;
+    notUpdated?: Record<string, unknown>;
+  };
+
+  // Positive confirmation, the same way PATCH /messages/:id above does it:
+  // mere absence from notUpdated is not success. A response that names the id
+  // in neither map means the server never reported moving anything, and
+  // reading that as "moved" would silently hide a leftover draft.
+  const rejected = Boolean(result.notUpdated && input.originalDraftId in result.notUpdated);
+  const confirmed = Boolean(result.updated && input.originalDraftId in result.updated);
+  if (rejected || !confirmed) {
+    log("warn", "save draft: original draft was not confirmed moved to Trash", {
+      originalDraftId: input.originalDraftId,
+      rejected,
+    });
+  }
 }
 
 export function createMailRouter(deps: MailDeps) {
@@ -571,6 +749,24 @@ export function createMailRouter(deps: MailDeps) {
       position: queryResult.position ?? 0,
       emails: sorted.map(toEmailSummary),
     };
+
+    // GH #124: best-effort address-book harvest from this page's senders.
+    // Only runs when a contacts repo is wired (deps.contacts is optional —
+    // see context.ts) and never affects this response: harvestContacts logs
+    // and swallows its own failures instead of throwing.
+    if (deps.contacts) {
+      const user = c.get("user");
+      await harvestContacts({
+        contacts: deps.contacts,
+        jmap: deps.jmap!,
+        auth: c.get("jmapAuth"),
+        session,
+        userId: user.userId,
+        ownerEmail: user.email,
+        emails: sorted,
+      });
+    }
+
     return c.json(page);
   });
 
@@ -602,6 +798,14 @@ export function createMailRouter(deps: MailDeps) {
             "textBody",
             "bodyValues",
             "attachments",
+            "messageId",
+            "references",
+            "inReplyTo",
+            // GH #136: full ordered header list, used to derive the sender-
+            // authenticity verdict — see sender-auth.ts and the JmapHeader
+            // comment above for why the generic `headers` property is
+            // requested instead of a narrower `header:X:asText` accessor.
+            "headers",
           ],
           fetchHTMLBodyValues: true,
           fetchTextBodyValues: true,
@@ -687,6 +891,75 @@ export function createMailRouter(deps: MailDeps) {
     );
   });
 
+  // GH #133: permanently destroys a message via Email/set `destroy`. This is
+  // irreversible, so the route does not trust the client's claim that the id
+  // it sends is actually sitting in Trash — the web app only ever offers
+  // "Delete permanently" while viewing Trash, but that's a UI affordance, not
+  // a security boundary, and an id can arrive here from anywhere. The same
+  // lesson as the save-draft route's originalDraftId check above: trusting a
+  // client-supplied id without verifying it server-side let that route trash
+  // an arbitrary message. Here the stakes are higher (destroy, not move), so
+  // the message's mailbox membership is looked up and checked BEFORE the
+  // destroy is ever issued. The cost is one extra JMAP round trip (a batched
+  // Mailbox/get + Email/get) ahead of the Email/set destroy call.
+  //
+  // Email/get is scoped to this session's own accountId, so a message
+  // belonging to a different account never appears in the lookup — it comes
+  // back as an empty list, indistinguishable from "no such message", and is
+  // refused the same way as any id that isn't genuinely in Trash.
+  router.delete("/messages/:id", requireMail(deps), async (c) => {
+    const id = c.req.param("id");
+    const session = c.get("jmapSession");
+    const auth = c.get("jmapAuth");
+
+    const lookup = await deps.jmap!.request(auth, session, [
+      ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
+      ["Email/get", { accountId: session.accountId, ids: [id], properties: ["id", "mailboxIds"] }, "e"],
+    ]);
+
+    const mailboxResult = (lookup[0]?.[1] ?? {}) as { list?: JmapMailbox[] };
+    const trashId = (mailboxResult.list ?? []).find((m) => m.role === "trash")?.id;
+
+    const emailResult = (lookup[1]?.[1] ?? {}) as { list?: JmapEmail[] };
+    const email = (emailResult.list ?? [])[0];
+
+    const isInTrash = Boolean(trashId && email?.mailboxIds?.[trashId] === true);
+    if (!isInTrash) {
+      return c.json(
+        { code: "not_in_trash", message: "errors.not_in_trash", traceId: c.get("traceId") },
+        409,
+      );
+    }
+
+    const responses = await deps.jmap!.request(auth, session, [
+      ["Email/set", { accountId: session.accountId, destroy: [id] }, "d"],
+    ]);
+
+    const setResult = (responses[0]?.[1] ?? {}) as {
+      destroyed?: string[];
+      notDestroyed?: Record<string, unknown>;
+    };
+
+    // Same rigor PATCH /messages/:id applies above: check the negative
+    // (notDestroyed) first, then require a positive confirmation (id present
+    // in `destroyed`) before reporting success — a response that names the
+    // id in neither is not proof anything was actually destroyed.
+    if (setResult.notDestroyed && id in setResult.notDestroyed) {
+      return c.json(
+        { code: "destroy_failed", message: "errors.destroy_failed", traceId: c.get("traceId") },
+        409,
+      );
+    }
+    if (setResult.destroyed && setResult.destroyed.includes(id)) {
+      return c.json({ ok: true });
+    }
+
+    return c.json(
+      { code: "destroy_failed", message: "errors.destroy_failed", traceId: c.get("traceId") },
+      409,
+    );
+  });
+
   router.post("/send", requireMail(deps), async (c) => {
     let body: unknown;
     try {
@@ -709,24 +982,17 @@ export function createMailRouter(deps: MailDeps) {
     const session = c.get("jmapSession");
     const auth = c.get("jmapAuth");
 
-    const lookup = await deps.jmap!.request(auth, session, [
-      ["Identity/get", { accountId: session.accountId, ids: [input.identityId] }, "i"],
-      ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
-    ]);
-
-    const identityResult = (lookup[0]?.[1] ?? {}) as { list?: JmapIdentity[] };
-    const identity = (identityResult.list ?? [])[0];
-    if (!identity) {
+    const context = await lookupComposeContext(deps.jmap!, auth, session, input.identityId);
+    if (!context) {
       return c.json(
         { code: "invalid_identity", message: "errors.invalid_identity", traceId: c.get("traceId") },
         400,
       );
     }
+    const { identity, mailboxes } = context;
 
-    const mailboxResult = (lookup[1]?.[1] ?? {}) as { list?: JmapMailbox[] };
-    const mailboxList = mailboxResult.list ?? [];
-    const draftsId = mailboxList.find((m) => m.role === "drafts")?.id;
-    const sentId = mailboxList.find((m) => m.role === "sent")?.id;
+    const draftsId = mailboxes.find((m) => m.role === "drafts")?.id;
+    const sentId = mailboxes.find((m) => m.role === "sent")?.id;
     if (!draftsId || !sentId) {
       return c.json(
         { code: "mailbox_roles_missing", message: "errors.mailbox_roles_missing", traceId: c.get("traceId") },
@@ -734,33 +1000,20 @@ export function createMailRouter(deps: MailDeps) {
       );
     }
 
-    const create: Record<string, unknown> = {
-      from: [{ name: identity.name || null, email: identity.email }],
+    const create = buildComposeEmailCreate({
+      identity,
+      draftsMailboxId: draftsId,
       to: input.to,
       cc: input.cc,
       bcc: input.bcc,
       subject: input.subject,
+      textBody: input.textBody,
+      htmlBody: input.htmlBody,
+      attachments: input.attachments,
+      inReplyTo: input.inReplyTo,
+      references: input.references,
       keywords: { $seen: true },
-      mailboxIds: { [draftsId]: true },
-      bodyValues: {
-        t: { value: input.textBody },
-        ...(input.htmlBody ? { h: { value: input.htmlBody } } : {}),
-      },
-      textBody: [{ partId: "t", type: "text/plain" }],
-      ...(input.htmlBody ? { htmlBody: [{ partId: "h", type: "text/html" }] } : {}),
-      ...(input.attachments.length > 0
-        ? {
-            attachments: input.attachments.map((a) => ({
-              blobId: a.blobId,
-              type: a.type,
-              name: a.name,
-              disposition: "attachment",
-            })),
-          }
-        : {}),
-      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
-      ...(input.references ? { references: input.references } : {}),
-    };
+    });
 
     const sendResponses = await deps.jmap!.request(auth, session, [
       ["Email/set", { accountId: session.accountId, create: { draft: create } }, "e"],
@@ -798,6 +1051,153 @@ export function createMailRouter(deps: MailDeps) {
     }
 
     return c.json({ ok: true });
+  });
+
+  // GH #149: creates the same kind of message /send does, but leaves it in
+  // Drafts instead of submitting it — no EmailSubmission/set is ever issued
+  // here, which is the whole difference from /send above.
+  router.post("/drafts", requireMail(deps), async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const parsed = saveDraftSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const input = parsed.data;
+
+    const session = c.get("jmapSession");
+    const auth = c.get("jmapAuth");
+
+    const context = await lookupComposeContext(deps.jmap!, auth, session, input.identityId);
+    if (!context) {
+      return c.json(
+        { code: "invalid_identity", message: "errors.invalid_identity", traceId: c.get("traceId") },
+        400,
+      );
+    }
+    const { identity, mailboxes } = context;
+
+    const draftsId = mailboxes.find((m) => m.role === "drafts")?.id;
+    if (!draftsId) {
+      return c.json(
+        { code: "mailbox_roles_missing", message: "errors.mailbox_roles_missing", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    // The trash role is needed only to clean up a superseded original, and is
+    // deliberately NOT a precondition for saving: an account whose Trash
+    // mailbox is missing must still be able to store the user's work. Making
+    // an impossible tidy-up block the save would refuse to save for a reason
+    // that has nothing to do with the draft itself.
+    const trashId = mailboxes.find((m) => m.role === "trash")?.id;
+    const replaceTarget =
+      input.originalDraftId && trashId
+        ? { originalDraftId: input.originalDraftId, trashId }
+        : null;
+
+    const create = buildComposeEmailCreate({
+      identity,
+      draftsMailboxId: draftsId,
+      to: input.to,
+      cc: input.cc,
+      bcc: input.bcc,
+      subject: input.subject,
+      textBody: input.textBody,
+      htmlBody: input.htmlBody,
+      attachments: input.attachments,
+      inReplyTo: input.inReplyTo,
+      references: input.references,
+      // $draft marks this message as a draft in JMAP. /send never sets it
+      // explicitly because the message it creates is submitted and moved to
+      // Sent in the same request (see onSuccessUpdateEmail's
+      // "keywords/$draft": null above) — but a saved draft is never
+      // submitted, so nothing else will ever set it. $seen mirrors what
+      // /send sets: the message was authored by the user, not received.
+      keywords: { $draft: true, $seen: true },
+    });
+
+    // RFC 8620 §5.3: Email/set is NOT transactional across `create` and
+    // `update`. Without `ifInState` — which this route does not pass, since it
+    // has no state token to pin — the server applies each record
+    // independently and reports them separately in notCreated/notUpdated.
+    // Carrying the new draft's create and the original's move-to-Trash in one
+    // call therefore permits "original trashed, replacement never created":
+    // the user's work vanishes into Trash while the route answers 502, with
+    // nothing to tell them where it went.
+    //
+    // So the create goes out alone and is confirmed below before anything
+    // touches the original. The worst remaining outcome is a leftover
+    // duplicate draft — visible in Drafts and recoverable — instead of a lost
+    // one. The Email/get rides along in the same request only because it is
+    // read-only and cannot affect the create; it saves a round trip without
+    // reintroducing the coupling.
+    const draftResponses = await deps.jmap!.request(auth, session, [
+      ["Email/set", { accountId: session.accountId, create: { draft: create } }, "e"],
+      ...(replaceTarget
+        ? ([
+            [
+              "Email/get",
+              {
+                accountId: session.accountId,
+                ids: [replaceTarget.originalDraftId],
+                properties: ["id", "mailboxIds", "keywords"],
+              },
+              "o",
+            ],
+          ] satisfies JmapMethodCall[])
+        : []),
+    ]);
+
+    const emailSetResult = (draftResponses[0]?.[1] ?? {}) as {
+      created?: Record<string, { id?: string }>;
+      notCreated?: Record<string, unknown>;
+    };
+    const createdId = emailSetResult.created?.draft?.id;
+
+    if ((emailSetResult.notCreated && "draft" in emailSetResult.notCreated) || !createdId) {
+      return c.json(
+        { code: "save_draft_failed", message: "errors.save_draft_failed", traceId: c.get("traceId") },
+        502,
+      );
+    }
+
+    if (replaceTarget) {
+      // Best-effort, exactly like the send path's cleanup of the same stale
+      // original (see apps/web/src/features/composer/useComposer.ts): the
+      // draft the user asked to save already exists by now, so a failure to
+      // tidy up the superseded original must never surface as a save failure.
+      // Returning 502 here would tell the user their work was not saved when
+      // it was — and invite them to retry, producing another duplicate.
+      try {
+        const originalResult = (draftResponses[1]?.[1] ?? {}) as { list?: JmapEmail[] };
+        await trashSupersededDraft({
+          jmap: deps.jmap!,
+          auth,
+          session,
+          originalDraftId: replaceTarget.originalDraftId,
+          original: (originalResult.list ?? [])[0],
+          draftsMailboxId: draftsId,
+          trashMailboxId: replaceTarget.trashId,
+        });
+      } catch {
+        log("warn", "save draft: trashing the original draft threw", {
+          originalDraftId: replaceTarget.originalDraftId,
+        });
+      }
+    }
+
+    return c.json(saveDraftResultSchema.parse({ id: createdId }));
   });
 
   return router;

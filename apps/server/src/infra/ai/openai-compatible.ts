@@ -16,8 +16,14 @@ const MAX_TOKENS = 1024;
 
 type ChatRole = "system" | "user";
 type ChatMessage = { role: ChatRole; content: string };
+
+// Reasoning-capable models (e.g. Mistral Small 4, mistral-small-2603) return
+// `message.content` as a list of typed chunks instead of a plain string when
+// reasoning is active: a "thinking" chunk carries the model's reasoning
+// trace, a "text" chunk carries the actual answer. See GitHub issue #138.
+type ChatContentChunk = { type?: string; text?: unknown };
 type ChatCompletionResponse = {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{ message?: { content?: string | ChatContentChunk[] } }>;
 };
 
 /**
@@ -60,10 +66,22 @@ export function createOpenAiCompatibleClient(input: {
     }
     const data = (await res.json()) as ChatCompletionResponse;
     const content = data.choices?.[0]?.message?.content;
-    if (typeof content !== "string") {
-      throw new Error("openai-compatible provider returned a malformed response");
+    if (typeof content === "string") {
+      return content;
     }
-    return content;
+    if (Array.isArray(content)) {
+      // Concatenate only "text" chunks, in order; "thinking" chunks (and any
+      // other chunk type) are discarded so reasoning traces never leak into
+      // summaries or drafts. See GitHub issue #138.
+      const text = content
+        .filter((chunk) => chunk?.type === "text" && typeof chunk.text === "string")
+        .map((chunk) => chunk.text as string)
+        .join("");
+      if (text.length > 0) {
+        return text;
+      }
+    }
+    throw new Error("openai-compatible provider returned a malformed response");
   }
 
   return {

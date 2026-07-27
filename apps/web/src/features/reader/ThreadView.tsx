@@ -4,26 +4,112 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
+import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
 import { Avatar } from "../../app/ui/Avatar";
+import { Button } from "../../app/ui/Button";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
-import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon } from "../../app/ui/icons";
+import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon, TrashIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { AttachmentCard } from "./AttachmentCard";
-import { EmailBody } from "./EmailBody";
+import { EmailBody, isSafeInlineImage } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
+import { SenderAuthBadge } from "./SenderAuthBadge";
 
 interface ThreadViewProps {
   threadId: string;
   archiveMailboxId: string | null;
   inboxMailboxId: string | null;
+  // GH #133: optional (defaults to null) so existing callers/tests that don't
+  // care about Trash keep compiling unchanged — mirrors archiveMailboxId's
+  // role, just for the trash-role mailbox instead.
+  trashMailboxId?: string | null;
+}
+
+interface DeletePermanentlyConfirmDialogProps {
+  subject: string;
+  deleting: boolean;
+  deleteError: string | null;
+  onConfirm(): void;
+  onCancel(): void;
+}
+
+// GH #133: shown before a message is permanently destroyed. Mirrors
+// Composer.tsx's DiscardConfirmDialog and NewLabelModal.tsx's existing dialog
+// precedent in this codebase — a full-screen bg-overlay backdrop,
+// backdrop-click dismissal, focus moved in on open and restored on close, and
+// its own Escape-to-dismiss effect scoped to this dialog only. Unlike
+// discarding a draft, this action is irreversible, so the description always
+// names the exact message being destroyed rather than a generic "this
+// message" — and every dismissal path (Escape, backdrop click, Cancel)
+// destroys nothing; only the explicit confirm button does.
+function DeletePermanentlyConfirmDialog({
+  subject, deleting, deleteError, onConfirm, onCancel,
+}: DeletePermanentlyConfirmDialogProps) {
+  const { t } = useTranslation();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+
+    return () => {
+      previouslyFocusedRef.current?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div
+      role="alertdialog"
+      aria-label={t("mail.deletePermanentlyConfirm.title")}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
+      onClick={onCancel}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        className="flex w-full max-w-[360px] flex-col gap-4 rounded-[14px] border border-line bg-panel p-5 shadow-pop outline-none"
+        style={{ animation: "popIn 0.18s ease" }}
+      >
+        <div>
+          <h2 className="text-[14px] font-[650]">{t("mail.deletePermanentlyConfirm.title")}</h2>
+          <p className="mt-1 text-[13px] text-muted">
+            {t("mail.deletePermanentlyConfirm.description", { subject })}
+          </p>
+        </div>
+        {deleteError && (
+          <p role="alert" className="text-[12.5px] text-warn">
+            {t(deleteError)}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={onCancel} disabled={deleting}>
+            {t("mail.deletePermanentlyConfirm.cancel")}
+          </Button>
+          <Button variant="primary" onClick={onConfirm} disabled={deleting}>
+            {deleting ? t("mail.deletePermanentlyConfirm.deleting") : t("mail.deletePermanentlyConfirm.confirm")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function addressLabel(address: EmailAddress | undefined) {
@@ -62,7 +148,7 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
   return others.size >= 1;
 }
 
-export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: ThreadViewProps) {
+export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -198,6 +284,49 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     },
   });
 
+  // GH #133: Delete moves the last email to Trash — the same single-mailbox
+  // move archiveMutation/unarchiveMutation above already use (JMAP
+  // mailboxIds is a full-set replace). Recoverable, so it needs no
+  // confirmation — just feedback, mirroring archiveMutation's toast.
+  const deleteMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!trashMailboxId) throw new Error("no trash mailbox");
+      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      showToast(t("mail.deleted"));
+      backToList();
+    },
+  });
+
+  const [deletePermanentlyConfirmOpen, setDeletePermanentlyConfirmOpen] = useState(false);
+  const [destroyError, setDestroyError] = useState<string | null>(null);
+
+  // GH #133: permanently destroys the last email. Irreversible, so this is
+  // only ever invoked from the explicit confirm button inside
+  // DeletePermanentlyConfirmDialog below — never directly from the action
+  // bar click.
+  const destroyMutation = useMutation({
+    mutationFn: (email: EmailDetail) => destroyMessage(email.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      setDeletePermanentlyConfirmOpen(false);
+      setDestroyError(null);
+      showToast(t("mail.deletedPermanently"));
+      backToList();
+    },
+    onError: (err) => {
+      const error = err instanceof MailApiError ? `mail.errors.${err.code || "generic"}` : "mail.errors.generic";
+      setDestroyError(error);
+    },
+  });
+
+  function handleCancelDeletePermanently() {
+    setDeletePermanentlyConfirmOpen(false);
+    setDestroyError(null);
+  }
+
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
       updateMessage(email.id, { keywords: { $flagged: starred } }),
@@ -253,15 +382,14 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   }, [lastEmail]);
 
   // GH #90: previous, already-read messages collapse into one-line stubs;
-  // the last message and any still-unread message stay expanded. This is a
-  // one-time snapshot taken when the thread's messages first load — a Set
-  // of expandable ids, grown only by the user clicking a stub open. It's
-  // deliberately NOT recomputed on every refetch (star/label/archive
-  // mutations all invalidate and refetch this same thread query): once the
-  // user has opened a stub, a later refetch must not re-collapse it. The
-  // ref guards that — it only (re)seeds the set the first time a given
-  // threadId's data arrives, so switching to a different thread does get a
-  // fresh snapshot.
+  // the newest message and any still-unread message stay expanded. This is
+  // a one-time snapshot taken when the thread's messages first load — a Set
+  // of expanded ids. It's deliberately NOT recomputed on every refetch
+  // (star/label/archive mutations all invalidate and refetch this same
+  // thread query): once the user has changed a message's expand state, a
+  // later refetch must not reset it. The ref guards that — it only
+  // (re)seeds the set the first time a given threadId's data arrives, so
+  // switching to a different thread does get a fresh snapshot.
   const initializedThreadIdRef = useRef<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
 
@@ -270,19 +398,28 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
     if (!currentEmails || currentEmails.length === 0) return;
     if (initializedThreadIdRef.current === threadId) return;
 
-    const last = currentEmails[currentEmails.length - 1];
+    const newest = currentEmails[currentEmails.length - 1];
     const initial = new Set<string>();
     for (const email of currentEmails) {
-      if (email.id === last?.id || !email.keywords.$seen) initial.add(email.id);
+      if (email.id === newest?.id || !email.keywords.$seen) initial.add(email.id);
     }
     setExpandedIds(initial);
     initializedThreadIdRef.current = threadId;
   }, [threadQuery.data, threadId]);
 
-  function expandMessage(emailId: string) {
+  // GH #119: a real toggle — clicking a collapsed stub expands it (GH #90)
+  // and clicking an expanded message's header collapses it again. The
+  // newest message starts expanded purely because the seeding effect above
+  // put its id in the initial set, not because of any render-time force —
+  // see the `isExpanded` check below — so it can be collapsed too.
+  function toggleMessage(emailId: string) {
     setExpandedIds((previous) => {
       const next = new Set(previous);
-      next.add(emailId);
+      if (next.has(emailId)) {
+        next.delete(emailId);
+      } else {
+        next.add(emailId);
+      }
       return next;
     });
   }
@@ -319,8 +456,28 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
   // Mutually exclusive with showArchive: only an archived email offers the way
   // back to Recibidos, and only when we know which mailbox that is.
   const showUnarchive = isOnlyInArchive && inboxMailboxId !== null;
+
+  // GH #133: same "only in one mailbox" shape as isOnlyInArchive above, for
+  // Trash. Delete moves a message INTO Trash — meaningless once it's already
+  // there, so the two actions are mutually exclusive, mirroring how
+  // showArchive/showUnarchive never both show. Delete permanently is offered
+  // ONLY while genuinely viewing Trash: a destroy control anywhere else would
+  // be a trap the user could hit on an ordinary message by mistake.
+  const isOnlyInTrash =
+    trashMailboxId !== null &&
+    lastEmail.mailboxIds.length === 1 &&
+    lastEmail.mailboxIds[0] === trashMailboxId;
+  const showDelete = trashMailboxId !== null && !isOnlyInTrash;
+  const showDeletePermanently = isOnlyInTrash;
+
   const starred = Boolean(lastEmail.keywords.$flagged);
   const showReplyAll = hasReplyAllRecipient(lastEmail, identities);
+
+  // GH #118: render newest-first (top to bottom). `emails` itself keeps the
+  // query's original oldest-to-newest order — the keyboard shortcut, the
+  // expand-state seeding effect, and `lastEmail` above all depend on that
+  // order, so only this display copy is reversed.
+  const displayEmails = [...emails].reverse();
 
   const actionButtonBaseClass =
     "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
@@ -358,6 +515,26 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
           >
             <InboxIcon size={15} />
             {t("mail.unarchive")}
+          </button>
+        )}
+        {showDelete && (
+          <button
+            type="button"
+            onClick={() => deleteMutation.mutate(lastEmail)}
+            className={actionButtonClass}
+          >
+            <TrashIcon size={15} />
+            {t("mail.delete")}
+          </button>
+        )}
+        {showDeletePermanently && (
+          <button
+            type="button"
+            onClick={() => setDeletePermanentlyConfirmOpen(true)}
+            className={actionButtonClass}
+          >
+            <TrashIcon size={15} />
+            {t("mail.deletePermanently")}
           </button>
         )}
         <button
@@ -461,13 +638,20 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
               </span>
             ))}
           </div>
-          {emails.map((email) => {
+          {displayEmails.map((email) => {
             const sender = email.from[0];
-            const isLast = email.id === lastEmail.id;
+            const isNewest = email.id === lastEmail.id;
             // GH #90: previous, already-read messages collapse into a
             // one-line stub. A single-message thread is always fully
-            // expanded — there's nothing to collapse "away from".
-            const isExpanded = emails.length === 1 || isLast || expandedIds.has(email.id);
+            // expanded — there's nothing to collapse "away from". GH #119:
+            // the newest message is no longer forced open here — it starts
+            // expanded via the seeding effect above but, like any other
+            // message, can be collapsed and re-expanded by the user.
+            const isExpanded = emails.length === 1 || expandedIds.has(email.id);
+            // GH #119: only a message that could actually collapse "into"
+            // something gets the collapse affordance on its header — a
+            // single-message thread has nothing else to show.
+            const collapsible = emails.length > 1;
             const dateLabel = formatRelativeTime(email.receivedAt, {
               yesterdayLabel: t("mail.yesterday"),
               locale: i18n.language,
@@ -478,7 +662,8 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                 <article key={email.id} className="mt-6 border-b border-line pb-6 last:border-b-0">
                   <button
                     type="button"
-                    onClick={() => expandMessage(email.id)}
+                    onClick={() => toggleMessage(email.id)}
+                    aria-expanded={isExpanded}
                     aria-label={t("mail.expandMessage", { sender: addressLabel(sender) })}
                     className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition hover:bg-hover"
                   >
@@ -507,37 +692,80 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
             // downloadable chip below, so they're hidden from the chip list
             // here (Gmail behavior). Attachments not referenced by any cid:
             // image — including images sent as real attachments — stay visible.
+            //
+            // GH #134: a cid: reference is only hidden when it will actually
+            // resolve to a rendered image (isSafeInlineImage — the same
+            // allowlist EmailBody itself uses to decide what to fetch/inline).
+            // A cid: pointing at any other type (e.g. a PDF invoice
+            // referenced via cid:) never renders inline no matter what, so
+            // excluding it here too would make the file completely
+            // unreachable — neither shown inline (broken image icon) nor
+            // downloadable. It must still surface as a regular attachment.
             const referencedCids = extractReferencedCids(email.bodyHtml);
             const visibleAttachments = email.attachments.filter(
-              (attachment) => !(attachment.cid && referencedCids.has(attachment.cid)),
+              (attachment) =>
+                !(attachment.cid && referencedCids.has(attachment.cid) && isSafeInlineImage(attachment.type)),
+            );
+
+            // GH #119: the header of an expanded, collapsible message is
+            // itself the collapse control — clicking it re-collapses the
+            // message into the GH #90 stub. Built once so both the button
+            // and the plain-div fallback (single-message thread) render
+            // identical content. The button's content model is phrasing
+            // content only, so — like the GH #90 stub above — these are
+            // `<span>`s with an explicit block display rather than `<div>`s,
+            // which would be invalid inside a `<button>`.
+            const senderHeaderContent = (
+              <>
+                <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
+                <span className="block min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-[14.5px] font-semibold">{addressLabel(sender)}</span>
+                    {/* GH #136: renders purely from the server-derived
+                        verdict — never from `sender`/addressLabel above, so a
+                        sender cannot forge this mark via their display name. */}
+                    <SenderAuthBadge verdict={email.senderAuth} />
+                  </span>
+                  {toCcLabel && (
+                    <span className="block truncate text-[12.5px] text-muted">
+                      {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
+              </>
             );
 
             return (
               <article
                 key={email.id}
-                // GH #92: the last (active) message gets a subtle elevated-card
+                // GH #92: the newest (active) message gets a subtle elevated-card
                 // treatment — a real border, the panel surface, and shadow-card
-                // — so it visually stands out from the collapsed stubs / earlier
-                // messages above it, in both the light and night themes.
+                // — so it visually stands out from the collapsed stubs / older
+                // messages below it (GH #118 moved it to the top), in both the
+                // light and night themes.
                 className={
-                  isLast
+                  isNewest
                     ? "mt-6 rounded-[14px] border border-line bg-panel p-5 shadow-card"
                     : "mt-6 border-b border-line pb-6"
                 }
               >
-                <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
-                  <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[14.5px] font-semibold">{addressLabel(sender)}</div>
-                    {toCcLabel && (
-                      <div className="truncate text-[12.5px] text-muted">
-                        {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
-                      </div>
-                    )}
+                {collapsible ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleMessage(email.id)}
+                    aria-expanded={isExpanded}
+                    aria-label={t("mail.collapseMessage", { sender: addressLabel(sender) })}
+                    className="flex w-full items-center gap-3 border-b border-line pb-5 mb-[22px] text-left transition hover:bg-hover"
+                  >
+                    {senderHeaderContent}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-3 border-b border-line pb-5 mb-[22px]">
+                    {senderHeaderContent}
                   </div>
-                  <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
-                </div>
-                {isLast && (
+                )}
+                {isNewest && (
                   <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
                 )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
@@ -555,7 +783,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
                     </div>
                   </div>
                 )}
-                {isLast && (
+                {isNewest && (
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>
@@ -610,6 +838,15 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId }: Threa
           })}
         </div>
       </div>
+      {deletePermanentlyConfirmOpen && (
+        <DeletePermanentlyConfirmDialog
+          subject={lastEmail.subject || t("mail.noSubject")}
+          deleting={destroyMutation.isPending}
+          deleteError={destroyError}
+          onConfirm={() => destroyMutation.mutate(lastEmail)}
+          onCancel={handleCancelDeletePermanently}
+        />
+      )}
     </div>
   );
 }

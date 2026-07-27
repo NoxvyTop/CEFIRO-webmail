@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { sanitizeEmailHtml } from "../reader/sanitize";
+import { IMAGE_SIZE_PRESETS } from "./resizableImageExtension";
 import { isSafeLinkUrl, RichTextEditor } from "./RichTextEditor";
 
 function pngFile(name: string, byteLength: number, type = "image/png"): File {
@@ -432,5 +433,153 @@ describe("RichTextEditor image size/alignment toolbar", () => {
       const lastCall = handleChange.mock.calls.at(-1);
       expect(lastCall?.[0]).toContain("margin-left: auto");
     });
+  });
+});
+
+// Regression coverage for issue #127: the size/align controls appeared to do
+// nothing because inserting an image via the toolbar (handleImageFileSelected)
+// left the selection *after* the inserted node instead of *on* it as a
+// NodeSelection — so `disabled={!isImageSelected}` (and the buttons'
+// pointer-events-none) kept the controls inert immediately after the most
+// common workflow: insert an image, then try to resize/align it.
+//
+// jsdom can't simulate a real click landing on a rendered <img> —
+// `document.elementFromPoint` is unimplemented, so ProseMirror's
+// `posAtCoords` throws — so these tests drive insertion through the real
+// handleImageFileSelected path (the file input) rather than clicking an image
+// directly, exactly like the "RichTextEditor image insertion" tests above.
+describe("RichTextEditor image size/alignment toolbar — selection on insert (issue #127)", () => {
+  function getImageFileInput(): HTMLInputElement {
+    return screen.getByLabelText(i18n.t("composer.image")) as HTMLInputElement;
+  }
+
+  it("enables the size and alignment controls immediately after inserting an image", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeSmall") })).not.toBeDisabled();
+    });
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeMedium") })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageSizeLarge") })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignLeft") })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignRight") })).not.toBeDisabled();
+  });
+
+  it("applies a size preset to the image that was just inserted", async () => {
+    const handleChange = vi.fn();
+    render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+    const smallButton = await screen.findByRole("button", { name: i18n.t("composer.imageSizeSmall") });
+    await waitFor(() => expect(smallButton).not.toBeDisabled());
+    fireEvent.click(smallButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain(`width: ${IMAGE_SIZE_PRESETS.small}`);
+    });
+  });
+
+  it("applies an alignment to the image that was just inserted", async () => {
+    const handleChange = vi.fn();
+    render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+    const rightButton = await screen.findByRole("button", { name: i18n.t("composer.imageAlignRight") });
+    await waitFor(() => expect(rightButton).not.toBeDisabled());
+    fireEvent.click(rightButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain("margin-left: auto");
+    });
+  });
+
+  it("selects the newly inserted image, not an earlier identical one, when the same image is inserted twice", async () => {
+    const handleChange = vi.fn();
+    render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    // Two separate File instances with byte-identical content -> the exact
+    // same data: URL, so the two resulting <img> nodes are indistinguishable
+    // by src alone.
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(editor.querySelectorAll("img")).toHaveLength(1));
+
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+    await waitFor(() => expect(editor.querySelectorAll("img")).toHaveLength(2));
+
+    const largeButton = await screen.findByRole("button", { name: i18n.t("composer.imageSizeLarge") });
+    await waitFor(() => expect(largeButton).not.toBeDisabled());
+    fireEvent.click(largeButton);
+
+    await waitFor(() => {
+      const lastCall = handleChange.mock.calls.at(-1);
+      expect(lastCall?.[0]).toContain(`width: ${IMAGE_SIZE_PRESETS.large}`);
+    });
+    const images = Array.from(editor.querySelectorAll("img"));
+    expect(images).toHaveLength(2);
+    // The second (just-inserted) image is the one that got resized...
+    expect(images[1]?.getAttribute("style") ?? "").toContain(`width: ${IMAGE_SIZE_PRESETS.large}`);
+    // ...the first, earlier occurrence of the identical image is untouched.
+    expect(images[0]?.getAttribute("style")).toBeNull();
+  });
+
+  it("does not modify a different, pre-existing image elsewhere in the document when a control is applied to the newly inserted one", async () => {
+    const decoySrc = "data:image/png;base64,ZGVjb3k=";
+    render(
+      <RichTextEditor
+        html={`<p>Hello</p><img src="${decoySrc}"><p>World</p>`}
+        onChange={() => {}}
+        ariaLabel="Message"
+      />,
+    );
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    await waitFor(() => expect(editor.querySelectorAll("img")).toHaveLength(2));
+
+    const centerButton = await screen.findByRole("button", { name: i18n.t("composer.imageAlignCenter") });
+    await waitFor(() => expect(centerButton).not.toBeDisabled());
+    fireEvent.click(centerButton);
+
+    await waitFor(() => {
+      const decoyImg = editor.querySelector(`img[src="${decoySrc}"]`);
+      expect(decoyImg).not.toBeNull();
+      expect(decoyImg?.getAttribute("style")).toBeNull();
+    });
+  });
+
+  it("never leaks the editor-only selection class into getHTML() output", async () => {
+    const handleChange = vi.fn();
+    render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
+
+    const fileInput = getImageFileInput();
+    fireEvent.change(fileInput, { target: { files: [pngFile("logo.png", 10, "image/png")] } });
+
+    const editor = screen.getByRole("textbox", { name: "Message" });
+    // Sanity check the fix actually selected the node: the class IS present
+    // in the live editor DOM...
+    await waitFor(() => {
+      expect(editor.querySelector("img")).toHaveClass("ProseMirror-selectednode");
+    });
+
+    // ...but that live-view-only class must never appear in the serialized
+    // getHTML() output that becomes the stored/sent email body.
+    expect(handleChange.mock.calls.length).toBeGreaterThan(0);
+    for (const call of handleChange.mock.calls) {
+      expect(call[0]).not.toContain("ProseMirror-selectednode");
+    }
   });
 });

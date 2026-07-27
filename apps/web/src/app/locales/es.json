@@ -177,6 +177,8 @@
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el resumen con IA",
+      "not_in_trash": "El mensaje ya no está en la papelera",
+      "destroy_failed": "No se pudo eliminar el mensaje",
       "generic": "No se pudo cargar el correo"
     },
     "unlinked": {
@@ -198,6 +200,17 @@
     "archivedHint": "pulsa e para archivar más rápido",
     "unarchive": "Mover a Recibidos",
     "unarchived": "Movido a Recibidos",
+    "delete": "Eliminar",
+    "deleted": "Movido a la papelera",
+    "deletePermanently": "Eliminar definitivamente",
+    "deletedPermanently": "Mensaje eliminado definitivamente",
+    "deletePermanentlyConfirm": {
+      "title": "¿Eliminar este mensaje definitivamente?",
+      "description": "«{{subject}}» se eliminará definitivamente. Esta acción no se puede deshacer.",
+      "confirm": "Eliminar definitivamente",
+      "deleting": "Eliminando…",
+      "cancel": "Cancelar"
+    },
     "labels": "Etiquetas",
     "clearLabel": "Quitar filtro de etiqueta",
     "newLabel": "Nueva etiqueta",
@@ -215,8 +228,14 @@
     "sentTo": "Para:",
     "yesterday": "Ayer",
     "expandMessage": "Mostrar mensaje completo de {{sender}}",
+    "collapseMessage": "Ocultar mensaje completo de {{sender}}",
+    "senderAuth": {
+      "passLabel": "Autenticación del remitente verificada (SPF/DKIM/DMARC)",
+      "failLabel": "Autenticación del remitente fallida — este mensaje podría ser falsificado"
+    },
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
+    "showFullMessage": "Ver todo el mensaje",
     "folders": {
       "inbox": "Recibidos",
       "sent": "Enviados",
@@ -237,7 +256,8 @@
     "to": "Para",
     "cc": "Cc",
     "bcc": "Cco",
-    "addCcBcc": "Cc/Cco",
+    "addCc": "Añadir Cc",
+    "addBcc": "Añadir Cco",
     "subject": "Asunto",
     "body": "Mensaje",
     "bodyPlaceholder": "Escribe tu mensaje… o pídeselo a la IA",
@@ -280,6 +300,7 @@
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
       "send_failed": "No se pudo enviar",
+      "save_draft_failed": "No se pudo guardar el borrador",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el borrador con IA",
       "invalid_body": "Escribe un asunto antes de redactar con IA",
@@ -289,7 +310,15 @@
     "draftingWithAi": "Redactando…",
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
     "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
-    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos"
+    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos",
+    "discardConfirm": {
+      "title": "¿Descartar este mensaje?",
+      "description": "Tu mensaje tiene contenido sin guardar.",
+      "discard": "Descartar de todos modos",
+      "saveToDrafts": "Guardar en borradores",
+      "savingToDrafts": "Guardando…",
+      "keepEditing": "Seguir editando"
+    }
   },
   "attachments": {
     "download": "Descargar",
@@ -313,7 +342,8 @@
       "profile": "Perfil",
       "signatures": "Firmas",
       "filters": "Filtros",
-      "vacation": "Ausencia"
+      "vacation": "Ausencia",
+      "contacts": "Contactos"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
@@ -336,6 +366,7 @@
       "vacationDateOrder": "La fecha de fin no puede ser anterior a la de inicio",
       "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG o WebP)",
       "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
+      "contact_exists": "Ese contacto ya existe",
       "generic": "Algo salió mal"
     }
   },
@@ -386,6 +417,16 @@
     "intervalDays": "Días entre respuestas al mismo remitente",
     "save": "Guardar",
     "saved": "Guardado"
+  },
+  "contacts": {
+    "title": "Contactos",
+    "empty": "Aún no tienes contactos guardados",
+    "name": "Nombre",
+    "email": "Correo",
+    "add": "Añadir contacto",
+    "confirmDeleteQuestion": "¿Eliminar a «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar"
   },
   "shortcuts": {
     "title": "Atajos",

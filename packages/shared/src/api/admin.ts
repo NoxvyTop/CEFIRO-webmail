@@ -8,6 +8,12 @@ export const adminUserSchema = z.object({
   locale: z.string(),
   active: z.boolean(),
   mailboxLinked: z.boolean(),
+  // The user's uploaded profile photo (mirrors ProfileView.avatarDataUrl —
+  // see packages/shared/src/api/profile.ts), so the admin console can show
+  // it instead of always falling back to initials. Optional (rather than
+  // required-and-nullable like ProfileView's) so payloads/fixtures that
+  // predate this field still validate; null means "no photo".
+  avatarDataUrl: z.string().nullable().optional(),
 });
 export type AdminUser = z.infer<typeof adminUserSchema>;
 

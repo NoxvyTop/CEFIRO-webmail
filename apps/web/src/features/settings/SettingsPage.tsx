@@ -1,18 +1,20 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import { ContactsSettings } from "./ContactsSettings";
 import { FilterSettings } from "./FilterSettings";
 import { ProfileSettings } from "./ProfileSettings";
 import { SignatureSettings } from "./SignatureSettings";
 import { VacationSettings } from "./VacationSettings";
 
-type Section = "profile" | "signatures" | "filters" | "vacation";
+type Section = "profile" | "signatures" | "filters" | "vacation" | "contacts";
 
 const NAV_ITEMS: { id: Section; labelKey: string }[] = [
   { id: "profile", labelKey: "settings.nav.profile" },
   { id: "signatures", labelKey: "settings.nav.signatures" },
   { id: "filters", labelKey: "settings.nav.filters" },
   { id: "vacation", labelKey: "settings.nav.vacation" },
+  { id: "contacts", labelKey: "settings.nav.contacts" },
 ];
 
 export function SettingsPage() {
@@ -20,7 +22,7 @@ export function SettingsPage() {
   const [section, setSection] = useState<Section>("profile");
 
   return (
-    <main role="main" className="mx-auto flex min-h-full max-w-3xl flex-col gap-6 p-6">
+    <main role="main" className="flex min-h-full flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
         <Link to="/" className="text-sm text-accent-text underline">
@@ -74,6 +76,13 @@ export function SettingsPage() {
             <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
               <h2 className="text-lg font-medium">{t("vacation.title")}</h2>
               <VacationSettings />
+            </section>
+          )}
+
+          {section === "contacts" && (
+            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+              <h2 className="text-lg font-medium">{t("contacts.title")}</h2>
+              <ContactsSettings />
             </section>
           )}
         </div>

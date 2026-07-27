@@ -18,11 +18,7 @@ import { fetchIdentities } from "../composer/api";
 import { buildEditDraft, emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useAuth } from "../auth/useAuth";
-import {
-  PANE_MAX_WIDTH,
-  PANE_MIN_WIDTH,
-  useResizablePane,
-} from "../../app/ui/useResizablePane";
+import { PANE_MIN_WIDTH, useResizablePane } from "../../app/ui/useResizablePane";
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -30,7 +26,7 @@ export function MailPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const { width: listWidth, startDrag, handleKeyDown } = useResizablePane();
+  const { width: listWidth, maxWidth: paneMaxWidth, startDrag, handleKeyDown } = useResizablePane();
   const isAdmin = user?.role === "admin";
 
   useMailEvents(true);
@@ -474,7 +470,7 @@ export function MailPage() {
         aria-orientation="vertical"
         aria-label={t("mail.resizeList")}
         aria-valuemin={PANE_MIN_WIDTH}
-        aria-valuemax={PANE_MAX_WIDTH}
+        aria-valuemax={paneMaxWidth}
         aria-valuenow={listWidth}
         tabIndex={0}
         onMouseDown={startDrag}
@@ -492,6 +488,7 @@ export function MailPage() {
             threadId={threadParam}
             archiveMailboxId={archiveMailboxId}
             inboxMailboxId={inboxMailboxId}
+            trashMailboxId={trashMailboxId}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">

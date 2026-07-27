@@ -109,8 +109,10 @@ const basePayload = {
   textBody: "Plain text",
   htmlBody: "<p>Rich text</p>",
   attachments: [{ blobId: "blob-1", name: "file.pdf", type: "application/pdf" }],
-  inReplyTo: ["<msg-1@noxvytop.com>"],
-  references: ["<msg-0@noxvytop.com>", "<msg-1@noxvytop.com>"],
+  // RFC 8621: JMAP exposes and accepts message ids in parsed form — no
+  // surrounding angle brackets and no CFWS.
+  inReplyTo: ["msg-1@noxvytop.com"],
+  references: ["msg-0@noxvytop.com", "msg-1@noxvytop.com"],
 };
 
 describe("POST /api/mail/send", () => {
@@ -145,8 +147,8 @@ describe("POST /api/mail/send", () => {
       textBody: [{ partId: "t", type: "text/plain" }],
       htmlBody: [{ partId: "h", type: "text/html" }],
       attachments: [{ blobId: "blob-1", type: "application/pdf", name: "file.pdf", disposition: "attachment" }],
-      inReplyTo: ["<msg-1@noxvytop.com>"],
-      references: ["<msg-0@noxvytop.com>", "<msg-1@noxvytop.com>"],
+      inReplyTo: ["msg-1@noxvytop.com"],
+      references: ["msg-0@noxvytop.com", "msg-1@noxvytop.com"],
     });
 
     const submissionCall = sendCall[1];
@@ -165,6 +167,38 @@ describe("POST /api/mail/send", () => {
         "keywords/$draft": null,
       },
     });
+  });
+
+  // GH #120: [] is truthy in JavaScript, so a plain truthiness guard would
+  // forward an empty inReplyTo/references array to Email/set instead of
+  // omitting the property. A non-reply payload must produce neither key.
+  it("omits inReplyTo and references from the Email/set create object for a non-reply payload", async () => {
+    const { inReplyTo: _inReplyTo, references: _references, ...nonReply } = basePayload;
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(nonReply),
+    });
+    expect(res.status).toBe(200);
+
+    const create = (requests[1]?.[0]?.[1] as { create: Record<string, Record<string, unknown>> })
+      .create.draft as Record<string, unknown>;
+    expect(create).not.toHaveProperty("inReplyTo");
+    expect(create).not.toHaveProperty("references");
+  });
+
+  it("omits inReplyTo and references when the payload carries empty arrays", async () => {
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...basePayload, inReplyTo: [], references: [] }),
+    });
+    expect(res.status).toBe(200);
+
+    const create = (requests[1]?.[0]?.[1] as { create: Record<string, Record<string, unknown>> })
+      .create.draft as Record<string, unknown>;
+    expect(create).not.toHaveProperty("inReplyTo");
+    expect(create).not.toHaveProperty("references");
   });
 
   it("returns 400 invalid_identity for an unknown identity and skips the send request", async () => {

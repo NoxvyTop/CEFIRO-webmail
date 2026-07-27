@@ -6,6 +6,9 @@ const KNOWN_CODES = new Set([
   "not_found",
   "sieve_invalid",
   "sieve_sync_failed",
+  // GH #124: returned by POST /api/mail/contacts on a duplicate address —
+  // see apps/server/src/modules/contacts/router.ts.
+  "contact_exists",
 ]);
 
 export function settingsErrorKey(error: unknown): string {

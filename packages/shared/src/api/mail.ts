@@ -51,12 +51,51 @@ export const attachmentMetaSchema = z.object({
 });
 export type AttachmentMeta = z.infer<typeof attachmentMetaSchema>;
 
+// GH #136: an explicit, three-state verdict on whether the message's sender
+// passed email authentication (SPF/DKIM/DMARC) — never a raw pass/fail
+// boolean, because "unknown" must be a distinct, first-class outcome a client
+// can render as neutral. A missing/falsy field must never be silently read as
+// authenticated: a wrong trust mark on a spoofed message is worse than no
+// mark at all. The verdict is keyed off DMARC's own result rather than raw
+// SPF/DKIM results, because DMARC is the only one of the three that checks
+// *alignment* with the visible From domain — SPF or DKIM can legitimately
+// pass for a domain that has nothing to do with the sender the user is shown,
+// which is exactly how spoofing works. See
+// apps/server/src/modules/mail/sender-auth.ts for how this is derived from
+// the message's Authentication-Results header (RFC 8601).
+export const senderAuthVerdictSchema = z.enum(["pass", "fail", "unknown"]);
+export type SenderAuthVerdict = z.infer<typeof senderAuthVerdictSchema>;
+
 export const emailDetailSchema = emailSummarySchema.extend({
   cc: z.array(emailAddressSchema),
   replyTo: z.array(emailAddressSchema),
   bodyHtml: z.string().nullable(),
   bodyText: z.string().nullable(),
   attachments: z.array(attachmentMetaSchema),
+  // JMAP Email properties carrying RFC 5322 threading headers: messageId is
+  // this message's own Message-ID(s), references is the Message-ID(s) of its
+  // ancestors, and inReplyTo is the Message-ID(s) of the message this one
+  // replied to. All three are String[]|null in JMAP — null when the message
+  // has no such header — and carry the parsed form, with surrounding angle
+  // brackets and CFWS removed (RFC 8621 §4.1.3). Used by composer/reply.ts
+  // to build In-Reply-To/References on the outgoing reply so it threads
+  // correctly in the recipient's client; inReplyTo covers the RFC 5322
+  // §3.6.4 clause where a parent without References contributes its own
+  // In-Reply-To to the reply's References chain instead.
+  //
+  // All three default to null (same reasoning as userPreferences.customLabels
+  // below) so a response from a server that predates these fields still
+  // parses. emailDetailSchema is parsed as part of threadDetailSchema, so
+  // throwing here would take down the entire thread view rather than just
+  // degrading reply threading.
+  messageId: z.array(z.string()).nullable().default(null),
+  references: z.array(z.string()).nullable().default(null),
+  inReplyTo: z.array(z.string()).nullable().default(null),
+  // GH #136: see senderAuthVerdictSchema above. Defaults to "unknown" — not
+  // "pass" — so a response from a server that predates this field (or a
+  // hand-written test fixture) parses as "no assertion" rather than either
+  // throwing or, far worse, defaulting to a false trust mark.
+  senderAuth: senderAuthVerdictSchema.default("unknown"),
 });
 export type EmailDetail = z.infer<typeof emailDetailSchema>;
 

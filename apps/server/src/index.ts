@@ -15,6 +15,7 @@ import { createUserPreferencesRepo } from "./infra/repos/user-preferences";
 import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
+import { createContactsRepo } from "./infra/repos/contacts";
 import { importMasterKey } from "./modules/credentials/crypto";
 import { createAuthRouter } from "./modules/auth/router";
 import { createSessionStore } from "./modules/auth/sessions";
@@ -23,6 +24,7 @@ import { createMailRouter } from "./modules/mail/router";
 import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
 import { createProfileRouter } from "./modules/profile/router";
+import { createContactsRouter } from "./modules/contacts/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
 import { createAiRouter } from "./modules/ai/router";
@@ -52,6 +54,7 @@ const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
 const filterRules = createFilterRulesRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
+const contacts = createContactsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
 const jmap = config.stalwartUrl
   ? createJmapClient({ baseUrl: config.stalwartUrl, forceBase: config.jmapForceBase })
@@ -111,11 +114,12 @@ const app = createApp({
     bootstrap,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
-  mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap }),
+  mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap, contacts }),
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
   profileRouter: createProfileRouter({ sessions, users, audit }),
+  contactsRouter: createContactsRouter({ sessions, contacts }),
 });
 
 if (process.env.NODE_ENV === "production") {

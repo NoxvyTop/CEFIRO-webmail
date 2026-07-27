@@ -1,4 +1,10 @@
-import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
+import {
+  MAX_MESSAGE_ID_COUNT,
+  messageIdSchema,
+  type EmailAddress,
+  type EmailDetail,
+  type Identity,
+} from "@webmail/shared";
 import { sanitizeEmailHtml } from "../reader/sanitize";
 import { QUOTE_MARKER_ATTR } from "./signature";
 
@@ -11,10 +17,14 @@ export type ComposerDraft = {
   bcc: EmailAddress[];
   subject: string;
   bodyHtml: string;
-  // JMAP threading (inReplyTo/references) is keyed by Message-ID headers,
-  // which the current EmailDetail contract does not expose. Threading for
-  // replies is handled server-side via the JMAP threadId instead. These
-  // fields are kept for a future plan that surfaces Message-IDs.
+  // RFC 5322 §3.6.4 threading headers (In-Reply-To / References), populated
+  // by replyDraft from the parent message's own Message-ID, References and
+  // In-Reply-To (see EmailDetail.messageId/.references/.inReplyTo in
+  // packages/shared/src/api/mail.ts) so replies thread correctly in the
+  // recipient's mail client. Left unset by
+  // forwardDraft (a forward starts a new conversation) and by buildEditDraft
+  // (see the comment there for why reopening a draft can't safely
+  // reconstruct them).
   inReplyTo?: string[];
   references?: string[];
   // present only on forward drafts: original attachments reattached by blobId
@@ -39,6 +49,46 @@ function dedupeAddresses(addresses: EmailAddress[]): EmailAddress[] {
     result.push(address);
   }
   return result;
+}
+
+// A malformed/duplicated upstream References chain is non-conformant with
+// RFC 5322, so collapse repeats defensively while preserving first-seen
+// order (References is meaningful as an ordered ancestry list).
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+// Drops the individual ids sendEmailSchema would reject — empty, over-long,
+// or carrying a control character — validating against that exact schema so
+// the two rules cannot drift. Dropping one id costs a single ancestry link
+// and degrades threading slightly; letting it through costs the user the
+// whole reply, because the send is rejected client-side (composer/api.ts
+// parses the payload before it builds the request) and surfaces only as a
+// generic error.
+function keepSendableIds(ids: string[]): string[] {
+  return ids.filter((id) => messageIdSchema.safeParse(id).success);
+}
+
+// A References chain grows by one id per reply and is inherited verbatim from
+// the parent, so a long-lived thread eventually carries more ids than
+// sendEmailSchema accepts. Keeps the first id — the conversation's anchor,
+// which is what receiving clients use to attach the reply to the thread root
+// — plus the most recent ids, dropping the middle, matching what Gmail and
+// Outlook do. Trimming happens here rather than in the schema so an inherited
+// chain is already within bounds by the time the draft reaches validation;
+// the schema bound stays as a backstop for hand-crafted direct API calls.
+function trimMessageIdChain(ids: string[]): string[] {
+  if (ids.length <= MAX_MESSAGE_ID_COUNT) return ids;
+  const [anchor, ...rest] = ids;
+  if (anchor === undefined) return ids;
+  return [anchor, ...rest.slice(rest.length - (MAX_MESSAGE_ID_COUNT - 1))];
 }
 
 function escapeHtml(text: string): string {
@@ -119,7 +169,7 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
     });
   }
 
-  return {
+  const draft: ComposerDraft = {
     identityId,
     to,
     cc,
@@ -127,6 +177,44 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
     subject: deriveSubject(email.subject),
     bodyHtml: quotedBody(email),
   };
+
+  // RFC 5322 §3.6.4. The two header fields are independently optional, so
+  // they are derived separately rather than behind a single guard:
+  //
+  //   In-Reply-To — the parent's own Message-ID, if it has one.
+  //   References  — the parent's References (if any) followed by the
+  //                 parent's Message-ID (if any). When the parent carries no
+  //                 References of its own but does carry an In-Reply-To
+  //                 containing *a single* message identifier, that
+  //                 In-Reply-To stands in for the missing References. The
+  //                 single-identifier qualifier is part of the rule: a
+  //                 multi-identifier In-Reply-To does not name one parent, so
+  //                 the RFC does not authorize promoting it to References.
+  //
+  // A parent with References but no Message-ID therefore still yields a
+  // References chain — suppressing it would detach the reply from the
+  // thread. Each field is omitted entirely (never sent as an empty array)
+  // when its rule produces nothing, and when the parent has none of
+  // References, In-Reply-To or Message-ID, neither field is emitted.
+  //
+  // Every inherited value is filtered and the resulting chain trimmed (see
+  // keepSendableIds/trimMessageIdChain) so what this builds always satisfies
+  // sendEmailSchema — a draft the user cannot send is a worse outcome than
+  // slightly shorter ancestry.
+  const parentMessageId = keepSendableIds(email.messageId ?? []);
+  const parentReferences = keepSendableIds(email.references ?? []);
+  // Arity is checked on the parent's In-Reply-To as received, before unusable
+  // ids are dropped, so filtering can never turn a multi-identifier field
+  // into an eligible single-identifier fallback.
+  const rawInReplyTo = email.inReplyTo ?? [];
+  const inReplyToFallback = rawInReplyTo.length === 1 ? keepSendableIds(rawInReplyTo) : [];
+  const inheritedChain = parentReferences.length > 0 ? parentReferences : inReplyToFallback;
+  const references = trimMessageIdChain(dedupeStrings([...inheritedChain, ...parentMessageId]));
+
+  if (parentMessageId.length > 0) draft.inReplyTo = trimMessageIdChain(parentMessageId);
+  if (references.length > 0) draft.references = references;
+
+  return draft;
 }
 
 // Continues editing an existing draft (Gmail: click a draft row → it opens
@@ -134,6 +222,13 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
 // forwardDraft, this does not quote/wrap the body — the draft's own body is
 // the thing being edited, verbatim — and it carries originalDraftId so a
 // successful send can trash the stale original (see useComposer.ts).
+// KNOWN LIMITATION: does not restore inReplyTo/references when reopening a
+// reply draft for editing. email.messageId here is the draft's own id, not
+// its parent's, so reusing it as inReplyTo would misrepresent the thread.
+// EmailDetail does now expose the draft's own In-Reply-To header (added for
+// the RFC 5322 §3.6.4 References fallback in replyDraft above), so restoring
+// the headers has become feasible — but wiring it into the draft-edit path
+// is a separate behavior change and remains out of scope here (GH #120).
 export function buildEditDraft(email: EmailDetail, identities: Identity[]): ComposerDraft {
   const identity = pickIdentityByFrom(email, identities);
   const rawHtml = email.bodyHtml ?? escapeHtml(email.bodyText ?? "");

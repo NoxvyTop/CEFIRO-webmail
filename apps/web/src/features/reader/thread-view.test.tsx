@@ -35,6 +35,10 @@ const thread: ThreadDetail = {
       bodyHtml: `<p>Here is the report.</p><img src="${REMOTE_IMAGE_URL}">`,
       bodyText: null,
       attachments: [{ blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null }],
+      messageId: ["e1@example.com"],
+      references: null,
+      inReplyTo: null,
+      senderAuth: "unknown",
     },
     {
       id: "e2",
@@ -53,6 +57,10 @@ const thread: ThreadDetail = {
       bodyHtml: null,
       bodyText: "Thanks, looks good!",
       attachments: [],
+      messageId: ["e2@example.com"],
+      references: ["e1@example.com"],
+      inReplyTo: ["e1@example.com"],
+      senderAuth: "unknown",
     },
   ],
 };
@@ -109,6 +117,7 @@ function renderThread(
   threadId = "t1",
   archiveMailboxId: string | null = null,
   inboxMailboxId: string | null = null,
+  trashMailboxId: string | null = null,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -119,6 +128,7 @@ function renderThread(
             threadId={threadId}
             archiveMailboxId={archiveMailboxId}
             inboxMailboxId={inboxMailboxId}
+            trashMailboxId={trashMailboxId}
           />
           <ComposeParamProbe />
         </ToastProvider>
@@ -138,6 +148,34 @@ function stubArchivedThread() {
     const method = init?.method ?? "GET";
     if (url.includes("/api/mail/messages/") && method === "PATCH") {
       return new Response(null, { status: 204 });
+    }
+    if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+    if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+    return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+  });
+}
+
+// GH #133: a thread whose last email (e2) sits ONLY in the Trash mailbox —
+// the state where the reader should offer "Delete permanently" instead of
+// "Delete", mirroring stubArchivedThread() above. Answers DELETE for the
+// destroy request the same way a real server would on success; individual
+// tests override this default via destroyStatus.
+function stubTrashedThread(destroyStatus = 200) {
+  const state = structuredClone(thread);
+  state.emails[1]!.mailboxIds = ["trash1"];
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.includes("/api/mail/messages/") && method === "PATCH") {
+      return new Response(null, { status: 204 });
+    }
+    if (url.includes("/api/mail/messages/") && method === "DELETE") {
+      return destroyStatus === 200
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response(
+            JSON.stringify({ code: "destroy_failed", message: "errors.destroy_failed", traceId: "t1" }),
+            { status: destroyStatus },
+          );
     }
     if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
     if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
@@ -513,6 +551,38 @@ describe("ThreadView", () => {
 
         expect(await screen.findByText(i18n.t("attachments.count", { count: 2 }))).toBeInTheDocument();
         expect(screen.getByText(/photo\.png/)).toBeInTheDocument();
+      });
+
+      // GH #134: a cid: reference only actually renders inline when EmailBody
+      // considers the attachment's type a "safe inline image" (see
+      // isSafeInlineImage in EmailBody.tsx — a narrow allowlist for security
+      // reasons). A cid: reference to any other type (e.g. a PDF invoice
+      // referenced via cid:, unusual but real) will NEVER resolve to a
+      // rendered image — EmailBody leaves it as a broken <img> icon. Hiding
+      // it from the attachment chip list too, purely because *something*
+      // referenced its cid, makes the file completely unreachable: not
+      // rendered inline, not downloadable. Gmail-style behavior is that an
+      // attachment that can't actually be shown inline must still surface as
+      // a regular, downloadable attachment below the body.
+      it("keeps a cid-referenced attachment in the chip list when its type can never resolve inline", async () => {
+        const state = structuredClone(thread);
+        state.emails[0]!.bodyHtml = `<p>See the invoice below.</p><img src="cid:doc123">`;
+        state.emails[0]!.attachments = [
+          { blobId: "doc-blob", name: "invoice.pdf", type: "application/pdf", size: 2048, cid: "doc123" },
+        ];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+            if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }),
+        );
+        renderThread();
+
+        expect(await screen.findByText(i18n.t("attachments.count", { count: 1 }))).toBeInTheDocument();
+        expect(screen.getByText(/invoice\.pdf/)).toBeInTheDocument();
       });
 
       it("passes the email's attachments to EmailBody so the inline cid: image itself resolves to a data: URL", async () => {
@@ -976,6 +1046,10 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Let's get started with the quarterly plan and align on next steps together.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "m2",
@@ -995,6 +1069,10 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "Sounds good, I am unread still.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
           },
           {
             id: "m3",
@@ -1014,6 +1092,10 @@ describe("ThreadView", () => {
             bodyHtml: null,
             bodyText: "This is the last message in the thread.",
             attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
           },
         ],
       };
@@ -1070,6 +1152,362 @@ describe("ThreadView", () => {
       expect(
         await screen.findByText("Let's get started with the quarterly plan and align on next steps together."),
       ).toBeInTheDocument();
+    });
+  });
+
+  // GH #118: the reader now shows the newest message at the top (oldest at
+  // the bottom) instead of the old oldest-first order. GH #119: an expanded
+  // message (including the newest one) can be collapsed again by clicking
+  // its header — expandMessage() used to only ever add ids to expandedIds,
+  // and a render-time `|| isLast` force kept the newest message stuck open
+  // regardless of expandedIds.
+  describe("newest-first order and collapsible expansion (GH #118, GH #119)", () => {
+    function threeMessageThread(): ThreadDetail {
+      return {
+        id: "t2",
+        emails: [
+          {
+            id: "m1",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Kickoff",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Let's get started",
+            // Read, not the newest message — collapses into a stub.
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 100,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Let's get started with the quarterly plan and align on next steps together.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+          {
+            id: "m2",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Alice", email: "alice@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T10:00:00.000Z",
+            preview: "Sounds good",
+            // Unread ($seen absent), not the newest message — stays expanded.
+            keywords: {},
+            hasAttachment: false,
+            size: 80,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Sounds good, I am unread still.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+          {
+            id: "m3",
+            threadId: "t2",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Re: Kickoff",
+            receivedAt: "2026-07-01T11:00:00.000Z",
+            preview: "Final message",
+            // Read, but IS the newest message — expanded by default, must
+            // still be collapsible (the GH #119 regression).
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 60,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This is the newest message in the thread.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+        ],
+      };
+    }
+
+    function stubThreeMessageThread() {
+      const state = threeMessageThread();
+      return vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("renders the newest message before older messages in the DOM", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      const newestText = await screen.findByText("This is the newest message in the thread.");
+      const middleText = await screen.findByText("Sounds good, I am unread still.");
+      const oldestStub = await screen.findByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+
+      expect(newestText.compareDocumentPosition(middleText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(middleText.compareDocumentPosition(oldestStub) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("collapses the newest message when its header is clicked, even though it is expanded by default (GH #119 regression)", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      await screen.findByText("This is the newest message in the thread.");
+      // Before collapsing, only m1 (already read, not newest) is a stub.
+      expect(
+        screen.getAllByRole("button", { name: i18n.t("mail.expandMessage", { sender: "Alice" }) }),
+      ).toHaveLength(1);
+
+      const collapseButton = await screen.findByRole("button", {
+        name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+      });
+      fireEvent.click(collapseButton);
+
+      await waitFor(() => {
+        expect(screen.queryByText("This is the newest message in the thread.")).not.toBeInTheDocument();
+      });
+      // Collapsing the newest message turns it into a second "Alice" stub.
+      expect(
+        screen.getAllByRole("button", { name: i18n.t("mail.expandMessage", { sender: "Alice" }) }),
+      ).toHaveLength(2);
+    });
+
+    it("expands a collapsed message again once its stub is re-clicked, restoring its full body", async () => {
+      vi.stubGlobal("fetch", stubThreeMessageThread());
+      renderThread("t2");
+
+      await screen.findByText("This is the newest message in the thread.");
+      fireEvent.click(
+        await screen.findByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Alice" }) }),
+      );
+
+      const stubs = await screen.findAllByRole("button", {
+        name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+      });
+      const newestStub = stubs.find((button) => button.textContent?.includes("This is the newest message"));
+      expect(newestStub).toBeTruthy();
+      fireEvent.click(newestStub!);
+
+      expect(await screen.findByText("This is the newest message in the thread.")).toBeInTheDocument();
+    });
+
+    it("keeps a single-message thread expanded with no collapse affordance", async () => {
+      const state: ThreadDetail = {
+        id: "t4",
+        emails: [
+          {
+            id: "solo",
+            threadId: "t4",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Alice", email: "alice@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Solo message",
+            receivedAt: "2026-07-01T09:00:00.000Z",
+            preview: "Just me",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 40,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This thread only has one message.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread("t4");
+
+      expect(await screen.findByText("This thread only has one message.")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Alice" }) }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("reseeds expand state fresh when switching to a different thread, so the new thread's newest message is expanded even after collapsing the previous thread's newest message", async () => {
+      const t2 = threeMessageThread();
+      const t3: ThreadDetail = {
+        id: "t3",
+        emails: [
+          {
+            id: "n1",
+            threadId: "t3",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Eve", email: "eve@example.com" }],
+            to: [{ name: "Bob", email: "bob@example.com" }],
+            subject: "Budget",
+            receivedAt: "2026-07-02T09:00:00.000Z",
+            preview: "Numbers attached",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 40,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "Here is the budget spreadsheet summary for review.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+          {
+            id: "n2",
+            threadId: "t3",
+            mailboxIds: ["mb-inbox"],
+            from: [{ name: "Bob", email: "bob@example.com" }],
+            to: [{ name: "Eve", email: "eve@example.com" }],
+            subject: "Re: Budget",
+            receivedAt: "2026-07-02T10:00:00.000Z",
+            preview: "Looks fine",
+            keywords: { $seen: true },
+            hasAttachment: false,
+            size: 30,
+            cc: [],
+            replyTo: [],
+            bodyHtml: null,
+            bodyText: "This is the newest message in the second thread.",
+            attachments: [],
+            messageId: null,
+            references: null,
+            inReplyTo: null,
+            senderAuth: "unknown",
+          },
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          if (url.includes("/api/mail/threads/t2")) return new Response(JSON.stringify(t2));
+          if (url.includes("/api/mail/threads/t3")) return new Response(JSON.stringify(t3));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { rerender } = render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <ToastProvider>
+              <ThreadView threadId="t2" archiveMailboxId={null} inboxMailboxId={null} />
+            </ToastProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      await screen.findByText("This is the newest message in the thread.");
+      fireEvent.click(
+        await screen.findByRole("button", { name: i18n.t("mail.collapseMessage", { sender: "Alice" }) }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("This is the newest message in the thread.")).not.toBeInTheDocument();
+      });
+
+      rerender(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <ToastProvider>
+              <ThreadView threadId="t3" archiveMailboxId={null} inboxMailboxId={null} />
+            </ToastProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByText("This is the newest message in the second thread.")).toBeInTheDocument();
+    });
+
+    // Both halves of the same collapse/expand disclosure control need to
+    // agree with each other — a screen reader user toggling a message must
+    // hear its state confirmed regardless of which half (stub or header)
+    // they are currently looking at.
+    describe("aria-expanded state", () => {
+      it("exposes aria-expanded=false on a collapsed stub's button", async () => {
+        vi.stubGlobal("fetch", stubThreeMessageThread());
+        renderThread("t2");
+
+        const stub = await screen.findByRole("button", {
+          name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+        });
+        expect(stub).toHaveAttribute("aria-expanded", "false");
+      });
+
+      it("exposes aria-expanded=true on an expanded message's header button", async () => {
+        vi.stubGlobal("fetch", stubThreeMessageThread());
+        renderThread("t2");
+
+        const header = await screen.findByRole("button", {
+          name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+        });
+        expect(header).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("flips aria-expanded on the same logical control as it is collapsed and re-expanded", async () => {
+        vi.stubGlobal("fetch", stubThreeMessageThread());
+        renderThread("t2");
+
+        const header = await screen.findByRole("button", {
+          name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+        });
+        expect(header).toHaveAttribute("aria-expanded", "true");
+
+        fireEvent.click(header);
+
+        const stubs = await screen.findAllByRole("button", {
+          name: i18n.t("mail.expandMessage", { sender: "Alice" }),
+        });
+        const collapsedControl = stubs.find((button) => button.textContent?.includes("This is the newest message"));
+        expect(collapsedControl).toBeTruthy();
+        expect(collapsedControl).toHaveAttribute("aria-expanded", "false");
+
+        fireEvent.click(collapsedControl!);
+
+        const reExpandedHeader = await screen.findByRole("button", {
+          name: i18n.t("mail.collapseMessage", { sender: "Alice" }),
+        });
+        expect(reExpandedHeader).toHaveAttribute("aria-expanded", "true");
+      });
     });
   });
 
@@ -1145,5 +1583,306 @@ describe("ThreadView", () => {
       expect(article).not.toBeNull();
       expect(article?.className).not.toMatch(/shadow-card/);
     });
+  });
+
+  // GH #133: Delete moves the last email to Trash (recoverable, no
+  // confirmation, just feedback — mirrors archiveMutation). Delete
+  // permanently is offered ONLY while viewing Trash and always requires
+  // explicit confirmation before anything is destroyed.
+  describe("delete and delete permanently (GH #133)", () => {
+    it("hides the Delete action when the account has no trash mailbox", async () => {
+      stubFetch();
+      renderThread("t1", "arch1", null, null);
+
+      await screen.findByTestId("thread-actions-bar");
+      expect(screen.queryByRole("button", { name: i18n.t("mail.delete") })).not.toBeInTheDocument();
+    });
+
+    it("shows the Delete action in the action bar when a trash mailbox exists", async () => {
+      stubFetch();
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(within(actionsBar).getByRole("button", { name: i18n.t("mail.delete") })).toBeInTheDocument();
+    });
+
+    it("clicking Delete moves the last email to the trash mailbox with no confirmation and shows feedback", async () => {
+      const fetchMock = stubFetch();
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.delete") }));
+
+      // No confirmation dialog for a move to Trash — it's recoverable.
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+      const patchCall = await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "PATCH",
+        );
+        expect(call).toBeTruthy();
+        return call;
+      });
+      const [, init] = patchCall as [RequestInfo | URL, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { trash1: true } });
+
+      expect(await screen.findByText(i18n.t("mail.deleted"))).toBeInTheDocument();
+    });
+
+    it("hides Delete permanently when a trash mailbox exists but the thread is not being viewed from Trash", async () => {
+      stubFetch();
+      renderThread("t1", "arch1", null, "trash1");
+
+      await screen.findByTestId("thread-actions-bar");
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.deletePermanently") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows Delete permanently (and hides Delete) when the last email is only in Trash", async () => {
+      vi.stubGlobal("fetch", stubTrashedThread());
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }),
+      ).toBeInTheDocument();
+      expect(
+        within(actionsBar).queryByRole("button", { name: i18n.t("mail.delete") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("clicking Delete permanently opens a confirmation dialog naming the message, without destroying anything yet", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/Re: Quarterly report/)).toBeInTheDocument();
+
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("dismissing the confirmation with Cancel destroys nothing", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.cancel") }),
+      );
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("dismissing the confirmation with Escape destroys nothing", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      await screen.findByRole("alertdialog");
+
+      fireEvent.keyDown(window, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("dismissing the confirmation by clicking the backdrop destroys nothing", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+
+      fireEvent.click(dialog);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(
+        fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+      ).toBe(false);
+    });
+
+    it("confirming Delete permanently issues the destroy request, closes the dialog and shows feedback", async () => {
+      const fetchMock = stubTrashedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.confirm") }),
+      );
+
+      await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2" && (init as RequestInit | undefined)?.method === "DELETE",
+        );
+        expect(call).toBeTruthy();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(await screen.findByText(i18n.t("mail.deletedPermanently"))).toBeInTheDocument();
+    });
+
+    it("keeps the confirmation open and shows an error when the server refuses to destroy the message", async () => {
+      const fetchMock = stubTrashedThread(409);
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", "arch1", null, "trash1");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.confirm") }),
+      );
+
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+        i18n.t("mail.errors.destroy_failed"),
+      );
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+  });
+});
+
+// GH #136: sender-authenticity indicator, wired into the sender header of
+// the expanded (newest) message. The badge component's own rendering rules
+// (icon choice, accessible name per verdict, nothing for "unknown") are
+// covered in sender-auth-badge.test.tsx — these tests only check that
+// ThreadView actually renders it from the last email's `senderAuth` field.
+describe("sender authentication badge (GH #136)", () => {
+  function stubThreadWithSenderAuth(senderAuth: ThreadDetail["emails"][number]["senderAuth"]) {
+    const state = structuredClone(thread);
+    state.emails[1]!.senderAuth = senderAuth;
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+      if (url.includes("/api/mail/preferences")) {
+        return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  it("shows the pass mark, with its full accessible-name meaning, when the last email's senderAuth is 'pass'", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("pass"));
+    renderThread();
+
+    expect(
+      await screen.findByRole("img", { name: i18n.t("mail.senderAuth.passLabel") }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the warning mark, with its full accessible-name meaning, when the last email's senderAuth is 'fail'", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("fail"));
+    renderThread();
+
+    expect(
+      await screen.findByRole("img", { name: i18n.t("mail.senderAuth.failLabel") }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders each verdict distinctly: pass and fail never share the same accessible name", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("pass"));
+    renderThread();
+    await screen.findByRole("img", { name: i18n.t("mail.senderAuth.passLabel") });
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.failLabel") })).not.toBeInTheDocument();
+  });
+
+  it("shows no authenticity mark at all when senderAuth is 'unknown' — never a positive mark by default", async () => {
+    vi.stubGlobal("fetch", stubThreadWithSenderAuth("unknown"));
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.failLabel") })).not.toBeInTheDocument();
+  });
+
+  // The mark must be impossible for a sender to forge via their own display
+  // name: it renders exclusively from the server-provided senderAuth
+  // verdict, never from `from.name`/addressLabel. A checkmark-like character
+  // in the display name must show up only as plain text, never as (or
+  // instead of) the real authenticity mark.
+  it("does not render a pass mark from a checkmark in the sender's display name when senderAuth is 'unknown'", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.senderAuth = "unknown";
+    state.emails[1]!.from = [{ name: "✓ Verified Sender", email: "carol@example.com" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    // The forged checkmark is visible as ordinary sender-name text...
+    expect(await screen.findByText("✓ Verified Sender")).toBeInTheDocument();
+    // ...but it never produces (or is read as) the real authenticity mark.
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
+  });
+
+  // Same forged-display-name scenario, but with a server-confirmed 'fail' —
+  // proves the forged checkmark can't even mask a genuine warning.
+  it("still shows the real warning mark (not the spoofed checkmark) when a forged display name coincides with senderAuth 'fail'", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.senderAuth = "fail";
+    state.emails[1]!.from = [{ name: "✓ Verified Sender", email: "carol@example.com" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    expect(
+      await screen.findByRole("img", { name: i18n.t("mail.senderAuth.failLabel") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
   });
 });
