@@ -51,11 +51,24 @@ export function buildDraftReplyPrompt(subject: string, context?: string): string
     : `Asunto: ${subject}`;
 }
 
+// Matches a bullet marker and nothing beyond it: either a symbol marker, or a
+// number immediately followed by `.`/`)` and whitespace.
+//
+// The previous expression was a character class — `^[\s\-*•\d.]+` — which does
+// not stop at the marker at all: it keeps consuming any run of digits, dots,
+// dashes and spaces, straight into the content. "- 3 facturas pendientes"
+// arrived as "facturas pendientes", and a summary bullet that opens with a
+// figure loses precisely the figure, which is usually the point of the bullet.
+//
+// A numbered marker requires trailing whitespace so that a decimal is not read
+// as one: "1.5 millones" has no marker, it has a quantity.
+const BULLET_MARKER = /^\s*(?:[-*•]\s*|\d+[.)]\s+)/;
+
 /** Splits a raw model response into up to `limit` cleaned bullet lines. */
 export function parseBullets(text: string, limit: number = SUMMARY_BULLET_COUNT): string[] {
   return text
     .split("\n")
-    .map((line) => line.replace(/^[\s\-*•\d.]+/, "").trim())
+    .map((line) => line.replace(BULLET_MARKER, "").trim())
     .filter((line) => line.length > 0)
     .slice(0, limit);
 }
