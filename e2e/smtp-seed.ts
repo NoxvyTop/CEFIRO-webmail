@@ -57,6 +57,18 @@ const CONNECT_RETRIES = 5;
 const CONNECT_RETRY_DELAY_MS = 750;
 const CONNECT_TIMEOUT_MS = 5_000;
 
+// The fixture's self-signed certificate is regenerated fresh on every
+// container boot, but always for "DNS:localhost" — confirmed by inspecting a
+// running container's cert directly (`openssl s_client -connect <host>:465
+// -servername localhost | openssl x509 -noout -ext subjectAltName`). It does
+// NOT vary with the container's actual hostname or with how it is reached.
+// TLS hostname verification in seedInbox is therefore pinned to this
+// constant as an explicit `servername`, decoupled from the `host` used to
+// open the TCP connection — so seeding keeps working when `host` is a Docker
+// service name (e.g. "stalwart" inside a GitHub Actions `services:` network)
+// instead of "localhost", without weakening the certificate pinning below.
+const STALWART_CERT_SERVERNAME = "localhost";
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -352,7 +364,7 @@ export async function seedInbox(host: string, port: number, messages: SeedEmail[
   const account = { email: "admin@cefiro.test", password: "n2BODWVsupeXnJ3L" };
 
   const ca = await fetchFixtureCertificate(host, port);
-  const tlsOptions: ConnectionOptions = { ca };
+  const tlsOptions: ConnectionOptions = { ca, servername: STALWART_CERT_SERVERNAME };
   const runId = crypto.randomUUID();
 
   for (const message of messages) {

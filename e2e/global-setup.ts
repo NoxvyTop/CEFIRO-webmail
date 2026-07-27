@@ -27,15 +27,22 @@ const MASTER_KEY_B64 = "ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=";
 // valid for this local/E2E fixture, never production credentials.
 const STALWART_ACCOUNT_EMAIL = "admin@cefiro.test";
 const STALWART_ACCOUNT_PASSWORD = "n2BODWVsupeXnJ3L";
-const STALWART_SMTP_HOST = "localhost";
+// Env-overridable, defaulting to docker-compose.e2e.yml's host-published
+// ports so local development and that compose file keep working unchanged.
+// A containerized CI job reaches the fixture as a `services:` container
+// instead — sharing a network with it and addressing it by service name on
+// its own container-native ports (STALWART_SMTP_HOST=stalwart,
+// STALWART_SMTP_PORT=465, STALWART_SMTP_PLAIN_PORT=25) rather than the
+// host-published 8465/8025 docker-compose.e2e.yml uses.
+const STALWART_SMTP_HOST = process.env.STALWART_SMTP_HOST ?? "localhost";
 // The TLS ("SMTPS") listener, not plain port 8025 — see smtp-seed.ts for why
 // authenticated, TLS-only submission is required to land seeded mail in the
 // Inbox instead of Junk Mail.
-const STALWART_SMTP_PORT = 8465;
+const STALWART_SMTP_PORT = Number(process.env.STALWART_SMTP_PORT ?? 8465);
 // Plain, unauthenticated SMTP listener — used only for SPAM_SEED_EMAILS via
 // seedJunk, which relies on the lack of AUTH/TLS to trigger Stalwart's spam
 // classifier (see smtp-seed.ts's file header).
-const STALWART_SMTP_PLAIN_PORT = 8025;
+const STALWART_SMTP_PLAIN_PORT = Number(process.env.STALWART_SMTP_PLAIN_PORT ?? 8025);
 
 export default async function globalSetup() {
   const url =
