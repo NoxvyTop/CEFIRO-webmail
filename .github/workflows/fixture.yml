@@ -31,7 +31,14 @@ env:
 
 jobs:
   publish-fixture:
-    runs-on: ubuntu-latest
+    # Deliberately NOT ubuntu-latest. This builds a test fixture, not a
+    # release artefact — the neutral-infrastructure argument that sends the
+    # main gate to GitHub's image does not apply to it, and pinning it there
+    # made the workflow unable to run at all while the hosted quota is spent:
+    # the job is refused before it exists, in two seconds, with no steps and
+    # an empty runner name. A workflow whose whole purpose is publishing an
+    # image cannot be the one thing that cannot run.
+    runs-on: [self-hosted, linux, x64, docker]
     permissions:
       contents: read
       packages: write
