@@ -210,4 +210,66 @@ describe("jmap client", () => {
       expect(result.apiUrl).toBe("https://mail.test/jmap/");
     });
   });
+
+  describe("transport failure (GH #187)", () => {
+    const session: JmapSession = {
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    };
+
+    // Stalwart is down: the connection is refused/reset, so fetch REJECTS
+    // (a TypeError) rather than returning a response. That never reaches the
+    // status-based mapping, so before the fix it propagated raw to app.onError
+    // and surfaced as a 500 "internal" — a known dependency being down reported
+    // as if it were our own bug.
+    function refusedFetch(): typeof fetch {
+      return vi.fn(async () => {
+        throw new TypeError("Unable to connect. Is the computer able to access the url?");
+      }) as unknown as typeof fetch;
+    }
+
+    it("maps a refused connection on getSession to stalwart_unavailable (502)", async () => {
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: refusedFetch() });
+      await expect(client.getSession(auth)).rejects.toMatchObject({
+        code: "stalwart_unavailable",
+        httpStatus: 502,
+      });
+    });
+
+    it("maps a refused connection on request to stalwart_unavailable (502)", async () => {
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: refusedFetch() });
+      await expect(
+        client.request(auth, session, [["Mailbox/get", {}, "0"]]),
+      ).rejects.toMatchObject({ code: "stalwart_unavailable", httpStatus: 502 });
+    });
+
+    it("maps a refused connection on uploadBlob to stalwart_unavailable (502)", async () => {
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: refusedFetch() });
+      await expect(
+        client.uploadBlob(auth, session, "script", "application/sieve"),
+      ).rejects.toMatchObject({ code: "stalwart_unavailable", httpStatus: 502 });
+    });
+
+    it("lets the deadline's own timeout error pass through unchanged", async () => {
+      // The transport mapping must not swallow the upstream_timeout (504) that
+      // withDeadlineFetch raises — that is already a correct dependency error
+      // and carries its own distinct status.
+      vi.useFakeTimers();
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch,
+      });
+      const pending = client.request(auth, session, [["Mailbox/get", {}, "0"]]);
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "upstream_timeout",
+        httpStatus: 504,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+      vi.useRealTimers();
+    });
+  });
 });
