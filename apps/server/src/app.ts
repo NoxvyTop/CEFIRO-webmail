@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { HealthResponse, InstanceSettingsView } from "@webmail/shared";
 import type { InstanceSettingsRepo } from "./infra/repos/instance-settings";
+import { logAccess, loggedPath } from "./core/access-log";
+import { errorResponse } from "./core/error-response";
 import { DomainError } from "./core/errors";
 import { log } from "./core/logger";
 
@@ -60,6 +62,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
   app.use("*", async (c, next) => {
     const traceId = crypto.randomUUID();
+    const startedAt = Date.now();
     c.set("traceId", traceId);
     c.header("x-trace-id", traceId);
     await next();
@@ -69,6 +72,16 @@ export function createApp(options: CreateAppOptions = {}) {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
       if (!c.res.headers.has(name)) c.res.headers.set(name, value);
     }
+    // The status is known only here, and every response passes through —
+    // handler returns, hand-built error envelopes, notFound and onError alike.
+    // See core/access-log.ts for the level and path choices.
+    logAccess({
+      traceId,
+      method: c.req.method,
+      path: loggedPath(c.req.matchedRoutes, c.req.path),
+      status: c.res.status,
+      durationMs: Date.now() - startedAt,
+    });
   });
 
   app.get("/api/health", async (c) => {
@@ -104,12 +117,7 @@ export function createApp(options: CreateAppOptions = {}) {
   if (options.profileRouter) app.route("/api/profile", options.profileRouter as never);
   if (options.contactsRouter) app.route("/api/mail", options.contactsRouter as never);
 
-  app.notFound((c) =>
-    c.json(
-      { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-      404,
-    ),
-  );
+  app.notFound((c) => errorResponse(c, "not_found", 404));
 
   app.onError((err, c) => {
     const traceId = c.get("traceId") ?? "unknown";

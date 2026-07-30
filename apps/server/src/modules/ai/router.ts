@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from "hono";
-import { draftInputSchema } from "@webmail/shared";
+import { draftInputSchema, isQuoteSeparatorLine } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import { DomainError } from "../../core/errors";
 import { requireSession } from "../auth/middleware";
 import { requireMail } from "../mail/context";
@@ -48,32 +49,18 @@ function extractBodyText(email: JmapEmailBody): string {
   return html ? stripHtml(html) : "";
 }
 
-// Lines that mark the start of a dragged-in quoted reply trail — the client
-// inserts one of these right before quoting the previous message(s). Not an
-// exhaustive email-quote parser, just the handful of variants Gmail/Outlook
-// actually produce.
-const REPLY_SEPARATOR_PATTERNS: RegExp[] = [
-  /^el .+ escribió:\s*$/i, // Gmail (es): "El <date>, <name> <email> escribió:"
-  /^on .+ wrote:\s*$/i, // Gmail (en): "On <date>, <name> <email> wrote:"
-  /^-{3,}\s*original\s+message\s*-{3,}$/i, // Outlook: "-----Original Message-----"
-  /^_{8,}$/, // Outlook's underscore divider above the quoted headers
-];
-
-function isReplySeparatorLine(line: string): boolean {
-  const trimmed = line.trim();
-  return REPLY_SEPARATOR_PATTERNS.some((pattern) => pattern.test(trimmed));
-}
-
 /**
  * Strips the dragged quoted-reply trail from a message body so thread
  * summarization only sees what this particular message actually says, not
  * the previous messages it re-quotes. Truncates at the first line that looks
- * like a client-inserted reply separator, then drops any remaining `>`-quoted
- * lines (top-posted quote blocks sometimes have no separator line at all).
+ * like a client-inserted reply separator (see isQuoteSeparatorLine, shared
+ * with the reader's own quote split — GH #168), then drops any remaining
+ * `>`-quoted lines (top-posted quote blocks sometimes have no separator line
+ * at all).
  */
 export function stripQuotedTrail(text: string): string {
   const lines = text.split("\n");
-  const cutIndex = lines.findIndex(isReplySeparatorLine);
+  const cutIndex = lines.findIndex(isQuoteSeparatorLine);
   const kept = cutIndex === -1 ? lines : lines.slice(0, cutIndex);
   return kept
     .filter((line) => !line.trim().startsWith(">"))
@@ -127,10 +114,7 @@ export function createAiRouter(deps: AiDeps) {
     const list = ((responses[0]?.[1] ?? {}) as { list?: JmapEmailBody[] }).list ?? [];
     const email = list[0];
     if (!email) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const bullets = await deps.aiClient!.summarize(extractBodyText(email));
     return c.json({ bullets });
@@ -170,10 +154,7 @@ export function createAiRouter(deps: AiDeps) {
     const getResult = (responses[1]?.[1] ?? {}) as { list?: JmapThreadEmail[] };
     const emails = getResult.list ?? [];
     if (threadResult.list?.length === 0 || emails.length === 0) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
 
     const ordered = [...emails].sort(
@@ -193,17 +174,11 @@ export function createAiRouter(deps: AiDeps) {
     try {
       body = await c.req.json();
     } catch {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const parsed = draftInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const draft = await deps.aiClient!.draftReply(parsed.data.subject);
     return c.json({ body: draft });

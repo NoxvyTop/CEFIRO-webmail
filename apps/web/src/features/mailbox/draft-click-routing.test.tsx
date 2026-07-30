@@ -245,6 +245,14 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
     const cancelButton = within(dialog).getByRole("button", { name: i18n.t("composer.cancel") });
     fireEvent.click(cancelButton);
 
+    // GH #159: Cancel now routes through the same discard confirmation as
+    // Escape and the header close (X) button — this draft carries a subject
+    // and a recipient, so it isn't empty and must confirm before closing.
+    const discardButton = await screen.findByRole("button", {
+      name: i18n.t("composer.discardConfirm.discard"),
+    });
+    fireEvent.click(discardButton);
+
     expect(
       screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
     ).not.toBeInTheDocument();
@@ -272,6 +280,14 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
     const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
     const cancelButton = within(dialog).getByRole("button", { name: i18n.t("composer.cancel") });
     fireEvent.click(cancelButton);
+
+    // GH #159: replyDraft pre-fills `to` with the original sender, so this
+    // composer isn't empty either — Cancel must confirm here too, same as
+    // the draft-edit case above.
+    const discardButton = await screen.findByRole("button", {
+      name: i18n.t("composer.discardConfirm.discard"),
+    });
+    fireEvent.click(discardButton);
 
     expect(
       screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),

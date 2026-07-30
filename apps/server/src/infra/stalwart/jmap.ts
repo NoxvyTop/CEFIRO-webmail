@@ -1,3 +1,4 @@
+import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 
 export type JmapAuth = { email: string; password: string };
@@ -36,8 +37,37 @@ export function createJmapClient(input: {
   baseUrl: string;
   fetchFn?: typeof fetch;
   forceBase?: boolean;
+  /** Outbound deadline per JMAP call — see core/deadline.ts (GH #165). */
+  timeoutMs?: number;
 }) {
-  const fetchFn = input.fetchFn ?? fetch;
+  // Every call below goes through the wrapped fetch, so a Stalwart that accepts
+  // the connection and never answers surfaces as `upstream_timeout` instead of
+  // hanging the request forever.
+  const deadlineFetch = withDeadlineFetch(
+    input.fetchFn ?? fetch,
+    "stalwart",
+    input.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS,
+  );
+
+  // A transport failure — connection refused, reset, DNS error — makes fetch
+  // REJECT rather than return a response, so it never reaches the status-based
+  // toDomainError mapping. Left alone it propagated raw to app.onError and
+  // surfaced as a 500 "internal", reporting a known dependency being down as if
+  // it were our own bug — and logging it as an unhandled error, burying the
+  // real ones (GH #187). Map it to stalwart_unavailable, the same as an
+  // unreachable-status response. A DomainError already in flight — notably the
+  // upstream_timeout (504) that withDeadlineFetch raises (GH #165) — is a
+  // correct dependency error with its own status, so it passes through
+  // untouched.
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      return await deadlineFetch(input, init);
+    } catch (err) {
+      if (err instanceof DomainError) throw err;
+      throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+    }
+  }) as typeof fetch;
+
   const baseUrl = input.baseUrl.replace(/\/$/, "");
   const forceBase = input.forceBase ?? false;
 

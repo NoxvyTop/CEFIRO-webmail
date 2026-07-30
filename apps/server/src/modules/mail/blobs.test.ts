@@ -84,7 +84,7 @@ beforeAll(async () => {
 });
 afterAll(() => sql.end());
 
-function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch) {
+function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch, timeoutMs?: number) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -93,6 +93,7 @@ function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch) {
       userPreferences: createUserPreferencesRepo(sql),
       jmap,
       fetchFn,
+      timeoutMs,
     }),
   });
 }
@@ -354,5 +355,48 @@ describe("GET /api/mail/blobs/:blobId", () => {
     expect(res.headers.get("content-type")).toBe("application/octet-stream");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    /** Stalwart accepts the download and then never answers. */
+    const silentFetch = (() =>
+      new Promise<Response>(() => {})) as unknown as typeof fetch;
+
+    it("returns 504 upstream_timeout instead of hanging forever", async () => {
+      const res = await makeApp(stubJmap, silentFetch, 50).request(
+        "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf",
+        { headers: { cookie: `session=${token}` } },
+      );
+
+      expect(res.status).toBe(504);
+      expect(((await res.json()) as { code: string }).code).toBe("upstream_timeout");
+    });
+
+    it("keeps aborting the upstream when the client cancels the download mid-stream", async () => {
+      upstreamResponse = new Response(
+        new ReadableStream({
+          start() {
+            // Never closes: a large attachment still being relayed.
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/pdf" } },
+      );
+      const client = new AbortController();
+
+      const res = await makeApp(stubJmap, stubFetch(), 50).request(
+        new Request("http://localhost/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf", {
+          headers: { cookie: `session=${token}` },
+          signal: client.signal,
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const upstreamSignal = (capturedInit as RequestInit).signal;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(upstreamSignal?.aborted).toBe(false);
+
+      client.abort();
+      expect(upstreamSignal?.aborted).toBe(true);
+    });
   });
 });

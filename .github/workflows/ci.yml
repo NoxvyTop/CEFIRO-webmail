@@ -38,6 +38,71 @@ concurrency:
 # Containerising the jobs is what makes this safe to alternate: the toolchain
 # is declared in this file, so the same job behaves identically on either.
 jobs:
+  # Resolves the Stalwart fixture image the e2e job will run against, and
+  # publishes it if that exact image does not exist yet.
+  #
+  # The tag is derived from the CONTENT of e2e/stalwart, not written by hand.
+  # A hand-written tag was the previous design, and it did not freeze anything:
+  # the publishing workflow pushed a fixed `v1` on every fixture change, so an
+  # old commit silently started being tested against a fixture that did not
+  # exist when it was written. The file even said "bump it whenever either
+  # input changes" — an intention that depends on nobody forgetting is not a
+  # guarantee, and there was nothing checking it.
+  #
+  # Content-addressing makes the guarantee structural instead. Change a seed
+  # file and the tag changes with it, so the new fixture cannot occupy the old
+  # one's name. Change nothing and the tag is already in the registry, the
+  # build is skipped, and every commit keeps resolving to the bytes it was
+  # written against.
+  fixture:
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+    env:
+      IMAGE_NAME: ghcr.io/noxvytop/cefiro-e2e-stalwart
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        # hashFiles returns an empty string when the glob matches nothing, which
+        # would silently produce the tag `sha-` and hand every future fixture the
+        # same name again — the exact failure this job exists to remove. Fail
+        # instead: an empty hash means the fixture directory moved, and that is
+        # worth stopping for.
+        run: |
+          hash='${{ hashFiles('e2e/stalwart/**') }}'
+          if [ -z "$hash" ]; then
+            echo "::error::e2e/stalwart/** matched no files — the fixture directory moved or is empty."
+            exit 1
+          fi
+          echo "image=${IMAGE_NAME}:sha-${hash}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: probe
+        # The common case by far: the fixture has not changed, the image is
+        # already published, and the whole job costs one registry round-trip.
+        run: |
+          if docker manifest inspect '${{ steps.resolve.outputs.image }}' >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.probe.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.probe.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./e2e/stalwart
+          push: true
+          tags: ${{ steps.resolve.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   test:
     runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
     # The job runs inside a declared image rather than on whatever the runner
@@ -96,6 +161,10 @@ jobs:
         run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
 
   e2e:
+    # The fixture job resolves — and publishes if missing — the exact image
+    # this job pulls, so the tag can never name bytes other than the ones this
+    # commit declares.
+    needs: [fixture]
     runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
     # The official Playwright image, pinned to the exact @playwright/test
     # version the lockfile resolves. These two must match: Playwright refuses
@@ -139,13 +208,15 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       stalwart:
-        # Pre-provisioned Stalwart fixture, built from ./e2e/stalwart and
-        # published to ghcr.io (see that directory's README for what's baked
-        # in and how to rebuild/republish it). Pinned to an explicit tag,
-        # never :latest, since this is a fixed test fixture, not a moving
-        # target. `services:` needs a pre-built image rather than a build
-        # context, which is why this is no longer `docker compose build`.
-        image: ghcr.io/noxvytop/cefiro-e2e-stalwart:v1
+        # Pre-provisioned Stalwart fixture, built from ./e2e/stalwart (see that
+        # directory's README for what's baked in). `services:` needs a
+        # pre-built image rather than a build context, which is why this is not
+        # `docker compose build` — the `fixture` job above covers the build.
+        #
+        # The tag is content-addressed rather than hand-written, so it names
+        # this commit's fixture and cannot be repointed at a later one. See the
+        # `fixture` job for why that distinction matters.
+        image: ${{ needs.fixture.outputs.image }}
         # The package is private, like the repository it belongs to — a test
         # fixture with seeded mailboxes has no reason to be world-readable.
         # A service container pulls before any step runs, so it needs the
@@ -168,11 +239,31 @@ jobs:
           # docker-compose.e2e.yml, which points it at the host-published
           # localhost:8096 because that setup has no shared service network.
           STALWART_PUBLIC_URL: "http://stalwart:8080"
+        # The probe talks to the three ports the tests actually use, instead of
+        # asking the binary its version. `stalwart --version` answers at t=0s,
+        # before a single listener is serving, so the container was reported
+        # healthy while it could still accept a TCP connection and drop it
+        # without sending the SMTP greeting — which is precisely how seeding
+        # failed: "SMTP connection closed before a final response arrived
+        # (buffer: "")". Measured on the runner: version says ok at t=0s, the
+        # ports answer at t≈2s. The suite passed most of the time because job
+        # setup happened to outlast the gap, which is luck, not readiness.
+        #
+        # The `/cefiro.test` path is curl's EHLO domain, not a URL path. Without
+        # it curl greets with the container hostname and Stalwart answers "550
+        # Invalid EHLO domain" — a healthy server refusing a malformed hello,
+        # which would make this probe fail forever against a working container.
+        #
+        # --insecure on 465 because the fixture's certificate is self-signed;
+        # the seeder connects the same way (see e2e/smtp-seed.ts's
+        # trust-on-first-use comment). This is a loopback probe inside the
+        # container, so there is no transport to intercept.
         options: >-
-          --health-cmd "/usr/local/bin/stalwart --version"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+          --health-cmd "curl -sS --max-time 3 -o /dev/null smtp://127.0.0.1:25/cefiro.test && curl -sS --max-time 3 -o /dev/null --insecure smtps://127.0.0.1:465/cefiro.test && curl -sS --max-time 3 -o /dev/null http://127.0.0.1:8080/"
+          --health-interval 3s
+          --health-timeout 10s
+          --health-start-period 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
       # setup-bun extracts a zip, and the Playwright image is slim enough not

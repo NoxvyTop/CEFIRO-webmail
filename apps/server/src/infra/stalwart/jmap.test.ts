@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_STALWART_TIMEOUT_MS } from "../../core/deadline";
 import { createJmapClient, type JmapSession } from "./jmap";
 
 const auth = { email: "u@noxvytop.com", password: "mailbox-pw" };
@@ -122,5 +123,153 @@ describe("jmap client", () => {
     await expect(
       client.request(auth, session, [["Mailbox/get", {}, "0"]]),
     ).rejects.toMatchObject({ code: "jmap_error" });
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    const session: JmapSession = {
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    };
+
+    /** Stalwart accepts the connection and then never answers. */
+    function silentFetch(): typeof fetch {
+      return vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fails getSession with upstream_timeout when Stalwart never answers", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: silentFetch() });
+
+      const pending = client.getSession(auth);
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "upstream_timeout",
+        httpStatus: 504,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("fails request with upstream_timeout when Stalwart never answers", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: silentFetch() });
+
+      const pending = client.request(auth, session, [["Mailbox/get", {}, "0"]]);
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("fails uploadBlob with upstream_timeout when Stalwart never answers", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: silentFetch() });
+
+      const pending = client.uploadBlob(auth, session, "script", "application/sieve");
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+    });
+
+    it("honours a configured timeoutMs instead of the default", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: silentFetch(),
+        timeoutMs: 2_000,
+      });
+
+      const pending = client.getSession(auth);
+      const settled = vi.fn();
+      pending.then(settled, settled);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).not.toHaveBeenCalled();
+
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+    });
+
+    it("leaves a response that arrives in time completely untouched", async () => {
+      vi.useFakeTimers();
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning(sessionBody),
+      });
+
+      const result = await client.getSession(auth);
+
+      expect(result.accountId).toBe("acc-1");
+      // Well past the deadline: a settled call must never be timed out later.
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS * 10);
+      expect(result.apiUrl).toBe("https://mail.test/jmap/");
+    });
+  });
+
+  describe("transport failure (GH #187)", () => {
+    const session: JmapSession = {
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    };
+
+    // Stalwart is down: the connection is refused/reset, so fetch REJECTS
+    // (a TypeError) rather than returning a response. That never reaches the
+    // status-based mapping, so before the fix it propagated raw to app.onError
+    // and surfaced as a 500 "internal" — a known dependency being down reported
+    // as if it were our own bug.
+    function refusedFetch(): typeof fetch {
+      return vi.fn(async () => {
+        throw new TypeError("Unable to connect. Is the computer able to access the url?");
+      }) as unknown as typeof fetch;
+    }
+
+    it("maps a refused connection on getSession to stalwart_unavailable (502)", async () => {
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: refusedFetch() });
+      await expect(client.getSession(auth)).rejects.toMatchObject({
+        code: "stalwart_unavailable",
+        httpStatus: 502,
+      });
+    });
+
+    it("maps a refused connection on request to stalwart_unavailable (502)", async () => {
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: refusedFetch() });
+      await expect(
+        client.request(auth, session, [["Mailbox/get", {}, "0"]]),
+      ).rejects.toMatchObject({ code: "stalwart_unavailable", httpStatus: 502 });
+    });
+
+    it("maps a refused connection on uploadBlob to stalwart_unavailable (502)", async () => {
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn: refusedFetch() });
+      await expect(
+        client.uploadBlob(auth, session, "script", "application/sieve"),
+      ).rejects.toMatchObject({ code: "stalwart_unavailable", httpStatus: 502 });
+    });
+
+    it("lets the deadline's own timeout error pass through unchanged", async () => {
+      // The transport mapping must not swallow the upstream_timeout (504) that
+      // withDeadlineFetch raises — that is already a correct dependency error
+      // and carries its own distinct status.
+      vi.useFakeTimers();
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch,
+      });
+      const pending = client.request(auth, session, [["Mailbox/get", {}, "0"]]);
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "upstream_timeout",
+        httpStatus: 504,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await assertion;
+      vi.useRealTimers();
+    });
   });
 });

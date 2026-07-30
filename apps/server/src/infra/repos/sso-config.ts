@@ -1,5 +1,11 @@
 import type { Db } from "../db/client";
-import { decryptSecret, encryptSecret } from "../../modules/credentials/crypto";
+import { log } from "../../core/logger";
+import {
+  asKeyring,
+  decryptWithKeyring,
+  encryptWithKeyring,
+  type Keyring,
+} from "../../modules/credentials/crypto";
 
 export type SsoConfig = {
   issuer: string;
@@ -13,10 +19,36 @@ type SsoRow = {
   client_id: string;
   client_secret_ciphertext: Uint8Array;
   client_secret_iv: Uint8Array;
+  key_version: number;
   scopes: string;
 };
 
-export function createSsoConfigRepo(sql: Db, key: CryptoKey) {
+export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
+  const keyring = asKeyring(keys);
+
+  // Same progressive re-encryption contract as mail credentials: best-effort,
+  // never fails the read, and skipped when a concurrent set() moved the row on.
+  async function reEncrypt(clientSecret: string, fromVersion: number): Promise<void> {
+    try {
+      const { ciphertext, iv, keyVersion } = await encryptWithKeyring(
+        keyring,
+        clientSecret,
+      );
+      await sql`
+        update sso_config
+        set client_secret_ciphertext = ${ciphertext}, client_secret_iv = ${iv},
+            key_version = ${keyVersion}, updated_at = now()
+        where id = 1 and key_version = ${fromVersion}
+      `;
+    } catch (error) {
+      log("warn", "sso client secret re-encryption failed", {
+        fromKeyVersion: fromVersion,
+        toKeyVersion: keyring.current.version,
+        error: String(error),
+      });
+    }
+  }
+
   return {
     async exists(): Promise<boolean> {
       const rows = await sql<{ id: number }[]>`select id from sso_config where id = 1`;
@@ -24,19 +56,24 @@ export function createSsoConfigRepo(sql: Db, key: CryptoKey) {
     },
     async get(): Promise<SsoConfig | null> {
       const rows = await sql<SsoRow[]>`
-        select issuer, client_id, client_secret_ciphertext, client_secret_iv, scopes
+        select issuer, client_id, client_secret_ciphertext, client_secret_iv,
+               key_version, scopes
         from sso_config where id = 1
       `;
       const row = rows[0];
       if (!row) return null;
+      const clientSecret = await decryptWithKeyring(keyring, {
+        ciphertext: new Uint8Array(row.client_secret_ciphertext),
+        iv: new Uint8Array(row.client_secret_iv),
+        keyVersion: row.key_version,
+      });
+      if (row.key_version !== keyring.current.version) {
+        await reEncrypt(clientSecret, row.key_version);
+      }
       return {
         issuer: row.issuer,
         clientId: row.client_id,
-        clientSecret: await decryptSecret(
-          key,
-          new Uint8Array(row.client_secret_ciphertext),
-          new Uint8Array(row.client_secret_iv),
-        ),
+        clientSecret,
         scopes: row.scopes,
       };
     },
@@ -48,11 +85,14 @@ export function createSsoConfigRepo(sql: Db, key: CryptoKey) {
       return row ? { issuer: row.issuer, clientId: row.client_id, scopes: row.scopes } : null;
     },
     async set(config: SsoConfig): Promise<void> {
-      const { ciphertext, iv } = await encryptSecret(key, config.clientSecret);
+      const { ciphertext, iv, keyVersion } = await encryptWithKeyring(
+        keyring,
+        config.clientSecret,
+      );
       await sql`
         insert into sso_config
           (id, issuer, client_id, client_secret_ciphertext, client_secret_iv, key_version, scopes)
-        values (1, ${config.issuer}, ${config.clientId}, ${ciphertext}, ${iv}, 1, ${config.scopes})
+        values (1, ${config.issuer}, ${config.clientId}, ${ciphertext}, ${iv}, ${keyVersion}, ${config.scopes})
         on conflict (id) do update set
           issuer = excluded.issuer,
           client_id = excluded.client_id,

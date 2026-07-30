@@ -2,7 +2,8 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Contact } from "@webmail/shared";
-import { createContact, deleteContact, fetchContacts } from "../contacts/api";
+import { createContact, deleteContact, fetchContacts, promoteContact } from "../contacts/api";
+import { HarvestedBadge } from "../contacts/HarvestedBadge";
 import { settingsErrorKey } from "./errors";
 
 const CONTACTS_QUERY_KEY = ["mail", "contacts"] as const;
@@ -35,6 +36,21 @@ export function ContactsSettings() {
     onSuccess: async () => {
       setName("");
       setEmail("");
+      setErrorKey(null);
+      await invalidateContacts();
+    },
+    onError: (error) => setErrorKey(settingsErrorKey(error)),
+  });
+
+  // GH #163: adopting a sender the harvest added on its own. Deliberately
+  // single-click, unlike delete's two-step confirm above: deleting is
+  // irreversible and tombstones the address, whereas this only clears an
+  // advisory mark on a contact the user is already keeping. Guarding it behind
+  // a confirmation would make the safe action feel as consequential as the
+  // destructive one.
+  const promoteMutation = useMutation({
+    mutationFn: (id: string) => promoteContact(id),
+    onSuccess: async () => {
       setErrorKey(null);
       await invalidateContacts();
     },
@@ -108,16 +124,35 @@ export function ContactsSettings() {
               ) : (
                 <>
                   <div className="flex min-w-0 flex-col">
-                    <span className="truncate">{displayName(contact)}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate">{displayName(contact)}</span>
+                      {contact.source === "harvested" && <HarvestedBadge withHint />}
+                    </span>
                     {contact.name && <span className="truncate text-xs text-muted">{contact.email}</span>}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmingDeleteId(contact.id)}
-                    className="shrink-0 rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
-                  >
-                    {t("settings.delete")}
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {contact.source === "harvested" && (
+                      // Named per contact rather than a bare "Confirmar": the
+                      // list repeats this button, so a screen-reader user
+                      // moving button to button would otherwise hear the same
+                      // label on every row with nothing to tell them apart.
+                      <button
+                        type="button"
+                        aria-label={t("contacts.promoteLabel", { name: displayName(contact) })}
+                        onClick={() => promoteMutation.mutate(contact.id)}
+                        className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
+                      >
+                        {t("contacts.promote")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingDeleteId(contact.id)}
+                      className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
+                    >
+                      {t("settings.delete")}
+                    </button>
+                  </div>
                 </>
               )}
             </li>

@@ -8,6 +8,7 @@ import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updat
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { fetchIdentities } from "../composer/api";
+import { replyRecipients } from "../composer/reply";
 import { Avatar } from "../../app/ui/Avatar";
 import { Button } from "../../app/ui/Button";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
@@ -16,6 +17,7 @@ import { labelBackground, labelColor, labelDisplayName, userLabels } from "../..
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody, isSafeInlineImage } from "./EmailBody";
@@ -53,18 +55,12 @@ function DeletePermanentlyConfirmDialog({
   subject, deleting, deleteError, onConfirm, onCancel,
 }: DeletePermanentlyConfirmDialogProps) {
   const { t } = useTranslation();
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    previouslyFocusedRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.focus();
-
-    return () => {
-      previouslyFocusedRef.current?.focus();
-    };
-  }, []);
+  // GH #158/#161: focus-in/Tab-cycling/restore-on-close now come from the
+  // shared useFocusTrap primitive — this dialog used to move focus in and
+  // restore it on close by hand, but never cycled Tab, so focus could walk
+  // out of this still-visible confirmation into the background page (right
+  // next to the irreversible destroy action it's guarding).
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -129,23 +125,25 @@ function bodySnippet(email: EmailDetail, maxLength = 80): string {
 }
 
 // Gmail shows "Reply all" when there is at least one other recipient besides
-// the account itself and the original sender — plain reply already goes to
-// the sender, so reply-all is only meaningful once it would add someone.
-// This mirrors reply.ts's replyDraft(): reply-all's cc is exactly
-// dedupe(to+cc) minus the account's own identity and minus the sender's
-// address, so the two modes are equivalent (and the button redundant)
-// whenever that set is empty.
+// the account itself and whoever plain reply already addresses — reply-all
+// is only meaningful once it would add someone plain reply doesn't already
+// reach.
+//
+// GH #174: this used to be a hand-rolled predicate that claimed to mirror
+// reply.ts's replyDraft() but actually diverged from it on any message
+// carrying a Reply-To — it always excluded email.from[0], while replyDraft's
+// "to" is replyTo when present, else from, and it matched against every
+// identity while replyDraft picks exactly one. The two could show a button
+// whose draft turns out identical to plain reply, or hide one that would
+// genuinely have added a recipient. Rather than patch the predicate again
+// (and risk a second drift), visibility now calls the exact same recipient
+// computation the real draft is built from, so the two cannot disagree.
+// It deliberately calls replyRecipients rather than replyDraft: the draft
+// also builds a quoted body, which means a DOMParser parse and a DOMPurify
+// pass over the whole message — far too much work to decide whether to
+// paint a button, on every render.
 function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boolean {
-  const ownEmails = new Set(identities.map((identity) => identity.email.trim().toLowerCase()));
-  const senderEmail = email.from[0]?.email.trim().toLowerCase();
-  const others = new Set<string>();
-  for (const address of [...email.to, ...email.cc]) {
-    const key = address.email.trim().toLowerCase();
-    if (ownEmails.has(key)) continue;
-    if (senderEmail && key === senderEmail) continue;
-    others.add(key);
-  }
-  return others.size >= 1;
+  return replyRecipients(email, identities, true).cc.length > 0;
 }
 
 export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null }: ThreadViewProps) {
@@ -384,27 +382,62 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   // GH #90: previous, already-read messages collapse into one-line stubs;
   // the newest message and any still-unread message stay expanded. This is
   // a one-time snapshot taken when the thread's messages first load — a Set
-  // of expanded ids. It's deliberately NOT recomputed on every refetch
-  // (star/label/archive mutations all invalidate and refetch this same
-  // thread query): once the user has changed a message's expand state, a
-  // later refetch must not reset it. The ref guards that — it only
-  // (re)seeds the set the first time a given threadId's data arrives, so
-  // switching to a different thread does get a fresh snapshot.
+  // of expanded ids. It's deliberately NOT recomputed wholesale on every
+  // refetch (star/label/archive mutations all invalidate and refetch this
+  // same thread query, and so does every server-sent event via
+  // useMailEvents' blanket ["mail"] invalidation): once the user has changed
+  // an already-known message's expand state, a later refetch must not reset
+  // it. initializedThreadIdRef guards the full reseed — it only happens the
+  // first time a given threadId's data arrives, so switching to a different
+  // thread does get a fresh snapshot.
+  //
+  // GH #162: that guard used to also block admitting genuinely NEW message
+  // ids that arrive while the thread stays open (e.g. a reply landing via
+  // the SSE-driven refetch above) — a message id never seen before for this
+  // thread was simply never added to expandedIds, silently collapsing it
+  // (and, since it's the newest message, taking the reply/reply-all/forward
+  // footer and AI summary card down with it — both live inside the
+  // isExpanded branch). knownEmailIdsRef tracks which ids have already been
+  // accounted for (by the initial seed or a previous run of this effect) so
+  // a later run can tell "new to this thread" apart from "already decided,
+  // possibly by the user" and only ever ADD the former — an already-known
+  // id's expand state, however it got there, is never touched again here.
   const initializedThreadIdRef = useRef<string | null>(null);
+  const knownEmailIdsRef = useRef<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     const currentEmails = threadQuery.data?.emails;
     if (!currentEmails || currentEmails.length === 0) return;
-    if (initializedThreadIdRef.current === threadId) return;
 
     const newest = currentEmails[currentEmails.length - 1];
-    const initial = new Set<string>();
-    for (const email of currentEmails) {
-      if (email.id === newest?.id || !email.keywords.$seen) initial.add(email.id);
+
+    if (initializedThreadIdRef.current !== threadId) {
+      const initial = new Set<string>();
+      for (const email of currentEmails) {
+        if (email.id === newest?.id || !email.keywords.$seen) initial.add(email.id);
+      }
+      setExpandedIds(initial);
+      knownEmailIdsRef.current = new Set(currentEmails.map((email) => email.id));
+      initializedThreadIdRef.current = threadId;
+      return;
     }
-    setExpandedIds(initial);
-    initializedThreadIdRef.current = threadId;
+
+    // Same thread, later refetch: admit only ids not seen before for this
+    // thread — the newest and any unread arrival stay expanded, mirroring
+    // the initial-seed rule above. Every already-known id's expand state
+    // (including whatever the user has since done to it) is left untouched.
+    const newlyArrived = currentEmails.filter((email) => !knownEmailIdsRef.current.has(email.id));
+    if (newlyArrived.length > 0) {
+      setExpandedIds((previous) => {
+        const next = new Set(previous);
+        for (const email of newlyArrived) {
+          if (email.id === newest?.id || !email.keywords.$seen) next.add(email.id);
+        }
+        return next;
+      });
+      knownEmailIdsRef.current = new Set(currentEmails.map((email) => email.id));
+    }
   }, [threadQuery.data, threadId]);
 
   // GH #119: a real toggle — clicking a collapsed stub expands it (GH #90)

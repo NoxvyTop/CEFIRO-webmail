@@ -84,7 +84,7 @@ beforeAll(async () => {
 });
 afterAll(() => sql.end());
 
-function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch) {
+function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch, timeoutMs?: number) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -93,6 +93,7 @@ function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch) {
       userPreferences: createUserPreferencesRepo(sql),
       jmap,
       fetchFn,
+      timeoutMs,
     }),
   });
 }
@@ -160,5 +161,51 @@ describe("GET /api/mail/events", () => {
     expect(res.status).toBe(502);
     expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
     expect(fetchCallCount).toBe(beforeCount);
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    /** Stalwart accepts the event-source connection and then never answers. */
+    const silentFetch = (() =>
+      new Promise<Response>(() => {})) as unknown as typeof fetch;
+
+    it("returns 504 upstream_timeout instead of hanging forever", async () => {
+      const res = await makeApp(stubJmap, silentFetch, 50).request("/api/mail/events", {
+        headers: { cookie: `session=${token}` },
+      });
+
+      expect(res.status).toBe(504);
+      expect(((await res.json()) as { code: string }).code).toBe("upstream_timeout");
+    });
+
+    it("stops counting once the stream starts, but still aborts it when the client leaves", async () => {
+      // The deadline covers time-to-headers only: an event stream legitimately
+      // stays open for minutes, and the client's own signal — which this route
+      // has always forwarded — must keep tearing the upstream down.
+      upstreamResponse = new Response(
+        new ReadableStream({
+          start() {
+            // Never closes: a live event stream.
+          },
+        }),
+        { status: 200 },
+      );
+      const client = new AbortController();
+
+      const res = await makeApp(stubJmap, stubFetch(), 50).request(
+        new Request("http://localhost/api/mail/events", {
+          headers: { cookie: `session=${token}` },
+          signal: client.signal,
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const upstreamSignal = capturedInit?.signal;
+      // Well past the 50ms deadline, the open stream is untouched.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(upstreamSignal?.aborted).toBe(false);
+
+      client.abort();
+      expect(upstreamSignal?.aborted).toBe(true);
+    });
   });
 });

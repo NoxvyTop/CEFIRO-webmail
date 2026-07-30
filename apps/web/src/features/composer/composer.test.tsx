@@ -826,6 +826,29 @@ describe("Composer", () => {
       expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
     });
 
+    // GH #158: reproduced in the browser as Tab walking off the last button,
+    // through <body>, and into background page elements (the header logo)
+    // while this alertdialog still covers the screen. Now backed by the
+    // shared useFocusTrap primitive.
+    it("traps Tab focus inside the discard confirmation instead of letting it escape to the page", async () => {
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      pressEscape();
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.contains(document.activeElement)).toBe(true);
+
+      const saveButton = screen.getByRole("button", {
+        name: i18n.t("composer.discardConfirm.saveToDrafts"),
+      });
+      saveButton.focus();
+      fireEvent.keyDown(window, { key: "Tab" });
+
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: i18n.t("composer.discardConfirm.keepEditing") }),
+      );
+    });
+
     it("cannot trigger the save action twice while the first save is still in flight", async () => {
       let resolveSave: (value: { id: string }) => void = () => {};
       saveDraft.mockImplementationOnce(
@@ -849,6 +872,145 @@ describe("Composer", () => {
       await act(async () => {
         resolveSave({ id: "draft-1" });
       });
+    });
+  });
+
+  // GH #159: the header close (X) button and the bottom Cancel/discard
+  // button both used to call onClose() directly — bypassing the discard
+  // confirmation Escape already goes through (GH #125). A user with real
+  // content in the draft lost it silently by clicking either one. Both now
+  // route through the same requestClose() decision Escape uses: an empty
+  // draft closes immediately, anything else shows the confirmation — so any
+  // future exit route wired the same way inherits the protection instead of
+  // being born unguarded.
+  describe("close (X) and Cancel route through the discard confirmation (#159)", () => {
+    it("closes immediately when the header close (X) button is clicked on an untouched composer", async () => {
+      const { onClose } = renderComposer();
+      const closeButton = await screen.findByRole("button", { name: i18n.t("composer.close") });
+
+      fireEvent.click(closeButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("shows the discard confirmation instead of closing when the header close (X) button is clicked on a draft with a recipient", async () => {
+      const { onClose } = renderComposer(vi.fn(), {
+        ...baseDraft(),
+        to: [{ name: null, email: "bob@example.com" }],
+      });
+      const closeButton = await screen.findByRole("button", { name: i18n.t("composer.close") });
+
+      fireEvent.click(closeButton);
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation instead of closing when the header close (X) button is clicked on a draft with a typed body", async () => {
+      const { onClose } = renderComposer();
+      const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
+      fireEvent.input(body, { target: { innerHTML: "<p>hello there</p>" } });
+      await waitFor(() => expect(body.textContent).toContain("hello there"));
+      const closeButton = screen.getByRole("button", { name: i18n.t("composer.close") });
+
+      fireEvent.click(closeButton);
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("Discard from the header close (X) button's confirmation closes the composer", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      const closeButton = await screen.findByRole("button", { name: i18n.t("composer.close") });
+      fireEvent.click(closeButton);
+      const discardButton = await screen.findByRole("button", { name: i18n.t("composer.discardConfirm.discard") });
+
+      fireEvent.click(discardButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("Keep editing from the header close (X) button's confirmation leaves the composer open without closing it", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      const closeButton = await screen.findByRole("button", { name: i18n.t("composer.close") });
+      fireEvent.click(closeButton);
+      const keepEditingButton = await screen.findByRole("button", {
+        name: i18n.t("composer.discardConfirm.keepEditing"),
+      });
+
+      fireEvent.click(keepEditingButton);
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows the discard confirmation instead of closing when the bottom Cancel/discard button is clicked on a draft with content", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      const cancelButton = await screen.findByRole("button", { name: i18n.t("composer.cancel") });
+
+      fireEvent.click(cancelButton);
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("Discard from the bottom Cancel button's confirmation closes the composer", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      const cancelButton = await screen.findByRole("button", { name: i18n.t("composer.cancel") });
+      fireEvent.click(cancelButton);
+      const discardButton = await screen.findByRole("button", { name: i18n.t("composer.discardConfirm.discard") });
+
+      fireEvent.click(discardButton);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    // The composer intentionally has no backdrop-click-to-close today (unlike
+    // DiscardConfirmDialog/NewLabelModal/AttachmentViewer in this codebase) —
+    // this locks that in as a deliberate choice rather than an oversight, so
+    // it doesn't quietly turn into a second unguarded exit route later.
+    it("does not close or show a confirmation when the backdrop itself is clicked", async () => {
+      const { onClose } = renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      fireEvent.click(dialog);
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #159: nothing in the app warned before a browser-tab close discarded
+  // an open draft — the same silent-discard defect as the header close
+  // button, just through the browser's own exit door instead of the
+  // composer's. Armed only when the draft actually has content, mirroring
+  // requestClose's isComposerDraftEmpty check above, so an untouched compose
+  // window never nags on tab close.
+  describe("beforeunload guard (#159)", () => {
+    function dispatchBeforeUnload(): Event {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event;
+    }
+
+    it("prevents the tab from closing when the draft has content", async () => {
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      const event = dispatchBeforeUnload();
+
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("does not prevent the tab from closing when the composer is untouched", async () => {
+      renderComposer();
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      const event = dispatchBeforeUnload();
+
+      expect(event.defaultPrevented).toBe(false);
     });
   });
 

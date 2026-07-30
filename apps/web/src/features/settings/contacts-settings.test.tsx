@@ -7,17 +7,18 @@ import type { Contact } from "@webmail/shared";
 import { MailApiError } from "../mailbox/api";
 import { ContactsSettings } from "./ContactsSettings";
 
-const { fetchContacts, createContact, deleteContact } = vi.hoisted(() => ({
+const { fetchContacts, createContact, deleteContact, promoteContact } = vi.hoisted(() => ({
   fetchContacts: vi.fn(),
   createContact: vi.fn(),
   deleteContact: vi.fn(),
+  promoteContact: vi.fn(),
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-vi.mock("../contacts/api", () => ({ fetchContacts, createContact, deleteContact }));
+vi.mock("../contacts/api", () => ({ fetchContacts, createContact, deleteContact, promoteContact }));
 
 const ana: Contact = { id: "c1", name: "Ana Lopez", email: "ana@example.com", source: "manual" };
 const bob: Contact = { id: "c2", name: "Bob Smith", email: "bob@example.com", source: "harvested" };
@@ -118,5 +119,59 @@ describe("ContactsSettings", () => {
     fireEvent.click(await screen.findByRole("button", { name: i18n.t("contacts.confirmDeleteAction") }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+  });
+
+  // GH #163: provenance was stored but never shown, so an address the harvest
+  // added on its own was indistinguishable from one the user vetted by hand.
+  describe("harvested provenance (#163)", () => {
+    it("marks only the auto-harvested contact, inside its own row", async () => {
+      renderSettings([ana, bob]);
+
+      await screen.findByText("Ana Lopez");
+      const badges = screen.getAllByText(i18n.t("contacts.harvestedBadge"));
+      expect(badges).toHaveLength(1);
+      expect(badges[0]?.closest("li")).toHaveTextContent("Bob Smith");
+    });
+
+    it("offers promotion only for the harvested contact", async () => {
+      renderSettings([ana, bob]);
+
+      await screen.findByText("Bob Smith");
+      expect(
+        screen.getByRole("button", { name: i18n.t("contacts.promoteLabel", { name: "Bob Smith" }) }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: i18n.t("contacts.promoteLabel", { name: "Ana Lopez" }) }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("promotes a harvested contact and drops the mark once the list refreshes", async () => {
+      promoteContact.mockResolvedValueOnce({ ...bob, source: "manual" });
+      renderSettings([ana, bob]);
+
+      await screen.findByText("Bob Smith");
+      fetchContacts.mockResolvedValue([ana, { ...bob, source: "manual" }]);
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("contacts.promoteLabel", { name: "Bob Smith" }) }),
+      );
+
+      await waitFor(() => expect(promoteContact).toHaveBeenCalledWith("c2"));
+      await waitFor(() =>
+        expect(screen.queryByText(i18n.t("contacts.harvestedBadge"))).not.toBeInTheDocument(),
+      );
+    });
+
+    it("surfaces a failed promotion as an alert and keeps the contact marked", async () => {
+      promoteContact.mockRejectedValueOnce(new MailApiError(404, "not_found"));
+      renderSettings([bob]);
+
+      await screen.findByText("Bob Smith");
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("contacts.promoteLabel", { name: "Bob Smith" }) }),
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.not_found"));
+      expect(screen.getByText(i18n.t("contacts.harvestedBadge"))).toBeInTheDocument();
+    });
   });
 });

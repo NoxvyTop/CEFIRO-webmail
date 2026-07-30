@@ -44,6 +44,88 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...validEnv, APP_URL: "not-a-url" })).toThrow();
   });
 
+  describe("master key rotation (single key by default)", () => {
+    const retiredKey = "B".repeat(44);
+
+    it("defaults to version 1 with no retired keys", () => {
+      const config = loadConfig(validEnv);
+      expect(config.masterKeyVersion).toBe(1);
+      expect(config.previousMasterKeys).toEqual([]);
+    });
+
+    it("treats an empty MASTER_KEY_PREVIOUS as no retired keys", () => {
+      expect(loadConfig({ ...validEnv, MASTER_KEY_PREVIOUS: "" }).previousMasterKeys).toEqual(
+        [],
+      );
+    });
+
+    it("reads MASTER_KEY_VERSION and the retired keys it needs", () => {
+      const config = loadConfig({
+        ...validEnv,
+        MASTER_KEY_VERSION: "2",
+        MASTER_KEY_PREVIOUS: `1:${retiredKey}`,
+      });
+      expect(config.masterKeyVersion).toBe(2);
+      expect(config.previousMasterKeys).toEqual([{ version: 1, key: retiredKey }]);
+    });
+
+    it("reads several retired keys and ignores surrounding whitespace", () => {
+      const config = loadConfig({
+        ...validEnv,
+        MASTER_KEY_VERSION: "3",
+        MASTER_KEY_PREVIOUS: ` 1:${retiredKey}, 2:${"C".repeat(44)} `,
+      });
+      expect(config.previousMasterKeys).toEqual([
+        { version: 1, key: retiredKey },
+        { version: 2, key: "C".repeat(44) },
+      ]);
+    });
+
+    it("rejects a retired key with no version prefix", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, MASTER_KEY_PREVIOUS: retiredKey }),
+      ).toThrow();
+    });
+
+    it("rejects a retired key that is not 44 chars", () => {
+      expect(() => loadConfig({ ...validEnv, MASTER_KEY_PREVIOUS: "1:short" })).toThrow();
+    });
+
+    it("rejects a non-numeric retired key version", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, MASTER_KEY_PREVIOUS: `old:${retiredKey}` }),
+      ).toThrow();
+    });
+
+    it("rejects the same retired version declared twice", () => {
+      expect(() =>
+        loadConfig({
+          ...validEnv,
+          MASTER_KEY_VERSION: "2",
+          MASTER_KEY_PREVIOUS: `1:${retiredKey},1:${"C".repeat(44)}`,
+        }),
+      ).toThrow();
+    });
+
+    it("rejects a retired key that reuses the current MASTER_KEY_VERSION", () => {
+      expect(() =>
+        loadConfig({
+          ...validEnv,
+          MASTER_KEY_VERSION: "2",
+          MASTER_KEY_PREVIOUS: `2:${retiredKey}`,
+        }),
+      ).toThrow();
+    });
+
+    it("rejects a MASTER_KEY_VERSION below 1", () => {
+      expect(() => loadConfig({ ...validEnv, MASTER_KEY_VERSION: "0" })).toThrow();
+    });
+
+    it("rejects a non-numeric MASTER_KEY_VERSION", () => {
+      expect(() => loadConfig({ ...validEnv, MASTER_KEY_VERSION: "latest" })).toThrow();
+    });
+  });
+
   it("parses optional STALWART_URL and treats empty as undefined", () => {
     expect(loadConfig(validEnv).stalwartUrl).toBeUndefined();
     expect(loadConfig({ ...validEnv, STALWART_URL: "" }).stalwartUrl).toBeUndefined();
@@ -133,6 +215,49 @@ describe("loadConfig", () => {
       expect(loadConfig({ ...validEnv, AI_PROVIDER: "openai-compat" }).aiProvider).toBe(
         "openai-compat",
       );
+    });
+  });
+
+  describe("outbound deadlines (GH #165)", () => {
+    it("defaults every upstream deadline so no deployment has to set one", () => {
+      const config = loadConfig(validEnv);
+      expect(config.stalwartTimeoutMs).toBe(10_000);
+      expect(config.aiTimeoutMs).toBe(60_000);
+      expect(config.oidcTimeoutMs).toBe(10_000);
+    });
+
+    it("gives the AI provider a looser deadline than Stalwart by default", () => {
+      const config = loadConfig(validEnv);
+      expect(config.aiTimeoutMs).toBeGreaterThan(config.stalwartTimeoutMs);
+    });
+
+    it("reads STALWART_TIMEOUT_MS, AI_TIMEOUT_MS and OIDC_TIMEOUT_MS overrides", () => {
+      const config = loadConfig({
+        ...validEnv,
+        STALWART_TIMEOUT_MS: "2500",
+        AI_TIMEOUT_MS: "120000",
+        OIDC_TIMEOUT_MS: "7000",
+      });
+      expect(config.stalwartTimeoutMs).toBe(2500);
+      expect(config.aiTimeoutMs).toBe(120_000);
+      expect(config.oidcTimeoutMs).toBe(7000);
+    });
+
+    it("treats an empty deadline variable as absent", () => {
+      expect(loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "" }).stalwartTimeoutMs).toBe(10_000);
+    });
+
+    it("rejects a non-numeric deadline", () => {
+      expect(() => loadConfig({ ...validEnv, AI_TIMEOUT_MS: "soon" })).toThrow();
+    });
+
+    it("rejects a zero or negative deadline, which would abort every call", () => {
+      expect(() => loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, OIDC_TIMEOUT_MS: "-1" })).toThrow();
+    });
+
+    it("rejects a fractional deadline", () => {
+      expect(() => loadConfig({ ...validEnv, AI_TIMEOUT_MS: "1500.5" })).toThrow();
     });
   });
 });

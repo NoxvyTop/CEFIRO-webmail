@@ -1,4 +1,5 @@
 import type { AiClient } from "../../core/ai";
+import { DEFAULT_AI_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 import { log } from "../../core/logger";
 import {
@@ -27,6 +28,20 @@ type ChatCompletionResponse = {
 };
 
 /**
+ * Flattens every provider failure into one opaque `ai_provider_error` — never
+ * include email content in logs, only the failure itself.
+ *
+ * A DomainError is passed through untouched: that is the outbound deadline
+ * (`upstream_timeout`), which exists precisely so an operator can tell a
+ * provider that stalled from a provider that answered with garbage (GH #165).
+ */
+function toAiError(error: unknown, task: string): DomainError {
+  if (error instanceof DomainError) return error;
+  log("error", `ai ${task} failed`, { error: error instanceof Error ? error.message : "unknown" });
+  return new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+}
+
+/**
  * Adapter for any provider that speaks the OpenAI `/v1/chat/completions`
  * shape: MiniMax, Kimi/Moonshot, or a self-hosted Ollama/vLLM/LiteLLM
  * server — one adapter, configurable via `baseUrl` (see core/config.ts
@@ -41,8 +56,14 @@ export function createOpenAiCompatibleClient(input: {
   model: string;
   baseUrl: string;
   fetchFn?: typeof fetch;
+  /** Outbound deadline per completion — see core/deadline.ts (GH #165). */
+  timeoutMs?: number;
 }): AiClient {
-  const fetchFn = input.fetchFn ?? fetch;
+  const fetchFn = withDeadlineFetch(
+    input.fetchFn ?? fetch,
+    "ai",
+    input.timeoutMs ?? DEFAULT_AI_TIMEOUT_MS,
+  );
   const endpoint = `${input.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
   // Note: both tasks currently reuse the single configured `model`. Per-task
@@ -93,9 +114,7 @@ export function createOpenAiCompatibleClient(input: {
         ]);
         return parseBullets(content, SUMMARY_BULLET_COUNT);
       } catch (error) {
-        // Never include email content in logs — only the failure itself.
-        log("error", "ai summarize failed", { error: error instanceof Error ? error.message : "unknown" });
-        throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+        throw toAiError(error, "summarize");
       }
     },
 
@@ -107,9 +126,7 @@ export function createOpenAiCompatibleClient(input: {
         ]);
         return parseBullets(content, THREAD_SUMMARY_BULLET_COUNT);
       } catch (error) {
-        // Never include email content in logs — only the failure itself.
-        log("error", "ai summarizeThread failed", { error: error instanceof Error ? error.message : "unknown" });
-        throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+        throw toAiError(error, "summarizeThread");
       }
     },
 
@@ -122,8 +139,7 @@ export function createOpenAiCompatibleClient(input: {
         ]);
         return content.trim();
       } catch (error) {
-        log("error", "ai draft failed", { error: error instanceof Error ? error.message : "unknown" });
-        throw new DomainError("ai_provider_error", 502, "errors.ai_provider_error");
+        throw toAiError(error, "draft");
       }
     },
   };

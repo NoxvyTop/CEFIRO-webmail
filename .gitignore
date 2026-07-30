@@ -14,6 +14,8 @@ GEMINI.md
 openspec/
 docs/superpowers/
 *.local.md
+.codegraph/
+scratchpad/
 
 # Environment and secrets
 .env

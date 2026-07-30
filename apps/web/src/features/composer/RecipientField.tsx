@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { Contact, EmailAddress } from "@webmail/shared";
 import { searchContacts } from "../contacts/api";
+import { HarvestedBadge } from "../contacts/HarvestedBadge";
 import { CloseIcon } from "../../app/ui/icons";
 
 interface RecipientFieldProps {
@@ -228,7 +229,14 @@ export function RecipientField({ label, placeholder = label, value, onChange }: 
                 index === clampedActiveIndex ? "bg-sel" : ""
               }`}
             >
-              <span className="truncate font-medium text-ink">{contact.name || contact.email}</span>
+              {/* GH #163: a suggestion the harvest added on its own must not
+                  read as one the user vetted — the badge is part of the
+                  option's text, so it reaches a screen reader through the
+                  option's accessible name rather than by styling alone. */}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate font-medium text-ink">{contact.name || contact.email}</span>
+                {contact.source === "harvested" && <HarvestedBadge />}
+              </span>
               {contact.name && <span className="truncate text-xs text-muted">{contact.email}</span>}
             </li>
           ))}

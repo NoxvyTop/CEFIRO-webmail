@@ -81,6 +81,31 @@ export function createContactsRepo(sql: Db) {
       });
     },
 
+    // GH #163: adopts a harvested contact as one of the user's own. Now that
+    // both surfaces mark provenance, recognising a sender needs a way to act
+    // on it — this is the constructive counterpart to remove() below, for the
+    // sender you *do* know rather than the one you don't.
+    //
+    // Only ever 'harvested' -> 'manual'. There is deliberately no downgrade:
+    // nothing the user does by hand should be able to make an address look
+    // less vouched-for than it already is, and harvestSenders() above already
+    // refuses to touch a row that exists.
+    //
+    // Idempotent on an already-manual contact — it returns the row unchanged
+    // rather than reporting a miss, since "make this mine" is satisfied by a
+    // contact that is already mine and the caller shouldn't special-case it.
+    // Null means no such contact *for this user*, which is what makes the
+    // route's 404 an ownership check as well as an existence one.
+    async promote(userId: string, id: string): Promise<Contact | null> {
+      const rows = await sql<ContactRow[]>`
+        update contacts
+        set source = 'manual'
+        where id = ${id} and user_id = ${userId}
+        returning id, name, email, source
+      `;
+      return rows[0] ? toContact(rows[0]) : null;
+    },
+
     // Deletes the contact and records a tombstone for its address so the
     // harvest bulk upsert (harvestSenders below) never silently re-adds it —
     // GH #124's "never resurrect a deleted contact". Recorded regardless of

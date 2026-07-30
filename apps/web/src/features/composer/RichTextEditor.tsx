@@ -175,6 +175,89 @@ const configuredImage = ResizableImage.configure({ allowBase64: true });
 // this keeps text-align consistent if one shows up).
 const configuredTextAlign = TextAlign.configure({ types: ["heading", "paragraph"] });
 
+// Minimal structural shape of a ProseMirror doc node — only what
+// resolveWritableSelectionPos below needs (iterate top-level children,
+// resolve a position to check what block it falls in). Kept duck-typed
+// instead of importing prosemirror-model's Node type: @tiptap/pm isn't a
+// direct dependency here (only @tiptap/core/-react/-starter-kit etc. are),
+// so its types aren't reliably resolvable from this file, while
+// editor.state.doc (typed by @tiptap/core) already satisfies this shape
+// structurally.
+interface WalkableDoc {
+  forEach(callback: (node: { type: { name: string } }, offset: number) => void): void;
+  resolve(pos: number): { parent: { isTextblock: boolean } };
+}
+
+// Position of every top-level signature/quote marker block in the doc, in
+// document order. Shared by resolveWritableSelectionPos (only needs the
+// first one — applySignature always places the signature before any quote)
+// and the click interceptor below (needs all of them, to test click
+// coordinates against each block's own rendered bounds).
+function findMarkerBlockPositions(doc: WalkableDoc): number[] {
+  const positions: number[] = [];
+  doc.forEach((node, offset) => {
+    if (node.type.name === MarkerBlock.name) positions.push(offset);
+  });
+  return positions;
+}
+
+// True when (clientX, clientY) falls within the actual rendered bounding box
+// of the doc node starting at `pos`. Used to tell a click genuinely aimed at
+// a marker block's own content apart from a click that only *resolves* into
+// it because ProseMirror's posAtCoords clamps an out-of-content click (dead
+// space below a short body, inside the editor's min-height) to the nearest
+// position — the resolved position alone can't distinguish the two, since
+// both land at or past the same marker start.
+function isPointWithinNodeBounds(
+  view: { nodeDOM(pos: number): Node | null },
+  pos: number,
+  clientX: number,
+  clientY: number,
+): boolean {
+  const dom = view.nodeDOM(pos);
+  const el = dom instanceof HTMLElement ? dom : dom?.parentElement ?? null;
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
+// GH #157: after `editor.commands.setContent()` swaps in externally-provided
+// HTML (the effect below — triggered by the default-signature auto-apply on
+// open, a manual signature switch, or an AI-drafted body), ProseMirror maps
+// the previous selection through a transaction that replaces the *entire*
+// document. Replacing a whole range maps any position that was inside it to
+// the end of the newly inserted content (confirmed against @tiptap/core
+// 2.27.2 — see also the "Selection.atStart(doc) resolves to a NodeSelection"
+// comment in rich-text-editor.test.tsx for a related but distinct quirk of
+// the editor's *initial* mount selection). When the document's last node is
+// the signature (or quote) marker block — the normal case, since
+// applySignature (signature.ts) always places the signature right before any
+// quote and both sit at the end of the body — that silently leaves the
+// stored selection inside the marker. Clicking or Tab-focusing into the
+// editor afterward restores that stored selection rather than computing a
+// fresh one, so the caret lands inside the signature and typing merges
+// straight into it (verified live: focusing the body and typing landed the
+// text inside `[data-cefiro-signature]`, both via click and via Tab).
+//
+// ensureWritableRegionBefore (signature.ts) already guarantees a writable
+// paragraph — real content or an empty filler one — immediately precedes the
+// first marker block. This finds that position (its end, so the user lands
+// ready to keep typing rather than at the start of the doc) so it can be
+// explicitly restored after setContent, instead of leaving the selection
+// wherever the whole-document replacement happened to map it. Returns null
+// when there is no marker block (nothing to correct) or the position
+// immediately before it doesn't resolve into a textblock (defensive: leaves
+// the default TipTap-mapped selection untouched rather than risking an
+// invalid one).
+function resolveWritableSelectionPos(doc: WalkableDoc): number | null {
+  const markerPos = findMarkerBlockPositions(doc)[0] ?? null;
+  if (markerPos === null || markerPos === 0) return null;
+
+  const candidate = markerPos - 1;
+  const resolved = doc.resolve(candidate);
+  return resolved.parent.isTextblock ? candidate : null;
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -213,6 +296,65 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
         "aria-multiline": "true",
         class: "field-focus-line",
       },
+      // GH #157, second half: resolveWritableSelectionPos (above) covers a
+      // focus that merely *restores* an already-computed selection (keyboard
+      // Tab). A mouse click is resolved independently, straight from event
+      // coordinates (ProseMirror's own posAtCoords), and the editor's
+      // min-height (index.css) leaves a lot of visually empty space below a
+      // short body — clicking anywhere in that space resolves to the
+      // *nearest* position, which sits at or past the marker block's own
+      // start boundary when it's the last thing in the doc (confirmed live:
+      // a click there resolved to the exact boundary position between the
+      // filler paragraph and the marker div — not "inside" the marker by
+      // node ancestry, but ProseMirror's own default Selection.near bias
+      // still resolves a boundary position like that into the marker rather
+      // than back into the shorter preceding paragraph).
+      //
+      // That position-based signal alone is too blunt, though: it can't tell
+      // a dead-space click apart from one the user genuinely aimed at their
+      // own signature/quote text — both resolve to the same position range.
+      // Treating every such click as dead space would trap the user out of
+      // editing their own signature for one message, which is its own bug,
+      // just a quieter one than the duplication/merge this fix addresses.
+      // isPointWithinNodeBounds checks the click's actual screen coordinates
+      // against each marker block's own rendered bounding box — a click
+      // inside it is real and reaches the block normally; only a click
+      // outside every marker's box (the actual dead-space case) gets
+      // redirected to the writable region above it.
+      //
+      // Hooked at handleDOMEvents.mousedown, not the higher-level
+      // handleClick prop: by the time a "click" fires, the browser has
+      // already placed its own native caret from the mousedown's coordinates
+      // (contentEditable's default caret-from-point behavior happens on
+      // mousedown, independent of ProseMirror's own click handling), so
+      // reacting on "click" was consistently one step too late — the
+      // redirect ran, but the browser's already-placed native selection is
+      // what actually stuck (confirmed live: identical redirect logic wired
+      // to handleClick left the caret inside the signature every time).
+      // event.preventDefault() here stops that native placement before it
+      // happens, so the selection this sets is the one that survives.
+      handleDOMEvents: {
+        mousedown: (view, event) => {
+          const target = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!target) return false;
+
+          const markerPositions = findMarkerBlockPositions(view.state.doc);
+          const firstMarkerPos = markerPositions[0] ?? null;
+          if (firstMarkerPos === null || target.pos < firstMarkerPos) return false;
+
+          const clickedOnMarkerContent = markerPositions.some((pos) =>
+            isPointWithinNodeBounds(view, pos, event.clientX, event.clientY),
+          );
+          if (clickedOnMarkerContent) return false;
+
+          const writablePos = resolveWritableSelectionPos(view.state.doc);
+          if (writablePos === null) return false;
+
+          event.preventDefault();
+          editor?.chain().focus().setTextSelection(writablePos).run();
+          return true;
+        },
+      },
     },
     onUpdate: ({ editor: current }) => {
       onChange(current.getHTML());
@@ -228,6 +370,14 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
     if (html !== editor.getHTML()) {
       editor.commands.setContent(html, false);
       setIsEmpty(isHtmlEmpty(html));
+
+      // GH #157: see resolveWritableSelectionPos's doc comment — put the
+      // caret back in the writable region above the signature/quote instead
+      // of leaving it wherever the setContent replacement mapped it to.
+      const writablePos = resolveWritableSelectionPos(editor.state.doc);
+      if (writablePos !== null) {
+        editor.commands.setTextSelection(writablePos);
+      }
     }
   }, [editor, html]);
 

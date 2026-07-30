@@ -420,8 +420,11 @@ describe("useComposer", () => {
 
   // GH #125: saveDraft() wires composer/api.ts's saveDraft into useComposer,
   // reusing send()'s payload construction (identity, recipients, subject,
-  // stripSignatureMarkers(bodyHtml), plain-text derivation, attachments,
-  // threading headers) so both actions build the outgoing body identically.
+  // plain-text derivation, attachments, threading headers). GH #156: the one
+  // deliberate difference is htmlBody — send() strips the internal
+  // signature/quote markers (see buildComposePayload's stripMarkers option),
+  // saveDraft() does not, so a reopened draft can still find its previously
+  // applied signature instead of duplicating it.
   describe("saveDraft (#125)", () => {
     beforeEach(() => {
       saveDraftApi.mockReset();
@@ -468,7 +471,16 @@ describe("useComposer", () => {
       expect(result.current.state.saveDraftError).toBeNull();
     });
 
-    it("strips internal signature/quote marker attributes from the outgoing htmlBody, same as send", async () => {
+    // GH #156: saveDraft() deliberately does NOT strip the internal
+    // signature/quote marker divs, unlike send(). Stripping them here used
+    // to be the root cause of a reopened draft's signature duplicating —
+    // with the marker gone, the next auto-apply had no way to find the
+    // previously-applied signature and appended a second copy instead of
+    // replacing it (see signature-integrity.test.ts for the full
+    // save -> reopen -> auto-apply regression coverage). A saved draft is
+    // never recipient-facing — only an actual send is — so keeping the
+    // marker in a draft's persisted body is safe and, per GH #156, required.
+    it("preserves internal signature/quote marker attributes in the persisted draft body, unlike send", async () => {
       saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
       const draft: ComposerDraft = {
         ...baseDraft(),
@@ -483,9 +495,9 @@ describe("useComposer", () => {
       });
 
       const sentHtml = saveDraftApi.mock.calls[0]?.[0]?.htmlBody as string;
-      expect(sentHtml).toBe("<p>Hi</p><p>Thanks, Alice</p><blockquote><p>Original</p></blockquote>");
-      expect(sentHtml).not.toContain("data-cefiro-signature");
-      expect(sentHtml).not.toContain("data-cefiro-quote");
+      expect(sentHtml).toBe(draft.bodyHtml);
+      expect(sentHtml).toContain("data-cefiro-signature");
+      expect(sentHtml).toContain("data-cefiro-quote");
     });
 
     it("carries originalDraftId through to the saveDraft payload when editing an existing draft", async () => {

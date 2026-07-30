@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SignJWT,
   createLocalJWKSet,
   exportJWK,
   generateKeyPair,
 } from "jose";
+import { DEFAULT_OIDC_TIMEOUT_MS } from "../../core/deadline";
 import {
   buildAuthUrl,
   createIdTokenVerifier,
@@ -86,6 +87,78 @@ describe("exchangeCode", () => {
     await expect(exchangeCode({ ...base, fetchFn })).rejects.toMatchObject({
       code: "oidc_exchange_failed",
     });
+  });
+});
+
+describe("outbound deadline (GH #165)", () => {
+  /** The identity provider accepts the connection and then never answers. */
+  function silentFetch(): typeof fetch {
+    return vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fails discovery with upstream_timeout, not oidc_discovery_failed", async () => {
+    vi.useFakeTimers();
+
+    const pending = discover("https://auth.test", silentFetch());
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: "upstream_timeout",
+      httpStatus: 504,
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_OIDC_TIMEOUT_MS);
+    await assertion;
+  });
+
+  it("fails the token exchange with upstream_timeout when the provider never answers", async () => {
+    vi.useFakeTimers();
+
+    const pending = exchangeCode({
+      tokenEndpoint: "https://auth.test/token",
+      clientId: "webmail",
+      clientSecret: "s",
+      code: "c",
+      redirectUri: "http://localhost:5173/api/auth/callback",
+      verifier: "v",
+      fetchFn: silentFetch(),
+    });
+    const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+    await vi.advanceTimersByTimeAsync(DEFAULT_OIDC_TIMEOUT_MS);
+    await assertion;
+  });
+
+  it("honours a configured timeoutMs on discovery", async () => {
+    vi.useFakeTimers();
+
+    const pending = discover("https://auth.test", silentFetch(), 3_000);
+    const settled = vi.fn();
+    pending.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled).not.toHaveBeenCalled();
+
+    const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+  });
+
+  it("honours a configured timeoutMs on the token exchange", async () => {
+    vi.useFakeTimers();
+
+    const pending = exchangeCode({
+      tokenEndpoint: "https://auth.test/token",
+      clientId: "webmail",
+      clientSecret: "s",
+      code: "c",
+      redirectUri: "http://localhost:5173/api/auth/callback",
+      verifier: "v",
+      fetchFn: silentFetch(),
+      timeoutMs: 3_000,
+    });
+    const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
   });
 });
 

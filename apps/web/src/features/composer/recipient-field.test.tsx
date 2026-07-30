@@ -10,6 +10,7 @@ vi.mock("../contacts/api", () => ({ searchContacts }));
 
 const ana: Contact = { id: "c1", name: "Ana Lopez", email: "ana@example.com", source: "manual" };
 const bob: Contact = { id: "c2", name: "Bob Smith", email: "bob@example.com", source: "manual" };
+const zoe: Contact = { id: "c3", name: "Zoe Ruiz", email: "zoe@example.com", source: "harvested" };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -243,6 +244,57 @@ describe("RecipientField", () => {
       const option = screen.getByRole("option", { name: /Ana Lopez/ });
       expect(input).toHaveAttribute("aria-expanded", "true");
       expect(input.getAttribute("aria-activedescendant")).toBe(option.id);
+    });
+  });
+
+  // GH #163: an auto-harvested address must not be offered as if the user had
+  // vetted it themselves — otherwise a stranger who mailed you once shows up
+  // in autocomplete looking exactly like a colleague you added by hand.
+  describe("harvested provenance (#163)", () => {
+    it("marks an auto-harvested suggestion and leaves a hand-added one unmarked", async () => {
+      searchContacts.mockResolvedValueOnce([ana, zoe]);
+      render(<RecipientField label="Para" value={[]} onChange={vi.fn()} />);
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      fireEvent.change(input, { target: { value: "an" } });
+      await advanceDebounce();
+
+      expect(screen.getByRole("option", { name: /Zoe Ruiz/ })).toHaveTextContent(
+        i18n.t("contacts.harvestedBadge"),
+      );
+      expect(screen.getByRole("option", { name: /Ana Lopez/ })).not.toHaveTextContent(
+        i18n.t("contacts.harvestedBadge"),
+      );
+    });
+
+    it("carries the origin in the option's accessible name, so it is not conveyed by styling alone", async () => {
+      searchContacts.mockResolvedValueOnce([zoe]);
+      render(<RecipientField label="Para" value={[]} onChange={vi.fn()} />);
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      fireEvent.change(input, { target: { value: "zo" } });
+      await advanceDebounce();
+
+      // The badge is real text inside the option, so it reaches a screen
+      // reader through the option's own accessible name — no colour, border
+      // or icon-only cue is load-bearing here.
+      const option = screen.getByRole("option", {
+        name: new RegExp(i18n.t("contacts.harvestedBadge")),
+      });
+      expect(option).toHaveTextContent("Zoe Ruiz");
+    });
+
+    it("still selects a harvested suggestion normally — marking it is not blocking it", async () => {
+      searchContacts.mockResolvedValueOnce([zoe]);
+      const onChange = vi.fn();
+      render(<RecipientField label="Para" value={[]} onChange={onChange} />);
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      fireEvent.change(input, { target: { value: "zo" } });
+      await advanceDebounce();
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onChange).toHaveBeenCalledWith([{ name: "Zoe Ruiz", email: "zoe@example.com" }]);
     });
   });
 });

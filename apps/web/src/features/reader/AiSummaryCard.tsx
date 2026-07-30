@@ -23,6 +23,11 @@ function aiErrorKey(error: unknown): string | null {
   if (error instanceof MailApiError) {
     if (error.code === "ai_disabled") return null;
     if (error.code === "ai_provider_error") return "mail.errors.ai_provider_error";
+    // GH #165: "the provider never answered" is a different thing to tell the
+    // user than "the provider answered with garbage" — one is worth retrying
+    // right away, the other is not. The server keeps them apart as separate
+    // codes, so the card must too, or the distinction dies at the last step.
+    if (error.code === "upstream_timeout") return "mail.errors.upstream_timeout";
   }
   return "mail.errors.generic";
 }

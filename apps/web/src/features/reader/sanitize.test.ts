@@ -102,6 +102,95 @@ describe("sanitizeEmailHtml", () => {
     expect(out.html).not.toContain("evil.test");
   });
 
+  // A <style> element carrying a remote url() is a tracking pixel that the
+  // per-attribute checks above miss: the remote reference lives in the element's
+  // text content, not in a [style]/[background] attribute. Confirmed live — the
+  // browser fired the request on open, without opting into remote images (the
+  // CSP allows https: images, so only this sanitiser stands in the way).
+  //
+  // These tests assert exactly two things: the remote reference does not survive
+  // into the output, and hasRemoteImages reflects that the message carried one.
+  // They deliberately do NOT assert that a *clean* <style> survives — DOMPurify
+  // strips every <style> under jsdom regardless of its content (a real browser
+  // keeps them), so preservation is a browser-only behaviour this unit
+  // environment cannot demonstrate. The security guarantee — no remote leak —
+  // is what matters and is what is pinned here.
+  it("blocks a <style> element whose CSS references a remote url()", () => {
+    const out = sanitizeEmailHtml(
+      `<style>body{background:url(https://evil.test/pixel.png)}</style><p>hi</p>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(true);
+    expect(out.html).not.toContain("evil.test");
+    expect(out.html).toContain("hi");
+  });
+
+  it("blocks a <style> element that pulls a remote stylesheet via @import", () => {
+    const out = sanitizeEmailHtml(
+      `<style>@import url("https://evil.test/tracker.css");</style><p>hi</p>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(true);
+    expect(out.html).not.toContain("evil.test");
+    expect(out.html).toContain("hi");
+  });
+
+  it("blocks a bare-string @import in a <style> element", () => {
+    const out = sanitizeEmailHtml(
+      `<style>@import "https://evil.test/tracker.css";</style><p>hi</p>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(true);
+    expect(out.html).not.toContain("evil.test");
+  });
+
+  it("blocks a protocol-relative url() inside a <style> element", () => {
+    const out = sanitizeEmailHtml(
+      `<style>.x{background:url(//evil.test/p.png)}</style><p>hi</p>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(true);
+    expect(out.html).not.toContain("evil.test");
+  });
+
+  it("also finds a remote <style> placed in the document head", () => {
+    const out = sanitizeEmailHtml(
+      `<head><style>body{background:url(https://evil.test/head.png)}</style></head><body><p>hi</p></body>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(true);
+    expect(out.html).not.toContain("evil.test");
+  });
+
+  it("does not flag a <style> element whose only url() is a data: URI", () => {
+    const out = sanitizeEmailHtml(
+      `<style>.x{background:url(data:image/png;base64,AA)}</style><p>hi</p>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(false);
+    expect(out.html).not.toContain("evil.test");
+  });
+
+  it("does not flag a <style> element with no url() at all", () => {
+    const out = sanitizeEmailHtml(
+      `<style>p{color:red;font-weight:bold}</style><p>hi</p>`,
+      { allowRemoteImages: false },
+    );
+    expect(out.hasRemoteImages).toBe(false);
+  });
+
+  it("reports a remote <style> under the opt-in without stripping it early", () => {
+    // Symmetric with remote <img>: when the reader has opted into remote
+    // content, the flag still reflects that the message carries some, and the
+    // up-front strip is skipped. (Whether the <style> then survives DOMPurify
+    // is environment-dependent and not asserted here — see the block above.)
+    const out = sanitizeEmailHtml(
+      `<style>body{background:url(https://evil.test/pixel.png)}</style>`,
+      { allowRemoteImages: true },
+    );
+    expect(out.hasRemoteImages).toBe(true);
+  });
+
   describe("data: URI images (signature/composer inserted images)", () => {
     // Verifies DOMPurify's default config (USE_PROFILES: { html: true }) does
     // NOT strip data:image/* from <img src>: DOMPurify special-cases the

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
 import { CloseIcon } from "../../app/ui/icons";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
 
 interface AttachmentViewerProps {
   /**
@@ -20,13 +21,6 @@ interface AttachmentViewerProps {
   kind: "image" | "pdf";
   onClose: () => void;
 }
-
-// Elements a Tab-based focus trap should cycle through — mirrors
-// ShortcutsOverlay's list. Intentionally excludes the preview <iframe>
-// itself: its content isn't part of our chrome, so the trap's first/last
-// boundary stays on the header controls (Descargar/Imprimir/Cerrar).
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 // Only used for the Descargar link — a real, credential-carrying navigation
 // straight to the blob endpoint (dl=1 forces Content-Disposition:
@@ -83,10 +77,11 @@ function blobFetchUrl(blobId: string, name: string, type: string): string {
  */
 export function AttachmentViewer({ attachment, kind, onClose }: AttachmentViewerProps) {
   const { t } = useTranslation();
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const printFrameRef = useRef<HTMLIFrameElement>(null);
   const open = attachment !== null;
+  // GH #158: focus-in/Tab-cycling/restore-on-close now come from the shared
+  // useFocusTrap primitive — this component used to hand-roll all three.
+  const dialogRef = useFocusTrap<HTMLDivElement>(open);
 
   const [status, setStatus] = useState<"loading" | "error" | "ready">("loading");
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
@@ -132,46 +127,10 @@ export function AttachmentViewer({ attachment, kind, onClose }: AttachmentViewer
     };
   }, [attachment?.blobId, attachment?.type, attachment?.name]);
 
-  // Move focus into the dialog on open, and restore it to whatever triggered
-  // it once the dialog closes.
-  useEffect(() => {
-    if (!open) return;
-    previouslyFocusedRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.focus();
-
-    return () => {
-      previouslyFocusedRef.current?.focus();
-    };
-  }, [open]);
-
   useEffect(() => {
     if (!open) return;
     function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-
-      const first = focusable[0] as HTMLElement;
-      const last = focusable[focusable.length - 1] as HTMLElement;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      if (event.key === "Escape") onClose();
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);

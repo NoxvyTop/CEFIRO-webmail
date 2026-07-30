@@ -11,7 +11,9 @@ import type { ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
 import { Button } from "../../app/ui/Button";
 import { CloseIcon } from "../../app/ui/icons";
+import { MODAL_SELECTOR } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
 import { AttachmentCard } from "../reader/AttachmentCard";
 
 // A <select> exists to let the user choose between options. With at most one
@@ -79,18 +81,11 @@ function DiscardConfirmDialog({
   saving, saveError, onDiscard, onSaveToDrafts, onKeepEditing,
 }: DiscardConfirmDialogProps) {
   const { t } = useTranslation();
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    previouslyFocusedRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.focus();
-
-    return () => {
-      previouslyFocusedRef.current?.focus();
-    };
-  }, []);
+  // GH #158: focus-in/Tab-cycling/restore-on-close now come from the shared
+  // useFocusTrap primitive — this dialog used to move focus in and restore
+  // it on close by hand, but never cycled Tab, so focus could walk out of
+  // this still-visible confirmation into the composer/page behind it.
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -157,39 +152,84 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   // Guards the default-signature auto-apply so it only runs once per composer
   // session (on open), not on every render once signatures finish loading.
   const appliedDefaultRef = useRef(false);
-  // GH #125: Escape-to-close. This dialog's own root element, so the outer
-  // Escape handler below can tell its own dialog apart from a nested one
-  // (the discard confirmation) layered on top of it.
-  const composerRootRef = useRef<HTMLDivElement>(null);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // GH #158: focus-in/Tab-cycling/restore-on-close for the composer's own
+  // dialog — previously unmanaged entirely (no initial focus, no restore,
+  // no Tab trap). Stays active for the composer's whole mounted lifetime
+  // (never toggled off while the nested DiscardConfirmDialog is open):
+  // useFocusTrap's own nested-dialog exclusion already keeps this trap from
+  // fighting the nested one's Tab handling, so there is no need to suspend
+  // it — doing so would instead race the nested dialog's own focus-in
+  // effect for who gets to claim focus first.
+  //
+  // Also this dialog's own root element for the outer Escape handler below,
+  // which uses it to tell its own dialog apart from a nested one (the
+  // discard confirmation) layered on top of it — same identity GH #125
+  // originally used a plain useRef for.
+  const composerRootRef = useFocusTrap<HTMLDivElement>(true);
 
-  // Escape closes the composer immediately when the draft is empty, or opens
-  // the discard confirmation otherwise (isComposerDraftEmpty, see
-  // composer/emptiness.ts). Mirrors shortcuts.ts's isModalOpen reasoning —
-  // a [role="dialog"]/[role="alertdialog"] element marks a keyboard-owning
-  // overlay — but isModalOpen itself can't be reused unmodified here: it
-  // would always report "a dialog is open" because this composer's own root
-  // already carries role="dialog". This handler excludes that one element so
-  // a genuinely nested overlay (the discard confirmation below, or any
-  // other dialog layered on top) still gets to own Escape instead of this
-  // outer handler racing it.
+  // GH #159: the single decision point every exit route must go through —
+  // "is the user abandoning this draft, or is the composer's work done?"
+  // Closes immediately when the draft is empty, or opens the discard
+  // confirmation otherwise (isComposerDraftEmpty, see composer/emptiness.ts).
+  // Escape (below), the header close (X) button, and the bottom Cancel
+  // button all call this instead of onClose() directly — GH #125 wired the
+  // confirmation to the Escape *gesture* specifically, which left every
+  // other way to close the composer (the X button, first and worst) calling
+  // onClose() straight through with no check at all. Routing every "abandon"
+  // exit through this one function means a future exit route inherits the
+  // protection automatically instead of being born unguarded the same way.
+  //
+  // Exit routes that do NOT call this: handleDiscard (the confirmation's own
+  // resolution, already past the check), handleSaveToDrafts and handleSend
+  // on success (the composer's work is done, not abandoned — nothing to
+  // confirm).
+  function requestClose() {
+    if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
+      onClose();
+      return;
+    }
+    setDiscardConfirmOpen(true);
+  }
+
+  // Escape mirrors shortcuts.ts's isModalOpen reasoning — MODAL_SELECTOR
+  // (GH #161) marks a keyboard-owning overlay — but isModalOpen itself can't
+  // be reused unmodified here: it would always report "a dialog is open"
+  // because this composer's own root already matches MODAL_SELECTOR. This
+  // handler excludes that one element so a genuinely nested overlay (the
+  // discard confirmation below, or any other dialog layered on top) still
+  // gets to own Escape instead of this outer handler racing it.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
 
-      const overlays = document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+      const overlays = document.querySelectorAll<HTMLElement>(MODAL_SELECTOR);
       const hasNestedOverlay = Array.from(overlays).some((overlay) => overlay !== composerRootRef.current);
       if (hasNestedOverlay) return;
 
-      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
-        onClose();
-        return;
-      }
-      setDiscardConfirmOpen(true);
+      requestClose();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestClose closes over the same state.draft/attachments/uploads/onClose already listed below
   }, [state.draft, state.attachments.length, state.uploads.length, onClose]);
+
+  // GH #159: closing the browser tab (or the window) outright bypasses the
+  // composer entirely — same silent-discard hole as the X button, just
+  // through the browser's own exit door. A plain, standards-compliant
+  // beforeunload guard, armed only while the draft actually has content
+  // (mirrors requestClose above) so an untouched compose window never nags.
+  // Setting returnValue (legacy) alongside preventDefault() covers browsers
+  // that still require it to show their native confirmation prompt.
+  useEffect(() => {
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [state.draft, state.attachments.length, state.uploads.length]);
 
   function handleKeepEditing() {
     setDiscardConfirmOpen(false);
@@ -291,7 +331,8 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
       ref={composerRootRef}
       role="dialog"
       aria-label={t("composer.newMessage")}
-      className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6"
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6 outline-none"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -312,7 +353,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           <h2 className="flex-1 text-[14px] font-[650]">{t("composer.newMessage")}</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label={t("composer.close")}
             className="rounded-md px-2 py-1 text-muted transition hover:bg-hover hover:text-ink"
           >
@@ -489,7 +530,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           <span className="flex-1" />
           <Button
             variant="secondary"
-            onClick={onClose}
+            onClick={requestClose}
             className="rounded-lg px-3 py-2 text-[13px] font-semibold"
           >
             {t("composer.cancel")}

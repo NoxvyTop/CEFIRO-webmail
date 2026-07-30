@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { useTranslation } from "react-i18next";
-import type { AttachmentMeta } from "@webmail/shared";
+import { isQuoteSeparatorLine, type AttachmentMeta } from "@webmail/shared";
 import { extractReferencedCids, sanitizeEmailHtml } from "./sanitize";
 
 interface EmailBodyProps {
@@ -410,19 +410,6 @@ function splitQuotedHtml(rawHtml: string): { newHtml: string; quotedHtml: string
   return { newHtml: doc.body.innerHTML, quotedHtml: quotedContainer.innerHTML };
 }
 
-// Reply-separator lines recognized ahead of a plain-text quote trail —
-// mirrors the client conventions named in GH #91: Gmail's Spanish/English
-// "El ... escribió:" / "On ... wrote:" line, Outlook's "-----Original
-// Message-----" banner, and a bare divider of 8+ underscores.
-function isPlainTextReplySeparator(line: string): boolean {
-  const trimmed = line.trim();
-  if (/^_{8,}$/.test(trimmed)) return true;
-  if (/^-{3,}\s*Original Message\s*-{3,}$/i.test(trimmed)) return true;
-  if (/^El .+ escribió:$/.test(trimmed)) return true;
-  if (/^On .+ wrote:$/.test(trimmed)) return true;
-  return false;
-}
-
 function isPlainTextQuoteLine(line: string): boolean {
   return /^\s*>/.test(line);
 }
@@ -437,7 +424,11 @@ function isBlankLine(line: string): boolean {
  *
  * An explicit reply-separator line ("On ... wrote:", "-----Original
  * Message-----", ...) is an unambiguous signal — the first one found wins,
- * whatever follows it.
+ * whatever follows it. Detection is shared with the server's own quote-trail
+ * stripping (see isQuoteSeparatorLine in @webmail/shared) — GH #168: this
+ * used to be a separate, hand-rolled check here that had already drifted
+ * from the server's version (missing case-insensitivity on the Spanish
+ * separator, and requiring exactly one space in the Outlook banner).
  *
  * A `>`-quoted line is far more ambiguous (a code snippet, a shell prompt
  * "> npm run build", a numeric comparison "> 5" can all start a line with
@@ -448,7 +439,7 @@ function isBlankLine(line: string): boolean {
  * follow-up.
  */
 function findQuoteSplitIndex(lines: string[]): number {
-  const separatorIndex = lines.findIndex((line) => isPlainTextReplySeparator(line));
+  const separatorIndex = lines.findIndex((line) => isQuoteSeparatorLine(line));
   if (separatorIndex !== -1) return separatorIndex;
 
   for (let i = 0; i < lines.length; i++) {
@@ -478,8 +469,103 @@ function splitQuotedText(bodyText: string): { newContent: string; quotedTrail: s
   };
 }
 
-function wrapDocument(bodyInnerHtml: string) {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${EMAIL_PAPER_COLOR_SCHEME}}html,body{background:${EMAIL_PAPER_PANEL};margin:0}body{padding:2px;color:${EMAIL_PAPER_INK};font-family:"Space Grotesk Variable","Space Grotesk",system-ui,sans-serif;font-size:15px;line-height:1.65}</style></head><body>${bodyInnerHtml}</body></html>`;
+// GH #160: srcDoc's own <style> gets an extra `body{zoom:<scale>}` rule
+// whenever the email's authored width doesn't fit — see
+// detectAuthoredContentWidth/computeEmailScale below for how scale is
+// derived. scale === 1 (the overwhelmingly common case — most mail has no
+// fixed-width layout wider than the reader) adds no rule at all, so the
+// srcdoc stays byte-identical to before this change for ordinary mail.
+function wrapDocument(bodyInnerHtml: string, scale: number) {
+  const zoomRule = scale < 1 ? `body{zoom:${scale}}` : "";
+  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${EMAIL_PAPER_COLOR_SCHEME}}html,body{background:${EMAIL_PAPER_PANEL};margin:0}body{padding:2px;color:${EMAIL_PAPER_INK};font-family:"Space Grotesk Variable","Space Grotesk",system-ui,sans-serif;font-size:15px;line-height:1.65}${zoomRule}</style></head><body>${bodyInnerHtml}</body></html>`;
+}
+
+// GH #160: wide messages (an ordinary fixed-width marketing table, e.g.
+// `<table width="600">`) were clipped mid-word with no horizontal
+// scrollbar to reach the rest — the iframe's own box stays capped at its
+// container's width (see EmailBody's wrapping div), but nothing shrank the
+// content to match. The text was always present in the DOM and
+// accessibility tree (a screen reader announced it in full) while a sighted
+// user simply had no way to see, or discover, the missing part. GH #135
+// solved the orthogonal VERTICAL axis (very long messages, via clip and a
+// "view entire message" reveal); the horizontal axis was never covered.
+//
+// Chosen fix: scale the whole layout down to fit — mirroring how Gmail
+// handles fixed-width mail — rather than exposing a horizontal scrollbar.
+// A scrollbar would make the content technically reachable, but Chromium's
+// overlay scrollbars are invisible until hovered, and nothing else in the
+// clipped state hints one exists — silently-discoverable-if-you-happen-to-
+// hover is not meaningfully different from invisible. Scaling instead
+// guarantees the whole message renders on screen, with nothing left to
+// stumble onto.
+//
+// The scale factor needs the email's own authored (natural) width and the
+// container's real available width. The container width IS measurable — it
+// is a plain, un-sandboxed element in THIS document (see the ResizeObserver
+// wiring in EmailBody below). The sandboxed iframe's actual rendered
+// content width is NOT measurable from here (same contentDocument-access
+// constraint documented on useContentHeight above), so — like
+// BODY_TRUNCATE_TEXT_THRESHOLD — this has to work from the raw HTML string
+// itself, before the iframe ever mounts, rather than from a post-render
+// measurement. Detection is necessarily best-effort: it looks for the
+// single dominant real-world cause (a <table> carrying an explicit pixel
+// width, either as the legacy `width` attribute or an inline `width:NNpx`
+// style — the standard HTML-email fixed-layout pattern) and takes the
+// widest one found. A layout that achieves its fixed width some other way
+// (e.g. only via a deeply nested `<td>` width, or a `min-width`) is not
+// detected and is not scaled — a false negative here just leaves today's
+// existing (clipped) behavior unchanged for that email, never something
+// worse.
+function detectAuthoredContentWidth(html: string): number | null {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  let widest: number | null = null;
+
+  for (const table of Array.from(doc.body.querySelectorAll("table"))) {
+    const attrValue = table.getAttribute("width")?.trim();
+    const attrWidth = attrValue && /^\d+$/.test(attrValue) ? Number(attrValue) : null;
+
+    const styleValue = table.getAttribute("style") ?? "";
+    const styleMatch = styleValue.match(/(?:^|;)\s*width\s*:\s*(\d+)px/i);
+    const styleWidth = styleMatch ? Number(styleMatch[1]) : null;
+
+    const candidate = Math.max(attrWidth ?? 0, styleWidth ?? 0) || null;
+    if (candidate && (widest === null || candidate > widest)) widest = candidate;
+  }
+
+  return widest;
+}
+
+// Never scales up (a narrow email in a wide reader stays at its natural
+// size), and never scales on an unknown container width — an unmeasured
+// container (containerWidth === null, e.g. no ResizeObserver support) means
+// "we don't know if this fits," and guessing wrong in either direction is
+// worse than leaving today's existing behavior in place for that render.
+function computeEmailScale(authoredWidth: number | null, containerWidth: number | null): number {
+  if (!authoredWidth || !containerWidth || authoredWidth <= containerWidth) return 1;
+  return containerWidth / authoredWidth;
+}
+
+// Reports the live rendered width of a plain (un-sandboxed) container
+// element — unlike the sandboxed iframe's own content, this IS reachable
+// from here via ResizeObserver. Guarded for environments without
+// ResizeObserver (jsdom has none by default): containerWidth simply stays
+// null there, so computeEmailScale above never scales on a guess.
+function useContainerWidth() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState<number | null>(null);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setWidth(entry.contentRect.width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  return { containerRef: ref, containerWidth: width };
 }
 
 /**
@@ -587,6 +673,23 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
   const { height: newHeight, onLoad: onNewLoad } = useContentHeight(sanitizedNew?.html ?? "");
   const { height: quotedHeight, onLoad: onQuotedLoad } = useContentHeight(sanitizedQuoted?.html ?? "");
 
+  // GH #160: measures the real available width of the (un-sandboxed)
+  // wrapping card below, so a fixed-width authored layout can be scaled
+  // down to fit it exactly — see wrapDocument/detectAuthoredContentWidth/
+  // computeEmailScale above for why this can't be derived from inside the
+  // sandboxed iframe itself. Shared by both the new-content and quoted-
+  // trail iframes: they render in same-width sibling cards in this reader
+  // column, so one measurement serves both.
+  const { containerRef, containerWidth } = useContainerWidth();
+  const newScale = useMemo(
+    () => computeEmailScale(sanitizedNew ? detectAuthoredContentWidth(sanitizedNew.html) : null, containerWidth),
+    [sanitizedNew, containerWidth],
+  );
+  const quotedScale = useMemo(
+    () => computeEmailScale(sanitizedQuoted ? detectAuthoredContentWidth(sanitizedQuoted.html) : null, containerWidth),
+    [sanitizedQuoted, containerWidth],
+  );
+
   // GH #135: measured on sanitizedNew only — the new-content half of the
   // GH #91 split, never the quoted trail. The quoted trail already has its
   // own single show/hide toggle (renderQuoteToggle); layering a second,
@@ -624,7 +727,7 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
         {/* Hairline border + radius so the always-light email "paper" reads
             as an intentional document card rather than a floating white box
             against a dark app panel (most noticeable in night theme). */}
-        <div className="relative overflow-hidden rounded-[10px] border border-line">
+        <div ref={containerRef} className="relative overflow-hidden rounded-[10px] border border-line">
           {/* GH #135: srcDoc is ALWAYS the full sanitized document — clipping
               is purely a presentational height/scroll change on this SAME
               iframe, never a second, smaller render of different markup.
@@ -632,7 +735,7 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
               already processed. */}
           <iframe
             sandbox=""
-            srcDoc={wrapDocument(sanitizedNew.html)}
+            srcDoc={wrapDocument(sanitizedNew.html, newScale)}
             onLoad={onNewLoad}
             title={t("mail.emailContent")}
             style={{ height: isBodyClipped ? CLIPPED_BODY_HEIGHT : newHeight }}
@@ -668,7 +771,7 @@ export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
               <div className="mt-2 overflow-hidden rounded-[10px] border border-line">
                 <iframe
                   sandbox=""
-                  srcDoc={wrapDocument(sanitizedQuoted.html)}
+                  srcDoc={wrapDocument(sanitizedQuoted.html, quotedScale)}
                   onLoad={onQuotedLoad}
                   title={t("mail.emailContent")}
                   style={{ height: quotedHeight }}

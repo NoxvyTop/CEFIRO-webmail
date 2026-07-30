@@ -43,7 +43,7 @@ export function LoginPage() {
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [bootstrapError, setBootstrapError] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<"invalid" | "rate_limited" | null>(null);
   const [fieldErrors, setFieldErrors] = useState<BootstrapFieldErrors>({});
   const [ssoConnecting, setSsoConnecting] = useState(false);
 
@@ -58,13 +58,13 @@ export function LoginPage() {
   async function handleBootstrapSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!validateBootstrapFields()) return;
-    const ok = await bootstrapLogin(email, password);
-    if (ok) {
-      setBootstrapError(false);
+    const result = await bootstrapLogin(email, password);
+    if (result === "ok") {
+      setBootstrapError(null);
       await queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
       navigate("/");
     } else {
-      setBootstrapError(true);
+      setBootstrapError(result === "rate_limited" ? "rate_limited" : "invalid");
     }
   }
 
@@ -183,7 +183,13 @@ export function LoginPage() {
                 {t("auth.bootstrap.submit")}
               </button>
               {bootstrapError && (
-                <p className="text-[12.5px] text-danger">{t("auth.bootstrap.error")}</p>
+                <p className="text-[12.5px] text-danger">
+                  {t(
+                    bootstrapError === "rate_limited"
+                      ? "auth.bootstrap.errors.too_many_requests"
+                      : "auth.bootstrap.error",
+                  )}
+                </p>
               )}
             </form>
           </>

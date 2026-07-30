@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { updateProfileSchema, type ProfileView } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { UsersRepo } from "../../infra/repos/users";
 import { requireSession, type AuthVariables } from "../auth/middleware";
@@ -48,10 +49,7 @@ export function createProfileRouter(deps: ProfileDeps) {
     const userId = c.get("user").userId;
     const profile = await deps.users.getProfile(userId);
     if (!profile) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const body: ProfileView = profile;
     return c.json(body);
@@ -61,19 +59,12 @@ export function createProfileRouter(deps: ProfileDeps) {
     "/",
     bodyLimit({
       maxSize: PATCH_BODY_MAX_BYTES,
-      onError: (c) =>
-        c.json(
-          { code: "payload_too_large", message: "errors.payload_too_large", traceId: c.get("traceId") },
-          413,
-        ),
+      onError: (c) => errorResponse(c, "payload_too_large", 413),
     }),
     async (c) => {
       const parsed = await parseBody(c, updateProfileSchema);
       if (!parsed.success) {
-        return c.json(
-          { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-          400,
-        );
+        return errorResponse(c, "invalid_body", 400);
       }
       const userId = c.get("user").userId;
       const hasDisplayName = parsed.data.displayName !== undefined;
@@ -84,10 +75,7 @@ export function createProfileRouter(deps: ProfileDeps) {
       if (!hasDisplayName && !hasAvatar) {
         const profile = await deps.users.getProfile(userId);
         if (!profile) {
-          return c.json(
-            { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-            404,
-          );
+          return errorResponse(c, "not_found", 404);
         }
         const body: ProfileView = profile;
         return c.json(body);
@@ -101,10 +89,7 @@ export function createProfileRouter(deps: ProfileDeps) {
       }
       const profile = await deps.users.getProfile(userId);
       if (!profile) {
-        return c.json(
-          { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-          404,
-        );
+        return errorResponse(c, "not_found", 404);
       }
       await deps.audit.record({
         actor: c.get("user").email,

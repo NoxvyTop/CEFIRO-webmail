@@ -16,8 +16,20 @@ import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { createContactsRepo } from "./infra/repos/contacts";
-import { importMasterKey } from "./modules/credentials/crypto";
-import { createAuthRouter } from "./modules/auth/router";
+import { findUncoveredKeyVersions } from "./infra/db/key-versions";
+import {
+  createKeyring,
+  importMasterKey,
+  knownKeyVersions,
+  type Keyring,
+} from "./modules/credentials/crypto";
+import { createAuthRouter, type OidcClient } from "./modules/auth/router";
+import {
+  createIdTokenVerifier,
+  discover,
+  exchangeCode,
+  remoteKeySource,
+} from "./modules/auth/oidc";
 import { createSessionStore } from "./modules/auth/sessions";
 import { createJmapClient } from "./infra/stalwart/jmap";
 import { createMailRouter } from "./modules/mail/router";
@@ -43,13 +55,42 @@ try {
 const db = createDb(config.databaseUrl);
 await migrate(db, fileURLToPath(new URL("../migrations", import.meta.url)));
 
-const masterKey = await importMasterKey(config.masterKey);
+// The keyring encrypts with MASTER_KEY at MASTER_KEY_VERSION and keeps the
+// retired keys listed in MASTER_KEY_PREVIOUS so rows written before a rotation
+// stay readable until progressive re-encryption has moved them all over.
+let masterKey: CryptoKey;
+let keyring: Keyring;
+try {
+  masterKey = await importMasterKey(config.masterKey);
+  const previous = new Map<number, CryptoKey>();
+  for (const retired of config.previousMasterKeys) {
+    previous.set(retired.version, await importMasterKey(retired.key));
+  }
+  keyring = createKeyring({ version: config.masterKeyVersion, key: masterKey }, previous);
+} catch (error) {
+  log("error", "invalid master key ring", { error: String(error) });
+  process.exit(1);
+}
+
+// A keyring that cannot decrypt what is already stored must fail here, at
+// boot, instead of failing per user at runtime the first time each one
+// reaches for their mail.
+const uncoveredKeyVersions = await findUncoveredKeyVersions(db, keyring);
+if (uncoveredKeyVersions.length > 0) {
+  log("error", "master key ring cannot decrypt stored rows", {
+    uncovered: uncoveredKeyVersions,
+    configuredKeyVersions: knownKeyVersions(keyring),
+    hint: "list the missing keys in MASTER_KEY_PREVIOUS as version:base64key",
+  });
+  process.exit(1);
+}
+
 const users = createUsersRepo(db);
 const audit = createAuditRepo(db);
 const sessions = createSessionStore(db);
-const ssoConfig = createSsoConfigRepo(db, masterKey);
+const ssoConfig = createSsoConfigRepo(db, keyring);
 const instanceSettings = createInstanceSettingsRepo(db);
-const mailCredentials = createMailCredentialsRepo(db, masterKey);
+const mailCredentials = createMailCredentialsRepo(db, keyring);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
 const filterRules = createFilterRulesRepo(db);
@@ -57,7 +98,11 @@ const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
 const jmap = config.stalwartUrl
-  ? createJmapClient({ baseUrl: config.stalwartUrl, forceBase: config.jmapForceBase })
+  ? createJmapClient({
+      baseUrl: config.stalwartUrl,
+      forceBase: config.jmapForceBase,
+      timeoutMs: config.stalwartTimeoutMs,
+    })
   : null;
 
 log("info", "mail proxy", { configured: jmap !== null });
@@ -84,14 +129,29 @@ function buildAiClient(): AiClient | null {
       apiKey: config.aiApiKey,
       model: config.aiModel,
       baseUrl: config.aiBaseUrl,
+      timeoutMs: config.aiTimeoutMs,
     });
   }
-  return createAnthropicAiClient({ apiKey: config.aiApiKey, model: config.aiModel });
+  return createAnthropicAiClient({
+    apiKey: config.aiApiKey,
+    model: config.aiModel,
+    timeoutMs: config.aiTimeoutMs,
+  });
 }
 
 const aiClient: AiClient | null = buildAiClient();
 
 log("info", "ai features", { enabled: aiClient !== null, provider: config.aiProvider });
+
+// Same OIDC client the auth router falls back to, built here so the configured
+// outbound deadline reaches it (GH #165). The JWKS fetch behind createVerifier
+// carries jose's own 5s `timeoutDuration` default and needs nothing from us.
+const oidcClient: OidcClient = {
+  discover: (issuer) => discover(issuer, undefined, config.oidcTimeoutMs),
+  exchangeCode: (input) => exchangeCode({ ...input, timeoutMs: config.oidcTimeoutMs }),
+  createVerifier: ({ jwksUri, issuer, clientId }) =>
+    createIdTokenVerifier({ issuer, clientId, keySource: remoteKeySource(jwksUri) }),
+};
 
 if (bootstrap.enabled) {
   log("warn", "bootstrap mode active", {
@@ -112,9 +172,18 @@ const app = createApp({
     appUrl: config.appUrl,
     sessionTtlHours: config.sessionTtlHours,
     bootstrap,
+    oidcClient,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
-  mailRouter: createMailRouter({ sessions, mailCredentials, signatures, userPreferences, jmap, contacts }),
+  mailRouter: createMailRouter({
+    sessions,
+    mailCredentials,
+    signatures,
+    userPreferences,
+    jmap,
+    contacts,
+    timeoutMs: config.stalwartTimeoutMs,
+  }),
   sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),

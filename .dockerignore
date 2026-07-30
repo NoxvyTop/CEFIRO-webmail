@@ -4,6 +4,13 @@ node_modules
 docs
 coverage
 .env
+# Local scratch work: probe scripts and screenshots written while debugging
+# against a live environment. The build stage does `COPY . .`, so anything left
+# here would travel in the build context even though the runtime stage never
+# copies it out. That is a poor place to keep a file someone pasted a real
+# credential into, which is precisely what a scratch directory attracts.
+scratchpad
+.codegraph
 # Keep tests out of the build context so they never reach the runtime image.
 **/*.test.ts
 **/*.test.tsx

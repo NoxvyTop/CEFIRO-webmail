@@ -79,6 +79,27 @@ describe("AiSummaryCard", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.ai_provider_error"));
   });
+
+  it("tells a timed-out provider apart from one that answered badly", async () => {
+    // GH #165: the server emits upstream_timeout (504) specifically so these
+    // two stay distinguishable. If the card folded it into the generic error,
+    // the distinction would die at the last step — and the user would not know
+    // that this one is worth retrying straight away.
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ code: "upstream_timeout" }), { status: 504 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderCard();
+
+    const button = await screen.findByRole("button", { name: i18n.t("mail.summarizeWithAi") });
+    fireEvent.click(button);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(i18n.t("mail.errors.upstream_timeout"));
+    // A raw key leaking to the screen is the failure mode this guards (GH #150).
+    expect(alert.textContent).not.toContain("mail.errors.");
+    expect(alert).not.toHaveTextContent(i18n.t("mail.errors.generic"));
+  });
 });
 
 describe("AiSummaryCard — thread mode", () => {

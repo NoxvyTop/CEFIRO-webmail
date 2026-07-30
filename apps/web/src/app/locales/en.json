@@ -125,7 +125,8 @@
       "hint": "Only available in setup or recovery mode",
       "errors": {
         "emptyUser": "Enter your username.",
-        "emptyPassword": "Enter your password."
+        "emptyPassword": "Enter your password.",
+        "too_many_requests": "Too many attempts. Wait a moment and try again."
       }
     }
   },
@@ -159,8 +160,10 @@
     "readerRegion": "Reading pane",
     "starredView": "Starred",
     "unread": "{{count}} unread",
-    "messageCount": "{{count}} messages",
-    "conversationCount": "{{count}} messages",
+    "messageCount_one": "{{count}} message",
+    "messageCount_other": "{{count}} messages",
+    "conversationCount_one": "{{count}} message",
+    "conversationCount_other": "{{count}} messages",
     "searchPlaceholder": "Search mail…",
     "empty": "No mail here.",
     "noSubject": "(no subject)",
@@ -177,6 +180,7 @@
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI summary",
+      "upstream_timeout": "The server took too long to respond. Try again",
       "not_in_trash": "The message is no longer in Trash",
       "destroy_failed": "Could not delete the message",
       "generic": "Mail could not be loaded"
@@ -303,6 +307,7 @@
       "save_draft_failed": "Could not save the draft",
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI draft",
+      "upstream_timeout": "The server took too long to respond. Try again",
       "invalid_body": "Write a subject before drafting with AI",
       "generic": "Something went wrong"
     },
@@ -424,6 +429,10 @@
     "name": "Name",
     "email": "Email",
     "add": "Add contact",
+    "harvestedBadge": "Auto-added",
+    "harvestedHint": "Added automatically when you received a message from them",
+    "promote": "Confirm",
+    "promoteLabel": "Confirm \"{{name}}\" as your own contact",
     "confirmDeleteQuestion": "Delete \"{{name}}\"? This can't be undone.",
     "confirmDeleteAction": "Delete permanently",
     "cancelDelete": "Cancel"

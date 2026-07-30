@@ -10,6 +10,7 @@ import {
   type AdminUser,
   type InstanceSettingsView,
 } from "@webmail/shared";
+import { errorResponse } from "../../core/error-response";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { InstanceSettingsRepo } from "../../infra/repos/instance-settings";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
@@ -80,17 +81,11 @@ export function createAdminRouter(deps: AdminDeps) {
   router.post("/users", async (c) => {
     const parsed = await parseBody(c, createUserInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const { email, displayName, role, locale, mailPassword } = parsed.data;
     if (await deps.users.findByEmail(email)) {
-      return c.json(
-        { code: "user_exists", message: "errors.user_exists", traceId: c.get("traceId") },
-        409,
-      );
+      return errorResponse(c, "user_exists", 409);
     }
     const user = await deps.users.create({ email, displayName, role, locale });
     if (mailPassword) {
@@ -109,40 +104,25 @@ export function createAdminRouter(deps: AdminDeps) {
   router.put("/users/:id/role", async (c) => {
     const parsed = await parseBody(c, setRoleInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const id = c.req.param("id");
     const target = await deps.users.findById(id);
     if (!target) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const isDemotion = target.role === "admin" && parsed.data.role !== "admin";
     if (isDemotion) {
       if (c.get("user").userId === id) {
-        return c.json(
-          { code: "self_demotion", message: "errors.self_demotion", traceId: c.get("traceId") },
-          409,
-        );
+        return errorResponse(c, "self_demotion", 409);
       }
       if (target.active && (await deps.users.countActiveAdmins()) <= 1) {
-        return c.json(
-          { code: "last_admin", message: "errors.last_admin", traceId: c.get("traceId") },
-          409,
-        );
+        return errorResponse(c, "last_admin", 409);
       }
     }
     const updated = await deps.users.setRole(id, parsed.data.role);
     if (!updated) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     await deps.audit.record({
       actor: c.get("user").email,
@@ -157,18 +137,12 @@ export function createAdminRouter(deps: AdminDeps) {
   router.put("/users/:id/credential", async (c) => {
     const parsed = await parseBody(c, setMailCredentialInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const id = c.req.param("id");
     const target = await deps.users.findById(id);
     if (!target) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     await deps.mailCredentials.set(id, parsed.data.mailPassword);
     // Drop any cached JMAP session bound to the previous credentials.
@@ -184,39 +158,24 @@ export function createAdminRouter(deps: AdminDeps) {
   router.put("/users/:id/active", async (c) => {
     const parsed = await parseBody(c, setActiveInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const id = c.req.param("id");
     if (!parsed.data.active) {
       const target = await deps.users.findById(id);
       if (!target) {
-        return c.json(
-          { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-          404,
-        );
+        return errorResponse(c, "not_found", 404);
       }
       if (c.get("user").userId === id) {
-        return c.json(
-          { code: "self_archive", message: "errors.self_archive", traceId: c.get("traceId") },
-          409,
-        );
+        return errorResponse(c, "self_archive", 409);
       }
       if (target.role === "admin" && target.active && (await deps.users.countActiveAdmins()) <= 1) {
-        return c.json(
-          { code: "last_admin", message: "errors.last_admin", traceId: c.get("traceId") },
-          409,
-        );
+        return errorResponse(c, "last_admin", 409);
       }
     }
     const updated = await deps.users.setActive(id, parsed.data.active);
     if (!updated) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     if (parsed.data.active) {
       await deps.audit.record({
@@ -250,10 +209,7 @@ export function createAdminRouter(deps: AdminDeps) {
   router.put("/sso", async (c) => {
     const parsed = await parseBody(c, setupSsoSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     await deps.ssoConfig.set(parsed.data);
     await deps.audit.record({
@@ -274,10 +230,7 @@ export function createAdminRouter(deps: AdminDeps) {
   router.put("/instance", async (c) => {
     const parsed = await parseBody(c, updateInstanceSettingsSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     await deps.instanceSettings.set({ sentWithFooterEnabled: parsed.data.sentWithFooter });
     await deps.audit.record({

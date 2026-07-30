@@ -42,7 +42,23 @@ production credentials.
    `LOCK` after restoring `data/` so RocksDB doesn't refuse to open it).
 
 The result is baked into this fixture directory and built into the
-`cefiro-e2e-stalwart:v1` image referenced by `docker-compose.e2e.yml`.
+`cefiro-e2e-stalwart` image referenced by `docker-compose.e2e.yml`.
+
+## How the published image is tagged
+
+CI does not use a hand-written tag. The `fixture` job in `.github/workflows/ci.yml`
+derives the tag from a hash of everything under `e2e/stalwart/`, checks whether
+that exact image is already in the registry, and builds it only when it is not.
+
+This is deliberate, and it replaced a fixed `v1` tag that was republished on
+every fixture change. That design let an old commit be tested against a fixture
+that did not exist when it was written — the pin looked like reproducibility
+without providing it. Now a change to any file here produces a different tag by
+construction, so a new fixture cannot take an old one's name, and a commit always
+resolves to the bytes it was written against.
+
+The practical consequence when rebuilding: there is nothing to bump. Change the
+seed, push, and CI publishes and consumes the new tag on its own.
 
 ## Rebuilding the fixture (e.g. after bumping the Stalwart version)
 
