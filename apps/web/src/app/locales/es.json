@@ -125,7 +125,8 @@
       "hint": "Solo disponible en modo de configuración o recuperación",
       "errors": {
         "emptyUser": "Introduce tu usuario.",
-        "emptyPassword": "Introduce tu contraseña."
+        "emptyPassword": "Introduce tu contraseña.",
+        "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo."
       }
     }
   },

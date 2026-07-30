@@ -6,6 +6,7 @@ import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
 import type { Bootstrap } from "../setup/bootstrap";
 import { errorResponse } from "../../core/error-response";
+import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import { evictMailSession } from "../mail/context";
 import { SESSION_COOKIE, requireSession, type AuthVariables } from "./middleware";
 import {
@@ -39,6 +40,22 @@ export type OidcClient = {
 
 const BOOTSTRAP_ADMIN_EMAIL = "bootstrap-admin@webmail.local";
 
+// Rate limit for the break-glass bootstrap login, keyed by client IP.
+//
+// This is NOT a brute-force ceiling: the bootstrap password is 18 random bytes
+// (144 bits, see setup/bootstrap.ts), so guessing it at any rate is infeasible.
+// It exists to refuse a flood cheaply. The endpoint is reachable UNAUTHENTICATED
+// while bootstrap mode is on, and each failed attempt used to write a
+// `bootstrap.login_failed` audit row — measured at ~94 req/s with no ceiling
+// (GH #183), an audit-log (and disk) flooding vector. 10 attempts per minute
+// per IP leaves an operator who fat-fingers the long random password several
+// times unaffected, while a flood is blocked after the first handful and every
+// further request is refused before it can parse a body, verify a password, or
+// write audit. Lockout lasts at most one window (~60s), acceptable on a
+// deliberate emergency path.
+const BOOTSTRAP_LOGIN_MAX_ATTEMPTS = 10;
+const BOOTSTRAP_LOGIN_WINDOW_MS = 60_000;
+
 const defaultOidcClient: OidcClient = {
   discover: (issuer) => discover(issuer),
   exchangeCode: (input) => exchangeCode(input),
@@ -56,11 +73,17 @@ export type AuthRouterDeps = {
   sessionTtlHours?: number;
   oidcClient?: OidcClient;
   bootstrap?: Bootstrap;
+  rateLimiter?: RateLimiter;
 };
 
 export function createAuthRouter(deps: AuthRouterDeps) {
   const router = new Hono<{ Variables: AuthVariables }>();
   const oidc = deps.oidcClient ?? defaultOidcClient;
+  // One limiter per router instance, living in this closure so its counters
+  // persist across requests. Injectable so tests can drive a small limit.
+  const bootstrapRateLimiter =
+    deps.rateLimiter ??
+    createRateLimiter({ limit: BOOTSTRAP_LOGIN_MAX_ATTEMPTS, windowMs: BOOTSTRAP_LOGIN_WINDOW_MS });
 
   router.get("/me", requireSession(deps.sessions), (c) => c.json(c.get("user")));
 
@@ -116,6 +139,19 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     if (!bootstrap?.enabled || !users || !audit) {
       return errorResponse(c, "not_found", 404);
     }
+    // Client IP for the rate gate and the audit row. This trusts the reverse
+    // proxy's X-Forwarded-For — acceptable for a self-hosted deployment that
+    // always sits behind a reverse proxy we control; a direct-to-app exposure
+    // would need a hardened client-IP source. Absent header shares one bucket.
+    const ip = c.req.header("x-forwarded-for");
+    // Gate BEFORE parsing the body, verifying the password, or writing any
+    // audit row: a flood is refused cheaply and — the point of GH #183 — a
+    // blocked request produces ZERO `bootstrap.login_failed` rows.
+    const gate = bootstrapRateLimiter.check(ip ?? "unknown");
+    if (!gate.allowed) {
+      c.header("Retry-After", String(gate.retryAfterSeconds));
+      return errorResponse(c, "too_many_requests", 429);
+    }
     let body: { email: string; password: string };
     try {
       const parsed = bootstrapLoginSchema.safeParse(await c.req.json());
@@ -126,7 +162,6 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     } catch {
       return errorResponse(c, "invalid_body", 400);
     }
-    const ip = c.req.header("x-forwarded-for");
     const ok = await bootstrap.verify(body.password);
     if (!ok) {
       await audit.record({ actor: BOOTSTRAP_ADMIN_EMAIL, action: "bootstrap.login_failed", ip });

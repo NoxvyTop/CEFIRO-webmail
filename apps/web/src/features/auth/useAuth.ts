@@ -19,11 +19,21 @@ export function useAuth() {
   return { user: query.data, isLoading: query.isLoading, logout };
 }
 
-export async function bootstrapLogin(email: string, password: string): Promise<boolean> {
+// "rate_limited" is distinct from "error" so the emergency form can tell an
+// operator that the break-glass login is throttled (429, see GH #183) rather
+// than that the credential was wrong.
+export type BootstrapLoginResult = "ok" | "rate_limited" | "error";
+
+export async function bootstrapLogin(
+  email: string,
+  password: string,
+): Promise<BootstrapLoginResult> {
   const res = await fetch("/api/auth/bootstrap", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  return res.ok;
+  if (res.ok) return "ok";
+  if (res.status === 429) return "rate_limited";
+  return "error";
 }

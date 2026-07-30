@@ -201,6 +201,70 @@ describe("login screen bootstrap form", () => {
     });
   });
 
+  it("shows the throttled message when the emergency login is rate-limited (429)", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/bootstrap")) {
+        return new Response(JSON.stringify({ code: "too_many_requests" }), {
+          status: 429,
+          headers: { "retry-after": "60" },
+        });
+      }
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    fireEvent.change(await screen.findByLabelText("Usuario"), {
+      target: { value: "bootstrap-admin" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(
+      await screen.findByText(i18n.t("auth.bootstrap.errors.too_many_requests")),
+    ).toBeInTheDocument();
+    // A throttled attempt must not read as a wrong credential.
+    expect(screen.queryByText(i18n.t("auth.bootstrap.error"))).not.toBeInTheDocument();
+  });
+
+  it("shows the generic invalid-credential message on a rejected login (401)", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/bootstrap")) {
+        return new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 });
+      }
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    fireEvent.change(await screen.findByLabelText("Usuario"), {
+      target: { value: "bootstrap-admin" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), { target: { value: "nope" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByText(i18n.t("auth.bootstrap.error"))).toBeInTheDocument();
+    expect(
+      screen.queryByText(i18n.t("auth.bootstrap.errors.too_many_requests")),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders a discreet theme toggle and switches themes when clicked", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),

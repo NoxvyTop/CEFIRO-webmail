@@ -125,7 +125,8 @@
       "hint": "Only available in setup or recovery mode",
       "errors": {
         "emptyUser": "Enter your username.",
-        "emptyPassword": "Enter your password."
+        "emptyPassword": "Enter your password.",
+        "too_many_requests": "Too many attempts. Wait a moment and try again."
       }
     }
   },
