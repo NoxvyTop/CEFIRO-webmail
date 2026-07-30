@@ -964,17 +964,86 @@ export function createMailRouter(deps: MailDeps) {
       ],
     ]);
 
-    const emailSetResult = (sendResponses[0]?.[1] ?? {}) as { notCreated?: Record<string, unknown> };
+    const emailSetResult = (sendResponses[0]?.[1] ?? {}) as {
+      created?: Record<string, { id?: string }>;
+      notCreated?: Record<string, unknown>;
+    };
     const submissionResult = (sendResponses[1]?.[1] ?? {}) as {
       notCreated?: Record<string, unknown>;
       created?: Record<string, unknown>;
     };
+    // RFC 8621 §7.5: onSuccessUpdateEmail is applied by a SEPARATE implicit
+    // Email/set that the server runs AFTER the submission and appends to the
+    // response array under the EmailSubmission/set method-call id ("s"). This
+    // third response — never inspected before — is the only place that reports
+    // whether the just-sent message was actually moved to Sent and un-flagged
+    // as a draft.
+    const onSuccessUpdateResult = (sendResponses[2]?.[1] ?? {}) as {
+      updated?: Record<string, unknown>;
+      notUpdated?: Record<string, unknown>;
+    };
 
+    // Positive confirmation, matching the draft-save (#149) and destroy (#133)
+    // paths: an empty notCreated is NOT proof of success. The draft must appear
+    // in `created` (its id is what the submission's #draft back-reference
+    // resolves to) and the submission must appear in `created` before the mail
+    // is treated as sent. Without both, nothing left the outbox — report the
+    // failure rather than a phantom success that would hide a non-delivery.
+    const draftId = emailSetResult.created?.draft?.id;
+    const submissionCreated = Boolean(submissionResult.created && "sub" in submissionResult.created);
     if (
       (emailSetResult.notCreated && "draft" in emailSetResult.notCreated) ||
-      (submissionResult.notCreated && "sub" in submissionResult.notCreated)
+      !draftId ||
+      (submissionResult.notCreated && "sub" in submissionResult.notCreated) ||
+      !submissionCreated
     ) {
       return errorResponse(c, "send_failed", 502);
+    }
+
+    // The submission is confirmed, so the mail HAS gone out. RFC 8620 §5.3
+    // makes the implicit onSuccessUpdateEmail non-transactional with respect to
+    // the submission, so the move to Sent / $draft-clear can still have failed.
+    // If it did not positively confirm the draft's update, erroring now would
+    // be wrong twice over: it would claim the send failed when it did not, and
+    // it would leave the sent message in Drafts still flagged $draft — a fresh,
+    // re-sendable draft that invites a duplicate delivery. Instead, best-effort
+    // re-apply the same idempotent patch (as the draft-replace path does for
+    // its own non-transactional cleanup) so the sent message stops reading as a
+    // draft, and still report the send as successful.
+    const updateConfirmed = Boolean(
+      onSuccessUpdateResult.updated && draftId in onSuccessUpdateResult.updated,
+    );
+    if (!updateConfirmed) {
+      try {
+        const remediation = await deps.jmap!.request(auth, session, [
+          [
+            "Email/set",
+            {
+              accountId: session.accountId,
+              update: {
+                [draftId]: {
+                  [`mailboxIds/${draftsId}`]: null,
+                  [`mailboxIds/${sentId}`]: true,
+                  "keywords/$draft": null,
+                },
+              },
+            },
+            "u",
+          ],
+        ]);
+        const remediationResult = (remediation[0]?.[1] ?? {}) as {
+          updated?: Record<string, unknown>;
+        };
+        if (!(remediationResult.updated && draftId in remediationResult.updated)) {
+          log("warn", "send: post-submission move to Sent could not be confirmed after remediation", {
+            emailId: draftId,
+          });
+        }
+      } catch {
+        log("warn", "send: remediation of the post-submission move to Sent threw", {
+          emailId: draftId,
+        });
+      }
     }
 
     return c.json({ ok: true });
