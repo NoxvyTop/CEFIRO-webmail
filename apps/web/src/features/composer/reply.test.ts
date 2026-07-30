@@ -6,7 +6,14 @@ import {
   type EmailDetail,
   type Identity,
 } from "@webmail/shared";
-import { buildEditDraft, emptyDraft, replyDraft, forwardDraft, type ComposerDraft } from "./reply";
+import {
+  buildEditDraft,
+  emptyDraft,
+  replyDraft,
+  replyRecipients,
+  forwardDraft,
+  type ComposerDraft,
+} from "./reply";
 import { QUOTE_MARKER_ATTR } from "./signature";
 
 const identities: Identity[] = [
@@ -91,6 +98,75 @@ describe("replyDraft", () => {
   it("picks the identity matching an original recipient", () => {
     const draft = replyDraft(makeEmail(), identities, false);
     expect(draft.identityId).toBe("id1");
+  });
+
+  // GH #186: replying to a message the user sent must not address the reply to
+  // the user themselves. The reader's toolbar Reply acts on the newest message
+  // in a thread, which in an active thread is often one's own — so hitting
+  // Reply there used to open a draft to yourself, with the real correspondent
+  // demoted to Cc under reply-all.
+  describe("replying to one's own message (GH #186)", () => {
+    // from = alice, who is identity id1 — i.e. the user sent this.
+    const ownMessage = makeEmail({
+      from: [{ name: "Alice", email: "alice@example.com" }],
+      to: [{ name: "Carol", email: "carol@example.com" }],
+      cc: [{ name: "Dave", email: "dave@example.com" }],
+    });
+
+    it("addresses a reply to the original recipients, not to oneself", () => {
+      const { to } = replyRecipients(ownMessage, identities, false);
+      expect(to.map((a) => a.email.toLowerCase())).toEqual(["carol@example.com"]);
+      expect(to.map((a) => a.email.toLowerCase())).not.toContain("alice@example.com");
+    });
+
+    it("reply-all keeps the correspondent in To and the rest in Cc, never oneself", () => {
+      const { to, cc } = replyRecipients(ownMessage, identities, true);
+      expect(to.map((a) => a.email.toLowerCase())).toEqual(["carol@example.com"]);
+      expect(cc.map((a) => a.email.toLowerCase())).toEqual(["dave@example.com"]);
+      const everyone = [...to, ...cc].map((a) => a.email.toLowerCase());
+      expect(everyone).not.toContain("alice@example.com");
+    });
+
+    it("honours an explicit Reply-To even on one's own message", () => {
+      const withReplyTo = makeEmail({
+        from: [{ name: "Alice", email: "alice@example.com" }],
+        replyTo: [{ name: null, email: "list@example.com" }],
+        to: [{ name: "Carol", email: "carol@example.com" }],
+      });
+      expect(
+        replyRecipients(withReplyTo, identities, false).to.map((a) => a.email.toLowerCase()),
+      ).toEqual(["list@example.com"]);
+    });
+
+    it("falls back to the sender when the message was sent only to oneself", () => {
+      const noteToSelf = makeEmail({
+        from: [{ name: "Alice", email: "alice@example.com" }],
+        to: [{ name: "Alice", email: "alice@example.com" }],
+        cc: [],
+      });
+      expect(
+        replyRecipients(noteToSelf, identities, false).to.map((a) => a.email.toLowerCase()),
+      ).toEqual(["alice@example.com"]);
+    });
+  });
+
+  it("reply-all cc excludes every own identity, not just the picked one", () => {
+    // Both alice (id1) and zed (id2) are the user's own addresses. A message
+    // sent to both plus Carol must not cc either of the user's own addresses.
+    const email = makeEmail({
+      from: [{ name: "Bob", email: "bob@example.com" }],
+      to: [
+        { name: "Alice", email: "alice@example.com" },
+        { name: "Zed", email: "zed@example.com" },
+        { name: "Carol", email: "carol@example.com" },
+      ],
+      cc: [],
+    });
+    const { cc } = replyRecipients(email, identities, true);
+    const ccEmails = cc.map((a) => a.email.toLowerCase());
+    expect(ccEmails).toContain("carol@example.com");
+    expect(ccEmails).not.toContain("alice@example.com");
+    expect(ccEmails).not.toContain("zed@example.com");
   });
 
   it("falls back to the first identity when no recipient matches", () => {

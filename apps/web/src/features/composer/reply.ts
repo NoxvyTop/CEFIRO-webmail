@@ -169,17 +169,42 @@ export function replyRecipients(
   identities: Identity[],
   all: boolean,
 ): { identityId: string; to: EmailAddress[]; cc: EmailAddress[] } {
-  const to = dedupeAddresses(email.replyTo.length ? email.replyTo : email.from);
+  const ownKeys = new Set(identities.map((identity) => normalizeEmail(identity.email)));
+
+  // Who to address the reply to. Normally the sender (or an explicit Reply-To),
+  // but when the message is one the user *sent* — its From is entirely their
+  // own addresses — replying to the sender would address the reply to
+  // themselves. The reader's toolbar Reply acts on the newest message in a
+  // thread, which is often one's own, so this is a common path, not an edge
+  // case (GH #186). In that case continue the conversation with whoever the
+  // message went to instead, dropping the user's own addresses; fall back to
+  // the sender only if it turns out the message was sent solely to oneself.
+  const isOwnMessage =
+    email.from.length > 0 && email.from.every((a) => ownKeys.has(normalizeEmail(a.email)));
+  let to: EmailAddress[];
+  if (email.replyTo.length) {
+    to = dedupeAddresses(email.replyTo);
+  } else if (isOwnMessage) {
+    const originalRecipients = dedupeAddresses(email.to).filter(
+      (a) => !ownKeys.has(normalizeEmail(a.email)),
+    );
+    to = originalRecipients.length > 0 ? originalRecipients : dedupeAddresses(email.from);
+  } else {
+    to = dedupeAddresses(email.from);
+  }
+
   const identity = pickIdentity(email, identities);
   const identityId = identity?.id ?? identities[0]?.id ?? "";
 
   let cc: EmailAddress[] = [];
   if (all) {
     const toKeys = new Set(to.map((address) => normalizeEmail(address.email)));
-    const ownEmail = identity ? normalizeEmail(identity.email) : undefined;
+    // Exclude every one of the user's own addresses, not just the identity that
+    // happened to be picked: with more than one identity, a message sent to two
+    // of them would otherwise cc the user back on their own reply.
     cc = dedupeAddresses([...email.to, ...email.cc]).filter((address) => {
       const key = normalizeEmail(address.email);
-      if (ownEmail && key === ownEmail) return false;
+      if (ownKeys.has(key)) return false;
       if (toKeys.has(key)) return false;
       return true;
     });
