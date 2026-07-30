@@ -260,4 +260,47 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ ...validEnv, AI_TIMEOUT_MS: "1500.5" })).toThrow();
     });
   });
+
+  describe("database pool + timeouts (GH #191)", () => {
+    it("defaults the pool and every DB timeout so no deployment has to set one", () => {
+      const config = loadConfig(validEnv);
+      expect(config.dbPoolMax).toBe(10);
+      expect(config.dbConnectTimeoutS).toBe(10);
+      expect(config.dbIdleTimeoutS).toBe(300);
+      expect(config.dbStatementTimeoutMs).toBe(30_000);
+    });
+
+    it("reads DB_POOL_MAX, DB_CONNECT_TIMEOUT_S, DB_IDLE_TIMEOUT_S and DB_STATEMENT_TIMEOUT_MS overrides", () => {
+      const config = loadConfig({
+        ...validEnv,
+        DB_POOL_MAX: "20",
+        DB_CONNECT_TIMEOUT_S: "5",
+        DB_IDLE_TIMEOUT_S: "120",
+        DB_STATEMENT_TIMEOUT_MS: "15000",
+      });
+      expect(config.dbPoolMax).toBe(20);
+      expect(config.dbConnectTimeoutS).toBe(5);
+      expect(config.dbIdleTimeoutS).toBe(120);
+      expect(config.dbStatementTimeoutMs).toBe(15_000);
+    });
+
+    it("treats an empty DB variable as absent", () => {
+      expect(loadConfig({ ...validEnv, DB_STATEMENT_TIMEOUT_MS: "" }).dbStatementTimeoutMs).toBe(
+        30_000,
+      );
+    });
+
+    it("rejects a non-numeric DB limit", () => {
+      expect(() => loadConfig({ ...validEnv, DB_POOL_MAX: "many" })).toThrow();
+    });
+
+    it("rejects a zero or negative DB limit, which would break the pool", () => {
+      expect(() => loadConfig({ ...validEnv, DB_POOL_MAX: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, DB_CONNECT_TIMEOUT_S: "-1" })).toThrow();
+    });
+
+    it("rejects a fractional DB limit", () => {
+      expect(() => loadConfig({ ...validEnv, DB_IDLE_TIMEOUT_S: "12.5" })).toThrow();
+    });
+  });
 });

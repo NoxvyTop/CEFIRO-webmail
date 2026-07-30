@@ -4,12 +4,22 @@ import {
   DEFAULT_OIDC_TIMEOUT_MS,
   DEFAULT_STALWART_TIMEOUT_MS,
 } from "./deadline";
+import {
+  DEFAULT_DB_CONNECT_TIMEOUT_S,
+  DEFAULT_DB_IDLE_TIMEOUT_S,
+  DEFAULT_DB_POOL_MAX,
+  DEFAULT_DB_STATEMENT_TIMEOUT_MS,
+} from "../infra/db/client";
 
 const masterKeySchema = z.string().length(44);
 
 // A deadline of 0 or a fraction of a millisecond would abort every outbound
 // call before it started, so those are configuration errors, not tuning.
 const timeoutMsSchema = z.coerce.number().int().positive();
+
+// Pool sizes and DB timeouts share the same shape as the outbound deadlines: a
+// zero, negative, or fractional pool/timeout is a misconfiguration, not tuning.
+const positiveIntSchema = z.coerce.number().int().positive();
 
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(8080),
@@ -39,6 +49,15 @@ const configSchema = z.object({
   stalwartTimeoutMs: timeoutMsSchema.default(DEFAULT_STALWART_TIMEOUT_MS),
   aiTimeoutMs: timeoutMsSchema.default(DEFAULT_AI_TIMEOUT_MS),
   oidcTimeoutMs: timeoutMsSchema.default(DEFAULT_OIDC_TIMEOUT_MS),
+  // Postgres pool + timeouts (GH #191). Every DB dependency inherits the same
+  // fail-fast discipline as the outbound deadlines above: without these, a slow
+  // or locked query pinned a pooled connection forever and stalled the service.
+  // Defaults (and the postgres option semantics) live beside createDb in
+  // infra/db/client.ts, which also applies them when this config is not passed.
+  dbPoolMax: positiveIntSchema.default(DEFAULT_DB_POOL_MAX),
+  dbConnectTimeoutS: positiveIntSchema.default(DEFAULT_DB_CONNECT_TIMEOUT_S),
+  dbIdleTimeoutS: positiveIntSchema.default(DEFAULT_DB_IDLE_TIMEOUT_S),
+  dbStatementTimeoutMs: positiveIntSchema.default(DEFAULT_DB_STATEMENT_TIMEOUT_MS),
   // AI features (summarize / draft-with-AI) are software-level off by default:
   // aiEnabled defaults to false and any call must also have an aiApiKey, or the
   // domain layer fails fast with `ai_disabled` before attempting any network call.
@@ -115,6 +134,10 @@ export function loadConfig(
     stalwartTimeoutMs: env.STALWART_TIMEOUT_MS || undefined,
     aiTimeoutMs: env.AI_TIMEOUT_MS || undefined,
     oidcTimeoutMs: env.OIDC_TIMEOUT_MS || undefined,
+    dbPoolMax: env.DB_POOL_MAX || undefined,
+    dbConnectTimeoutS: env.DB_CONNECT_TIMEOUT_S || undefined,
+    dbIdleTimeoutS: env.DB_IDLE_TIMEOUT_S || undefined,
+    dbStatementTimeoutMs: env.DB_STATEMENT_TIMEOUT_MS || undefined,
     aiEnabled: env.AI_ENABLED === "true" || env.AI_ENABLED === "1",
     aiProvider: env.AI_PROVIDER || undefined,
     aiApiKey: env.AI_API_KEY || undefined,

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "./app";
 import { loadConfig, type AppConfig } from "./core/config";
 import { log } from "./core/logger";
+import { createShutdown, installProcessHandlers } from "./core/shutdown";
 import { createDb } from "./infra/db/client";
 import { checkDb } from "./infra/db/health";
 import { migrate } from "./infra/db/migrate";
@@ -52,7 +53,12 @@ try {
   process.exit(1);
 }
 
-const db = createDb(config.databaseUrl);
+const db = createDb(config.databaseUrl, {
+  poolMax: config.dbPoolMax,
+  connectTimeoutS: config.dbConnectTimeoutS,
+  idleTimeoutS: config.dbIdleTimeoutS,
+  statementTimeoutMs: config.dbStatementTimeoutMs,
+});
 await migrate(db, fileURLToPath(new URL("../migrations", import.meta.url)));
 
 // The keyring encrypts with MASTER_KEY at MASTER_KEY_VERSION and keeps the
@@ -197,6 +203,28 @@ if (process.env.NODE_ENV === "production") {
   app.use("*", serveStatic({ root, path: "index.html" }));
 }
 
-log("info", "server started", { port: config.port, bootstrapMode: config.bootstrapMode });
+// Explicit Bun.serve (rather than `export default { port, fetch }`) so we hold a
+// server handle to drain in-flight requests on shutdown. Every deploy target
+// runs this file as a subprocess — Dockerfile CMD, e2e/serve.ts, `bun --watch` —
+// so none import a default export; the server starts on execution as before.
+const server = Bun.serve({ port: config.port, fetch: app.fetch });
 
-export default { port: config.port, fetch: app.fetch };
+// Graceful shutdown (GH #193). Both budgets are env-tunable; the drain budget
+// bounds how long in-flight requests may finish before connections are
+// force-closed, and the DB budget bounds the pool close. Defaults live in
+// core/shutdown.ts.
+const shutdown = createShutdown({
+  server,
+  sql: db,
+  log,
+  graceMs: positiveIntEnv(process.env.SHUTDOWN_GRACE_MS),
+  dbTimeoutMs: positiveIntEnv(process.env.SHUTDOWN_DB_TIMEOUT_MS),
+});
+installProcessHandlers({ shutdown, log });
+
+log("info", "server started", { port: server.port, bootstrapMode: config.bootstrapMode });
+
+function positiveIntEnv(raw: string | undefined): number | undefined {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}

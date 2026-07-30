@@ -181,6 +181,7 @@
       "ai_disabled": "AI features are not enabled on this server",
       "ai_provider_error": "Could not generate the AI summary",
       "upstream_timeout": "The server took too long to respond. Try again",
+      "database_unavailable": "The service is temporarily unavailable. Try again",
       "not_in_trash": "The message is no longer in Trash",
       "destroy_failed": "Could not delete the message",
       "generic": "Mail could not be loaded"
