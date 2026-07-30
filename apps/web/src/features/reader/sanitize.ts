@@ -7,6 +7,11 @@ export type SanitizedEmail = { html: string; hasRemoteImages: boolean };
 // of leaking a tracking pixel as a fully-qualified https:// URL.
 const REMOTE_URL_PATTERN = /^(https?:)?\/\//i;
 const CSS_REMOTE_URL_PATTERN = /url\(\s*['"]?\s*(https?:)?\/\//i;
+// Same idea as CSS_REMOTE_URL_PATTERN, plus @import — which pulls a whole
+// remote stylesheet and takes a bare-string form (@import "https://…";) with
+// no url() wrapper. Both are remote references that leak on load.
+const CSS_REMOTE_REFERENCE_PATTERN =
+  /url\(\s*['"]?\s*(https?:)?\/\/|@import\s+(url\(\s*)?['"]?\s*(https?:)?\/\//i;
 
 // The "cid:" URI scheme (RFC 2392) referencing a Content-ID body part —
 // case-insensitive per the URI spec.
@@ -52,6 +57,41 @@ export function extractReferencedCids(html: string | null | undefined): Set<stri
   return cids;
 }
 
+// Neutralises remote references carried inside <style> elements, working on
+// the raw parse *before* DOMPurify runs.
+//
+// This has to happen here, and not in the post-DOMPurify pass below, for two
+// reasons. First, the reference lives in the element's text content, so the
+// per-attribute [style]/[background] checks never see it. Second — and this is
+// why it can't just be another loop after DOMPurify — DOMPurify's handling of
+// the <style> tag is environment-dependent: a real browser keeps the element
+// (confirmed live: a `background:url(https://…)` fired a request the moment the
+// message was opened, defeating the remote-image opt-in, since the CSP allows
+// https: images), while jsdom drops it. DOMParser keeps <style> in both, so
+// doing it here makes the behaviour identical everywhere and actually testable.
+//
+// Whole elements are removed rather than their CSS edited, exactly as the
+// [style] attribute is dropped whole below: patching arbitrary CSS to excise
+// only the remote bits is far more error-prone than removing a block the reader
+// chose not to load.
+function stripRemoteStyleElements(
+  raw: string,
+  allowRemoteImages: boolean,
+): { html: string; hasRemoteStyle: boolean } {
+  const doc = new DOMParser().parseFromString(raw, "text/html");
+  let hasRemoteStyle = false;
+  for (const styleEl of Array.from(doc.querySelectorAll("style"))) {
+    if (!CSS_REMOTE_REFERENCE_PATTERN.test(styleEl.textContent ?? "")) continue;
+    hasRemoteStyle = true;
+    if (!allowRemoteImages) styleEl.remove();
+  }
+  // Re-serialise only when something was found, so the common (no-<style>) case
+  // pays nothing and passes the original string through untouched. The full
+  // documentElement is serialised so a <style> in <head> is covered too.
+  if (!hasRemoteStyle) return { html: raw, hasRemoteStyle: false };
+  return { html: doc.documentElement.outerHTML, hasRemoteStyle: true };
+}
+
 export function sanitizeEmailHtml(
   raw: string,
   // cidMap is cid -> already-resolved src string (a data: URL in production).
@@ -62,14 +102,19 @@ export function sanitizeEmailHtml(
   // assigns whatever resolved src it's handed; it never constructs URLs.
   options: { allowRemoteImages: boolean; cidMap?: Record<string, string> },
 ): SanitizedEmail {
-  const clean = DOMPurify.sanitize(raw, {
+  const { html: preprocessed, hasRemoteStyle } = stripRemoteStyleElements(
+    raw,
+    options.allowRemoteImages,
+  );
+
+  const clean = DOMPurify.sanitize(preprocessed, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["form", "input", "button"],
   });
 
   const doc = new DOMParser().parseFromString(clean, "text/html");
 
-  let hasRemoteImages = false;
+  let hasRemoteImages = hasRemoteStyle;
 
   // Rewrite cid: image sources to their resolved src first. This is
   // independent of the remote-image block below: embedded inline images are
@@ -143,6 +188,10 @@ export function sanitizeEmailHtml(
       }
     }
   }
+
+  // Remote references inside <style> elements are handled up front by
+  // stripRemoteStyleElements, before DOMPurify — see its comment for why it
+  // cannot be another pass here.
 
   for (const link of Array.from(doc.querySelectorAll("a"))) {
     link.removeAttribute("target");
