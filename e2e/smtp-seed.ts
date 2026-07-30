@@ -73,6 +73,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Retries an entire per-message SMTP conversation, not just the initial
+// connect. connectWithRetry only covers the TCP/TLS handshake, but a Stalwart
+// that is still finishing startup does something the connect retry cannot see:
+// it ACCEPTS the socket and then closes it mid-conversation, before answering
+// EHLO or the DATA terminator. That surfaces as readResponse's onClose —
+// "SMTP connection closed before a final response arrived (buffer: "")" — and
+// flaked the e2e seed intermittently even after the health check was tightened
+// (GH #179 fixed the health check but explicitly left this as follow-up). Each
+// message already gets its own fresh connection, so re-running the whole
+// deliver block is safe: a half-spoken conversation on a dropped socket left
+// nothing on the server (Message-IDs are per-run unique, so even a partial
+// retry cannot double-deliver). Reuses the connect retry budget/backoff.
+async function withConversationRetry<T>(
+  label: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CONNECT_RETRIES; attempt += 1) {
+    try {
+      return await run();
+    } catch (err) {
+      lastError = err;
+      if (attempt < CONNECT_RETRIES) await sleep(CONNECT_RETRY_DELAY_MS);
+    }
+  }
+  throw new Error(
+    `${label} failed after ${CONNECT_RETRIES} attempts: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  );
+}
+
 function connectWithRetry(host: string, port: number, tlsOptions: ConnectionOptions): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     let attempt = 0;
@@ -368,15 +400,17 @@ export async function seedInbox(host: string, port: number, messages: SeedEmail[
   const runId = crypto.randomUUID();
 
   for (const message of messages) {
-    const socket = await connectWithRetry(host, port, tlsOptions);
-    try {
-      await ehlo(socket, heloHost);
-      await authLogin(socket, account.email, account.password);
-      await deliverOne(socket, message, account.email, runId);
-      await sendCommand(socket, "QUIT").catch(() => undefined);
-    } finally {
-      socket.destroy();
-    }
+    await withConversationRetry(`seedInbox "${message.subject}"`, async () => {
+      const socket = await connectWithRetry(host, port, tlsOptions);
+      try {
+        await ehlo(socket, heloHost);
+        await authLogin(socket, account.email, account.password);
+        await deliverOne(socket, message, account.email, runId);
+        await sendCommand(socket, "QUIT").catch(() => undefined);
+      } finally {
+        socket.destroy();
+      }
+    });
   }
 }
 
@@ -407,13 +441,15 @@ export async function seedJunk(host: string, port: number, messages: SeedEmail[]
   const runId = crypto.randomUUID();
 
   for (const message of messages) {
-    const socket = await connectPlainWithRetry(host, port);
-    try {
-      await ehlo(socket, heloHost);
-      await deliverOne(socket, message, extractEnvelopeAddress(message.from), runId);
-      await sendCommand(socket, "QUIT").catch(() => undefined);
-    } finally {
-      socket.destroy();
-    }
+    await withConversationRetry(`seedJunk "${message.subject}"`, async () => {
+      const socket = await connectPlainWithRetry(host, port);
+      try {
+        await ehlo(socket, heloHost);
+        await deliverOne(socket, message, extractEnvelopeAddress(message.from), runId);
+        await sendCommand(socket, "QUIT").catch(() => undefined);
+      } finally {
+        socket.destroy();
+      }
+    });
   }
 }
