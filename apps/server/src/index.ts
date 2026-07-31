@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { createApp, type HealthCheck } from "./app";
 import { loadConfig, type AppConfig } from "./core/config";
 import { log } from "./core/logger";
+import { registerServer } from "./core/idle-timeout";
 import { createShutdown, installProcessHandlers } from "./core/shutdown";
 import { createDb } from "./infra/db/client";
 import { checkDb } from "./infra/db/health";
@@ -222,6 +223,10 @@ if (process.env.NODE_ENV === "production") {
 // runs this file as a subprocess — Dockerfile CMD, e2e/serve.ts, `bun --watch` —
 // so none import a default export; the server starts on execution as before.
 const server = Bun.serve({ port: config.port, fetch: app.fetch });
+
+// Let long-lived routes (the SSE event stream) clear their own idle deadline
+// without weakening Bun's global idleTimeout for every other route (GH #204).
+registerServer(server);
 
 // Graceful shutdown (GH #193). Both budgets are env-tunable; the drain budget
 // bounds how long in-flight requests may finish before connections are

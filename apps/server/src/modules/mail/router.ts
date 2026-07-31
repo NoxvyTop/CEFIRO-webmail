@@ -20,6 +20,7 @@ import {
 import { requireSession } from "../auth/middleware";
 import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { errorResponse } from "../../core/error-response";
+import { clearIdleTimeout } from "../../core/idle-timeout";
 import { log } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestContacts } from "./contacts-harvest";
@@ -521,6 +522,12 @@ export function createMailRouter(deps: MailDeps) {
     if (!upstream.ok || !upstream.body) {
       return errorResponse(c, "stalwart_unavailable", 502);
     }
+
+    // This connection legitimately sits idle between Stalwart's 30s keepalive
+    // pings, longer than Bun.serve's 10s global idleTimeout. Clear the idle
+    // deadline for THIS socket only so it isn't force-closed and reconnect-
+    // stormed (GH #204); the global default still guards every other route.
+    clearIdleTimeout(c.req.raw);
 
     return new Response(upstream.body, {
       headers: {
