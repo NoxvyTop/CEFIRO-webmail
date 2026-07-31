@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import "../../app/i18n";
@@ -51,21 +51,21 @@ const thread = {
 };
 
 function stubFetch() {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/auth/me")) return new Response(JSON.stringify(user));
-      if (url.includes("/api/mail/mailboxes")) return new Response(JSON.stringify(mailboxes));
-      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
-      if (url.includes("/api/mail/signatures")) return new Response(JSON.stringify([]));
-      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(thread));
-      if (url.includes("/api/mail/messages")) {
-        return new Response(JSON.stringify({ total: 0, position: 0, emails: [] }));
-      }
-      return new Response(JSON.stringify({ status: "ok", checks: {} }));
-    }),
-  );
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/api/auth/me")) return new Response(JSON.stringify(user));
+    if (url.includes("/api/mail/mailboxes")) return new Response(JSON.stringify(mailboxes));
+    if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
+    if (url.includes("/api/mail/signatures")) return new Response(JSON.stringify([]));
+    if (url.includes("/api/mail/drafts")) return new Response(JSON.stringify({ id: "draft-1" }));
+    if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(thread));
+    if (url.includes("/api/mail/messages")) {
+      return new Response(JSON.stringify({ total: 0, position: 0, emails: [] }));
+    }
+    return new Response(JSON.stringify({ status: "ok", checks: {} }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 function renderAt(path: string) {
@@ -108,5 +108,37 @@ describe("composer wiring", () => {
     expect((subject as HTMLInputElement).value).toMatch(/^Fwd: /);
     expect(within(dialog).getByText(/doc\.pdf/)).toBeInTheDocument();
     expect(within(dialog).queryByText("a@x.com")).not.toBeInTheDocument();
+  });
+
+  // GH #176: clicking the header's CÉFIRO home link clears the compose param
+  // and unmounts the composer — an exit route that never runs through the
+  // discard confirmation. With autosave in place (#178), leaving this way must
+  // flush the in-progress draft rather than silently discarding it.
+  it("flushes an unsaved draft to the save-draft endpoint when leaving via the home link (#176)", async () => {
+    const fetchMock = stubFetch();
+    renderAt("/?mailbox=mb1&thread=t1&compose=new");
+
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
+    fireEvent.change(subject, { target: { value: "Unsaved but important" } });
+
+    fireEvent.click(screen.getByRole("link", { name: i18n.t("app.home") }));
+
+    // The composer is torn down by the navigation…
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+      ).not.toBeInTheDocument(),
+    );
+
+    // …and the draft was persisted on the way out, not lost.
+    await waitFor(() => {
+      const draftSave = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).includes("/api/mail/drafts") && init?.method === "POST",
+      );
+      expect(draftSave).toBeTruthy();
+      expect(String(draftSave?.[1]?.body)).toContain("Unsaved but important");
+    });
   });
 });

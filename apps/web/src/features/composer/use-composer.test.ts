@@ -1,8 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MailApiError } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
-import { useComposer } from "./useComposer";
+import { AUTOSAVE_DEBOUNCE_MS, useComposer } from "./useComposer";
 
 const { uploadAttachment, sendEmail, fetchAiDraft, updateMessage, saveDraftApi } = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
@@ -557,6 +557,247 @@ describe("useComposer", () => {
       });
 
       expect(secondResult).toBe(false);
+    });
+  });
+
+  // GH #178: debounced autosave of the in-progress draft. The delicate part
+  // isn't the timer — it's identity and coalescence: only one save in flight at
+  // a time, each save superseding the draft the previous one created (POST
+  // /drafts is create-then-replace, not update — RFC 8620 §5.3) so a burst of
+  // edits leaves exactly one draft, never a pile of duplicates.
+  describe("autosave (#178)", () => {
+    function emptyDraft(): ComposerDraft {
+      return { identityId: "id1", to: [], cc: [], bcc: [], subject: "", bodyHtml: "" };
+    }
+
+    // Chained promise continuations (persistDraft → coalescing loop → dispatch)
+    // settle across several microtask turns; flush enough of them that the
+    // assertions see the final state under fake timers.
+    async function flushMicrotasks() {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    }
+
+    beforeEach(() => {
+      saveDraftApi.mockReset();
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("autosaves after the idle debounce once meaningful content is typed", async () => {
+      saveDraftApi.mockResolvedValue({ id: "draft-1" });
+      const { result } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "Reunión de mañana");
+      });
+      // Debounced: nothing is saved on the keystroke itself.
+      expect(saveDraftApi).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+
+      expect(saveDraftApi).toHaveBeenCalledTimes(1);
+      expect(saveDraftApi).toHaveBeenCalledWith(
+        expect.objectContaining({ subject: "Reunión de mañana" }),
+      );
+      expect(result.current.state.autosaveStatus).toBe("saved");
+    });
+
+    it("does not autosave an empty draft (only whitespace typed)", async () => {
+      const { result } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "   ");
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS * 3);
+      });
+
+      expect(saveDraftApi).not.toHaveBeenCalled();
+      expect(result.current.state.autosaveStatus).toBe("idle");
+    });
+
+    it("supersedes the same draft on the next save instead of creating a duplicate", async () => {
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-2" });
+      const { result } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "First");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+
+      // The first save is a fresh create — no draft to supersede yet.
+      expect(saveDraftApi.mock.calls[0]?.[0]?.originalDraftId).toBeUndefined();
+
+      act(() => {
+        result.current.setField("subject", "Second");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+
+      expect(saveDraftApi).toHaveBeenCalledTimes(2);
+      // The second save carries the id the first one created, so the server
+      // replaces that draft rather than leaving two behind.
+      expect(saveDraftApi.mock.calls[1]?.[0]?.originalDraftId).toBe("draft-1");
+      expect(saveDraftApi.mock.calls[1]?.[0]?.subject).toBe("Second");
+    });
+
+    it("reflects saving then saved in the autosave indicator status", async () => {
+      let resolveSave: (value: { id: string }) => void = () => {};
+      saveDraftApi.mockImplementationOnce(
+        () => new Promise((resolve) => { resolveSave = resolve; }),
+      );
+      const { result } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "Reunión");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+
+      // Parked on the in-flight request.
+      expect(result.current.state.autosaveStatus).toBe("saving");
+
+      await act(async () => {
+        resolveSave({ id: "draft-1" });
+        await flushMicrotasks();
+      });
+
+      expect(result.current.state.autosaveStatus).toBe("saved");
+    });
+
+    it("surfaces an error status when the autosave request fails", async () => {
+      saveDraftApi.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
+      const { result } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "Reunión");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+        await flushMicrotasks();
+      });
+
+      expect(result.current.state.autosaveStatus).toBe("error");
+    });
+
+    it("coalesces an edit made mid-save into a single follow-up, without overlapping or duplicating", async () => {
+      let resolveFirst: (value: { id: string }) => void = () => {};
+      saveDraftApi
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+        .mockResolvedValueOnce({ id: "draft-2" });
+      const { result } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "First");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+      expect(saveDraftApi).toHaveBeenCalledTimes(1);
+      expect(result.current.state.autosaveStatus).toBe("saving");
+
+      // Edit again while the first save is still in flight, and let its debounce
+      // fire: no second request goes out on top of the running one.
+      act(() => {
+        result.current.setField("subject", "Second");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+      expect(saveDraftApi).toHaveBeenCalledTimes(1);
+
+      // First settles → the coalesced follow-up runs with the latest content,
+      // superseding the draft the first save created.
+      await act(async () => {
+        resolveFirst({ id: "draft-1" });
+        await flushMicrotasks();
+      });
+
+      expect(saveDraftApi).toHaveBeenCalledTimes(2);
+      expect(saveDraftApi.mock.calls[1]?.[0]?.subject).toBe("Second");
+      expect(saveDraftApi.mock.calls[1]?.[0]?.originalDraftId).toBe("draft-1");
+      expect(result.current.state.autosaveStatus).toBe("saved");
+    });
+
+    // GH #176: an exit route that never runs through requestClose (the header's
+    // home link clears the compose param and unmounts the composer) must still
+    // not drop the draft. The unmount flush persists it on the way out.
+    it("flushes unsaved content on unmount, before the debounce would have fired (#176)", async () => {
+      saveDraftApi.mockResolvedValue({ id: "draft-1" });
+      const { result, unmount } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "Do not lose me");
+      });
+      // Torn down well before AUTOSAVE_DEBOUNCE_MS elapses.
+      expect(saveDraftApi).not.toHaveBeenCalled();
+
+      unmount();
+
+      expect(saveDraftApi).toHaveBeenCalledTimes(1);
+      expect(saveDraftApi).toHaveBeenCalledWith(
+        expect.objectContaining({ subject: "Do not lose me" }),
+      );
+    });
+
+    it("does not flush on unmount when the draft is empty", async () => {
+      const { result, unmount } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "   ");
+      });
+      unmount();
+
+      expect(saveDraftApi).not.toHaveBeenCalled();
+    });
+
+    // Guards against the unmount flush recreating the message as a draft after
+    // it was actually sent (send → onClose → unmount).
+    it("does not resave the message as a draft on unmount after a successful send", async () => {
+      sendEmail.mockReset();
+      sendEmail.mockResolvedValueOnce(undefined);
+      const { result, unmount } = renderHook(() =>
+        useComposer({ ...emptyDraft(), to: [{ name: null, email: "bob@example.com" }] }),
+      );
+
+      act(() => {
+        result.current.setField("subject", "Sent, not a draft");
+      });
+      await act(async () => {
+        await result.current.send();
+      });
+      expect(result.current.state.sendError).toBeNull();
+
+      unmount();
+
+      expect(saveDraftApi).not.toHaveBeenCalled();
+    });
+
+    // Guards against the unmount flush re-saving a draft the user explicitly
+    // discarded (Discard anyway → onClose → unmount).
+    it("does not resave a discarded draft on unmount", async () => {
+      const { result, unmount } = renderHook(() => useComposer(emptyDraft()));
+
+      act(() => {
+        result.current.setField("subject", "Throw me away");
+      });
+      act(() => {
+        result.current.discardDraft();
+      });
+      unmount();
+
+      expect(saveDraftApi).not.toHaveBeenCalled();
     });
   });
 });
