@@ -21,11 +21,12 @@ export type MailDeps = {
    * DEFAULT_STALWART_TIMEOUT_MS — see core/deadline.ts (GH #165).
    */
   timeoutMs?: number;
-  // Optional (GH #124): when wired, GET /messages harvests sender addresses
-  // into the user's contacts after fetching a page — see
-  // modules/mail/contacts-harvest.ts. Left optional, and gated behind an
-  // `if (deps.contacts)` at the one call site, so every existing test/deploy
-  // that constructs MailDeps without it keeps behaving exactly as before.
+  // Optional (GH #124): when wired, sender addresses are harvested into the
+  // user's contacts. As of GH #180 this happens once per delivery, off the JMAP
+  // event subscription that feeds GET /events, not on every GET /messages read —
+  // see modules/mail/contacts-harvest.ts. Left optional, and gated behind an
+  // `if (deps.contacts)` at the tap site, so every existing test/deploy that
+  // constructs MailDeps without it keeps behaving exactly as before.
   contacts?: ContactsRepo;
 };
 
