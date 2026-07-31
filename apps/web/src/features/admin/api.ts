@@ -1,8 +1,8 @@
 import {
-  adminSsoViewSchema, adminUserSchema, instanceSettingsViewSchema,
-  type AdminSsoView, type AdminUser, type CreateUserInput, type InstanceSettingsView,
+  adminSsoViewSchema, adminUserSchema, adminUsersPageSchema, instanceSettingsViewSchema,
+  type AdminSsoView, type AdminUser, type AdminUsersPage, type CreateUserInput,
+  type InstanceSettingsView,
 } from "@webmail/shared";
-import { z } from "zod";
 import { MailApiError } from "../mailbox/api";
 
 async function parseError(res: Response): Promise<never> {
@@ -23,10 +23,17 @@ function jsonRequest(method: string, body: unknown): RequestInit {
   };
 }
 
-export async function fetchAdminUsers(): Promise<AdminUser[]> {
-  const res = await fetch("/api/admin/users");
+export async function fetchAdminUsers(
+  params: { page: number; pageSize: number; search?: string },
+): Promise<AdminUsersPage> {
+  const query = new URLSearchParams({
+    page: String(params.page),
+    pageSize: String(params.pageSize),
+  });
+  if (params.search) query.set("search", params.search);
+  const res = await fetch(`/api/admin/users?${query.toString()}`);
   if (!res.ok) return parseError(res);
-  return z.array(adminUserSchema).parse(await res.json());
+  return adminUsersPageSchema.parse(await res.json());
 }
 
 export async function createAdminUser(input: CreateUserInput): Promise<AdminUser> {

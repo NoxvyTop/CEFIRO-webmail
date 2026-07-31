@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { AdminUser } from "@webmail/shared";
+import type { AdminUser, AdminUsersPage } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AdminPage } from "./AdminPage";
@@ -39,6 +39,33 @@ function makeUsers(count: number): AdminUser[] {
   }));
 }
 
+// GH #153: pagination and search are server-side now, so the mock replays what
+// the endpoint would do — slice/filter the full set by the params it's given.
+type PageParams = { page: number; pageSize: number; search?: string };
+
+function pageFor(all: AdminUser[], params: PageParams): AdminUsersPage {
+  const term = params.search?.toLowerCase() ?? "";
+  const filtered = term
+    ? all.filter(
+        (u) => u.email.toLowerCase().includes(term) || u.displayName.toLowerCase().includes(term),
+      )
+    : all;
+  const start = (params.page - 1) * params.pageSize;
+  return {
+    users: filtered.slice(start, start + params.pageSize),
+    total: filtered.length,
+    stats: {
+      total: all.length,
+      active: all.filter((u) => u.active).length,
+      mailboxLinked: all.filter((u) => u.mailboxLinked).length,
+    },
+  };
+}
+
+function serve(all: AdminUser[]) {
+  fetchAdminUsers.mockImplementation((params: PageParams) => Promise.resolve(pageFor(all, params)));
+}
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -52,9 +79,9 @@ function renderPage() {
   return client;
 }
 
-describe("AdminPage users table pagination and search", () => {
+describe("AdminPage users table server-driven pagination and search", () => {
   it("shows only the first 25 users and a range count when there are more than a page's worth", async () => {
-    fetchAdminUsers.mockResolvedValue(makeUsers(30));
+    serve(makeUsers(30));
     renderPage();
 
     expect(await screen.findByText("user0@example.com")).toBeInTheDocument();
@@ -66,8 +93,8 @@ describe("AdminPage users table pagination and search", () => {
     ).toBeInTheDocument();
   });
 
-  it("moves to the next page and updates the range, disabling next at the last page", async () => {
-    fetchAdminUsers.mockResolvedValue(makeUsers(30));
+  it("fetches the next page from the server and updates the range, disabling next at the last page", async () => {
+    serve(makeUsers(30));
     renderPage();
 
     await screen.findByText("user0@example.com");
@@ -84,19 +111,26 @@ describe("AdminPage users table pagination and search", () => {
     ).toBeInTheDocument();
     expect(nextButton).toBeDisabled();
     expect(prevButton).not.toBeDisabled();
+
+    // The second page was fetched from the server, not sliced in memory.
+    expect(fetchAdminUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 2, pageSize: 25 }),
+    );
   });
 
-  it("filters users by email or name via the search input and resets to the first page", async () => {
-    const users = [...makeUsers(30), {
-      id: "special",
-      email: "zzz@special.com",
-      displayName: "Special Target",
-      role: "employee" as const,
-      locale: "es",
-      active: true,
-      mailboxLinked: true,
-    }];
-    fetchAdminUsers.mockResolvedValue(users);
+  it("filters via the search input (server-side) and resets to the first page", async () => {
+    serve([
+      ...makeUsers(30),
+      {
+        id: "special",
+        email: "zzz@special.com",
+        displayName: "Special Target",
+        role: "employee" as const,
+        locale: "es",
+        active: true,
+        mailboxLinked: true,
+      },
+    ]);
     renderPage();
 
     await screen.findByText("user0@example.com");
@@ -108,10 +142,14 @@ describe("AdminPage users table pagination and search", () => {
     expect(
       screen.getByText(i18n.t("admin.pagination.range", { from: 1, to: 1, total: 1 })),
     ).toBeInTheDocument();
+    // The search term reached the server (debounced), starting from page 1.
+    expect(fetchAdminUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, search: "special" }),
+    );
   });
 
   it("shows a no-results message and hides pagination when the search matches nothing", async () => {
-    fetchAdminUsers.mockResolvedValue(makeUsers(5));
+    serve(makeUsers(5));
     renderPage();
 
     await screen.findByText("user0@example.com");
@@ -124,7 +162,7 @@ describe("AdminPage users table pagination and search", () => {
   });
 
   it("gives the table its own scrollable wrapper (not the whole section) so overflow is visible and intentional", async () => {
-    fetchAdminUsers.mockResolvedValue(makeUsers(3));
+    serve(makeUsers(3));
     renderPage();
 
     const table = await screen.findByRole("table");

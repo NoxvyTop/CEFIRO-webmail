@@ -2,10 +2,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { AdminSsoView, AdminUser } from "@webmail/shared";
+import type { AdminSsoView, AdminUser, AdminUsersPage } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AdminPage } from "./AdminPage";
+
+// GH #153: fetchAdminUsers now resolves a page envelope. The Resumen metrics
+// read the tenant-wide `stats`, so derive them here from the fixture list.
+function usersPage(users: AdminUser[]): AdminUsersPage {
+  return {
+    users,
+    total: users.length,
+    stats: {
+      total: users.length,
+      active: users.filter((u) => u.active).length,
+      mailboxLinked: users.filter((u) => u.mailboxLinked).length,
+    },
+  };
+}
 
 const {
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
@@ -67,7 +81,7 @@ function renderPage() {
 
 describe("AdminPage console shell", () => {
   it("defaults to the Resumen section with derived metric cards, and hides other sections' content", async () => {
-    fetchAdminUsers.mockResolvedValue(threeUsers);
+    fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
     fetchAdminSso.mockResolvedValue(configuredSso);
     fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
@@ -93,12 +107,12 @@ describe("AdminPage console shell", () => {
   });
 
   it("shows the mailbox-linked gauge card with the derived percentage and unlinked count", async () => {
-    fetchAdminUsers.mockResolvedValue([
+    fetchAdminUsers.mockResolvedValue(usersPage([
       makeUser({ id: "u1", email: "a@example.com", mailboxLinked: true }),
       makeUser({ id: "u2", email: "b@example.com", mailboxLinked: true }),
       makeUser({ id: "u3", email: "c@example.com", mailboxLinked: true }),
       makeUser({ id: "u4", email: "d@example.com", mailboxLinked: false }),
-    ]);
+    ]));
     fetchAdminSso.mockResolvedValue(configuredSso);
     fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
@@ -109,9 +123,9 @@ describe("AdminPage console shell", () => {
   });
 
   it("shows Sin configurar and a 0 archived suffix for a fully-active tenant without SSO", async () => {
-    fetchAdminUsers.mockResolvedValue([
+    fetchAdminUsers.mockResolvedValue(usersPage([
       makeUser({ id: "u1", email: "a@example.com", active: true, mailboxLinked: true }),
-    ]);
+    ]));
     fetchAdminSso.mockResolvedValue({ configured: false, issuer: null, clientId: null, scopes: null });
     fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
@@ -123,7 +137,7 @@ describe("AdminPage console shell", () => {
   });
 
   it("switches to Usuarios and shows the existing users table", async () => {
-    fetchAdminUsers.mockResolvedValue(threeUsers);
+    fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
     fetchAdminSso.mockResolvedValue(configuredSso);
     fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
@@ -136,7 +150,7 @@ describe("AdminPage console shell", () => {
   });
 
   it("switches to Identidad (SSO) and shows the existing SSO form", async () => {
-    fetchAdminUsers.mockResolvedValue(threeUsers);
+    fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
     fetchAdminSso.mockResolvedValue(configuredSso);
     fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();
@@ -149,7 +163,7 @@ describe("AdminPage console shell", () => {
   });
 
   it("switches to Ajustes and shows the sent-with-footer toggle, off by default", async () => {
-    fetchAdminUsers.mockResolvedValue(threeUsers);
+    fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
     fetchAdminSso.mockResolvedValue(configuredSso);
     fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
     renderPage();

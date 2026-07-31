@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
 import { migrate } from "../../infra/db/migrate";
@@ -76,16 +76,30 @@ describe("admin users api", () => {
     });
     await mailCredentials.set(linked.id, "mailbox-pass-123");
 
-    const res = await app.request("/api/admin/users", {
-      headers: { cookie: `session=${admin.token}` },
-    });
+    // Server-side pagination (GH #153): target each user via the search param
+    // so the assertion holds regardless of how many other users the shared DB
+    // has accumulated (the user might otherwise fall on a later page).
+    const res = await app.request(
+      `/api/admin/users?search=${encodeURIComponent(linked.email)}`,
+      { headers: { cookie: `session=${admin.token}` } },
+    );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ id: string; mailboxLinked: boolean }>;
-    expect(Array.isArray(body)).toBe(true);
-    const found = body.find((u) => u.id === linked.id);
-    expect(found?.mailboxLinked).toBe(true);
-    const foundAdmin = body.find((u) => u.id === admin.user.id);
-    expect(foundAdmin?.mailboxLinked).toBe(false);
+    const body = (await res.json()) as {
+      users: Array<{ id: string; mailboxLinked: boolean }>;
+      total: number;
+      stats: { total: number; active: number; mailboxLinked: number };
+    };
+    expect(Array.isArray(body.users)).toBe(true);
+    expect(body.users.find((u) => u.id === linked.id)?.mailboxLinked).toBe(true);
+
+    const adminRes = await app.request(
+      `/api/admin/users?search=${encodeURIComponent(admin.user.email)}`,
+      { headers: { cookie: `session=${admin.token}` } },
+    );
+    const adminBody = (await adminRes.json()) as {
+      users: Array<{ id: string; mailboxLinked: boolean }>;
+    };
+    expect(adminBody.users.find((u) => u.id === admin.user.id)?.mailboxLinked).toBe(false);
   });
 
   // GH #130: the admin users list must carry each user's uploaded avatar
@@ -98,19 +112,25 @@ describe("admin users api", () => {
       displayName: "Avatar Target",
     });
 
-    const before = await app.request("/api/admin/users", {
-      headers: { cookie: `session=${admin.token}` },
-    });
-    const beforeBody = (await before.json()) as Array<{ id: string; avatarDataUrl: string | null }>;
-    expect(beforeBody.find((u) => u.id === target.id)?.avatarDataUrl).toBeNull();
+    const before = await app.request(
+      `/api/admin/users?search=${encodeURIComponent(target.email)}`,
+      { headers: { cookie: `session=${admin.token}` } },
+    );
+    const beforeBody = (await before.json()) as {
+      users: Array<{ id: string; avatarDataUrl: string | null }>;
+    };
+    expect(beforeBody.users.find((u) => u.id === target.id)?.avatarDataUrl).toBeNull();
 
     await users.setAvatar(target.id, "data:image/png;base64,aGVsbG8=");
 
-    const after = await app.request("/api/admin/users", {
-      headers: { cookie: `session=${admin.token}` },
-    });
-    const afterBody = (await after.json()) as Array<{ id: string; avatarDataUrl: string | null }>;
-    expect(afterBody.find((u) => u.id === target.id)?.avatarDataUrl).toBe(
+    const after = await app.request(
+      `/api/admin/users?search=${encodeURIComponent(target.email)}`,
+      { headers: { cookie: `session=${admin.token}` } },
+    );
+    const afterBody = (await after.json()) as {
+      users: Array<{ id: string; avatarDataUrl: string | null }>;
+    };
+    expect(afterBody.users.find((u) => u.id === target.id)?.avatarDataUrl).toBe(
       "data:image/png;base64,aGVsbG8=",
     );
   });
@@ -222,11 +242,12 @@ describe("admin users api", () => {
     expect(body.code).toBe("self_demotion");
 
     // Role must be unchanged.
-    const reload = await app.request("/api/admin/users", {
-      headers: { cookie: `session=${admin.token}` },
-    });
-    const list = (await reload.json()) as Array<{ id: string; role: string }>;
-    expect(list.find((u) => u.id === admin.user.id)?.role).toBe("admin");
+    const reload = await app.request(
+      `/api/admin/users?search=${encodeURIComponent(admin.user.email)}`,
+      { headers: { cookie: `session=${admin.token}` } },
+    );
+    const list = (await reload.json()) as { users: Array<{ id: string; role: string }> };
+    expect(list.users.find((u) => u.id === admin.user.id)?.role).toBe("admin");
   });
 
   it("PUT /users/:id/role: demotes another admin when other admins remain", async () => {
@@ -285,5 +306,121 @@ describe("admin users api", () => {
       body: JSON.stringify({ mailPassword: "new-mailbox-pass" }),
     });
     expect(missing.status).toBe(404);
+  });
+});
+
+// GH #153: GET /api/admin/users paginates server-side instead of returning
+// every user (each row can embed a ~1 MiB base64 avatar).
+type UsersPageBody = {
+  users: Array<{ id: string; mailboxLinked: boolean }>;
+  total: number;
+  stats: { total: number; active: number; mailboxLinked: number };
+};
+
+describe("admin users pagination (GH #153)", () => {
+  it("returns a bounded page, a filtered total, and tenant-wide stats", async () => {
+    const admin = await createAdmin();
+    // A unique token in each email isolates this test's users from everything
+    // else in the shared DB, so the filtered total is exactly what we created.
+    const token = crypto.randomUUID();
+    for (let i = 0; i < 3; i++) {
+      await users.create({
+        email: `pg${i}-${token}@noxvytop.com`,
+        displayName: `Pager ${i}`,
+      });
+    }
+    const headers = { cookie: `session=${admin.token}` };
+
+    const p1 = await app.request(`/api/admin/users?page=1&pageSize=2&search=${token}`, { headers });
+    expect(p1.status).toBe(200);
+    const b1 = (await p1.json()) as UsersPageBody;
+    expect(b1.users).toHaveLength(2);
+    expect(b1.total).toBe(3);
+    // Stats are aggregate, so they count every user, not just this page.
+    expect(b1.stats.total).toBeGreaterThanOrEqual(3);
+    expect(typeof b1.stats.active).toBe("number");
+    expect(typeof b1.stats.mailboxLinked).toBe("number");
+
+    const p2 = await app.request(`/api/admin/users?page=2&pageSize=2&search=${token}`, { headers });
+    const b2 = (await p2.json()) as UsersPageBody;
+    expect(b2.users).toHaveLength(1);
+    expect(b2.total).toBe(3);
+
+    // A page past the end is empty but still reports the true total.
+    const p3 = await app.request(`/api/admin/users?page=3&pageSize=2&search=${token}`, { headers });
+    const b3 = (await p3.json()) as UsersPageBody;
+    expect(b3.users).toHaveLength(0);
+    expect(b3.total).toBe(3);
+  });
+
+  it("normalizes junk numeric params and rejects an over-long search", async () => {
+    const admin = await createAdmin();
+    const headers = { cookie: `session=${admin.token}` };
+
+    // Non-numeric page/pageSize fall back to defaults rather than 400.
+    const junk = await app.request("/api/admin/users?page=abc&pageSize=xyz", { headers });
+    expect(junk.status).toBe(200);
+    const junkBody = (await junk.json()) as UsersPageBody;
+    expect(Array.isArray(junkBody.users)).toBe(true);
+
+    // An absurdly long search term is a client bug → 400 invalid_query.
+    const bad = await app.request(`/api/admin/users?search=${"a".repeat(201)}`, { headers });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { code: string }).code).toBe("invalid_query");
+  });
+
+  it("resolves mailbox-linked state for the whole page in one batched query (no N+1)", async () => {
+    const admin = await createAdmin();
+    const token = crypto.randomUUID();
+    const withCred = await users.create({
+      email: `bat-a-${token}@noxvytop.com`,
+      displayName: "Batch A",
+    });
+    const withoutCred = await users.create({
+      email: `bat-b-${token}@noxvytop.com`,
+      displayName: "Batch B",
+    });
+    await mailCredentials.set(withCred.id, "mailbox-pass-123");
+
+    const batchSpy = vi.spyOn(mailCredentials, "existsForUsers");
+    const perUserSpy = vi.spyOn(mailCredentials, "exists");
+
+    const res = await app.request(`/api/admin/users?search=${token}&pageSize=100`, {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as UsersPageBody;
+
+    // Exactly one batched credential lookup for the page, never the per-user one.
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(perUserSpy).not.toHaveBeenCalled();
+    expect(body.users.find((u) => u.id === withCred.id)?.mailboxLinked).toBe(true);
+    expect(body.users.find((u) => u.id === withoutCred.id)?.mailboxLinked).toBe(false);
+
+    batchSpy.mockRestore();
+    perUserSpy.mockRestore();
+  });
+
+  it("moves aggregate stats when a linked, active user is added", async () => {
+    const admin = await createAdmin();
+    const headers = { cookie: `session=${admin.token}` };
+
+    const before = ((await (
+      await app.request("/api/admin/users?pageSize=1", { headers })
+    ).json()) as UsersPageBody).stats;
+
+    const u = await users.create({
+      email: `stat-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Stat",
+    });
+    await mailCredentials.set(u.id, "mailbox-pass-123");
+
+    const after = ((await (
+      await app.request("/api/admin/users?pageSize=1", { headers })
+    ).json()) as UsersPageBody).stats;
+
+    expect(after.total).toBe(before.total + 1);
+    expect(after.active).toBe(before.active + 1);
+    expect(after.mailboxLinked).toBe(before.mailboxLinked + 1);
   });
 });

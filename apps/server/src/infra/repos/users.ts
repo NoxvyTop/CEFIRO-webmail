@@ -32,6 +32,13 @@ function toRecord(row: UserRow): UserRecord {
   };
 }
 
+// Neutralize LIKE wildcards so a literal `%` or `_` typed into the admin
+// search box matches itself instead of acting as a pattern. Paired with an
+// explicit `ESCAPE '\'` clause on every ilike below.
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 // ProfileView comes from @webmail/shared (packages/shared/src/api/profile.ts)
 // rather than being redefined here — it's structurally identical to the
 // zod-inferred shared type and apps/server already imports other shared
@@ -97,6 +104,34 @@ export function createUsersRepo(sql: Db) {
       `;
       return rows.map((row) => ({ ...toRecord(row), avatarDataUrl: row.avatar_data_url }));
     },
+    // GH #153: the server-paginated counterpart of listWithAvatar(). Returns a
+    // single bounded page (with avatars) optionally filtered by an email/name
+    // substring. The ordering matches listWithAvatar() so paging is stable.
+    // Two query variants rather than a composed `where` fragment on purpose:
+    // the db-client wrapper (infra/db/client.ts) eagerly executes any nested
+    // tagged-template, so fragments cannot be interpolated here.
+    async listPageWithAvatar(opts: {
+      limit: number;
+      offset: number;
+      search?: string;
+    }): Promise<(UserRecord & { avatarDataUrl: string | null })[]> {
+      const rows = opts.search
+        ? await sql<(UserRow & { avatar_data_url: string | null })[]>`
+            select id, email, display_name, role, locale, active, avatar_data_url
+            from users
+            where email ilike ${`%${escapeLike(opts.search)}%`} escape '\\'
+               or display_name ilike ${`%${escapeLike(opts.search)}%`} escape '\\'
+            order by active desc, email asc
+            limit ${opts.limit} offset ${opts.offset}
+          `
+        : await sql<(UserRow & { avatar_data_url: string | null })[]>`
+            select id, email, display_name, role, locale, active, avatar_data_url
+            from users
+            order by active desc, email asc
+            limit ${opts.limit} offset ${opts.offset}
+          `;
+      return rows.map((row) => ({ ...toRecord(row), avatarDataUrl: row.avatar_data_url }));
+    },
     async setRole(id: string, role: UserRole): Promise<UserRecord | null> {
       const rows = await sql<UserRow[]>`
         update users set role = ${role} where id = ${id}
@@ -113,6 +148,27 @@ export function createUsersRepo(sql: Db) {
     },
     async count(): Promise<number> {
       const rows = await sql<{ count: string }[]>`select count(*)::text as count from users`;
+      return Number(rows[0]!.count);
+    },
+    // Active-user count for the Resumen dashboard (GH #153) — kept aggregate so
+    // the metric never depends on which page of users the admin is viewing.
+    async countActive(): Promise<number> {
+      const rows = await sql<{ count: string }[]>`
+        select count(*)::text as count from users where active = true
+      `;
+      return Number(rows[0]!.count);
+    },
+    // Total users matching the same email/name filter as listPageWithAvatar —
+    // this is what drives the pager's total. Mirrors that method's two-variant
+    // shape for the same db-client-wrapper reason.
+    async countMatching(search?: string): Promise<number> {
+      const rows = search
+        ? await sql<{ count: string }[]>`
+            select count(*)::text as count from users
+            where email ilike ${`%${escapeLike(search)}%`} escape '\\'
+               or display_name ilike ${`%${escapeLike(search)}%`} escape '\\'
+          `
+        : await sql<{ count: string }[]>`select count(*)::text as count from users`;
       return Number(rows[0]!.count);
     },
     async countActiveAdmins(): Promise<number> {
