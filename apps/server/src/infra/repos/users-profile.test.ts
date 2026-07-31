@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../db/client";
+import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
 import { createUsersRepo } from "./users";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 const users = createUsersRepo(sql);
 
 beforeAll(async () => {

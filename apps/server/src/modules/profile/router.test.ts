@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo, type UserRecord } from "../../infra/repos/users";
 import { createAuditRepo } from "../../infra/repos/audit";
@@ -9,9 +10,7 @@ import { createSessionStore } from "../auth/sessions";
 import { createAuthRouter } from "../auth/router";
 import { createProfileRouter } from "./router";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 const sessions = createSessionStore(sql);
 const users = createUsersRepo(sql);
 const audit = createAuditRepo(sql);

@@ -1,13 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../db/client";
+import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
 import { importMasterKey } from "../../modules/credentials/crypto";
 import { createSsoConfigRepo } from "./sso-config";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));

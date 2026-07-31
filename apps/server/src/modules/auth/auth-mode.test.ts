@@ -1,13 +1,12 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { createSessionStore } from "./sessions";
 import { createAuthRouter } from "./router";
 import { createBootstrap } from "../setup/bootstrap";
 import { createApp } from "../../app";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 const sessions = createSessionStore(sql);
 
 afterAll(() => sql.end());

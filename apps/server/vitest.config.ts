@@ -2,6 +2,10 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Provisions an isolated, throwaway Postgres database for the whole run and
+    // drops it afterwards, so the suite never writes into a shared/development
+    // database and cleans up after itself (GH #181). Requires DATABASE_URL.
+    globalSetup: ["./vitest.global-setup.ts"],
     // Integration tests share one Postgres instance and a singleton
     // sso_config row (id = 1). Running test files in parallel lets
     // concurrent beforeAll() calls stomp each other's encrypted
