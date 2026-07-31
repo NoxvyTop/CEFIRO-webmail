@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
+import {
+  useEffect, useMemo, useRef,
+  type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode,
+} from "react";
 import {
   useInfiniteQuery, useMutation, useQueryClient, type InfiniteData,
 } from "@tanstack/react-query";
@@ -133,6 +136,10 @@ export function MessageList({
   const parentRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const lastLabelsRef = useRef<string>("");
+  // WAI-ARIA listbox roving tabindex needs to move DOM focus between options as
+  // the user arrows through them; keep a live handle to each rendered option
+  // keyed by its threadId (the same key React uses for the row).
+  const optionRefs = useRef(new Map<string, HTMLDivElement>());
 
   const queryKey = useMemo(
     () =>
@@ -164,6 +171,15 @@ export function MessageList({
   );
 
   const conversations = useMemo(() => groupIntoConversations(emails), [emails]);
+
+  // Roving tabindex (WAI-ARIA listbox): exactly ONE option sits in the tab
+  // order at a time — the selected conversation, or the first row when nothing
+  // is selected yet — so Tab reaches the list as a single stop and Arrow keys
+  // move between options from there. Every other option is tabIndex=-1.
+  const rovingThreadId =
+    conversations.find((conversation) => conversation.threadId === selectedThreadId)?.threadId ??
+    conversations[0]?.threadId ??
+    null;
 
   const total = messagesQuery.data?.pages[0]?.total ?? 0;
 
@@ -260,6 +276,25 @@ export function MessageList({
   function handleToggleStar(event: MouseEvent, email: EmailSummary) {
     event.stopPropagation();
     starMutation.mutate({ email, starred: !email.keywords.$flagged });
+  }
+
+  // Keyboard handling scoped to a focused option (not the global window
+  // listener that owns j/k/s/e): Enter/Space open the conversation, and the
+  // arrow keys move the roving selection to the adjacent option and carry DOM
+  // focus with it, so a keyboard user can traverse the list without the mouse.
+  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLDivElement>, conversation: ConversationRow) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleSelect(conversation);
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const currentIndex = conversations.findIndex((row) => row.threadId === conversation.threadId);
+    const target = conversations[event.key === "ArrowDown" ? currentIndex + 1 : currentIndex - 1];
+    if (!target) return;
+    handleSelect(target);
+    optionRefs.current.get(target.threadId)?.focus();
   }
 
   useEffect(() => {
@@ -368,13 +403,15 @@ export function MessageList({
     return (
       <div
         key={conversation.threadId}
+        ref={(el) => {
+          if (el) optionRefs.current.set(conversation.threadId, el);
+          else optionRefs.current.delete(conversation.threadId);
+        }}
         role="option"
         aria-selected={selected}
-        tabIndex={0}
+        tabIndex={conversation.threadId === rovingThreadId ? 0 : -1}
         onClick={() => handleSelect(conversation)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") handleSelect(conversation);
-        }}
+        onKeyDown={(event) => handleOptionKeyDown(event, conversation)}
         className={rowClassName(selected)}
       >
         <Avatar name={email.from[0]?.name ?? null} email={email.from[0]?.email ?? "?"} size={38} />

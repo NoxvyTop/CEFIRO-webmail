@@ -1,6 +1,7 @@
 {
   "app": {
     "home": "Ir al inicio",
+    "skipToContent": "Saltar al contenido",
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",
@@ -158,6 +159,9 @@
   "mail": {
     "listRegion": "Lista de mensajes",
     "readerRegion": "Lectura",
+    "navRegion": "Navegación del buzón",
+    "navMenu": "Menú de navegación",
+    "closeNav": "Cerrar menú",
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount_one": "{{count}} correo",
@@ -180,7 +184,9 @@
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el resumen con IA",
+      "ai_rate_limited": "Has usado la IA demasiadas veces en poco tiempo. Espera un momento e inténtalo de nuevo",
       "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
+      "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
       "not_in_trash": "El mensaje ya no está en la papelera",
       "destroy_failed": "No se pudo eliminar el mensaje",
       "generic": "No se pudo cargar el correo"
@@ -307,6 +313,7 @@
       "save_draft_failed": "No se pudo guardar el borrador",
       "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
       "ai_provider_error": "No se pudo generar el borrador con IA",
+      "ai_rate_limited": "Has usado la IA demasiadas veces en poco tiempo. Espera un momento e inténtalo de nuevo",
       "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
       "invalid_body": "Escribe un asunto antes de redactar con IA",
       "generic": "Ocurrió un error"
@@ -316,6 +323,11 @@
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
     "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
     "noIdentitiesHint": "Vincula tu buzón para poder redactar correos",
+    "autosave": {
+      "saving": "Guardando…",
+      "saved": "Borrador guardado",
+      "error": "No se pudo guardar el borrador"
+    },
     "discardConfirm": {
       "title": "¿Descartar este mensaje?",
       "description": "Tu mensaje tiene contenido sin guardar.",

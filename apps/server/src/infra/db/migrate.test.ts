@@ -1,11 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { createDb } from "./client";
+import { testDatabaseUrl } from "./test-db";
 import { migrate } from "./migrate";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 const dir = fileURLToPath(new URL("../../../migrations", import.meta.url));
 
 afterAll(() => sql.end());

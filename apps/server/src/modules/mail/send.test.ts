@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
@@ -12,9 +13,7 @@ import { createApp } from "../../app";
 import { createMailRouter } from "./router";
 import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 const defaultIdentityList = [{ id: "id-1", name: "Carlos", email: "carlos@noxvytop.com" }];
 const defaultMailboxList = [
@@ -31,6 +30,19 @@ let emailSetResponse: { created?: Record<string, unknown>; notCreated?: Record<s
 };
 let submissionResponse: { created?: Record<string, unknown>; notCreated?: Record<string, unknown> } = {
   created: { sub: { id: "sub-1" } },
+};
+// RFC 8621 §7.5: onSuccessUpdateEmail is applied by a SEPARATE implicit
+// Email/set that runs after the submission and is appended to the response
+// array with the same method-call id ("s") as EmailSubmission/set. RFC 8620
+// §5.3 makes that Email/set non-transactional, so the submission can succeed
+// while this update fails — which is exactly the partial failure under test.
+let implicitUpdateResponse: { updated?: Record<string, unknown>; notUpdated?: Record<string, unknown> } = {
+  updated: { "e-new": null },
+};
+// Response to the server's best-effort post-send remediation (a lone
+// Email/set update re-applying the move-to-Sent / $draft-clear patch).
+let remediationResponse: { updated?: Record<string, unknown>; notUpdated?: Record<string, unknown> } = {
+  updated: { "e-new": null },
 };
 
 const stubJmap: JmapClient = {
@@ -50,9 +62,16 @@ const stubJmap: JmapClient = {
         ["Mailbox/get", { list: mailboxes }, "m"],
       ];
     }
+    // The best-effort post-send remediation is a single Email/set update.
+    if (methodCalls.length === 1 && name === "Email/set") {
+      return [["Email/set", remediationResponse, "u"]];
+    }
+    // The /send request: draft create + submission + the implicit
+    // onSuccessUpdateEmail response (same "s" id, appended by the server).
     return [
       ["Email/set", emailSetResponse, "e"],
       ["EmailSubmission/set", submissionResponse, "s"],
+      ["Email/set", implicitUpdateResponse, "s"],
     ];
   },
   uploadBlob: async () => "blob-id",
@@ -86,6 +105,8 @@ beforeEach(() => {
   mailboxes = defaultMailboxList;
   emailSetResponse = { created: { draft: { id: "e-new" } } };
   submissionResponse = { created: { sub: { id: "sub-1" } } };
+  implicitUpdateResponse = { updated: { "e-new": null } };
+  remediationResponse = { updated: { "e-new": null } };
 });
 
 function makeApp() {
@@ -236,6 +257,82 @@ describe("POST /api/mail/send", () => {
     });
     expect(res.status).toBe(502);
     expect(((await res.json()) as { code: string }).code).toBe("send_failed");
+  });
+
+  // GH #192: positive confirmation of the send, mirroring the draft-save (#149)
+  // and destroy (#133) paths. Three outcomes to pin down:
+  //   1. submission confirmed in `created` + post-send update confirmed -> ok,
+  //      no remediation.
+  //   2. submission absent from `created` -> the mail did NOT go out, so we
+  //      must fail, never falsely report success off an empty notCreated.
+  //   3. submission confirmed but the post-send move-to-Sent failed -> the mail
+  //      IS out, so still report sent (no resend prompt), but re-clear the
+  //      $draft state so the sent message is not re-presented as a fresh draft.
+  it("confirms the submission and the post-send email update, issuing no remediation", async () => {
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(basePayload),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    // Lookup + send only: the implicit onSuccessUpdateEmail confirmed, so there
+    // is nothing left to remediate.
+    expect(requests).toHaveLength(2);
+  });
+
+  it("returns 502 send_failed and does not falsely report success when the submission is absent from created", async () => {
+    // Neither `created` nor `notCreated` names the submission: the server never
+    // confirmed it, so the mail did NOT go out. A truthiness-only guard on
+    // notCreated would fall through to { ok: true } — a phantom success that
+    // hides a non-delivery.
+    submissionResponse = {};
+
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(basePayload),
+    });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("send_failed");
+    // Nothing was sent, so no post-send remediation must be attempted.
+    expect(requests).toHaveLength(2);
+  });
+
+  it("still reports the message as sent but re-clears $draft when the post-send email update fails", async () => {
+    // Submission created (mail is out) but the implicit onSuccessUpdateEmail
+    // could not move the message to Sent / clear $draft.
+    implicitUpdateResponse = { notUpdated: { "e-new": { type: "stateMismatch" } } };
+
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(basePayload),
+    });
+
+    // The mail went out — erroring here would invite a duplicate resend.
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    // A best-effort remediation Email/set re-applies the move-to-Sent /
+    // $draft-clear patch so the already-sent message does not linger as a
+    // fresh, re-sendable draft.
+    expect(requests).toHaveLength(3);
+    const remediation = requests[2] ?? [];
+    expect(remediation).toHaveLength(1);
+    const remediationCall = remediation[0];
+    expect(remediationCall?.[0]).toBe("Email/set");
+    const remediationParams = remediationCall?.[1] as {
+      accountId: string;
+      update: Record<string, Record<string, unknown>>;
+    };
+    expect(remediationParams.accountId).toBe("acc-1");
+    expect(remediationParams.update["e-new"]).toEqual({
+      "mailboxIds/mb-drafts": null,
+      "mailboxIds/mb-sent": true,
+      "keywords/$draft": null,
+    });
   });
 
   it("returns 400 invalid_body for zero recipients", async () => {

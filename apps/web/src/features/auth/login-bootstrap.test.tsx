@@ -265,6 +265,68 @@ describe("login screen bootstrap form", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("announces empty-field errors as alerts and wires them to their inputs for screen readers", async () => {
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
+    });
+    renderAt("/");
+
+    const emailInput = await screen.findByLabelText("Usuario");
+    const passwordInput = screen.getByLabelText("Contraseña");
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    // Both field errors must be exposed as live alerts so a screen reader
+    // announces them instead of leaving the failed submit silent.
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.length).toBeGreaterThanOrEqual(2);
+
+    expect(emailInput).toHaveAttribute("aria-invalid", "true");
+    expect(emailInput).toHaveAttribute("aria-describedby", "bootstrap-email-error");
+    const emailError = document.getElementById("bootstrap-email-error");
+    expect(emailError).toHaveAttribute("role", "alert");
+    expect(emailError).toHaveTextContent(i18n.t("auth.bootstrap.errors.emptyUser"));
+
+    expect(passwordInput).toHaveAttribute("aria-invalid", "true");
+    expect(passwordInput).toHaveAttribute("aria-describedby", "bootstrap-password-error");
+    const passwordError = document.getElementById("bootstrap-password-error");
+    expect(passwordError).toHaveAttribute("role", "alert");
+    expect(passwordError).toHaveTextContent(i18n.t("auth.bootstrap.errors.emptyPassword"));
+
+    // Clearing the fields drops both the alert and the aria-invalid wiring.
+    fireEvent.change(emailInput, { target: { value: "bootstrap-admin" } });
+    expect(emailInput).not.toHaveAttribute("aria-invalid");
+    expect(emailInput).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("announces a rejected credential as an alert", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/bootstrap")) {
+        return new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 });
+      }
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    fireEvent.change(await screen.findByLabelText("Usuario"), {
+      target: { value: "bootstrap-admin" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), { target: { value: "nope" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(i18n.t("auth.bootstrap.error"));
+  });
+
   it("renders a discreet theme toggle and switches themes when clicked", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),

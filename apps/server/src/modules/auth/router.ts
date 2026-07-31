@@ -56,6 +56,15 @@ const BOOTSTRAP_ADMIN_EMAIL = "bootstrap-admin@webmail.local";
 const BOOTSTRAP_LOGIN_MAX_ATTEMPTS = 10;
 const BOOTSTRAP_LOGIN_WINDOW_MS = 60_000;
 
+// Rate limit for GET /login (GH #194), keyed by client IP. Each hit triggers an
+// outbound oidc.discover() to the IdP, so an unbounded endpoint amplifies one
+// cheap request into a request against the IdP plus discovery work here. 15 per
+// minute per IP is well above what a human bouncing off an expired session
+// needs, yet caps a flood after the first handful — every further request is
+// refused before the discovery call runs.
+const LOGIN_MAX_ATTEMPTS = 15;
+const LOGIN_WINDOW_MS = 60_000;
+
 const defaultOidcClient: OidcClient = {
   discover: (issuer) => discover(issuer),
   exchangeCode: (input) => exchangeCode(input),
@@ -74,6 +83,10 @@ export type AuthRouterDeps = {
   oidcClient?: OidcClient;
   bootstrap?: Bootstrap;
   rateLimiter?: RateLimiter;
+  loginRateLimiter?: RateLimiter;
+  // When true (NODE_ENV=production, see core/config.ts), every cookie is
+  // written Secure regardless of APP_URL's scheme — see cookieSecure below.
+  isProduction?: boolean;
 };
 
 export function createAuthRouter(deps: AuthRouterDeps) {
@@ -84,6 +97,26 @@ export function createAuthRouter(deps: AuthRouterDeps) {
   const bootstrapRateLimiter =
     deps.rateLimiter ??
     createRateLimiter({ limit: BOOTSTRAP_LOGIN_MAX_ATTEMPTS, windowMs: BOOTSTRAP_LOGIN_WINDOW_MS });
+  // Rate limit for the unauthenticated OIDC login start, keyed by client IP.
+  // GET /login fires an outbound oidc.discover() to the IdP on every hit, so
+  // without a ceiling it is a cheap amplification/DoS lever against both the
+  // IdP and this process (GH #194). Same fixed-window limiter as the bootstrap
+  // path; the number is generous for a human who clicks "sign in" a few times
+  // but refuses a flood before the outbound discovery ever runs.
+  const loginRateLimiter =
+    deps.loginRateLimiter ??
+    createRateLimiter({ limit: LOGIN_MAX_ATTEMPTS, windowMs: LOGIN_WINDOW_MS });
+
+  // GH #196: a production deployment must never ship a cleartext session or
+  // OIDC-state cookie. Before this, `secure` was derived solely from APP_URL's
+  // scheme, so APP_URL=http://… in production (e.g. behind a TLS-terminating
+  // proxy the operator forgot to reflect in APP_URL) silently disabled Secure.
+  // Forcing Secure in production — rather than refusing to boot on a non-https
+  // APP_URL — is the fail-safe choice: it needs no operator action, adds no new
+  // boot failure mode, and still lets local/dev over http (isProduction=false)
+  // keep working from the scheme as before.
+  const cookieSecure = (url?: string): boolean =>
+    (deps.isProduction ?? false) || (url ?? "").startsWith("https");
 
   router.get("/me", requireSession(deps.sessions), (c) => c.json(c.get("user")));
 
@@ -105,6 +138,22 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     if (!ssoConfig || !masterKey || !appUrl) {
       return errorResponse(c, "sso_not_configured", 503);
     }
+    // Client IP from the reverse proxy. We take the LEFTMOST entry of
+    // X-Forwarded-For — the original client the trusted proxy recorded — rather
+    // than the raw header, since a client can prepend forged hops (GH #194).
+    // This assumes a reverse proxy we control always fronts this endpoint and
+    // rewrites/appends XFF; a direct-to-app exposure would need a hardened
+    // client-IP source. Absent header shares one bucket. (The bootstrap path
+    // keeps its own coarser keying; this endpoint gates on the client hop.)
+    const forwardedFor = c.req.header("x-forwarded-for");
+    const clientIp = forwardedFor?.split(",")[0]?.trim() || "unknown";
+    // Gate BEFORE the outbound oidc.discover(): a flood is refused cheaply and
+    // never amplifies into a discovery request against the IdP.
+    const gate = loginRateLimiter.check(clientIp);
+    if (!gate.allowed) {
+      c.header("Retry-After", String(gate.retryAfterSeconds));
+      return errorResponse(c, "too_many_requests", 429);
+    }
     const sso = await ssoConfig.get();
     if (!sso) {
       return errorResponse(c, "sso_not_configured", 503);
@@ -119,7 +168,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       httpOnly: true,
       path: "/",
       sameSite: "Lax",
-      secure: appUrl.startsWith("https"),
+      secure: cookieSecure(appUrl),
       maxAge: 600,
     });
     return c.redirect(
@@ -184,7 +233,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       httpOnly: true,
       path: "/",
       sameSite: "Lax",
-      secure: (appUrl ?? "").startsWith("https"),
+      secure: cookieSecure(appUrl),
       maxAge: ttl * 3600,
     });
     await audit.record({ actor: BOOTSTRAP_ADMIN_EMAIL, action: "bootstrap.login", ip });
@@ -239,7 +288,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         httpOnly: true,
         path: "/",
         sameSite: "Lax",
-        secure: appUrl.startsWith("https"),
+        secure: cookieSecure(appUrl),
         maxAge: ttl * 3600,
       });
       await audit.record({

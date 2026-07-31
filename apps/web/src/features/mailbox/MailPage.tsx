@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -11,14 +11,21 @@ import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
+import { MenuIcon } from "../../app/ui/icons";
 import { folderName } from "../../app/ui/folders";
 import { useToast } from "../../app/ui/toast";
-import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { buildEditDraft, emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useAuth } from "../auth/useAuth";
 import { PANE_MIN_WIDTH, useResizablePane } from "../../app/ui/useResizablePane";
+
+// The composer pulls in TipTap (the editor is by far the heaviest dependency in
+// this view), so it's split into its own chunk and only fetched when the user
+// actually opens it — keeping TipTap out of the first paint of the mail list.
+const Composer = lazy(() =>
+  import("../composer/Composer").then((module) => ({ default: module.Composer })),
+);
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -42,6 +49,10 @@ export function MailPage() {
   const composeMode = composeMatch?.[1];
   const composeEmailId = composeMatch?.[2];
   const [availableLabels, setAvailableLabels] = useState<string[]>([]);
+  // GH #177: below `lg` the sidebar is an off-canvas drawer instead of a
+  // fixed 230px column that squeezed the mail list to truncated slivers at
+  // narrow widths. Closed by default; the `lg:hidden` hamburger opens it.
+  const [navOpen, setNavOpen] = useState(false);
 
   const mailboxesQuery = useQuery({
     queryKey: ["mail", "mailboxes"],
@@ -379,7 +390,24 @@ export function MailPage() {
   const composeDraft = resolveComposeDraft();
 
   return (
-    <div className="flex flex-1 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* GH #177: narrow-viewport top bar carrying the hamburger that opens the
+          sidebar drawer. Hidden at `lg`+, where the sidebar is a static column
+          and needs no toggle. */}
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-panel px-3 lg:hidden">
+        <button
+          type="button"
+          onClick={() => setNavOpen(true)}
+          aria-label={t("mail.navMenu")}
+          aria-expanded={navOpen}
+          aria-controls="mailbox-nav"
+          aria-haspopup="dialog"
+          className="flex h-9 w-9 items-center justify-center rounded-[9px] text-ink transition hover:bg-hover"
+        >
+          <MenuIcon size={20} />
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
       <Sidebar
         mailboxes={mailboxes}
         selectedMailboxId={sidebarSelectedMailboxId}
@@ -397,6 +425,8 @@ export function MailPage() {
         customLabels={customLabels}
         onCreateLabel={(label) => createLabelMutation.mutate(label)}
         onDeleteLabel={(slug) => deleteLabelMutation.mutate(slug)}
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
       />
       <section
         aria-label={t("mail.listRegion")}
@@ -507,12 +537,15 @@ export function MailPage() {
         )}
       </section>
       {composeDraft && (
-        <Composer
-          initial={composeDraft}
-          onClose={removeComposeParam}
-          trashMailboxId={trashMailboxId}
-        />
+        <Suspense fallback={null}>
+          <Composer
+            initial={composeDraft}
+            onClose={removeComposeParam}
+            trashMailboxId={trashMailboxId}
+          />
+        </Suspense>
       )}
+      </div>
     </div>
   );
 }

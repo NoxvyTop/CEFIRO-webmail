@@ -2,9 +2,29 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { draftInputSchema, isQuoteSeparatorLine } from "@webmail/shared";
 import { errorResponse } from "../../core/error-response";
 import { DomainError } from "../../core/errors";
+import { log } from "../../core/logger";
+import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import { requireSession } from "../auth/middleware";
 import { requireMail } from "../mail/context";
 import type { AiDeps, AiVariables } from "./context";
+
+// Per-user quota for the paid-LLM endpoints (GH #194). Keyed by userId, NOT IP,
+// so one busy office behind a single NAT isn't throttled as a whole while an
+// individual account still can't burn unbounded provider spend. 20/min/user is
+// well above interactive use (summarize a message, draft a reply) yet caps a
+// scripted account long before the bill runs away; the window is short so a
+// legitimate user is unblocked within a minute.
+const AI_MAX_REQUESTS_PER_USER = 20;
+const AI_RATE_WINDOW_MS = 60_000;
+
+// Bounds on the total input handed to a thread summary (GH #195). The route
+// caps each message BODY at 512 KB via JMAP's maxBodyValueBytes, but nothing
+// capped the message COUNT, so a long thread produced a prompt of N × 512 KB —
+// runaway cost and provider context-window errors. Keep the most recent
+// messages (they carry the current state of the conversation) within a bounded
+// character budget; anything dropped/truncated is logged, never silently cut.
+const MAX_THREAD_SUMMARY_MESSAGES = 40;
+const MAX_THREAD_SUMMARY_CHARS = 60_000;
 
 /**
  * Fails fast with `ai_disabled` before anything else runs — in particular
@@ -15,6 +35,23 @@ function requireAiEnabled(deps: AiDeps): MiddlewareHandler<{ Variables: AiVariab
   return async (_c, next) => {
     if (!deps.aiClient) {
       throw new DomainError("ai_disabled", 501, "errors.ai_disabled");
+    }
+    await next();
+  };
+}
+
+/**
+ * Per-user quota gate (GH #194). Placed AFTER requireAiEnabled so a disabled
+ * server never burns a caller's budget, and keyed by userId so the limit is per
+ * account rather than per IP. On over-limit: 429 with Retry-After and the
+ * `ai_rate_limited` code, refused before any JMAP fetch or provider call.
+ */
+function requireAiQuota(limiter: RateLimiter): MiddlewareHandler<{ Variables: AiVariables }> {
+  return async (c, next) => {
+    const gate = limiter.check(c.get("user").userId);
+    if (!gate.allowed) {
+      c.header("Retry-After", String(gate.retryAfterSeconds));
+      return errorResponse(c, "ai_rate_limited", 429);
     }
     await next();
   };
@@ -68,6 +105,62 @@ export function stripQuotedTrail(text: string): string {
     .trim();
 }
 
+export type ThreadSummaryMessage = { from: string; body: string };
+
+export type CapThreadResult = {
+  messages: ThreadSummaryMessage[];
+  truncated: boolean;
+  /** How many whole messages were dropped to fit the count cap. */
+  droppedMessages: number;
+  /** How many characters were trimmed to fit the character budget. */
+  droppedChars: number;
+};
+
+/**
+ * Bounds the input to a thread summary (GH #195). Keeps the MOST RECENT
+ * messages — the tail of a conversation carries its current state and pending
+ * items — first honoring `maxMessages`, then a total-character budget applied
+ * from the newest message backward. The oldest kept message is truncated (not
+ * dropped) when only part of it fits, and the returned list stays in
+ * chronological order. Pure and exported so the cap is unit-tested directly and
+ * the route only has to log what it reports.
+ */
+export function capThreadMessages(
+  messages: ThreadSummaryMessage[],
+  limits: { maxMessages: number; maxChars: number },
+): CapThreadResult {
+  const droppedMessages = Math.max(0, messages.length - limits.maxMessages);
+  const kept = droppedMessages > 0 ? messages.slice(-limits.maxMessages) : [...messages];
+
+  // Fill the character budget from the newest message backward.
+  const bounded: ThreadSummaryMessage[] = [];
+  let remaining = limits.maxChars;
+  let droppedChars = 0;
+  for (let i = kept.length - 1; i >= 0; i--) {
+    const message = kept[i]!;
+    if (remaining <= 0) {
+      // No budget left even for this whole message → drop it entirely.
+      droppedChars += message.body.length;
+      continue;
+    }
+    if (message.body.length <= remaining) {
+      bounded.unshift(message);
+      remaining -= message.body.length;
+    } else {
+      droppedChars += message.body.length - remaining;
+      bounded.unshift({ from: message.from, body: message.body.slice(0, remaining) });
+      remaining = 0;
+    }
+  }
+
+  return {
+    messages: bounded,
+    truncated: droppedMessages > 0 || droppedChars > 0,
+    droppedMessages,
+    droppedChars,
+  };
+}
+
 type JmapThreadEmailAddress = { name?: string | null; email: string };
 
 type JmapThreadEmail = JmapEmailBody & {
@@ -91,10 +184,16 @@ function formatSender(from: JmapThreadEmailAddress[] | undefined): string {
  */
 export function createAiRouter(deps: AiDeps) {
   const router = new Hono<{ Variables: AiVariables }>();
+  // One limiter per router instance, living in this closure so its per-user
+  // counters persist across requests. Injectable so tests drive a small limit.
+  const aiRateLimiter =
+    deps.aiRateLimiter ??
+    createRateLimiter({ limit: AI_MAX_REQUESTS_PER_USER, windowMs: AI_RATE_WINDOW_MS });
+  const quota = requireAiQuota(aiRateLimiter);
 
   router.use("*", requireSession(deps.sessions));
 
-  router.post("/messages/:id/summarize", requireAiEnabled(deps), requireMail(deps), async (c) => {
+  router.post("/messages/:id/summarize", requireAiEnabled(deps), quota, requireMail(deps), async (c) => {
     const id = c.req.param("id");
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
@@ -131,7 +230,7 @@ export function createAiRouter(deps: AiDeps) {
   // Note on token cost: a long thread means more input tokens (no
   // truncation is applied here) — acceptable for now, revisit if long
   // threads become a cost/latency problem in practice.
-  router.post("/threads/:threadId/summarize", requireAiEnabled(deps), requireMail(deps), async (c) => {
+  router.post("/threads/:threadId/summarize", requireAiEnabled(deps), quota, requireMail(deps), async (c) => {
     const threadId = c.req.param("threadId");
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
@@ -165,11 +264,29 @@ export function createAiRouter(deps: AiDeps) {
       body: stripQuotedTrail(extractBodyText(email)),
     }));
 
-    const bullets = await deps.aiClient!.summarizeThread(messages);
+    // Bound the total prompt before the paid provider call (GH #195). No email
+    // content is logged — only the counts — so the truncation is observable
+    // without leaking bodies (see core/ai.ts privacy discipline).
+    const capped = capThreadMessages(messages, {
+      maxMessages: MAX_THREAD_SUMMARY_MESSAGES,
+      maxChars: MAX_THREAD_SUMMARY_CHARS,
+    });
+    if (capped.truncated) {
+      log("warn", "thread summary input truncated", {
+        traceId: c.get("traceId"),
+        threadId,
+        totalMessages: messages.length,
+        keptMessages: capped.messages.length,
+        droppedMessages: capped.droppedMessages,
+        droppedChars: capped.droppedChars,
+      });
+    }
+
+    const bullets = await deps.aiClient!.summarizeThread(capped.messages);
     return c.json({ bullets });
   });
 
-  router.post("/compose/draft", requireAiEnabled(deps), async (c) => {
+  router.post("/compose/draft", requireAiEnabled(deps), quota, async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();

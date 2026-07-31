@@ -421,6 +421,64 @@ describe("MessageList", () => {
     expect(JSON.parse(String(init.body))).toEqual({ mailboxIds: { arch1: true } });
   });
 
+  describe("listbox roving tabindex and arrow navigation", () => {
+    it("keeps only the selected option in the tab order, the rest at -1 (roving tabindex)", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      renderList(vi.fn(), { selectedThreadId: "t2" });
+
+      await screen.findByText("Hello there");
+      const options = screen.getAllByRole("option");
+      // emailUnread=t1 (first row), emailRead=t2 (selected) → only t2 tabbable.
+      expect(options[0]).toHaveAttribute("tabindex", "-1");
+      expect(options[1]).toHaveAttribute("tabindex", "0");
+    });
+
+    it("falls back to the first option in the tab order when nothing is selected", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      renderList(vi.fn(), { selectedThreadId: null });
+
+      await screen.findByText("Hello there");
+      const options = screen.getAllByRole("option");
+      expect(options[0]).toHaveAttribute("tabindex", "0");
+      expect(options[1]).toHaveAttribute("tabindex", "-1");
+    });
+
+    it("opens the next conversation and moves focus to it on ArrowDown", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      const { onSelect } = renderControlledList();
+
+      await screen.findByText("Hello there");
+      const options = screen.getAllByRole("option");
+      options[0]!.focus();
+      fireEvent.keyDown(options[0]!, { key: "ArrowDown" });
+
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "e2" }));
+      await vi.waitFor(() => expect(options[1]).toHaveFocus());
+    });
+
+    it("does nothing on ArrowUp from the first option (no conversation above it)", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      const { onSelect } = renderList();
+
+      await screen.findByText("Hello there");
+      const options = screen.getAllByRole("option");
+      fireEvent.keyDown(options[0]!, { key: "ArrowUp" });
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("opens the focused conversation on Enter", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      const { onSelect } = renderList();
+
+      await screen.findByText("Hello there");
+      const options = screen.getAllByRole("option");
+      fireEvent.keyDown(options[0]!, { key: "Enter" });
+
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "e1" }));
+    });
+  });
+
   it("ignores shortcut keys when the event target is an input", async () => {
     stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
     const { onSelect } = renderList();

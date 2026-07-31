@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createAuditRepo } from "../../infra/repos/audit";
@@ -9,8 +10,7 @@ import { createAuthRouter } from "./router";
 import { createSessionStore } from "./sessions";
 import { createBootstrap, type Bootstrap } from "../setup/bootstrap";
 
-const url = process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 function cookieValue(res: Response, name: string): string | null {
   for (const line of res.headers.getSetCookie()) {

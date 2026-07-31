@@ -1,18 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
-import { createAiRouter, stripQuotedTrail } from "./router";
+import { capThreadMessages, createAiRouter, stripQuotedTrail } from "./router";
+import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import type { AiClient } from "../../core/ai";
 import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
 
-const url = process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
@@ -148,9 +149,9 @@ function stubThreadJmap(
   return { client, calls };
 }
 
-function makeApp(aiClient: AiClient | null, jmap: JmapClient | null) {
+function makeApp(aiClient: AiClient | null, jmap: JmapClient | null, aiRateLimiter?: RateLimiter) {
   return createApp({
-    aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
+    aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient, aiRateLimiter }),
   });
 }
 
@@ -317,5 +318,72 @@ describe("ai router — compose draft", () => {
     expect(res.status).toBe(400);
     const json = (await res.json()) as { code: string };
     expect(json.code).toBe("invalid_body");
+  });
+});
+
+describe("ai router — per-user quota (GH #194)", () => {
+  it("returns 429 ai_rate_limited with Retry-After once the user exceeds the quota", async () => {
+    const ai = fakeAiClient();
+    const app = makeApp(ai, null, createRateLimiter({ limit: 2, windowMs: 60_000 }));
+
+    expect((await post(app, "/api/mail/compose/draft", { subject: "one" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { subject: "two" })).status).toBe(200);
+
+    const blocked = await post(app, "/api/mail/compose/draft", { subject: "three" });
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(((await blocked.json()) as { code: string }).code).toBe("ai_rate_limited");
+    // The blocked request must not have reached the paid AI provider.
+    expect(ai.draftCalls).toHaveLength(2);
+  });
+
+  it("does not count a request rejected by the software-level gate (ai_disabled)", async () => {
+    // aiClient is null → ai_disabled fires before the quota, so a disabled
+    // server never burns the caller's budget.
+    const app = makeApp(null, null, createRateLimiter({ limit: 1, windowMs: 60_000 }));
+    expect((await post(app, "/api/mail/compose/draft", { subject: "a" })).status).toBe(501);
+    expect((await post(app, "/api/mail/compose/draft", { subject: "b" })).status).toBe(501);
+  });
+
+  it("shares one budget across the different AI endpoints for the same user", async () => {
+    const ai = fakeAiClient();
+    const { client } = stubJmap("hello");
+    const app = makeApp(ai, client, createRateLimiter({ limit: 1, windowMs: 60_000 }));
+
+    expect((await post(app, "/api/mail/compose/draft", { subject: "x" })).status).toBe(200);
+    const blocked = await post(app, "/api/mail/messages/e1/summarize", {});
+    expect(blocked.status).toBe(429);
+    expect(((await blocked.json()) as { code: string }).code).toBe("ai_rate_limited");
+  });
+});
+
+describe("capThreadMessages (GH #195)", () => {
+  const msg = (from: string, body: string) => ({ from, body });
+
+  it("keeps every message when under both caps", () => {
+    const input = [msg("a", "hi"), msg("b", "there")];
+    const result = capThreadMessages(input, { maxMessages: 10, maxChars: 1000 });
+    expect(result.truncated).toBe(false);
+    expect(result.messages).toEqual(input);
+    expect(result.droppedMessages).toBe(0);
+  });
+
+  it("keeps only the most recent messages when the count cap is exceeded", () => {
+    const input = [msg("a", "1"), msg("b", "2"), msg("c", "3"), msg("d", "4")];
+    const result = capThreadMessages(input, { maxMessages: 2, maxChars: 100_000 });
+    expect(result.truncated).toBe(true);
+    expect(result.droppedMessages).toBe(2);
+    // Most recent two, still in chronological order.
+    expect(result.messages).toEqual([msg("c", "3"), msg("d", "4")]);
+  });
+
+  it("truncates the total character budget from the oldest kept message", () => {
+    const input = [msg("a", "AAAAA"), msg("b", "BBBBB"), msg("c", "CCCCC")];
+    const result = capThreadMessages(input, { maxMessages: 10, maxChars: 12 });
+    expect(result.truncated).toBe(true);
+    // 12 char budget: newest two whole (10 chars) + 2 chars of the oldest kept.
+    const totalChars = result.messages.reduce((n, m) => n + m.body.length, 0);
+    expect(totalChars).toBeLessThanOrEqual(12);
+    expect(result.messages.at(-1)).toEqual(msg("c", "CCCCC"));
   });
 });

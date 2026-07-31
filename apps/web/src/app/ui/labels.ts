@@ -146,7 +146,7 @@ export function labelDisplayName(label: string, customLabels: CustomLabel[] = []
 // (e.g. a different client writing "Diseño") — normalizing here means that
 // still dedupes into the canonical "diseno" entry instead of showing as a
 // separate, orphaned chip.
-const COMBINING_DIACRITICS_PATTERN = new RegExp("[\\u0300-\\u036f]", "g");
+const COMBINING_DIACRITICS_PATTERN = /[\u0300-\u036f]/g;
 
 function stripDiacritics(value: string): string {
   return value.normalize("NFD").replace(COMBINING_DIACRITICS_PATTERN, "");

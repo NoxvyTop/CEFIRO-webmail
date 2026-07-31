@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../db/client";
+import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
 import { createUsersRepo } from "./users";
 import { createFilterRulesRepo } from "./filter-rules";
 import { createVacationSettingsRepo } from "./vacation-settings";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 let userId: string;
 let otherUserId: string;

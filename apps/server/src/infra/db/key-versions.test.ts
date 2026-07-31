@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "./client";
+import { testDatabaseUrl } from "./test-db";
 import { migrate } from "./migrate";
 import { findUncoveredKeyVersions } from "./key-versions";
 import { createKeyring, importMasterKey } from "../../modules/credentials/crypto";
@@ -8,9 +9,7 @@ import { createSsoConfigRepo } from "../repos/sso-config";
 import { createMailCredentialsRepo } from "../repos/mail-credentials";
 import { createUsersRepo } from "../repos/users";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 // Versions no other test uses, so assertions stay independent of leftover rows.
 const ORPHAN_MAIL_VERSION = 4242;

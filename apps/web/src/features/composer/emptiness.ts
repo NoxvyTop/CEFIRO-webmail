@@ -23,7 +23,9 @@ export function isComposerBodyEmpty(bodyHtml: string): boolean {
   const doc = new DOMParser().parseFromString(bodyHtml, "text/html");
   doc.body
     .querySelectorAll(`[${SIGNATURE_MARKER_ATTR}], [${QUOTE_MARKER_ATTR}]`)
-    .forEach((marker) => marker.remove());
+    .forEach((marker) => {
+      marker.remove();
+    });
 
   if ((doc.body.textContent ?? "").trim().length > 0) return false;
   // A user-inserted image carries no text but is still real content.

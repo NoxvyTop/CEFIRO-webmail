@@ -96,7 +96,7 @@ export function LoginPage() {
         <p className="mb-8 text-[13.5px] text-muted">{t("auth.subtitle")}</p>
       </div>
       {error && KNOWN_ERRORS.has(error) && (
-        <p className="mb-4 text-sm text-danger">{t(`auth.errors.${error}`)}</p>
+        <p role="alert" className="mb-4 text-sm text-danger">{t(`auth.errors.${error}`)}</p>
       )}
       <div className="flex w-full max-w-[400px] flex-col rounded-2xl border border-line bg-panel p-7 shadow-card">
         {mode?.bootstrapMode !== true && (
@@ -152,10 +152,14 @@ export function LoginPage() {
                     setEmail(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, email: undefined }));
                   }}
+                  aria-invalid={fieldErrors.email ? true : undefined}
+                  aria-describedby={fieldErrors.email ? "bootstrap-email-error" : undefined}
                   className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
                 />
                 {fieldErrors.email && (
-                  <p className="text-[12.5px] text-danger">{fieldErrors.email}</p>
+                  <p id="bootstrap-email-error" role="alert" className="text-[12.5px] text-danger">
+                    {fieldErrors.email}
+                  </p>
                 )}
               </div>
               <div className="flex flex-col gap-1.5">
@@ -170,10 +174,14 @@ export function LoginPage() {
                     setPassword(event.target.value);
                     setFieldErrors((prev) => ({ ...prev, password: undefined }));
                   }}
+                  aria-invalid={fieldErrors.password ? true : undefined}
+                  aria-describedby={fieldErrors.password ? "bootstrap-password-error" : undefined}
                   className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
                 />
                 {fieldErrors.password && (
-                  <p className="text-[12.5px] text-danger">{fieldErrors.password}</p>
+                  <p id="bootstrap-password-error" role="alert" className="text-[12.5px] text-danger">
+                    {fieldErrors.password}
+                  </p>
                 )}
               </div>
               <button
@@ -183,7 +191,7 @@ export function LoginPage() {
                 {t("auth.bootstrap.submit")}
               </button>
               {bootstrapError && (
-                <p className="text-[12.5px] text-danger">
+                <p role="alert" className="text-[12.5px] text-danger">
                   {t(
                     bootstrapError === "rate_limited"
                       ? "auth.bootstrap.errors.too_many_requests"

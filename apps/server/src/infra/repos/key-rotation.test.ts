@@ -1,15 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb, type Db } from "../db/client";
+import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
 import { createKeyring, importMasterKey } from "../../modules/credentials/crypto";
 import { createMailCredentialsRepo } from "./mail-credentials";
 import { createSsoConfigRepo } from "./sso-config";
 import { createUsersRepo } from "./users";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 function keyB64(): string {
   const raw = crypto.getRandomValues(new Uint8Array(32));
@@ -35,16 +34,29 @@ function dbFailingAfterFirstQuery(base: Db): Db {
   });
 }
 
+// Every user this suite creates, so afterAll can remove the mail_credentials
+// rows it seeded (GH #181): they carry test key versions (2, 4, 9, 4242) that,
+// left behind in a shared database, make the boot-time key-ring guard refuse to
+// start the server. Deleting the users cascades to mail_credentials
+// (migrations/0001_initial.sql: `on delete cascade`).
+const createdUserIds: string[] = [];
+
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
 });
-afterAll(() => sql.end());
+afterAll(async () => {
+  if (createdUserIds.length > 0) {
+    await sql`delete from users where id = any(${createdUserIds}::uuid[])`;
+  }
+  await sql.end();
+});
 
 async function createUser(): Promise<string> {
   const user = await createUsersRepo(sql).create({
     email: `rot-${crypto.randomUUID()}@noxvytop.com`,
     displayName: "Rotation User",
   });
+  createdUserIds.push(user.id);
   return user.id;
 }
 

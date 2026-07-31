@@ -4,7 +4,13 @@
   "type": "module",
   "workspaces": ["apps/*", "packages/*", "e2e"],
   "scripts": {
+    "lint": "biome ci .",
     "typecheck": "bun run --filter '*' typecheck",
-    "test": "bun run --filter '*' test"
+    "test": "bun run --filter '*' test",
+    "coverage": "bun run --filter '@webmail/web' coverage && bun run --filter '@webmail/server' coverage"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.6",
+    "@vitest/coverage-v8": "3.2.6"
   }
 }

@@ -1,8 +1,8 @@
-import { type FormEvent, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import type { AdminUser, CreateUserInput } from "@webmail/shared";
+import type { CreateUserInput } from "@webmail/shared";
 import {
   createAdminUser, fetchAdminInstance, fetchAdminSso, fetchAdminUsers,
   updateAdminInstance, updateAdminSso,
@@ -46,15 +46,6 @@ const metricValueClass = "mt-1 text-[27px] font-semibold tracking-tight tabular-
 const metricBannerClass = "mt-2 text-[40px] font-semibold leading-none tracking-tight tabular-nums";
 const metricStatClass = `${metricCardClass} flex flex-col justify-center`;
 
-function filterUsers(users: AdminUser[], term: string): AdminUser[] {
-  const normalized = term.trim().toLowerCase();
-  if (!normalized) return users;
-  return users.filter(
-    (user) =>
-      user.email.toLowerCase().includes(normalized) || user.displayName.toLowerCase().includes(normalized),
-  );
-}
-
 type NewUserForm = { email: string; displayName: string; role: "employee" | "admin"; mailPassword: string };
 
 const EMPTY_NEW_USER: NewUserForm = { email: "", displayName: "", role: "employee", mailPassword: "" };
@@ -66,15 +57,36 @@ const EMPTY_SSO_FORM: SsoForm = { issuer: "", clientId: "", clientSecret: "", sc
 export function AdminPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const usersQuery = useQuery({ queryKey: USERS_QUERY_KEY, queryFn: fetchAdminUsers });
-  const ssoQuery = useQuery({ queryKey: SSO_QUERY_KEY, queryFn: fetchAdminSso });
-  const instanceQuery = useQuery({ queryKey: INSTANCE_QUERY_KEY, queryFn: fetchAdminInstance });
 
   const [newUser, setNewUser] = useState(EMPTY_NEW_USER);
   const [ssoForm, setSsoForm] = useState(EMPTY_SSO_FORM);
   const [userSearch, setUserSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [userPage, setUserPage] = useState(0);
   const [section, setSection] = useState<Section>("resumen");
+
+  // Debounce the search box so each keystroke doesn't fire a server request
+  // (search is server-side now — GH #153). The applied value is what the query
+  // keys off; the page is reset the moment the raw input changes (below).
+  useEffect(() => {
+    const handle = setTimeout(() => setAppliedSearch(userSearch.trim()), 250);
+    return () => clearTimeout(handle);
+  }, [userSearch]);
+
+  const usersQuery = useQuery({
+    queryKey: [...USERS_QUERY_KEY, { page: userPage, search: appliedSearch }],
+    queryFn: () =>
+      fetchAdminUsers({
+        page: userPage + 1,
+        pageSize: USERS_PAGE_SIZE,
+        search: appliedSearch || undefined,
+      }),
+    // Keep the previous page visible while the next one loads so the table and
+    // the Resumen metrics don't flash empty on every page/search change.
+    placeholderData: keepPreviousData,
+  });
+  const ssoQuery = useQuery({ queryKey: SSO_QUERY_KEY, queryFn: fetchAdminSso });
+  const instanceQuery = useQuery({ queryKey: INSTANCE_QUERY_KEY, queryFn: fetchAdminInstance });
 
   const createMutation = useMutation({
     mutationFn: (input: CreateUserInput) => createAdminUser(input),
@@ -114,22 +126,27 @@ export function AdminPage() {
     ssoMutation.mutate(ssoForm);
   }
 
-  const users = usersQuery.data ?? [];
+  const pageData = usersQuery.data;
+  const pagedUsers = pageData?.users ?? [];
+  const total = pageData?.total ?? 0;
+  const tenantUserCount = pageData?.stats?.total ?? 0;
   const sso = ssoQuery.data;
 
-  const filteredUsers = useMemo(() => filterUsers(users, userSearch), [users, userSearch]);
-  const pageCount = Math.max(1, Math.ceil(filteredUsers.length / USERS_PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / USERS_PAGE_SIZE));
   const currentPage = Math.min(userPage, pageCount - 1);
   const pageStart = currentPage * USERS_PAGE_SIZE;
-  const pagedUsers = filteredUsers.slice(pageStart, pageStart + USERS_PAGE_SIZE);
 
   const metrics = useMemo(() => {
-    const total = users.length;
-    const active = users.filter((user) => user.active).length;
-    const archived = total - active;
-    const mailboxLinked = users.filter((user) => user.mailboxLinked).length;
-    return { total, active, archived, mailboxLinked };
-  }, [users]);
+    const stats = pageData?.stats;
+    const totalUsers = stats?.total ?? 0;
+    const active = stats?.active ?? 0;
+    return {
+      total: totalUsers,
+      active,
+      archived: totalUsers - active,
+      mailboxLinked: stats?.mailboxLinked ?? 0,
+    };
+  }, [pageData?.stats]);
 
   function handleUserSearchChange(value: string) {
     setUserSearch(value);
@@ -275,10 +292,10 @@ export function AdminPage() {
                     {t("admin.errors.load")}
                   </p>
                 )}
-                {!usersQuery.isError && !usersQuery.isLoading && users.length === 0 && (
+                {!usersQuery.isError && !usersQuery.isLoading && tenantUserCount === 0 && (
                   <p>{t("admin.empty")}</p>
                 )}
-                {users.length > 0 && (
+                {tenantUserCount > 0 && (
                   <>
                     <input
                       type="search"
@@ -288,7 +305,7 @@ export function AdminPage() {
                       aria-label={t("admin.search.placeholder")}
                       className={`${inputClass} w-full max-w-xs`}
                     />
-                    {filteredUsers.length === 0 ? (
+                    {total === 0 ? (
                       <p>{t("admin.search.noResults")}</p>
                     ) : (
                       <>
@@ -315,7 +332,7 @@ export function AdminPage() {
                             {t("admin.pagination.range", {
                               from: pageStart + 1,
                               to: pageStart + pagedUsers.length,
-                              total: filteredUsers.length,
+                              total,
                             })}
                           </p>
                           <div className="flex items-center gap-2">

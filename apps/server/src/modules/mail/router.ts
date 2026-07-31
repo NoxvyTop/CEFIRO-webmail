@@ -20,9 +20,11 @@ import {
 import { requireSession } from "../auth/middleware";
 import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { errorResponse } from "../../core/error-response";
+import { clearIdleTimeout } from "../../core/idle-timeout";
 import { log } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
-import { harvestContacts } from "./contacts-harvest";
+import { harvestOnMailArrival } from "./contacts-harvest";
+import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthVerdict } from "./sender-auth";
 import type { JmapAuth, JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
 
@@ -522,13 +524,45 @@ export function createMailRouter(deps: MailDeps) {
       return errorResponse(c, "stalwart_unavailable", 502);
     }
 
-    return new Response(upstream.body, {
-      headers: {
-        "content-type": "text/event-stream",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-      },
-    });
+    // This connection legitimately sits idle between Stalwart's 30s keepalive
+    // pings, longer than Bun.serve's 10s global idleTimeout. Clear the idle
+    // deadline for THIS socket only so it isn't force-closed and reconnect-
+    // stormed (GH #204); the global default still guards every other route.
+    clearIdleTimeout(c.req.raw);
+
+    const headers = {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+    };
+
+    // GH #180: this subscription (types=Email,Mailbox) is where the server
+    // learns mail arrived — once, instead of re-harvesting on every read. Tap
+    // it so an Email state advance triggers a best-effort contact harvest,
+    // while the bytes pass through to the client untouched. Only when a contacts
+    // repo is wired; otherwise the stream is proxied exactly as before.
+    const contacts = deps.contacts;
+    const jmap = deps.jmap;
+    if (contacts && jmap) {
+      const user = c.get("user");
+      const auth = c.get("jmapAuth");
+      const tapped = tapEmailStateChanges({
+        source: upstream.body,
+        accountId: session.accountId,
+        onEmailStateChange: () =>
+          harvestOnMailArrival({
+            contacts,
+            jmap,
+            auth,
+            session,
+            userId: user.userId,
+            ownerEmail: user.email,
+          }),
+      });
+      return new Response(tapped, { headers });
+    }
+
+    return new Response(upstream.body, { headers });
   });
 
   router.post("/blobs", requireMail(deps), async (c) => {
@@ -716,23 +750,10 @@ export function createMailRouter(deps: MailDeps) {
       emails: sorted.map(toEmailSummary),
     };
 
-    // GH #124: best-effort address-book harvest from this page's senders.
-    // Only runs when a contacts repo is wired (deps.contacts is optional —
-    // see context.ts) and never affects this response: harvestContacts logs
-    // and swallows its own failures instead of throwing.
-    if (deps.contacts) {
-      const user = c.get("user");
-      await harvestContacts({
-        contacts: deps.contacts,
-        jmap: deps.jmap!,
-        auth: c.get("jmapAuth"),
-        session,
-        userId: user.userId,
-        ownerEmail: user.email,
-        emails: sorted,
-      });
-    }
-
+    // GH #180: contact harvesting used to run here, on every read. It now runs
+    // once per delivery from the JMAP event subscription (see GET /events), so
+    // this route no longer harvests — reading the inbox is not a "mail arrived"
+    // signal.
     return c.json(page);
   });
 
@@ -964,17 +985,86 @@ export function createMailRouter(deps: MailDeps) {
       ],
     ]);
 
-    const emailSetResult = (sendResponses[0]?.[1] ?? {}) as { notCreated?: Record<string, unknown> };
+    const emailSetResult = (sendResponses[0]?.[1] ?? {}) as {
+      created?: Record<string, { id?: string }>;
+      notCreated?: Record<string, unknown>;
+    };
     const submissionResult = (sendResponses[1]?.[1] ?? {}) as {
       notCreated?: Record<string, unknown>;
       created?: Record<string, unknown>;
     };
+    // RFC 8621 §7.5: onSuccessUpdateEmail is applied by a SEPARATE implicit
+    // Email/set that the server runs AFTER the submission and appends to the
+    // response array under the EmailSubmission/set method-call id ("s"). This
+    // third response — never inspected before — is the only place that reports
+    // whether the just-sent message was actually moved to Sent and un-flagged
+    // as a draft.
+    const onSuccessUpdateResult = (sendResponses[2]?.[1] ?? {}) as {
+      updated?: Record<string, unknown>;
+      notUpdated?: Record<string, unknown>;
+    };
 
+    // Positive confirmation, matching the draft-save (#149) and destroy (#133)
+    // paths: an empty notCreated is NOT proof of success. The draft must appear
+    // in `created` (its id is what the submission's #draft back-reference
+    // resolves to) and the submission must appear in `created` before the mail
+    // is treated as sent. Without both, nothing left the outbox — report the
+    // failure rather than a phantom success that would hide a non-delivery.
+    const draftId = emailSetResult.created?.draft?.id;
+    const submissionCreated = Boolean(submissionResult.created && "sub" in submissionResult.created);
     if (
       (emailSetResult.notCreated && "draft" in emailSetResult.notCreated) ||
-      (submissionResult.notCreated && "sub" in submissionResult.notCreated)
+      !draftId ||
+      (submissionResult.notCreated && "sub" in submissionResult.notCreated) ||
+      !submissionCreated
     ) {
       return errorResponse(c, "send_failed", 502);
+    }
+
+    // The submission is confirmed, so the mail HAS gone out. RFC 8620 §5.3
+    // makes the implicit onSuccessUpdateEmail non-transactional with respect to
+    // the submission, so the move to Sent / $draft-clear can still have failed.
+    // If it did not positively confirm the draft's update, erroring now would
+    // be wrong twice over: it would claim the send failed when it did not, and
+    // it would leave the sent message in Drafts still flagged $draft — a fresh,
+    // re-sendable draft that invites a duplicate delivery. Instead, best-effort
+    // re-apply the same idempotent patch (as the draft-replace path does for
+    // its own non-transactional cleanup) so the sent message stops reading as a
+    // draft, and still report the send as successful.
+    const updateConfirmed = Boolean(
+      onSuccessUpdateResult.updated && draftId in onSuccessUpdateResult.updated,
+    );
+    if (!updateConfirmed) {
+      try {
+        const remediation = await deps.jmap!.request(auth, session, [
+          [
+            "Email/set",
+            {
+              accountId: session.accountId,
+              update: {
+                [draftId]: {
+                  [`mailboxIds/${draftsId}`]: null,
+                  [`mailboxIds/${sentId}`]: true,
+                  "keywords/$draft": null,
+                },
+              },
+            },
+            "u",
+          ],
+        ]);
+        const remediationResult = (remediation[0]?.[1] ?? {}) as {
+          updated?: Record<string, unknown>;
+        };
+        if (!(remediationResult.updated && draftId in remediationResult.updated)) {
+          log("warn", "send: post-submission move to Sent could not be confirmed after remediation", {
+            emailId: draftId,
+          });
+        }
+      } catch {
+        log("warn", "send: remediation of the post-submission move to Sent threw", {
+          emailId: draftId,
+        });
+      }
     }
 
     return c.json({ ok: true });

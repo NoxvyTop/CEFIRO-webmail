@@ -23,6 +23,9 @@ function aiErrorKey(error: unknown): string | null {
   if (error instanceof MailApiError) {
     if (error.code === "ai_disabled") return null;
     if (error.code === "ai_provider_error") return "mail.errors.ai_provider_error";
+    // GH #194: the per-user AI quota (429). Tell the user to wait rather than
+    // showing the generic failure — it is transient and self-clearing.
+    if (error.code === "ai_rate_limited") return "mail.errors.ai_rate_limited";
     // GH #165: "the provider never answered" is a different thing to tell the
     // user than "the provider answered with garbage" — one is worth retrying
     // right away, the other is not. The server keeps them apart as separate

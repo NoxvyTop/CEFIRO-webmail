@@ -70,5 +70,14 @@ Build multi-stage (`oven/bun:1.3` → `1.3-slim`), usuario no root, expone 8080:
 docker build -t ghcr.io/noxvytop/cefiro-webmail:<version> .
 ```
 
-El despliegue vive en [NoxvyTop/docker-cefiro](https://github.com/NoxvyTop/docker-cefiro),
-que consume la imagen publicada en GHCR pinneada por versión.
+CI publica en GHCR, en cada release, una etiqueta móvil **más** una inmutable:
+
+| Origen | Etiquetas |
+|---|---|
+| push a `preproduc` | `:staging` + `:sha-<commit>` |
+| push a `main` | `:latest` + `:sha-<commit>` |
+| tag `vX.Y.Z` | `:vX.Y.Z` + `:latest` + `:sha-<commit>` |
+
+El despliegue vive en [NoxvyTop/docker-cefiro](https://github.com/NoxvyTop/docker-cefiro).
+Para producción, **pinnear a `:sha-<commit>` o a `:vX.Y.Z`** (no a `:latest`), de
+modo que el rollback sea volver a una imagen exacta anterior.

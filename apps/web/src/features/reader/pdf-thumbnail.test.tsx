@@ -165,8 +165,16 @@ describe("PdfThumbnail", () => {
       <PdfThumbnail blobId="b1" name="report.pdf" type="application/pdf" fallback={<span>fallback-icon</span>} />,
     );
 
-    await waitFor(() => expect(renderMock).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByText("fallback-icon")).not.toBeInTheDocument());
+    // Generous explicit timeouts: this asserts the END of a multi-step async
+    // pipeline (fetch -> dynamic import("pdfjs-dist") -> getDocument.promise ->
+    // getPage -> render), and waitFor's default 1000ms is too tight for that
+    // chain under a loaded CI container — it passed locally but flaked in CI.
+    // The timeout bounds the wait; it doesn't slow the happy path, which
+    // resolves in a few ms.
+    await waitFor(() => expect(renderMock).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(screen.queryByText("fallback-icon")).not.toBeInTheDocument(), {
+      timeout: 5000,
+    });
   });
 
   it("does not let a stale (superseded) attachment's slow render land after the attachment has changed", async () => {
@@ -206,7 +214,7 @@ describe("PdfThumbnail", () => {
       />,
     );
 
-    await waitFor(() => expect(getDocumentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getDocumentMock).toHaveBeenCalledTimes(1), { timeout: 5000 });
 
     // The stale first attachment's fetch resolves only now, well after the
     // component already moved on to the second attachment.
@@ -241,8 +249,8 @@ describe("PdfThumbnail", () => {
         <PdfThumbnail blobId="b1" name="report.pdf" type="application/pdf" fallback={<span>fallback-icon</span>} />,
       );
 
-      await waitFor(() => expect(renderMock).toHaveBeenCalled());
-      await waitFor(() => expect(destroyMock).toHaveBeenCalled());
+      await waitFor(() => expect(renderMock).toHaveBeenCalled(), { timeout: 5000 });
+      await waitFor(() => expect(destroyMock).toHaveBeenCalled(), { timeout: 5000 });
     });
 
     it("destroys the loading task on unmount if the attachment changes before rendering completes", async () => {
@@ -273,7 +281,7 @@ describe("PdfThumbnail", () => {
       // to (still-pending) getPage — by this point the loading task is
       // already held via the component's ref, so unmounting now must
       // destroy it rather than leaking it.
-      await waitFor(() => expect(getPageMock).toHaveBeenCalled());
+      await waitFor(() => expect(getPageMock).toHaveBeenCalled(), { timeout: 5000 });
       expect(destroyMock).not.toHaveBeenCalled();
       unmount();
 

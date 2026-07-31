@@ -1,6 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// Routes and the Composer are now code-split (React.lazy + Suspense), so the
+// components under test resolve through a dynamic import. Under the parallel
+// test pool (maxWorkers 50%) that import — plus the heavy TipTap mount, made
+// heavier by the composer's autosave (#178) — can take longer than a short
+// findBy*/waitFor budget before they give up, which shows up as flaky "dialog
+// never appeared" timeouts only under load. 5s still raced the lazy composer
+// under contention; 10s gives those Suspense boundaries room while staying
+// under the 15s per-test timeout that guards a genuinely stuck render.
+configure({ asyncUtilTimeout: 10000 });
 
 // jsdom's AbortController/AbortSignal are not recognized by Node's built-in
 // fetch (undici), which validates `signal` against its own internal
@@ -18,6 +28,7 @@ import { cleanup } from "@testing-library/react";
 // AbortSignal that forwards abort state from the original signal.
 const NativeRequest = globalThis.Request;
 class PatchedRequest extends NativeRequest {
+  // biome-ignore lint/correctness/noUnreachableSuper: the two super() calls are on mutually exclusive try/catch paths — exactly one runs per construction (the AbortSignal fallback bridge described above).
   constructor(input: RequestInfo | URL, init?: RequestInit) {
     try {
       super(input, init);

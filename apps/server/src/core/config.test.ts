@@ -260,4 +260,85 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ ...validEnv, AI_TIMEOUT_MS: "1500.5" })).toThrow();
     });
   });
+
+  describe("NODE_ENV / isProduction (GH #196)", () => {
+    it("defaults nodeEnv to development and isProduction to false", () => {
+      const config = loadConfig(validEnv);
+      expect(config.nodeEnv).toBe("development");
+      expect(config.isProduction).toBe(false);
+    });
+
+    it("marks isProduction true only when NODE_ENV is exactly production", () => {
+      expect(loadConfig({ ...validEnv, NODE_ENV: "production" }).isProduction).toBe(true);
+      expect(loadConfig({ ...validEnv, NODE_ENV: "staging" }).isProduction).toBe(false);
+      expect(loadConfig({ ...validEnv, NODE_ENV: "test" }).isProduction).toBe(false);
+    });
+
+    it("carries the raw NODE_ENV value through", () => {
+      expect(loadConfig({ ...validEnv, NODE_ENV: "staging" }).nodeEnv).toBe("staging");
+    });
+  });
+
+  describe("global body limit (GH #195)", () => {
+    it("defaults maxBodyBytes so no deployment has to set one", () => {
+      expect(loadConfig(validEnv).maxBodyBytes).toBe(2 * 1024 * 1024);
+    });
+
+    it("reads a MAX_BODY_BYTES override", () => {
+      expect(loadConfig({ ...validEnv, MAX_BODY_BYTES: "524288" }).maxBodyBytes).toBe(524_288);
+    });
+
+    it("treats an empty MAX_BODY_BYTES as absent", () => {
+      expect(loadConfig({ ...validEnv, MAX_BODY_BYTES: "" }).maxBodyBytes).toBe(2 * 1024 * 1024);
+    });
+
+    it("rejects a zero, negative or fractional MAX_BODY_BYTES", () => {
+      expect(() => loadConfig({ ...validEnv, MAX_BODY_BYTES: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, MAX_BODY_BYTES: "-1" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, MAX_BODY_BYTES: "1.5" })).toThrow();
+    });
+  });
+
+  describe("database pool + timeouts (GH #191)", () => {
+    it("defaults the pool and every DB timeout so no deployment has to set one", () => {
+      const config = loadConfig(validEnv);
+      expect(config.dbPoolMax).toBe(10);
+      expect(config.dbConnectTimeoutS).toBe(10);
+      expect(config.dbIdleTimeoutS).toBe(300);
+      expect(config.dbStatementTimeoutMs).toBe(30_000);
+    });
+
+    it("reads DB_POOL_MAX, DB_CONNECT_TIMEOUT_S, DB_IDLE_TIMEOUT_S and DB_STATEMENT_TIMEOUT_MS overrides", () => {
+      const config = loadConfig({
+        ...validEnv,
+        DB_POOL_MAX: "20",
+        DB_CONNECT_TIMEOUT_S: "5",
+        DB_IDLE_TIMEOUT_S: "120",
+        DB_STATEMENT_TIMEOUT_MS: "15000",
+      });
+      expect(config.dbPoolMax).toBe(20);
+      expect(config.dbConnectTimeoutS).toBe(5);
+      expect(config.dbIdleTimeoutS).toBe(120);
+      expect(config.dbStatementTimeoutMs).toBe(15_000);
+    });
+
+    it("treats an empty DB variable as absent", () => {
+      expect(loadConfig({ ...validEnv, DB_STATEMENT_TIMEOUT_MS: "" }).dbStatementTimeoutMs).toBe(
+        30_000,
+      );
+    });
+
+    it("rejects a non-numeric DB limit", () => {
+      expect(() => loadConfig({ ...validEnv, DB_POOL_MAX: "many" })).toThrow();
+    });
+
+    it("rejects a zero or negative DB limit, which would break the pool", () => {
+      expect(() => loadConfig({ ...validEnv, DB_POOL_MAX: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, DB_CONNECT_TIMEOUT_S: "-1" })).toThrow();
+    });
+
+    it("rejects a fractional DB limit", () => {
+      expect(() => loadConfig({ ...validEnv, DB_IDLE_TIMEOUT_S: "12.5" })).toThrow();
+    });
+  });
 });
