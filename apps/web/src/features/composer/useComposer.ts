@@ -1,13 +1,24 @@
 import type { SaveDraftInput, SendEmailInput } from "@webmail/shared";
-import { useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import { saveDraft as saveDraftRequest, sendEmail, uploadAttachment } from "./api";
 import { fetchAiDraft } from "./aiApi";
+import { isComposerDraftEmpty } from "./emptiness";
 import { MailApiError, updateMessage } from "../mailbox/api";
 import type { ComposerDraft } from "./reply";
 import { stripSignatureMarkers } from "./signature";
 
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type PendingUpload = { id: string; name: string; size: number; progress: number; error: boolean };
+
+// GH #178: the idle window before an in-progress compose is autosaved. Long
+// enough that ordinary typing never triggers a save mid-word (the timer is
+// reset on every keystroke), short enough that an accidental close or crash
+// loses at most a second or two of work.
+export const AUTOSAVE_DEBOUNCE_MS = 1500;
+
+// The autosave indicator's user-visible state (GH #178). "idle" renders
+// nothing at all — a brand-new, untouched composer must not show a status.
+export type AutosaveStatus = "idle" | "saving" | "saved" | "error";
 
 export type ComposerState = {
   draft: ComposerDraft;
@@ -19,6 +30,12 @@ export type ComposerState = {
   // offered by the Escape-to-close discard confirmation.
   savingDraft: boolean;
   saveDraftError: string | null;
+  // GH #178: drives the subtle autosave indicator. Independent of
+  // savingDraft/saveDraftError above, which belong to the explicit "Save to
+  // drafts" button in the discard confirmation — the two run through the same
+  // save pipeline but surface in different places and must not clobber each
+  // other's UI.
+  autosaveStatus: AutosaveStatus;
   aiDrafting: boolean;
   aiDraftError: string | null;
   aiDraftNotice: boolean;
@@ -38,6 +55,9 @@ type Action =
   | { type: "saveDraftStart" }
   | { type: "saveDraftFailed"; error: string }
   | { type: "saveDraftSucceeded" }
+  | { type: "autosaveStart" }
+  | { type: "autosaveSaved" }
+  | { type: "autosaveError" }
   | { type: "aiDraftStart" }
   | { type: "aiDraftNeedsSubject" }
   | { type: "aiDraftSucceeded"; bodyHtml: string }
@@ -86,6 +106,12 @@ function reducer(state: ComposerState, action: Action): ComposerState {
       return { ...state, savingDraft: false, saveDraftError: action.error };
     case "saveDraftSucceeded":
       return { ...state, savingDraft: false, saveDraftError: null };
+    case "autosaveStart":
+      return { ...state, autosaveStatus: "saving" };
+    case "autosaveSaved":
+      return { ...state, autosaveStatus: "saved" };
+    case "autosaveError":
+      return { ...state, autosaveStatus: "error" };
     case "aiDraftStart":
       return { ...state, aiDrafting: true, aiDraftError: null, aiDraftNotice: false };
     case "aiDraftNeedsSubject":
@@ -114,6 +140,7 @@ function initState(draft: ComposerDraft): ComposerState {
     sendError: null,
     savingDraft: false,
     saveDraftError: null,
+    autosaveStatus: "idle",
     aiDrafting: false,
     aiDraftError: null,
     aiDraftNotice: false,
@@ -172,6 +199,16 @@ function buildComposePayload(
   };
 }
 
+// GH #178: a stable fingerprint of everything a saved draft persists, used to
+// tell "the content actually changed" from "React re-rendered". Autosave skips
+// a save whenever this matches what was last persisted, so returning the body
+// to an already-saved state, or a re-render that touches no compose field,
+// never fires a redundant save. Built from the same payload the save sends
+// (markers kept, exactly as saveDraft persists them) so the two cannot drift.
+function serializeDraftPayload(draft: ComposerDraft, attachments: Attachment[]): string {
+  return JSON.stringify(buildComposePayload(draft, attachments, { stripMarkers: false }));
+}
+
 export function useComposer(
   initial: ComposerDraft,
   // Present when editing an existing draft (compose=draft:<id>, see
@@ -186,21 +223,170 @@ export function useComposer(
   removeAttachment(blobId: string): void;
   send(): Promise<boolean>;
   saveDraft(): Promise<boolean>;
+  discardDraft(): void;
   draftWithAi(): Promise<void>;
 } {
   const [state, dispatch] = useReducer(reducer, initial, initState);
-  // Synchronous re-entrancy lock for saveDraft (GH #125): React state
-  // updates from dispatch don't apply until the next render, so two
-  // saveDraft() calls issued back-to-back within the same synchronous tick
-  // (e.g. a double-click before the button's disabled state can commit)
-  // would both still see the OLD state.savingDraft value and both proceed.
-  // A ref is mutated immediately, so it correctly blocks the second call
-  // regardless of render timing.
-  const savingDraftRef = useRef(false);
+
+  // Always-current mirror of state for the async save pipeline. Autosave runs
+  // out of a debounce timer and can re-run after an await (see the coalescing
+  // loop below), so it must read the latest draft/attachments at the moment it
+  // actually saves — not the values captured when a timer was scheduled.
+  // Written during render (a ref write, not a state update) so it is in place
+  // before any effect or timer callback fires.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // The id of the draft this compose session currently owns server-side.
+  // Seeded from initial.originalDraftId when reopening an existing draft, then
+  // advanced to the id every successful save returns. GH #178: POST /drafts is
+  // create-then-replace, not update (RFC 8620 §5.3 — Email/set create+update
+  // aren't transactional), so each save passes this as originalDraftId to make
+  // the server supersede the previous copy instead of leaving a duplicate.
+  const currentDraftIdRef = useRef<string | undefined>(initial.originalDraftId);
+
+  // Single-save-in-flight lock shared by autosave and the explicit "Save to
+  // drafts" action. GH #178: overlapping saves could create two drafts, or
+  // trash the copy that was just created, so only one save is ever in flight;
+  // a save requested while one runs is coalesced into pendingSaveRef and picked
+  // up by the loop below once the current save settles, always with the latest
+  // content. This also preserves GH #125's re-entrancy guard for saveDraft().
+  const saveInFlightRef = useRef(false);
+  const pendingSaveRef = useRef(false);
+
+  // Fingerprint of the last successfully persisted payload. Seeded from the
+  // initial draft so reopening an existing draft doesn't autosave an unchanged
+  // copy on open, and advanced on every save so identical content is never
+  // saved twice.
+  const lastSavedPayloadRef = useRef<string>(
+    serializeDraftPayload(initial, initial.attachments ?? []),
+  );
+
+  // Set once the compose session is closing on purpose — a successful send, or
+  // an explicit "Discard anyway" (see discardDraft()). The unmount flush below
+  // (GH #176) exists only for a *silent* teardown (navigating away via the home
+  // link); a deliberate close must never resurrect the message as a draft after
+  // it was sent, or re-save one the user just chose to throw away.
+  const finalizedRef = useRef(false);
 
   function setField<K extends keyof ComposerDraft>(key: K, value: ComposerDraft[K]): void {
     dispatch({ type: "setField", key, value });
   }
+
+  // Autosave's emptiness gate. Unlike the close/discard rule (which counts an
+  // in-flight upload as content worth confirming — see emptiness.ts), autosave
+  // ignores pending uploads: they have no blobId yet, so nothing about them is
+  // persistable. When the upload resolves it becomes a real attachment and the
+  // debounce fires again on that change.
+  function isAutosavableEmpty(): boolean {
+    const { draft, attachments } = stateRef.current;
+    return isComposerDraftEmpty(draft, attachments.length, 0);
+  }
+
+  // One save round-trip against the current content. No dispatch of its own so
+  // it is safe to call from an unmount cleanup (see below), where setting state
+  // would warn. Advances the owned draft id and the saved-payload fingerprint
+  // so the next save supersedes this copy instead of duplicating it.
+  async function persistDraft(): Promise<void> {
+    const { draft, attachments } = stateRef.current;
+    const payload = buildComposePayload(draft, attachments, { stripMarkers: false });
+    const snapshot = JSON.stringify(payload);
+    const input: SaveDraftInput = { ...payload, originalDraftId: currentDraftIdRef.current };
+    const result = await saveDraftRequest(input);
+    currentDraftIdRef.current = result.id;
+    lastSavedPayloadRef.current = snapshot;
+  }
+
+  async function autosave(): Promise<void> {
+    if (isAutosavableEmpty()) return;
+    const { draft, attachments } = stateRef.current;
+    if (serializeDraftPayload(draft, attachments) === lastSavedPayloadRef.current) return;
+    // A save is already running: record that more content arrived so exactly
+    // one more save runs after it, instead of racing a second one now.
+    if (saveInFlightRef.current) {
+      pendingSaveRef.current = true;
+      return;
+    }
+    saveInFlightRef.current = true;
+    dispatch({ type: "autosaveStart" });
+    try {
+      pendingSaveRef.current = false;
+      await persistDraft();
+      // Drain edits that landed while the save above was in flight — but only
+      // while there is genuinely newer, non-empty content, so this settles
+      // instead of looping on unchanged state.
+      while (
+        pendingSaveRef.current &&
+        !isAutosavableEmpty() &&
+        serializeDraftPayload(stateRef.current.draft, stateRef.current.attachments) !==
+          lastSavedPayloadRef.current
+      ) {
+        pendingSaveRef.current = false;
+        await persistDraft();
+      }
+      dispatch({ type: "autosaveSaved" });
+    } catch {
+      dispatch({ type: "autosaveError" });
+    } finally {
+      saveInFlightRef.current = false;
+    }
+  }
+
+  // Debounced autosave (GH #178). Reschedules on every meaningful change and
+  // never schedules for empty or already-saved content, so plain re-renders
+  // and the default-signature auto-apply on an untouched draft cost nothing.
+  useEffect(() => {
+    if (isAutosavableEmpty()) return;
+    if (
+      serializeDraftPayload(stateRef.current.draft, stateRef.current.attachments) ===
+      lastSavedPayloadRef.current
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => void autosave(), AUTOSAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the persisted compose fields; autosave/helpers read the latest via stateRef
+  }, [
+    state.draft.identityId,
+    state.draft.to,
+    state.draft.cc,
+    state.draft.bcc,
+    state.draft.subject,
+    state.draft.bodyHtml,
+    state.attachments,
+  ]);
+
+  // GH #176: the composer can be torn down by a route change that never runs
+  // through requestClose — most notably the header's CÉFIRO home link, which
+  // clears the `compose` param and unmounts the composer. Flush any content
+  // not yet persisted so navigating away can't silently drop the draft. Empty
+  // deps: this cleanup runs only on unmount, and everything it touches is a
+  // ref or the live stateRef, so the first-render closure still sees the
+  // latest content.
+  useEffect(() => {
+    return () => {
+      // A deliberate close (sent, or discarded) already decided the draft's
+      // fate — don't second-guess it by flushing on the way out.
+      if (finalizedRef.current) return;
+      if (isAutosavableEmpty()) return;
+      if (
+        serializeDraftPayload(stateRef.current.draft, stateRef.current.attachments) ===
+        lastSavedPayloadRef.current
+      ) {
+        return;
+      }
+      // A save is mid-flight: let its coalescing loop pick up the latest rather
+      // than firing a second, overlapping request as we tear down.
+      if (saveInFlightRef.current) {
+        pendingSaveRef.current = true;
+        return;
+      }
+      // Fire-and-forget: the component is going away, so there is nothing to
+      // await into and no state left to update — best-effort by design.
+      void persistDraft().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only flush; reads the latest content via refs
+  }, []);
 
   // Cheap, reliable dedup heuristic: name+size. Checked against both
   // already-uploaded attachments and still-pending uploads, and against
@@ -266,16 +452,27 @@ export function useComposer(
     try {
       await sendEmail(input);
       // Best-effort cleanup: the send already succeeded (it's in Sent now),
-      // so a failure to trash the stale original draft must not surface as
-      // a send failure — the user just keeps a leftover draft, same as
-      // today's behavior without this feature.
-      if (draft.originalDraftId && trashMailboxId) {
+      // so a failure to trash the stale draft must not surface as a send
+      // failure — the user just keeps a leftover draft, same as today's
+      // behavior without this feature.
+      //
+      // GH #178: this targets currentDraftIdRef, not draft.originalDraftId.
+      // The two are the same when reopening an existing draft that was never
+      // autosaved, but autosave advances currentDraftIdRef to the copy it
+      // created (even for a brand-new email that had no originalDraftId), and
+      // that copy is the one now sitting in Drafts. Trashing it on send is
+      // what stops an autosaved draft lingering after the mail is sent.
+      const draftToTrash = currentDraftIdRef.current;
+      if (draftToTrash && trashMailboxId) {
         try {
-          await updateMessage(draft.originalDraftId, { mailboxIds: { [trashMailboxId]: true } });
+          await updateMessage(draftToTrash, { mailboxIds: { [trashMailboxId]: true } });
         } catch {
           // ignore — see comment above
         }
       }
+      // The message left as mail, not a draft: block the unmount flush so the
+      // onClose that follows a successful send can't recreate it as a draft.
+      finalizedRef.current = true;
       dispatch({ type: "sendSucceeded" });
       return true;
     } catch (err) {
@@ -285,6 +482,15 @@ export function useComposer(
     }
   }
 
+  // GH #176: called by the composer's "Discard anyway" path so the deliberate
+  // teardown that follows doesn't trip the unmount flush and re-save the very
+  // draft the user just chose to abandon. Any copy an earlier autosave already
+  // wrote stays in Drafts (recoverable) — discard suppresses the flush, it does
+  // not chase down and delete an already-persisted draft.
+  function discardDraft(): void {
+    finalizedRef.current = true;
+  }
+
   // GH #125: "Save to drafts" from the Escape-to-close discard confirmation.
   // Unlike send(), a draft is deliberately allowed to be incomplete — no
   // recipient/subject guard here (see packages/shared/src/api/compose.ts's
@@ -292,24 +498,31 @@ export function useComposer(
   // shared payload so saving an already-open draft replaces it server-side
   // instead of creating a duplicate.
   async function saveDraft(): Promise<boolean> {
-    if (savingDraftRef.current) return false;
-    savingDraftRef.current = true;
+    // Shares saveInFlightRef with autosave (GH #178): still the synchronous
+    // re-entrancy guard GH #125 introduced (a double-click can't fire two
+    // saves), and now also keeps this explicit save from overlapping an
+    // in-flight autosave. Routes through the same persistDraft, so it advances
+    // the owned draft id and supersedes the autosaved copy rather than
+    // creating a duplicate.
+    if (saveInFlightRef.current) return false;
+    saveInFlightRef.current = true;
+    // We are persisting the latest content right now, so a queued autosave
+    // would be redundant.
+    pendingSaveRef.current = false;
     dispatch({ type: "saveDraftStart" });
     try {
-      const { draft, attachments } = state;
-      const input: SaveDraftInput = {
-        ...buildComposePayload(draft, attachments, { stripMarkers: false }),
-        originalDraftId: draft.originalDraftId,
-      };
-      await saveDraftRequest(input);
+      await persistDraft();
       dispatch({ type: "saveDraftSucceeded" });
+      // Keep the ambient indicator consistent with the discard dialog's own
+      // button state — the draft genuinely is saved now.
+      dispatch({ type: "autosaveSaved" });
       return true;
     } catch (err) {
       const error = err instanceof MailApiError ? `composer.errors.${err.code || "generic"}` : "composer.errors.generic";
       dispatch({ type: "saveDraftFailed", error });
       return false;
     } finally {
-      savingDraftRef.current = false;
+      saveInFlightRef.current = false;
     }
   }
 
@@ -336,5 +549,5 @@ export function useComposer(
     }
   }
 
-  return { state, setField, addFiles, removeAttachment, send, saveDraft, draftWithAi };
+  return { state, setField, addFiles, removeAttachment, send, saveDraft, discardDraft, draftWithAi };
 }

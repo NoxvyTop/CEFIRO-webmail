@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import type { z } from "zod";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createContactsRepo } from "../../infra/repos/contacts";
@@ -10,9 +11,7 @@ import { createApp } from "../../app";
 import { createContactsRouter } from "./router";
 import { contactSchema } from "@webmail/shared";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 let sessions: ReturnType<typeof createSessionStore>;
 let contacts: ReturnType<typeof createContactsRepo>;

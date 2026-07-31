@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { updateProfileSchema, type ProfileView } from "@webmail/shared";
+import { avatarImageResponse } from "../../core/avatar";
 import { errorResponse } from "../../core/error-response";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { UsersRepo } from "../../infra/repos/users";
@@ -53,6 +54,16 @@ export function createProfileRouter(deps: ProfileDeps) {
     }
     const body: ProfileView = profile;
     return c.json(body);
+  });
+
+  // GH #205: the caller's own avatar as a cacheable resource (ETag +
+  // Cache-Control, 304 on If-None-Match). Always the session user — this
+  // router has no id param, so it can never target another user's photo.
+  // 404 when the user has not uploaded one.
+  router.get("/avatar", async (c) => {
+    const dataUrl = await deps.users.getAvatar(c.get("user").userId);
+    const res = await avatarImageResponse(dataUrl, c.req.header("if-none-match"));
+    return res ?? errorResponse(c, "not_found", 404);
   });
 
   router.patch(

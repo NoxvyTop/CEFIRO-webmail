@@ -1014,6 +1014,35 @@ describe("Composer", () => {
     });
   });
 
+  // GH #178: the composer surfaces a subtle autosave status while the draft is
+  // being persisted in the background. These drive it through the real debounce
+  // (real timers) rather than mocking it, so the wiring from a typed change to
+  // the indicator is exercised end to end.
+  describe("autosave indicator (#178)", () => {
+    it("shows no autosave indicator on an untouched composer", async () => {
+      renderComposer();
+      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+
+      expect(screen.queryByTestId("autosave-indicator")).not.toBeInTheDocument();
+    });
+
+    it("shows the saved indicator once the debounce autosaves a typed draft", async () => {
+      saveDraft.mockResolvedValue({ id: "draft-1" });
+      renderComposer();
+
+      const subject = await screen.findByRole("textbox", { name: i18n.t("composer.subject") });
+      fireEvent.change(subject, { target: { value: "Reunión de mañana" } });
+
+      // findBy polls past the ~1.5s debounce until the save resolves and the
+      // indicator lands on "saved".
+      expect(await screen.findByText(i18n.t("composer.autosave.saved"))).toBeInTheDocument();
+      await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+      expect(saveDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ subject: "Reunión de mañana" }),
+      );
+    });
+  });
+
   // GH #124: the recipient autocomplete dropdown must swallow its own
   // Escape key — otherwise it would bubble up to the composer's own
   // Escape-to-close handler (GH #125, above) and close (or discard-confirm)

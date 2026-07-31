@@ -137,10 +137,8 @@ function DiscardConfirmDialog({
 export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send, saveDraft, draftWithAi } = useComposer(
-    initial,
-    trashMailboxId,
-  );
+  const { state, setField, addFiles, removeAttachment, send, saveDraft, discardDraft, draftWithAi } =
+    useComposer(initial, trashMailboxId);
   // Split into two independent reveal states (#123) — a draft arriving with
   // CC recipients (e.g. reply-all, see reply.ts's replyDraft) must show CC
   // without also showing an unrelated, still-empty BCC field, and vice versa.
@@ -236,6 +234,9 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   }
 
   function handleDiscard() {
+    // GH #176/#178: mark the session finalized so the composer's unmount flush
+    // doesn't re-save the draft the user just chose to discard.
+    discardDraft();
     setDiscardConfirmOpen(false);
     onClose();
   }
@@ -528,6 +529,20 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             </button>
           )}
           <span className="flex-1" />
+          {/* GH #178: subtle autosave status. Hidden while idle so an untouched
+              composer shows nothing; aria-live so a screen reader hears the
+              transition to "saved" without it stealing focus. */}
+          {state.autosaveStatus !== "idle" && (
+            <span
+              data-testid="autosave-indicator"
+              aria-live="polite"
+              className={`text-xs ${state.autosaveStatus === "error" ? "text-warn" : "text-muted"}`}
+            >
+              {state.autosaveStatus === "saving" && t("composer.autosave.saving")}
+              {state.autosaveStatus === "saved" && t("composer.autosave.saved")}
+              {state.autosaveStatus === "error" && t("composer.autosave.error")}
+            </span>
+          )}
           <Button
             variant="secondary"
             onClick={requestClose}

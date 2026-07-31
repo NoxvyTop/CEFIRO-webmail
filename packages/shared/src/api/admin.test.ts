@@ -18,11 +18,11 @@ describe("admin contracts", () => {
     });
     expect(u.mailboxLinked).toBe(false);
   });
-  // GH #130: adminUserSchema must carry the user's avatar so the admin UI
-  // can render it. avatarDataUrl is optional+nullable — optional so older
+  // GH #205: adminUserSchema now carries a cacheable avatar URL instead of an
+  // inline data URL. avatarUrl is optional+nullable — optional so older
   // payloads (and existing fixtures without the field) still validate,
   // nullable for users with no photo.
-  it("parses an admin user with an avatarDataUrl", () => {
+  it("parses an admin user with an avatarUrl", () => {
     const u = adminUserSchema.parse({
       id: "1",
       email: "a@x.com",
@@ -31,11 +31,11 @@ describe("admin contracts", () => {
       locale: "es",
       active: true,
       mailboxLinked: false,
-      avatarDataUrl: "data:image/png;base64,aGVsbG8=",
+      avatarUrl: "/api/admin/users/1/avatar",
     });
-    expect(u.avatarDataUrl).toBe("data:image/png;base64,aGVsbG8=");
+    expect(u.avatarUrl).toBe("/api/admin/users/1/avatar");
   });
-  it("parses an admin user without an avatarDataUrl (absent or null)", () => {
+  it("parses an admin user without an avatarUrl (absent or null)", () => {
     const withoutField = adminUserSchema.parse({
       id: "1",
       email: "a@x.com",
@@ -45,7 +45,7 @@ describe("admin contracts", () => {
       active: true,
       mailboxLinked: false,
     });
-    expect(withoutField.avatarDataUrl).toBeUndefined();
+    expect(withoutField.avatarUrl).toBeUndefined();
 
     const withNull = adminUserSchema.parse({
       id: "1",
@@ -55,9 +55,9 @@ describe("admin contracts", () => {
       locale: "es",
       active: true,
       mailboxLinked: false,
-      avatarDataUrl: null,
+      avatarUrl: null,
     });
-    expect(withNull.avatarDataUrl).toBeNull();
+    expect(withNull.avatarUrl).toBeNull();
   });
   it("createUserInput defaults role/locale and validates email", () => {
     const parsed = createUserInputSchema.parse({ email: "a@x.com", displayName: "A" });

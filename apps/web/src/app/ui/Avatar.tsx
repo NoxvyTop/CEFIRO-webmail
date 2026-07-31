@@ -52,6 +52,11 @@ export function Avatar({ name, email, size = 38, tone = "palette", imageUrl }: A
         src={imageUrl}
         alt=""
         aria-hidden="true"
+        // GH #205: when imageUrl is a URL (e.g. the admin list's avatar
+        // endpoint) let the browser lazy-load and cache it; harmless for the
+        // data: URLs still passed by the header/profile.
+        loading="lazy"
+        decoding="async"
         className="shrink-0 rounded-full object-cover"
         style={{ width: size, height: size }}
       />

@@ -2,6 +2,13 @@ import { log } from "../../core/logger";
 import type { ContactsRepo, HarvestedContact } from "../../infra/repos/contacts";
 import type { JmapAuth, JmapClient, JmapSession } from "../../infra/stalwart/jmap";
 
+// How many of the most recent messages to inspect when mail arrives (GH #180).
+// The harvest triggers on the JMAP Email state advancing, which says mail
+// changed but not what — so we pull the newest page and let extraction pick out
+// the eligible senders. A delivery is usually one or a few messages; this ceiling
+// simply bounds the read if many land between two state changes.
+const RECENT_MAIL_HARVEST_LIMIT = 50;
+
 export type HarvestEmail = {
   from?: { name?: string | null; email: string }[];
   mailboxIds?: Record<string, boolean>;
@@ -58,15 +65,18 @@ export function extractHarvestCandidates(
 }
 
 /**
- * Best-effort contact harvest, called from GET /api/mail/messages (GH #124).
+ * Best-effort contact harvest from an already-fetched page of messages.
  * Resolves mailbox roles with its own JMAP round trip — deliberately kept
- * separate from the Email/query + Email/get call the route itself makes,
+ * separate from the Email/query + Email/get call that produced `emails`,
  * because JmapClient.request() throws for the whole batch if ANY call in it
  * comes back as a JMAP-level error. Folding the role lookup into the same
- * batch would mean a harvest-only failure could take the actual mail listing
+ * batch would mean a harvest-only failure could take the caller's own work
  * down with it, which is exactly what this must never do. Never throws: a
  * failure here (JMAP hiccup, DB hiccup, anything) is logged and swallowed so
- * the caller's response is unaffected.
+ * the caller is unaffected.
+ *
+ * Invoked once per delivery from harvestOnMailArrival (GH #180), not on every
+ * mail read as it originally was (GH #124).
  */
 export async function harvestContacts(input: {
   contacts: ContactsRepo;
@@ -87,5 +97,67 @@ export async function harvestContacts(input: {
     await input.contacts.harvestSenders(input.userId, candidates);
   } catch (error) {
     log("warn", "contacts harvest failed", { userId: input.userId, error: String(error) });
+  }
+}
+
+/**
+ * The "mail arrived" harvest trigger (GH #180). Reading a mailbox is the app's
+ * most frequent operation, so harvesting on GET /messages re-harvested the same
+ * senders on every page, refetch and return to the inbox. The correct signal is
+ * the JMAP Email state advancing on the subscription that feeds the SSE stream —
+ * it fires once when mail actually arrives.
+ *
+ * The state-change event says mail changed but not what, so this pulls the
+ * newest page and hands it to harvestContacts. Never throws: a failure fetching
+ * that page is logged and swallowed, and harvestContacts swallows the rest, so a
+ * harvest hiccup can never disturb the caller's event stream.
+ */
+export async function harvestOnMailArrival(input: {
+  contacts: ContactsRepo;
+  jmap: JmapClient;
+  auth: JmapAuth;
+  session: JmapSession;
+  userId: string;
+  ownerEmail: string;
+}): Promise<void> {
+  try {
+    const responses = await input.jmap.request(input.auth, input.session, [
+      [
+        "Email/query",
+        {
+          accountId: input.session.accountId,
+          sort: [{ property: "receivedAt", isAscending: false }],
+          position: 0,
+          limit: RECENT_MAIL_HARVEST_LIMIT,
+          calculateTotal: false,
+        },
+        "q",
+      ],
+      [
+        "Email/get",
+        {
+          accountId: input.session.accountId,
+          "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+          properties: ["id", "from", "mailboxIds"],
+        },
+        "g",
+      ],
+    ]);
+    const emails = ((responses[1]?.[1] ?? {}) as { list?: HarvestEmail[] }).list ?? [];
+    if (emails.length === 0) return;
+    await harvestContacts({
+      contacts: input.contacts,
+      jmap: input.jmap,
+      auth: input.auth,
+      session: input.session,
+      userId: input.userId,
+      ownerEmail: input.ownerEmail,
+      emails,
+    });
+  } catch (error) {
+    log("warn", "contacts harvest on mail arrival failed", {
+      userId: input.userId,
+      error: String(error),
+    });
   }
 }

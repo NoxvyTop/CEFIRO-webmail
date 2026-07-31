@@ -159,6 +159,9 @@
   "mail": {
     "listRegion": "Lista de mensajes",
     "readerRegion": "Lectura",
+    "navRegion": "Navegación del buzón",
+    "navMenu": "Menú de navegación",
+    "closeNav": "Cerrar menú",
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount_one": "{{count}} correo",
@@ -320,6 +323,11 @@
     "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
     "aiDraftNeedsSubject": "Escribe un asunto antes de redactar con IA",
     "noIdentitiesHint": "Vincula tu buzón para poder redactar correos",
+    "autosave": {
+      "saving": "Guardando…",
+      "saved": "Borrador guardado",
+      "error": "No se pudo guardar el borrador"
+    },
     "discardConfirm": {
       "title": "¿Descartar este mensaje?",
       "description": "Tu mensaje tiene contenido sin guardar.",

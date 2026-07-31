@@ -85,7 +85,7 @@ function sleep(ms: number): Promise<void> {
 // deliver block is safe: a half-spoken conversation on a dropped socket left
 // nothing on the server (Message-IDs are per-run unique, so even a partial
 // retry cannot double-deliver). Reuses the connect retry budget/backoff.
-async function withConversationRetry<T>(
+export async function withConversationRetry<T>(
   label: string,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -204,7 +204,7 @@ async function fetchFixtureCertificate(host: string, port: number): Promise<stri
 // `Socket` (not `TLSSocket`) so it works for both the TLS connection used by
 // seedInbox and the plain connection used by seedJunk — TLSSocket is a
 // subclass of net.Socket, so callers passing either work unchanged.
-function readResponse(socket: Socket): Promise<SmtpResponse> {
+export function readResponse(socket: Socket): Promise<SmtpResponse> {
   return new Promise((resolve, reject) => {
     let buffer = "";
 
