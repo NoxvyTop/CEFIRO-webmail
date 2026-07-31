@@ -95,18 +95,20 @@ describe("AdminPage users table", () => {
     expect(within(row).getByText("Admin One")).toBeInTheDocument();
   });
 
-  // GH #130: the admin contract now carries the user's uploaded photo
-  // (adminUserSchema.avatarDataUrl) — the row must render it instead of
-  // initials, reusing Avatar's existing photo-or-initials decision.
-  it("renders a user's uploaded photo instead of initials when avatarDataUrl is present", async () => {
-    const withPhoto: AdminUser = { ...adminActive, avatarDataUrl: "data:image/png;base64,AAAA" };
+  // GH #205: the admin contract now carries a cacheable avatar URL
+  // (adminUserSchema.avatarUrl) instead of an inline data URL — the row must
+  // render a lazy <img> pointing at it, reusing Avatar's photo-or-initials
+  // decision.
+  it("renders a user's photo via the avatar URL instead of initials when avatarUrl is present", async () => {
+    const withPhoto: AdminUser = { ...adminActive, avatarUrl: "/api/admin/users/u1/avatar" };
     fetchAdminUsers.mockResolvedValue(usersPage([withPhoto]));
     renderPage();
 
     const row = (await screen.findByText("admin@example.com")).closest("tr") as HTMLElement;
     const img = row.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img?.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+    expect(img?.getAttribute("src")).toBe("/api/admin/users/u1/avatar");
+    expect(img?.getAttribute("loading")).toBe("lazy");
     expect(within(row).queryByText("AO")).not.toBeInTheDocument();
   });
 

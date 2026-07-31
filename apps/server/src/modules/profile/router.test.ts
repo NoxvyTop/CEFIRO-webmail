@@ -218,4 +218,44 @@ describe("profile api", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  // GH #205: the caller's own avatar is also available as a cacheable resource
+  // by URL, always scoped to the session user.
+  it("GET /api/profile/avatar: 401 without a session", async () => {
+    const res = await app.request("/api/profile/avatar");
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /api/profile/avatar: 404 when the session user has no avatar", async () => {
+    const { token } = await createSessionUser("No Avatar");
+    const res = await app.request("/api/profile/avatar", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /api/profile/avatar: 200 with bytes/ETag/Cache-Control after upload, then 304 on revalidation", async () => {
+    const { token } = await createSessionUser("With Avatar");
+    await app.request("/api/profile", {
+      method: "PATCH",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ avatar: SMALL_PNG_DATA_URL }),
+    });
+
+    const res = await app.request("/api/profile/avatar", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("cache-control")).toContain("must-revalidate");
+    const etag = res.headers.get("etag");
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+    expect(await res.text()).toBe("hello");
+
+    const revalidated = await app.request("/api/profile/avatar", {
+      headers: { cookie: `session=${token}`, "if-none-match": etag! },
+    });
+    expect(revalidated.status).toBe(304);
+    expect(await revalidated.text()).toBe("");
+  });
 });

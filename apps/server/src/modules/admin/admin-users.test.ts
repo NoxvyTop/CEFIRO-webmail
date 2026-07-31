@@ -101,10 +101,10 @@ describe("admin users api", () => {
     expect(adminBody.users.find((u) => u.id === admin.user.id)?.mailboxLinked).toBe(false);
   });
 
-  // GH #130: the admin users list must carry each user's uploaded avatar
-  // (users.avatar_data_url) so the console can render it instead of always
-  // falling back to initials.
-  it("GET /users: includes avatarDataUrl (null by default, populated once the user sets one)", async () => {
+  // GH #205: the admin users list no longer embeds the avatar as a base64 data
+  // URL — it exposes a cacheable avatar URL (null when the user has no photo),
+  // and the base64 bytes never travel in the list payload.
+  it("GET /users: exposes avatarUrl (null by default, the avatar endpoint once the user sets one) and never embeds the base64", async () => {
     const admin = await createAdmin();
     const target = await users.create({
       email: `avatar-${crypto.randomUUID()}@noxvytop.com`,
@@ -116,9 +116,9 @@ describe("admin users api", () => {
       { headers: { cookie: `session=${admin.token}` } },
     );
     const beforeBody = (await before.json()) as {
-      users: Array<{ id: string; avatarDataUrl: string | null }>;
+      users: Array<{ id: string; avatarUrl: string | null }>;
     };
-    expect(beforeBody.users.find((u) => u.id === target.id)?.avatarDataUrl).toBeNull();
+    expect(beforeBody.users.find((u) => u.id === target.id)?.avatarUrl).toBeNull();
 
     await users.setAvatar(target.id, "data:image/png;base64,aGVsbG8=");
 
@@ -127,11 +127,13 @@ describe("admin users api", () => {
       { headers: { cookie: `session=${admin.token}` } },
     );
     const afterBody = (await after.json()) as {
-      users: Array<{ id: string; avatarDataUrl: string | null }>;
+      users: Array<{ id: string; avatarUrl: string | null }>;
     };
-    expect(afterBody.users.find((u) => u.id === target.id)?.avatarDataUrl).toBe(
-      "data:image/png;base64,aGVsbG8=",
+    expect(afterBody.users.find((u) => u.id === target.id)?.avatarUrl).toBe(
+      `/api/admin/users/${target.id}/avatar`,
     );
+    // The list payload must not carry the base64 avatar bytes anymore.
+    expect(JSON.stringify(afterBody)).not.toContain("aGVsbG8=");
   });
 
   it("POST /users: creates user with credential, hides password, rejects duplicates and invalid body", async () => {
@@ -421,5 +423,106 @@ describe("admin users pagination (GH #153)", () => {
     expect(after.total).toBe(before.total + 1);
     expect(after.active).toBe(before.active + 1);
     expect(after.mailboxLinked).toBe(before.mailboxLinked + 1);
+  });
+});
+
+// GH #205: the avatar is served as a cacheable resource by URL instead of
+// being embedded in the users list. Admin-only (any user's photo), with an
+// ETag/Cache-Control and a 304 on If-None-Match.
+describe("admin avatar endpoint (GH #205)", () => {
+  // base64("hello") — the endpoint serves whatever bytes are stored; it does
+  // not re-validate the image structure (the upload path already did).
+  const AVATAR_DATA_URL = "data:image/png;base64,aGVsbG8=";
+
+  it("401 without a session, 403 for an employee", async () => {
+    const target = await users.create({
+      email: `av-authz-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Authz",
+    });
+    await users.setAvatar(target.id, AVATAR_DATA_URL);
+
+    const noSession = await app.request(`/api/admin/users/${target.id}/avatar`);
+    expect(noSession.status).toBe(401);
+
+    const employee = await createEmployee();
+    const forbidden = await app.request(`/api/admin/users/${target.id}/avatar`, {
+      headers: { cookie: `session=${employee.token}` },
+    });
+    expect(forbidden.status).toBe(403);
+  });
+
+  it("404 when the user has no avatar", async () => {
+    const admin = await createAdmin();
+    const target = await users.create({
+      email: `av-none-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "No Photo",
+    });
+    const res = await app.request(`/api/admin/users/${target.id}/avatar`, {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("200 returns the image bytes with content-type, a strong ETag and Cache-Control", async () => {
+    const admin = await createAdmin();
+    const target = await users.create({
+      email: `av-ok-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Has Photo",
+    });
+    await users.setAvatar(target.id, AVATAR_DATA_URL);
+
+    const res = await app.request(`/api/admin/users/${target.id}/avatar`, {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{64}"$/);
+    expect(res.headers.get("cache-control")).toContain("must-revalidate");
+    expect(await res.text()).toBe("hello");
+  });
+
+  it("304 when If-None-Match matches the current ETag, with no body", async () => {
+    const admin = await createAdmin();
+    const target = await users.create({
+      email: `av-304-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Cached",
+    });
+    await users.setAvatar(target.id, AVATAR_DATA_URL);
+    const headers = { cookie: `session=${admin.token}` };
+
+    const first = await app.request(`/api/admin/users/${target.id}/avatar`, { headers });
+    const etag = first.headers.get("etag");
+    expect(etag).toBeTruthy();
+
+    const revalidated = await app.request(`/api/admin/users/${target.id}/avatar`, {
+      headers: { ...headers, "if-none-match": etag! },
+    });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(await revalidated.text()).toBe("");
+  });
+
+  it("honors a weak validator and '*' in If-None-Match", async () => {
+    const admin = await createAdmin();
+    const target = await users.create({
+      email: `av-weak-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Weak",
+    });
+    await users.setAvatar(target.id, AVATAR_DATA_URL);
+    const headers = { cookie: `session=${admin.token}` };
+    const url = `/api/admin/users/${target.id}/avatar`;
+
+    const first = await app.request(url, { headers });
+    const etag = first.headers.get("etag")!;
+
+    const weak = await app.request(url, {
+      headers: { ...headers, "if-none-match": `W/${etag}` },
+    });
+    expect(weak.status).toBe(304);
+
+    const star = await app.request(url, {
+      headers: { ...headers, "if-none-match": "*" },
+    });
+    expect(star.status).toBe(304);
   });
 });

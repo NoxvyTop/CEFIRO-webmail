@@ -12,6 +12,7 @@ import {
   type AdminUsersPage,
   type InstanceSettingsView,
 } from "@webmail/shared";
+import { avatarImageResponse } from "../../core/avatar";
 import { errorResponse } from "../../core/error-response";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { InstanceSettingsRepo } from "../../infra/repos/instance-settings";
@@ -34,10 +35,17 @@ export type AdminDeps = {
 
 type Env = { Variables: AuthVariables };
 
+// The admin console loads each avatar from this cacheable endpoint (GH #205)
+// rather than receiving it inline. The admin router is mounted under
+// /api/admin (see app.ts), so the full path is /api/admin/users/:id/avatar.
+function adminAvatarUrl(id: string): string {
+  return `/api/admin/users/${id}/avatar`;
+}
+
 async function toAdminUser(
   deps: AdminDeps,
   user: UserRecord,
-  avatarDataUrl: string | null,
+  hasAvatar: boolean,
 ): Promise<AdminUser> {
   return {
     id: user.id,
@@ -47,7 +55,7 @@ async function toAdminUser(
     locale: user.locale,
     active: user.active,
     mailboxLinked: await deps.mailCredentials.exists(user.id),
-    avatarDataUrl,
+    avatarUrl: hasAvatar ? adminAvatarUrl(user.id) : null,
   };
 }
 
@@ -91,7 +99,7 @@ export function createAdminRouter(deps: AdminDeps) {
     // dashboard needs — all O(1) queries regardless of page size, issued
     // concurrently.
     const [pageRows, total, statsTotal, statsActive, statsMailbox] = await Promise.all([
-      deps.users.listPageWithAvatar({ limit: pageSize, offset, search }),
+      deps.users.listPage({ limit: pageSize, offset, search }),
       deps.users.countMatching(search),
       deps.users.count(),
       deps.users.countActive(),
@@ -109,7 +117,8 @@ export function createAdminRouter(deps: AdminDeps) {
       locale: u.locale,
       active: u.active,
       mailboxLinked: linkedIds.has(u.id),
-      avatarDataUrl: u.avatarDataUrl,
+      // GH #205: a URL to the cacheable avatar endpoint, or null → initials.
+      avatarUrl: u.hasAvatar ? adminAvatarUrl(u.id) : null,
     }));
 
     const body: AdminUsersPage = {
@@ -118,6 +127,15 @@ export function createAdminRouter(deps: AdminDeps) {
       stats: { total: statsTotal, active: statsActive, mailboxLinked: statsMailbox },
     };
     return c.json(body);
+  });
+
+  // GH #205: the cacheable avatar resource the users list points at. This
+  // router is already admin-only (requireAdmin above), so an admin may fetch
+  // any user's photo. Returns 404 when the user has no avatar (or no such id).
+  router.get("/users/:id/avatar", async (c) => {
+    const dataUrl = await deps.users.getAvatar(c.req.param("id"));
+    const res = await avatarImageResponse(dataUrl, c.req.header("if-none-match"));
+    return res ?? errorResponse(c, "not_found", 404);
   });
 
   router.post("/users", async (c) => {
@@ -140,7 +158,7 @@ export function createAdminRouter(deps: AdminDeps) {
       detail: { role: user.role },
     });
     // A just-created user has never uploaded a photo yet.
-    return c.json(await toAdminUser(deps, user, null));
+    return c.json(await toAdminUser(deps, user, false));
   });
 
   router.put("/users/:id/role", async (c) => {
@@ -172,8 +190,7 @@ export function createAdminRouter(deps: AdminDeps) {
       target: updated.email,
       detail: { role: updated.role },
     });
-    const profile = await deps.users.getProfile(updated.id);
-    return c.json(await toAdminUser(deps, updated, profile?.avatarDataUrl ?? null));
+    return c.json(await toAdminUser(deps, updated, await deps.users.hasAvatar(updated.id)));
   });
 
   router.put("/users/:id/credential", async (c) => {
@@ -236,8 +253,7 @@ export function createAdminRouter(deps: AdminDeps) {
         detail: { revokedSessions },
       });
     }
-    const profile = await deps.users.getProfile(updated.id);
-    return c.json(await toAdminUser(deps, updated, profile?.avatarDataUrl ?? null));
+    return c.json(await toAdminUser(deps, updated, await deps.users.hasAvatar(updated.id)));
   });
 
   router.get("/sso", async (c) => {
