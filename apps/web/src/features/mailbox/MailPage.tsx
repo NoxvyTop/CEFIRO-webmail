@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -13,12 +13,18 @@ import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { folderName } from "../../app/ui/folders";
 import { useToast } from "../../app/ui/toast";
-import { Composer } from "../composer/Composer";
 import { fetchIdentities } from "../composer/api";
 import { buildEditDraft, emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useAuth } from "../auth/useAuth";
 import { PANE_MIN_WIDTH, useResizablePane } from "../../app/ui/useResizablePane";
+
+// The composer pulls in TipTap (the editor is by far the heaviest dependency in
+// this view), so it's split into its own chunk and only fetched when the user
+// actually opens it — keeping TipTap out of the first paint of the mail list.
+const Composer = lazy(() =>
+  import("../composer/Composer").then((module) => ({ default: module.Composer })),
+);
 
 export function MailPage() {
   const { t } = useTranslation();
@@ -507,11 +513,13 @@ export function MailPage() {
         )}
       </section>
       {composeDraft && (
-        <Composer
-          initial={composeDraft}
-          onClose={removeComposeParam}
-          trashMailboxId={trashMailboxId}
-        />
+        <Suspense fallback={null}>
+          <Composer
+            initial={composeDraft}
+            onClose={removeComposeParam}
+            trashMailboxId={trashMailboxId}
+          />
+        </Suspense>
       )}
     </div>
   );

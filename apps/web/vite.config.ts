@@ -11,6 +11,45 @@ export default defineConfig({
       ? { usePolling: true, interval: 300 }
       : undefined,
   },
+  build: {
+    // Emit source maps for the production bundle but keep them "hidden": the
+    // .map files are written (so error monitoring can symbolicate stack
+    // traces) without appending a //# sourceMappingURL comment that would
+    // point browsers/curious users straight at our original source.
+    sourcemap: "hidden",
+    rollupOptions: {
+      output: {
+        // Split the heaviest third-party dependencies into their own vendor
+        // chunks so they cache independently and stay out of the main entry
+        // chunk (which was ~1 MB — over the 500 kB warning). pdf.js is already
+        // loaded on demand (dynamic import in PdfThumbnail); naming it here
+        // keeps it isolated. TipTap only ships once the lazy Composer is
+        // opened, so pinning it to its own chunk keeps it off the first-paint
+        // path. The React/router/query runtime is shared by every screen, so
+        // isolating it both shrinks the entry chunk and lets it cache across
+        // deploys that don't touch these versions.
+        // Function form (not the object form): it matches by resolved module
+        // path, so transitive-only packages (prosemirror under TipTap,
+        // react-router/scheduler under the React runtime) are captured without
+        // being listed as resolvable entries.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("pdfjs-dist")) return "pdfjs";
+          if (id.includes("@tiptap") || id.includes("prosemirror")) return "tiptap";
+          if (
+            id.includes("/react/") ||
+            id.includes("/react-dom/") ||
+            id.includes("/react-router") ||
+            id.includes("/scheduler/") ||
+            id.includes("@tanstack/react-query")
+          ) {
+            return "react-vendor";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["src/test/setup.ts"],

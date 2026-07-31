@@ -1,6 +1,15 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// Routes and the Composer are now code-split (React.lazy + Suspense), so the
+// components under test resolve through a dynamic import. Under the parallel
+// test pool (maxWorkers 50%) that import can take longer than the 1000ms
+// default before findBy*/waitFor give up, which shows up as flaky "dialog
+// never appeared" timeouts only under load. Give those Suspense boundaries
+// room to resolve; the 15s per-test timeout still guards a genuinely stuck
+// render.
+configure({ asyncUtilTimeout: 5000 });
 
 // jsdom's AbortController/AbortSignal are not recognized by Node's built-in
 // fetch (undici), which validates `signal` against its own internal

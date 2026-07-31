@@ -16,10 +16,12 @@ function renderSetup() {
 }
 
 describe("setup page", () => {
-  it("asks for the console token first", () => {
+  it("asks for the console token first", async () => {
     vi.stubGlobal("fetch", vi.fn());
     renderSetup();
-    expect(screen.getByText("Configuración inicial")).toBeInTheDocument();
+    // SetupPage is a lazily-loaded route chunk, so its first paint resolves
+    // through Suspense — await the initial content instead of reading it sync.
+    expect(await screen.findByText("Configuración inicial")).toBeInTheDocument();
     expect(screen.getByLabelText("Contraseña temporal de consola")).toBeInTheDocument();
   });
 
@@ -29,7 +31,7 @@ describe("setup page", () => {
       vi.fn().mockResolvedValue(new Response("{}", { status: 404 })),
     );
     renderSetup();
-    fireEvent.change(screen.getByLabelText("Contraseña temporal de consola"), {
+    fireEvent.change(await screen.findByLabelText("Contraseña temporal de consola"), {
       target: { value: "tok" },
     });
     fireEvent.click(screen.getByText("Conectar"));
@@ -53,7 +55,7 @@ describe("setup page", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     renderSetup();
-    fireEvent.change(screen.getByLabelText("Contraseña temporal de consola"), {
+    fireEvent.change(await screen.findByLabelText("Contraseña temporal de consola"), {
       target: { value: "console-token" },
     });
     fireEvent.click(screen.getByText("Conectar"));
