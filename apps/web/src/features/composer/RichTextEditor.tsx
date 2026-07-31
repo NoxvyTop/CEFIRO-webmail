@@ -39,7 +39,7 @@ const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 // unicode whitespace can be interleaved into a scheme to dodge naive prefix checks, e.g.
 // "java\tscript:alert(1)" or "\tjavascript:alert(1)". Stripping them first before extracting
 // the scheme neutralizes that obfuscation instead of being fooled by it.
-const CONTROL_AND_WHITESPACE_PATTERN = new RegExp('[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]', 'g');
+const CONTROL_AND_WHITESPACE_PATTERN = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]/g;
 
 /**
  * Returns true only for absolute http:, https:, or mailto: URLs. Relative URLs, unknown
@@ -120,7 +120,7 @@ function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorPr
         contentEditable
         suppressContentEditableWarning
         className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6] field-focus-line"
-        // eslint-disable-next-line react/no-danger -- initial content only; sanitized seed + ongoing edits through onInput
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: initial seed is sanitized via sanitizeEmailHtml (DOMPurify, allowRemoteImages:false); ongoing edits are captured through onInput
         dangerouslySetInnerHTML={{ __html: safeHtml }}
         onInput={handleInput}
       />

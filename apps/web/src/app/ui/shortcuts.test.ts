@@ -81,7 +81,9 @@ describe("isPlainShortcut", () => {
 
 describe("isModalOpen", () => {
   afterEach(() => {
-    Array.from(document.querySelectorAll(MODAL_SELECTOR)).forEach((el) => el.remove());
+    Array.from(document.querySelectorAll(MODAL_SELECTOR)).forEach((el) => {
+      el.remove();
+    });
   });
 
   it("returns false when no dialog is present", () => {

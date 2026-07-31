@@ -3,7 +3,7 @@ import { createRateLimiter } from "./rate-limit";
 
 describe("createRateLimiter", () => {
   it("allows up to the limit and blocks the next attempt in the same window", () => {
-    let now = 1_000;
+    const now = 1_000;
     const limiter = createRateLimiter({ limit: 3, windowMs: 60_000, now: () => now });
 
     for (let i = 0; i < 3; i++) {
@@ -42,7 +42,7 @@ describe("createRateLimiter", () => {
   });
 
   it("keeps counters isolated per key", () => {
-    let now = 0;
+    const now = 0;
     const limiter = createRateLimiter({ limit: 1, windowMs: 60_000, now: () => now });
 
     expect(limiter.check("ip-a").allowed).toBe(true);

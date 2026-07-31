@@ -18,6 +18,7 @@ import { cleanup } from "@testing-library/react";
 // AbortSignal that forwards abort state from the original signal.
 const NativeRequest = globalThis.Request;
 class PatchedRequest extends NativeRequest {
+  // biome-ignore lint/correctness/noUnreachableSuper: the two super() calls are on mutually exclusive try/catch paths — exactly one runs per construction (the AbortSignal fallback bridge described above).
   constructor(input: RequestInfo | URL, init?: RequestInit) {
     try {
       super(input, init);

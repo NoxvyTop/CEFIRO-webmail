@@ -106,7 +106,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # Biome lint gate (GH #198). Runs before `test` — which declares `needs:
+  # [lint]` — so a lint failure fails the pipeline fast, before the more
+  # expensive test/e2e jobs spend a runner. Biome is a self-contained binary
+  # (no Postgres, no browser), so this job only needs Bun to resolve it from
+  # the workspace. Same runner-selection and root-ownership handling as `test`,
+  # for the reasons documented on that job.
+  lint:
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
   test:
+    needs: [lint]
     runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
     # The job runs inside a declared image rather than on whatever the runner
     # host happens to have. That host is shared with other projects, so any

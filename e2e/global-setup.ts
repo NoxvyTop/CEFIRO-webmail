@@ -62,17 +62,16 @@ export default async function globalSetup() {
     // working exactly as before this task for every non-mail spec.
     const stalwartUrl = process.env.E2E_STALWART_URL;
 
-    let user;
+    let user: Awaited<ReturnType<typeof users.create>>;
     if (stalwartUrl) {
       // Mail specs need the seeded user's email to match the Stalwart
       // account's email (JMAP Basic auth is keyed on the user's own email),
       // so reuse the same row across runs instead of minting a fresh random
       // address every time — the dev/CI Postgres this points at isn't reset
       // between E2E runs.
-      user = await users.findByEmail(STALWART_ACCOUNT_EMAIL);
-      if (!user) {
-        user = await users.create({ email: STALWART_ACCOUNT_EMAIL, displayName: "Cefiro Admin" });
-      }
+      user =
+        (await users.findByEmail(STALWART_ACCOUNT_EMAIL)) ??
+        (await users.create({ email: STALWART_ACCOUNT_EMAIL, displayName: "Cefiro Admin" }));
     } else {
       const email = `e2e-${crypto.randomUUID()}@noxvytop.com`;
       user = await users.create({ email, displayName: "E2E Admin" });
