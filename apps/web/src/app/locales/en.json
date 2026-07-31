@@ -159,6 +159,9 @@
   "mail": {
     "listRegion": "Message list",
     "readerRegion": "Reading pane",
+    "navRegion": "Mailbox navigation",
+    "navMenu": "Navigation menu",
+    "closeNav": "Close menu",
     "starredView": "Starred",
     "unread": "{{count}} unread",
     "messageCount_one": "{{count}} message",

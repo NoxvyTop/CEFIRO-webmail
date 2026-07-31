@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
 import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
 import { NewLabelModal } from "./NewLabelModal";
 
 // Spec (docs/design/cefiro/README.md, Webmail Céfiro.dc.html:79-95): only the
@@ -37,14 +38,51 @@ interface SidebarProps {
   customLabels?: CustomLabel[];
   onCreateLabel?: (label: CustomLabel) => void;
   onDeleteLabel?: (slug: string) => void;
+  // GH #177: on viewports below `lg` the sidebar collapses into an off-canvas
+  // drawer (see MailPage) — `open` toggles it and `onClose` dismisses it. At
+  // `lg`+ the drawer chrome is inert: the aside is a static column again and
+  // `open` stays false (its only trigger, the hamburger, is `lg:hidden`).
+  open?: boolean;
+  onClose?: () => void;
 }
 
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
   groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
   composeDisabled = false, customLabels = [], onCreateLabel = () => {}, onDeleteLabel = () => {},
+  open = false, onClose = () => {},
 }: SidebarProps) {
   const { t } = useTranslation();
+  // GH #177: while open as a drawer, trap Tab within it and restore focus to
+  // the hamburger on close (same hook the modals use). Inert when `open` is
+  // false, i.e. the static `lg`+ sidebar never traps.
+  const drawerRef = useFocusTrap<HTMLElement>(open);
+
+  // Esc dismisses the drawer — the accessible escape hatch #177 asks for.
+  // Registered only while open, so the static sidebar adds no global listener.
+  useEffect(() => {
+    if (!open) return;
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
+
+  // GH #177: picking a destination closes the drawer so the mail list it
+  // uncovers is immediately usable on narrow screens. Harmless at `lg`+ where
+  // the drawer is never open (onClose just re-sets an already-false flag).
+  function closeAfter<A extends unknown[]>(action: (...args: A) => void) {
+    return (...args: A) => {
+      action(...args);
+      onClose();
+    };
+  }
+  const selectMailbox = closeAfter(onSelectMailbox);
+  const selectStarred = closeAfter(onSelectStarred);
+  const selectGroup = closeAfter(onSelectGroup);
+  const selectLabel = closeAfter(onSelectLabel);
+  const compose = closeAfter(onCompose);
   const displayLabels = mergeLabels(labels, customLabels.map((custom) => custom.slug));
   const customLabelSlugs = new Set(customLabels.map((custom) => custom.slug.toLowerCase()));
 
@@ -89,7 +127,7 @@ export function Sidebar({
         <button
           type="button"
           aria-current={selected ? "true" : undefined}
-          onClick={() => onSelectMailbox(mailbox.id)}
+          onClick={() => selectMailbox(mailbox.id)}
           className="flex h-[38px] w-full items-center gap-[11px] rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
         >
           {Icon && <Icon size={17} />}
@@ -108,10 +146,43 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex w-[230px] shrink-0 overflow-y-auto flex-col gap-4 border-r border-line p-3">
+    <>
+      {/* GH #177: dim + click-to-dismiss backdrop, drawer only (never at `lg`+
+          where the sidebar is a static column). */}
+      {open && (
+        <div
+          className="fixed inset-0 z-30 bg-overlay lg:hidden"
+          aria-hidden="true"
+          onClick={onClose}
+        />
+      )}
+      <aside
+        ref={drawerRef}
+        id="mailbox-nav"
+        tabIndex={-1}
+        // Only a modal dialog while acting as an open drawer; at `lg`+ it's a
+        // plain complementary landmark, so the dialog semantics (and the
+        // shortcuts.ts MODAL_SELECTOR that suppresses j/k/etc.) apply solely
+        // when it genuinely overlays the content.
+        {...(open ? { role: "dialog", "aria-modal": true, "aria-label": t("mail.navRegion") } : {})}
+        className={`${
+          open ? "fixed inset-y-0 left-0 z-40 flex shadow-pop" : "hidden"
+        } w-[230px] shrink-0 flex-col gap-4 overflow-y-auto border-r border-line bg-panel p-3 outline-none lg:static lg:z-auto lg:flex lg:shadow-none`}
+      >
+        {/* Drawer-only close affordance; redundant chrome at `lg`+, so hidden there. */}
+        <div className="flex justify-end lg:hidden">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("mail.closeNav")}
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted transition hover:bg-hover hover:text-ink"
+          >
+            <CloseIcon size={16} />
+          </button>
+        </div>
       <button
         type="button"
-        onClick={onCompose}
+        onClick={compose}
         disabled={composeDisabled}
         title={composeDisabled ? t("composer.noIdentitiesHint") : undefined}
         aria-disabled={composeDisabled}
@@ -129,7 +200,7 @@ export function Sidebar({
           <button
             type="button"
             aria-current={starredSelected ? "true" : undefined}
-            onClick={onSelectStarred}
+            onClick={selectStarred}
             className="flex h-[38px] w-full items-center gap-[11px] rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
           >
             <StarIcon size={17} />
@@ -190,7 +261,7 @@ export function Sidebar({
                     <button
                       type="button"
                       aria-current={selected ? "true" : undefined}
-                      onClick={() => onSelectLabel(label)}
+                      onClick={() => selectLabel(label)}
                       className="flex h-[34px] min-w-0 flex-1 items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-[13.5px] hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
                     >
                       <span
@@ -259,7 +330,7 @@ export function Sidebar({
                   <button
                     type="button"
                     aria-current={selected ? "true" : undefined}
-                    onClick={() => onSelectGroup(group.email)}
+                    onClick={() => selectGroup(group.email)}
                     className="flex h-[34px] w-full items-center justify-between truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
                   >
                     <span className="truncate">{group.email}</span>
@@ -270,6 +341,7 @@ export function Sidebar({
           </ul>
         </nav>
       )}
-    </aside>
+      </aside>
+    </>
   );
 }

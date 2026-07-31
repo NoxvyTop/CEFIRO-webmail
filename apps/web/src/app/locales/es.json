@@ -159,6 +159,9 @@
   "mail": {
     "listRegion": "Lista de mensajes",
     "readerRegion": "Lectura",
+    "navRegion": "Navegación del buzón",
+    "navMenu": "Menú de navegación",
+    "closeNav": "Cerrar menú",
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
     "messageCount_one": "{{count}} correo",
