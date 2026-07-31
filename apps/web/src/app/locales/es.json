@@ -1,6 +1,7 @@
 {
   "app": {
     "home": "Ir al inicio",
+    "skipToContent": "Saltar al contenido",
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",

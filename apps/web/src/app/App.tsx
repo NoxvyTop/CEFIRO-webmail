@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { useProfile } from "../features/settings/useProfile";
+import { CefiroLoader } from "./ui/CefiroLoader";
 import { CefiroLogo } from "./ui/CefiroLogo";
 import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { isPlainShortcut } from "./ui/shortcuts";
@@ -81,9 +82,33 @@ export function App() {
     setNotificationPermission(permission);
   }
 
+  // MailPage (the "/" route) renders no landmark of its own, so the shell
+  // supplies the <main> for it. Settings/Admin already wrap their content in
+  // their own <main>, so here the shell must NOT add a second one (a nested
+  // <main> is invalid and confuses landmark navigation) — it renders a plain
+  // wrapper that still carries the skip-link target id.
+  const shellOwnsMainLandmark = location.pathname === "/";
+  const outletRegion = (
+    <Suspense
+      fallback={
+        <div className="flex flex-1 items-center justify-center p-10">
+          <CefiroLoader label />
+        </div>
+      }
+    >
+      <Outlet />
+    </Suspense>
+  );
+
   return (
     <ToastProvider>
       <div className="flex h-screen flex-col">
+        <a
+          href="#main-content"
+          className="sr-only left-4 top-4 z-50 rounded-md bg-accent px-4 py-2 text-sm font-bold text-accent-ink shadow-cta focus:not-sr-only focus:absolute"
+        >
+          {t("app.skipToContent")}
+        </a>
         {/* no overflow clipping here: it would cut off the absolutely-positioned user menu */}
         <header className="flex h-[60px] shrink-0 items-center gap-5 border-b border-line bg-panel px-5 text-ink">
           <Link
@@ -138,9 +163,15 @@ export function App() {
             </div>
           )}
         </header>
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <Outlet />
-        </div>
+        {shellOwnsMainLandmark ? (
+          <main id="main-content" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            {outletRegion}
+          </main>
+        ) : (
+          <div id="main-content" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            {outletRegion}
+          </div>
+        )}
         <ShortcutsOverlay open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       </div>
     </ToastProvider>

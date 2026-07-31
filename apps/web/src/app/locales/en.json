@@ -1,6 +1,7 @@
 {
   "app": {
     "home": "Go to home",
+    "skipToContent": "Skip to content",
     "themeLight": "Switch to light theme",
     "themeNight": "Switch to night theme",
     "sentWith": "Sent with",

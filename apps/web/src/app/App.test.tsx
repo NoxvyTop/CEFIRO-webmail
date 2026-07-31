@@ -92,3 +92,17 @@ describe("App header avatar fallback", () => {
     expect(avatarButton.querySelector("img")).toBeNull();
   });
 });
+
+describe("App accessibility shell", () => {
+  it("exposes a skip-to-content link that targets the main landmark", async () => {
+    renderApp();
+
+    // The skip link is the first focusable element, hidden until focused, and
+    // its href must resolve to the <main> the shell wraps the Outlet in.
+    const skipLink = await screen.findByRole("link", { name: i18n.t("app.skipToContent") });
+    expect(skipLink).toHaveAttribute("href", "#main-content");
+
+    const main = screen.getByRole("main");
+    expect(main).toHaveAttribute("id", "main-content");
+  });
+});
