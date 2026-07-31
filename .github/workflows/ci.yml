@@ -188,6 +188,47 @@ jobs:
       - if: always()
         run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
 
+  # Coverage gate (GH #199). Runs vitest with the v8 provider and the per-package
+  # thresholds declared in each vitest config, so a genuine drop in line/function/
+  # branch coverage fails the build. It mirrors `test`'s container + Postgres
+  # service — the server suite is integration-tested against a real database and
+  # self-migrates, exactly like `test`; the web suite needs no database but shares
+  # the step. Runs as its own job (rather than folded into `test`) so `test` keeps
+  # covering every workspace unchanged; gated behind `lint` to fail fast.
+  coverage:
+    needs: [lint]
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    container: node:22-bookworm
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run coverage
+        env:
+          # Reached by service name, not localhost (mirrors the `test` job).
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
   e2e:
     # The fixture job resolves — and publishes if missing — the exact image
     # this job pulls, so the tag can never name bytes other than the ones this
@@ -340,7 +381,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [test, e2e]
+    needs: [test, e2e, coverage]
     # A release tag is cut from main, so it validates and publishes on neutral
     # GitHub-hosted infra just like main does.
     runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
