@@ -1,4 +1,5 @@
 import type { AiClient } from "../../core/ai";
+import type { RateLimiter } from "../../core/rate-limit";
 import type { JmapAccessDeps, MailVariables } from "../mail/context";
 import type { SessionStore } from "../auth/sessions";
 
@@ -11,6 +12,9 @@ export type AiDeps = JmapAccessDeps & {
   sessions: SessionStore;
   aiClient: AiClient | null;
   fetchFn?: typeof fetch;
+  // Per-user quota over the paid-LLM endpoints (GH #194). Injectable so tests
+  // drive a small limit; a default is created in the router when absent.
+  aiRateLimiter?: RateLimiter;
 };
 
 export type AiVariables = MailVariables;
