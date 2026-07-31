@@ -261,6 +261,44 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("NODE_ENV / isProduction (GH #196)", () => {
+    it("defaults nodeEnv to development and isProduction to false", () => {
+      const config = loadConfig(validEnv);
+      expect(config.nodeEnv).toBe("development");
+      expect(config.isProduction).toBe(false);
+    });
+
+    it("marks isProduction true only when NODE_ENV is exactly production", () => {
+      expect(loadConfig({ ...validEnv, NODE_ENV: "production" }).isProduction).toBe(true);
+      expect(loadConfig({ ...validEnv, NODE_ENV: "staging" }).isProduction).toBe(false);
+      expect(loadConfig({ ...validEnv, NODE_ENV: "test" }).isProduction).toBe(false);
+    });
+
+    it("carries the raw NODE_ENV value through", () => {
+      expect(loadConfig({ ...validEnv, NODE_ENV: "staging" }).nodeEnv).toBe("staging");
+    });
+  });
+
+  describe("global body limit (GH #195)", () => {
+    it("defaults maxBodyBytes so no deployment has to set one", () => {
+      expect(loadConfig(validEnv).maxBodyBytes).toBe(2 * 1024 * 1024);
+    });
+
+    it("reads a MAX_BODY_BYTES override", () => {
+      expect(loadConfig({ ...validEnv, MAX_BODY_BYTES: "524288" }).maxBodyBytes).toBe(524_288);
+    });
+
+    it("treats an empty MAX_BODY_BYTES as absent", () => {
+      expect(loadConfig({ ...validEnv, MAX_BODY_BYTES: "" }).maxBodyBytes).toBe(2 * 1024 * 1024);
+    });
+
+    it("rejects a zero, negative or fractional MAX_BODY_BYTES", () => {
+      expect(() => loadConfig({ ...validEnv, MAX_BODY_BYTES: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, MAX_BODY_BYTES: "-1" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, MAX_BODY_BYTES: "1.5" })).toThrow();
+    });
+  });
+
   describe("database pool + timeouts (GH #191)", () => {
     it("defaults the pool and every DB timeout so no deployment has to set one", () => {
       const config = loadConfig(validEnv);

@@ -66,6 +66,65 @@ describe("app", () => {
   });
 });
 
+describe("health readiness (GH #197)", () => {
+  it("returns 200 and status ok when every check passes", async () => {
+    const app = createApp({
+      checks: { postgres: async () => true, stalwart: async () => true },
+    });
+    const res = await app.request("/api/health");
+    expect(res.status).toBe(200);
+    const body = healthResponseSchema.parse(await res.json());
+    expect(body.status).toBe("ok");
+    expect(body.checks).toEqual({ postgres: true, stalwart: true });
+  });
+
+  it("returns 503 and status degraded when any check fails, so a balancer can drain it", async () => {
+    const app = createApp({
+      checks: { postgres: async () => true, stalwart: async () => false },
+    });
+    const res = await app.request("/api/health");
+    expect(res.status).toBe(503);
+    const body = healthResponseSchema.parse(await res.json());
+    expect(body.status).toBe("degraded");
+    expect(body.checks.stalwart).toBe(false);
+  });
+});
+
+describe("global body limit (GH #195)", () => {
+  const echoRouter = new Hono()
+    .post("/echo", (c) => c.json({ ok: true }))
+    .post("/blobs", (c) => c.json({ ok: true }));
+
+  function post(app: ReturnType<typeof createApp>, path: string, bytes: number) {
+    return app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "x".repeat(bytes),
+    });
+  }
+
+  it("rejects a body over the configured limit with payload_too_large", async () => {
+    const app = createApp({ mailRouter: echoRouter, maxBodyBytes: 100 });
+    const res = await post(app, "/api/mail/echo", 500);
+    expect(res.status).toBe(413);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe("payload_too_large");
+  });
+
+  it("lets a body within the limit through", async () => {
+    const app = createApp({ mailRouter: echoRouter, maxBodyBytes: 1000 });
+    const res = await post(app, "/api/mail/echo", 50);
+    expect(res.status).toBe(200);
+  });
+
+  it("does not cap the streamed attachment upload route (POST /api/mail/blobs)", async () => {
+    // /blobs streams straight to Stalwart and legitimately carries multi-MB
+    // attachments; the global JSON-body cap must not shadow it.
+    const app = createApp({ mailRouter: echoRouter, maxBodyBytes: 100 });
+    const res = await post(app, "/api/mail/blobs", 500);
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("access log", () => {
   it("logs one line per response with method, path, status, duration and the trace id", async () => {
     const { res, lines } = await captureLogs(() => createApp().request("/api/health"));

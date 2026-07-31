@@ -368,8 +368,12 @@ adaptadores de Odoo llegan en F4.
 - **Frontend resiliente**: reintentos con backoff para fallos transitorios;
   si Stalwart no responde, banner de desconexión manteniendo visible el
   contenido cacheado.
-- **Health checks**: endpoint que reporta el estado de Postgres, Stalwart y
-  Authentik.
+- **Health checks**: `/api/health` reporta el estado de Postgres y Stalwart
+  (sonda JMAP acotada por el deadline saliente) y devuelve **503** cuando algún
+  chequeo falla, para que un balanceador/orquestador saque de rotación una
+  instancia degradada. Authentik (OIDC) no se sondea en cada poll a propósito:
+  su `discover()` es una llamada saliente al IdP y golpearla en cada health
+  reintroduciría el vector de amplificación que cierra #194.
 
 ## Testing
 

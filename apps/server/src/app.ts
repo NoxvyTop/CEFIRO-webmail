@@ -1,18 +1,29 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { HealthResponse, InstanceSettingsView } from "@webmail/shared";
 import type { InstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { logAccess, loggedPath } from "./core/access-log";
+import { DEFAULT_MAX_BODY_BYTES } from "./core/config";
 import { errorResponse } from "./core/error-response";
 import { DomainError } from "./core/errors";
 import { log } from "./core/logger";
 
 type Env = { Variables: { traceId: string } };
 
+// The one route that must bypass the global body cap: the attachment upload
+// streams its body straight to Stalwart (modules/mail/router.ts POST /blobs)
+// instead of buffering it via c.req.json(), and legitimate attachments
+// routinely exceed the cap — it needs a rate-aware upload budget, not this
+// memory-exhaustion guard (GH #195).
+const STREAMED_UPLOAD_PATH = "/api/mail/blobs";
+
 export type HealthCheck = () => Promise<boolean>;
 
 export type CreateAppOptions = {
   checks?: Record<string, HealthCheck>;
+  /** Global request-body ceiling in bytes (GH #195). See core/config.ts. */
+  maxBodyBytes?: number;
   instanceSettings?: InstanceSettingsRepo;
   authRouter?: Hono<any>;
   setupRouter?: Hono<any>;
@@ -58,6 +69,7 @@ const SECURITY_HEADERS: Record<string, string> = {
 
 export function createApp(options: CreateAppOptions = {}) {
   const checks = options.checks ?? {};
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -84,16 +96,35 @@ export function createApp(options: CreateAppOptions = {}) {
     });
   });
 
+  // Global request-body ceiling (GH #195), ahead of every router: without it,
+  // the send/drafts/signatures/filters/sso/preferences handlers buffered an
+  // unbounded c.req.json() — a memory-exhaustion lever for any authenticated
+  // client. The streamed attachment upload is the one exception (see above).
+  const globalBodyLimit = bodyLimit({
+    maxSize: maxBodyBytes,
+    onError: (c) => errorResponse(c, "payload_too_large", 413),
+  });
+  app.use("*", async (c, next) => {
+    if (c.req.method === "POST" && c.req.path === STREAMED_UPLOAD_PATH) return next();
+    return globalBodyLimit(c, next);
+  });
+
   app.get("/api/health", async (c) => {
     const results: Record<string, boolean> = {};
     for (const [name, check] of Object.entries(checks)) {
       results[name] = await check();
     }
+    const healthy = Object.values(results).every(Boolean);
     const body: HealthResponse = {
-      status: Object.values(results).every(Boolean) ? "ok" : "degraded",
+      status: healthy ? "ok" : "degraded",
       checks: results,
     };
-    return c.json(body);
+    // Readiness, not liveness (GH #197): a degraded instance returns 503 so a
+    // load balancer / orchestrator drains it from rotation, while a healthy one
+    // returns 200. One endpoint rather than split liveness/readiness — this is a
+    // single self-hosted container, and restarting the process cannot fix a down
+    // Postgres or Stalwart, so a readiness signal is what on-call and the LB need.
+    return c.json(body, healthy ? 200 : 503);
   });
 
   // Public: the sent-with-footer flag is non-sensitive instance branding

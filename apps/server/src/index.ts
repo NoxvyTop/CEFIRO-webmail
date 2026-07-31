@@ -1,11 +1,12 @@
 import { serveStatic } from "hono/bun";
 import { fileURLToPath } from "node:url";
-import { createApp } from "./app";
+import { createApp, type HealthCheck } from "./app";
 import { loadConfig, type AppConfig } from "./core/config";
 import { log } from "./core/logger";
 import { createShutdown, installProcessHandlers } from "./core/shutdown";
 import { createDb } from "./infra/db/client";
 import { checkDb } from "./infra/db/health";
+import { checkStalwart } from "./infra/stalwart/health";
 import { migrate } from "./infra/db/migrate";
 import { createAuditRepo } from "./infra/repos/audit";
 import { createInstanceSettingsRepo } from "./infra/repos/instance-settings";
@@ -166,8 +167,20 @@ if (bootstrap.enabled) {
   });
 }
 
+// Health checks wired into /api/health (GH #197). Stalwart is probed only when
+// a URL is configured — an unconfigured mail backend would otherwise report the
+// instance degraded forever. The SSO/OIDC provider is deliberately NOT probed
+// here: discovery is an outbound call to the IdP, and hitting it on every
+// health poll would reintroduce the amplification vector #194 just closed.
+const checks: Record<string, HealthCheck> = { postgres: () => checkDb(db) };
+if (config.stalwartUrl) {
+  const stalwartUrl = config.stalwartUrl;
+  checks.stalwart = () => checkStalwart({ url: stalwartUrl, timeoutMs: config.stalwartTimeoutMs });
+}
+
 const app = createApp({
-  checks: { postgres: () => checkDb(db) },
+  checks,
+  maxBodyBytes: config.maxBodyBytes,
   instanceSettings,
   authRouter: createAuthRouter({
     sessions,
@@ -179,6 +192,7 @@ const app = createApp({
     sessionTtlHours: config.sessionTtlHours,
     bootstrap,
     oidcClient,
+    isProduction: config.isProduction,
   }),
   setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
   mailRouter: createMailRouter({

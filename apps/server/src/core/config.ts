@@ -13,6 +13,17 @@ import {
 
 const masterKeySchema = z.string().length(44);
 
+// Global request-body ceiling (GH #195). A few MB rather than the "few hundred
+// KB" a plain JSON API would need, because send/drafts/signatures legitimately
+// carry inline images embedded as base64 data: URIs directly in the body/
+// signature HTML (see apps/web RichTextEditor MAX_IMAGE_BYTES = 1 MiB, and
+// compose's uncapped htmlBody) — a sub-MB cap would 413 a normal email or
+// signature with a single inline image. 2 MB is the smallest small-integer-MB
+// cap that still admits one max-size inline image plus the JSON/HTML envelope,
+// the same sizing the profile avatar limit already uses. It bounds memory
+// (the "buffer a 100 MB body" vector this closes) without breaking real bodies.
+export const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
+
 // A deadline of 0 or a fraction of a millisecond would abort every outbound
 // call before it started, so those are configuration errors, not tuning.
 const timeoutMsSchema = z.coerce.number().int().positive();
@@ -35,6 +46,12 @@ const configSchema = z.object({
     .array(z.object({ version: z.number().int().positive(), key: masterKeySchema }))
     .default([]),
   appUrl: z.string().url(),
+  // Deployment environment (GH #196). Only "production" is load-bearing: it is
+  // what forces Secure cookies regardless of APP_URL's scheme, so a prod
+  // deployment behind a TLS-terminating proxy configured with APP_URL=http://…
+  // can no longer silently ship a cleartext session cookie. Defaults to
+  // development so local/test runs over http keep working unchanged.
+  nodeEnv: z.string().min(1).default("development"),
   bootstrapMode: z.boolean(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
   stalwartUrl: z.string().url().optional(),
@@ -72,6 +89,9 @@ const configSchema = z.object({
   // provider requires (OpenAI-SDK convention). Only consulted when
   // aiProvider is "openai-compat" — see infra/ai/openai-compatible.ts.
   aiBaseUrl: z.string().min(1).optional(),
+  // Global request-body ceiling in bytes (GH #195). A zero/negative/fractional
+  // limit is a misconfiguration, not tuning — same shape as the pool sizes.
+  maxBodyBytes: positiveIntSchema.default(DEFAULT_MAX_BODY_BYTES),
 }).superRefine((config, ctx) => {
   const declared = new Set<number>();
   for (const previous of config.previousMasterKeys) {
@@ -93,7 +113,9 @@ const configSchema = z.object({
   }
 });
 
-export type AppConfig = z.infer<typeof configSchema>;
+// `isProduction` is derived once here rather than re-deriving `nodeEnv ===
+// "production"` at each call site, so the production signal has a single source.
+export type AppConfig = z.infer<typeof configSchema> & { isProduction: boolean };
 
 /**
  * `MASTER_KEY_PREVIOUS` lists retired master keys as `version:base64key`,
@@ -120,13 +142,14 @@ function parsePreviousMasterKeys(
 export function loadConfig(
   env: Record<string, string | undefined>,
 ): AppConfig {
-  return configSchema.parse({
+  const parsed = configSchema.parse({
     port: env.PORT ?? undefined,
     databaseUrl: env.DATABASE_URL,
     masterKey: env.MASTER_KEY,
     masterKeyVersion: env.MASTER_KEY_VERSION ?? undefined,
     previousMasterKeys: parsePreviousMasterKeys(env.MASTER_KEY_PREVIOUS),
     appUrl: env.APP_URL,
+    nodeEnv: env.NODE_ENV || undefined,
     bootstrapMode: env.BOOTSTRAP_MODE === "true" || env.BOOTSTRAP_MODE === "1",
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
     stalwartUrl: env.STALWART_URL || undefined,
@@ -143,5 +166,7 @@ export function loadConfig(
     aiApiKey: env.AI_API_KEY || undefined,
     aiModel: env.AI_MODEL || undefined,
     aiBaseUrl: env.AI_BASE_URL || undefined,
+    maxBodyBytes: env.MAX_BODY_BYTES || undefined,
   });
+  return { ...parsed, isProduction: parsed.nodeEnv === "production" };
 }
