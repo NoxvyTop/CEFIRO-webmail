@@ -5,6 +5,7 @@ import type { AuditRepo } from "../../infra/repos/audit";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
 import type { Bootstrap } from "../setup/bootstrap";
+import { clientIp, DEFAULT_TRUSTED_PROXY_HOPS, rateLimitKey } from "../../core/client-ip";
 import { errorResponse } from "../../core/error-response";
 import { DomainError } from "../../core/errors";
 import { log } from "../../core/logger";
@@ -126,6 +127,11 @@ export type AuthRouterDeps = {
   bootstrap?: Bootstrap;
   rateLimiter?: RateLimiter;
   loginRateLimiter?: RateLimiter;
+  /**
+   * Proxy hops to trust in `X-Forwarded-For` (GH #238). Both ceilings below and
+   * the audit `ip` column are keyed off it; see core/client-ip.ts.
+   */
+  trustedProxyHops?: number;
   // When true (NODE_ENV=production, see core/config.ts), every cookie is
   // written Secure regardless of APP_URL's scheme — see cookieSecure below.
   isProduction?: boolean;
@@ -134,6 +140,7 @@ export type AuthRouterDeps = {
 export function createAuthRouter(deps: AuthRouterDeps) {
   const router = new Hono<{ Variables: AuthVariables }>();
   const oidc = deps.oidcClient ?? defaultOidcClient;
+  const trustedProxyHops = deps.trustedProxyHops ?? DEFAULT_TRUSTED_PROXY_HOPS;
   // One limiter per router instance, living in this closure so its counters
   // persist across requests. Injectable so tests can drive a small limit.
   const bootstrapRateLimiter =
@@ -180,18 +187,16 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     if (!ssoConfig || !masterKey || !appUrl) {
       return errorResponse(c, "sso_not_configured", 503);
     }
-    // Client IP from the reverse proxy. We take the LEFTMOST entry of
-    // X-Forwarded-For — the original client the trusted proxy recorded — rather
-    // than the raw header, since a client can prepend forged hops (GH #194).
-    // This assumes a reverse proxy we control always fronts this endpoint and
-    // rewrites/appends XFF; a direct-to-app exposure would need a hardened
-    // client-IP source. Absent header shares one bucket. (The bootstrap path
-    // keeps its own coarser keying; this endpoint gates on the client hop.)
-    const forwardedFor = c.req.header("x-forwarded-for");
-    const clientIp = forwardedFor?.split(",")[0]?.trim() || "unknown";
+    // Client IP counted from the RIGHT of X-Forwarded-For, one shared bucket
+    // when it cannot be attributed (GH #238). This used to take the LEFTMOST
+    // entry, which under the appending proxy this deployment documents is
+    // exactly the part the caller wrote — so rotating the header handed out a
+    // fresh budget per request and the ceiling GH #194 added never bound
+    // anything. See core/client-ip.ts.
+    //
     // Gate BEFORE the outbound oidc.discover(): a flood is refused cheaply and
     // never amplifies into a discovery request against the IdP.
-    const gate = loginRateLimiter.check(clientIp);
+    const gate = loginRateLimiter.check(rateLimitKey(c, trustedProxyHops));
     if (!gate.allowed) {
       c.header("Retry-After", String(gate.retryAfterSeconds));
       return errorResponse(c, "too_many_requests", 429);
@@ -230,15 +235,17 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     if (!bootstrap?.enabled || !users || !audit) {
       return errorResponse(c, "not_found", 404);
     }
-    // Client IP for the rate gate and the audit row. This trusts the reverse
-    // proxy's X-Forwarded-For — acceptable for a self-hosted deployment that
-    // always sits behind a reverse proxy we control; a direct-to-app exposure
-    // would need a hardened client-IP source. Absent header shares one bucket.
-    const ip = c.req.header("x-forwarded-for");
+    // Client IP for the rate gate and the audit row, attributed by counting
+    // trusted hops from the RIGHT of X-Forwarded-For (GH #238). This used to be
+    // the RAW header: the whole comma-separated string became the key, so a
+    // caller who appended one junk hop per attempt got an unlimited number of
+    // fresh buckets — and the same string was written verbatim into the audit
+    // `ip` column, which is how that column got poisoned rather than filled.
+    const ip = clientIp(c, trustedProxyHops);
     // Gate BEFORE parsing the body, verifying the password, or writing any
     // audit row: a flood is refused cheaply and — the point of GH #183 — a
     // blocked request produces ZERO `bootstrap.login_failed` rows.
-    const gate = bootstrapRateLimiter.check(ip ?? "unknown");
+    const gate = bootstrapRateLimiter.check(rateLimitKey(c, trustedProxyHops));
     if (!gate.allowed) {
       c.header("Retry-After", String(gate.retryAfterSeconds));
       return errorResponse(c, "too_many_requests", 429);
@@ -352,7 +359,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       await audit.record({
         actor: email,
         action: "login.success",
-        ip: c.req.header("x-forwarded-for"),
+        ip: clientIp(c, trustedProxyHops),
       });
       return c.redirect("/");
     } catch (error) {

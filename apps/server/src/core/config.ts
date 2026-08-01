@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_TRUSTED_PROXY_HOPS } from "./client-ip";
 import {
   DEFAULT_AI_TIMEOUT_MS,
   DEFAULT_OIDC_TIMEOUT_MS,
@@ -145,6 +146,22 @@ const configSchema = z.object({
   // travels through the one schema the rest of the contract goes through, and
   // `min(1)` refuses an empty string instead of unlocking an endpoint with it.
   metricsToken: z.string().min(1).optional(),
+  // How many proxies append to `X-Forwarded-For` between the internet and this
+  // process (GH #238). Load-bearing for every per-IP ceiling and for the audit
+  // `ip` column: the client is read by counting this many entries from the
+  // RIGHT of the chain, so a caller cannot choose their own rate-limit key by
+  // prepending hops. See core/client-ip.ts for the attribution rule and
+  // docs/OPERATIONS.md for what the proxy has to send.
+  //
+  // Zero is legal and means "trust nothing in that header" — correct for a
+  // process exposed directly, at the price of every ceiling becoming global.
+  // Anything negative or fractional is a misconfiguration, not tuning, so this
+  // is the one numeric knob here that is nonnegative rather than positive.
+  trustedProxyHops: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(DEFAULT_TRUSTED_PROXY_HOPS),
 }).superRefine((config, ctx) => {
   // GH #223: MASTER_KEY was only ever checked for LENGTH, so the key shipped in
   // docker-compose.dev.yml (`dev-master-key-dev-master-key-01`, base64) passed
@@ -281,6 +298,7 @@ export function loadConfig(
     // stray space) in a compose file has not configured a token, and must not
     // get the endpoint unlocked by whitespace.
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
+    trustedProxyHops: env.TRUSTED_PROXY_HOPS || undefined,
   });
   return { ...parsed, isProduction: parsed.nodeEnv === "production" };
 }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { apiErrorSchema, healthResponseSchema } from "@webmail/shared";
 import { createApp } from "./app";
+import { withDeadlineFetch } from "./core/deadline";
 import { errorResponse } from "./core/error-response";
 import { DEFAULT_HEALTH_BUDGET_MS } from "./core/health";
 import { log } from "./core/logger";
@@ -144,6 +145,83 @@ describe("health budget (GH #212)", () => {
     });
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
+  });
+
+  it("cancels a check that overruns instead of just abandoning it (GH #242)", async () => {
+    // The defect: the probe stopped WAITING at its budget but the check kept
+    // running to its own upstream deadline (~10s for Stalwart), so every
+    // cold-cache poll left seconds of outbound work behind an answer that had
+    // already been sent — against a dependency that is by hypothesis struggling.
+    let observed: AbortSignal | undefined;
+    const app = createApp({
+      checks: {
+        stalwart: (signal) => {
+          observed = signal;
+          return new Promise<boolean>(() => {});
+        },
+      },
+      healthBudgetMs: 50,
+    });
+
+    expect((await app.request("/api/health")).status).toBe(503);
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it("cancels a check that finished too, so nothing is left holding the signal", async () => {
+    let observed: AbortSignal | undefined;
+    const app = createApp({
+      checks: {
+        postgres: async (signal) => {
+          observed = signal;
+          return true;
+        },
+      },
+    });
+
+    expect((await app.request("/api/health")).status).toBe(200);
+    expect(observed?.aborted).toBe(true);
+  });
+});
+
+// GH #242. Liveness and readiness are two questions, and collapsing them meant
+// a Stalwart outage marked this container unhealthy — so Swarm restarted a
+// process that was working, and `depends_on: service_healthy` refused to start
+// what waited on it. Restarting this container has never fixed a down
+// dependency.
+describe("liveness endpoint (GH #242)", () => {
+  it("answers 200 while the process is serving", async () => {
+    const res = await createApp().request("/api/health/live");
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { status: string }).toEqual({ status: "alive" });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("stays 200 with every dependency down, while readiness reports 503", async () => {
+    // The whole point of the split: the container is alive and serving the SPA;
+    // it is the DEPENDENCY that is unavailable, and that is readiness' answer.
+    const app = createApp({ checks: { postgres: async () => false } });
+    expect((await app.request("/api/health/live")).status).toBe(200);
+    expect((await app.request("/api/health")).status).toBe(503);
+  });
+
+  it("runs no dependency check at all", async () => {
+    // It must not become a second way to generate load on Stalwart, and it must
+    // answer even when every probe is stalled.
+    let probes = 0;
+    const app = createApp({
+      checks: {
+        stalwart: () => {
+          probes += 1;
+          return new Promise<boolean>(() => {});
+        },
+      },
+      healthBudgetMs: 5_000,
+    });
+
+    const startedAt = Date.now();
+    expect((await app.request("/api/health/live")).status).toBe(200);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(probes).toBe(0);
   });
 });
 
@@ -379,6 +457,31 @@ describe("metrics endpoint (GH #208)", () => {
 
     expect((await scrape(app, "guess-1", "10.0.0.2")).status).toBe(401);
     expect((await scrape(app, "guess-2", "10.0.0.2")).status).toBe(429);
+  });
+
+  it("reports outbound calls made anywhere in the process (GH #240)", async () => {
+    // The gap this closes: the counters above show THAT a request failed, never
+    // which dependency was the reason. Both calls below go through the same
+    // wrapper the JMAP client, the OIDC client and the AI adapters use, which
+    // is why instrumenting one file covers every outbound call there is.
+    const app = createApp({ metricsToken: TOKEN });
+
+    const answering = (async () => new Response("{}")) as unknown as typeof fetch;
+    const reachable = withDeadlineFetch(answering, "stalwart", 1_000);
+    await reachable("https://mail.test/.well-known/jmap");
+
+    // Accepts the connection and never answers — the case the deadline exists
+    // for, and the one that must not be labelled the same as "refused".
+    const mute = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    const silent = withDeadlineFetch(mute, "oidc", 10);
+    await expect(silent("https://auth.test/.well-known/openid-configuration")).rejects.toThrow();
+
+    const body = await (await scrape(app)).text();
+    expect(body).toContain('cefiro_outbound_requests_total{dependency="stalwart",outcome="ok"} 1');
+    // A deadline, not a refused connection — the distinction that decides the
+    // first move at 3am, and the only place able to draw it.
+    expect(body).toContain('cefiro_outbound_requests_total{dependency="oidc",outcome="timeout"} 1');
+    expect(body).toContain('cefiro_outbound_request_duration_seconds_count{dependency="stalwart"} 1');
   });
 
   it("keeps its budget separate from the health poll's", async () => {

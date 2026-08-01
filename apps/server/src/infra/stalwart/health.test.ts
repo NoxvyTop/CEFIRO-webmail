@@ -49,6 +49,38 @@ describe("checkStalwart", () => {
     expect(await checkStalwart({ url: "https://mail.test", timeoutMs: 20, fetchFn })).toBe(false);
   });
 
+  // GH #242: the probe's budget (2s) is an order of magnitude tighter than this
+  // dependency's own deadline (~10s), and before this the fetch never learned
+  // the probe had given up — so a cold-cache poll left seconds of outbound work
+  // running behind an answer that had already been sent.
+  it("aborts the fetch when the health probe's budget runs out", async () => {
+    let observed: AbortSignal | undefined;
+    // Rejects on abort, the way a real fetch does — which is the whole point:
+    // without the signal reaching it, this request had nothing to reject on.
+    const fetchFn = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      observed = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      });
+    }) as unknown as typeof fetch;
+    const budget = new AbortController();
+
+    const probe = checkStalwart({
+      url: "https://mail.test",
+      timeoutMs: 60_000,
+      fetchFn,
+      signal: budget.signal,
+    });
+    budget.abort();
+
+    // Unhealthy well inside the 60s outbound deadline, because the budget — not
+    // the deadline — is what ended it.
+    expect(await probe).toBe(false);
+    expect(observed?.aborted).toBe(true);
+  });
+
   it("trims a trailing slash on the base URL", async () => {
     const fetchFn = vi.fn(async () => response(401));
     await checkStalwart({ url: "https://mail.test/", fetchFn: fetchFn as unknown as typeof fetch });

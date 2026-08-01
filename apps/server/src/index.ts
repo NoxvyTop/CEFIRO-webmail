@@ -249,7 +249,11 @@ if (bootstrap.enabled) {
 const checks: Record<string, HealthCheck> = { postgres: () => checkDb(db) };
 if (config.stalwartUrl) {
   const stalwartUrl = config.stalwartUrl;
-  checks.stalwart = () => checkStalwart({ url: stalwartUrl, timeoutMs: config.stalwartTimeoutMs });
+  // The probe's budget travels WITH the request (GH #242): overrunning it now
+  // cancels the fetch instead of leaving it running behind an answer that has
+  // already been sent. See core/health.ts.
+  checks.stalwart = (signal) =>
+    checkStalwart({ url: stalwartUrl, timeoutMs: config.stalwartTimeoutMs, signal });
 }
 
 const app = createApp({
@@ -257,6 +261,8 @@ const app = createApp({
   maxBodyBytes: config.maxBodyBytes,
   // From the validated schema, not a second read of the environment (GH #259).
   metricsToken: config.metricsToken,
+  // The proxy contract every per-IP ceiling is keyed on (GH #238).
+  trustedProxyHops: config.trustedProxyHops,
   instanceSettings,
   authRouter: createAuthRouter({
     sessions,
@@ -269,8 +275,16 @@ const app = createApp({
     bootstrap,
     oidcClient,
     isProduction: config.isProduction,
+    trustedProxyHops: config.trustedProxyHops,
   }),
-  setupRouter: createSetupRouter({ bootstrap, users, mailCredentials, ssoConfig, audit }),
+  setupRouter: createSetupRouter({
+    bootstrap,
+    users,
+    mailCredentials,
+    ssoConfig,
+    audit,
+    trustedProxyHops: config.trustedProxyHops,
+  }),
   mailRouter: createMailRouter({
     sessions,
     mailCredentials,

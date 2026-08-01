@@ -1,6 +1,21 @@
 import type { HealthResponse } from "@webmail/shared";
 
-export type HealthCheck = () => Promise<boolean>;
+/**
+ * One dependency probe.
+ *
+ * The `signal` is aborted the moment the probe's budget runs out (GH #242).
+ * Honouring it is not optional politeness: `runCheck` below stops WAITING for a
+ * check that overruns, and before this there was no way to tell the check that,
+ * so every cold-cache poll left a Stalwart fetch running for its own full 10s
+ * deadline behind a 2s budget that had already reported it failed. Under the
+ * container's 30s probe interval that is a permanent background of abandoned
+ * requests against a dependency that is, by hypothesis, already struggling.
+ *
+ * The parameter is optional at the call site — a check that genuinely has
+ * nothing to cancel simply ignores it — but every check that performs I/O
+ * should thread it through.
+ */
+export type HealthCheck = (signal: AbortSignal) => Promise<boolean>;
 
 /**
  * Budget for the WHOLE /api/health probe (GH #212).
@@ -41,15 +56,26 @@ export type HealthProbeResult = { body: HealthResponse; healthy: boolean };
  * Runs one check under its own budget. Never rejects: a check that throws or
  * overruns is a failed check, not a failed endpoint — /api/health must always
  * answer, and answer quickly, or it cannot do its job at all.
+ *
+ * Overrunning now CANCELS the check as well as abandoning it (GH #242). The
+ * abort fires in both directions on purpose: when the budget wins it stops the
+ * work nobody is waiting for any more, and when the check wins it releases
+ * anything the implementation may still be holding on that signal. Abandoning
+ * without cancelling is how a 2s budget quietly produced 10s of outbound work
+ * per poll.
  */
 async function runCheck(check: HealthCheck, budgetMs: number): Promise<boolean> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), budgetMs);
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(false);
+    }, budgetMs);
   });
   const attempt = (async () => {
     try {
-      return await check();
+      return await check(controller.signal);
     } catch {
       return false;
     }
@@ -58,6 +84,7 @@ async function runCheck(check: HealthCheck, budgetMs: number): Promise<boolean> 
     return await Promise.race([attempt, expired]);
   } finally {
     clearTimeout(timer);
+    controller.abort();
   }
 }
 

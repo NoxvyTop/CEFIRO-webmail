@@ -11,6 +11,8 @@ import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createMailRouter } from "./router";
+import { evictMailSession } from "./context";
+import { DEFAULT_MAX_STREAMS_PER_USER } from "./streams";
 import type { JmapClient } from "../../infra/stalwart/jmap";
 
 const sql = createDb(testDatabaseUrl());
@@ -42,6 +44,7 @@ const stubJmapNoEventSource: JmapClient = {
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
 let token: string;
+let userId: string;
 let tokenNoEventSource: string;
 
 let capturedUrl: string | undefined;
@@ -76,6 +79,7 @@ beforeAll(async () => {
     displayName: "Mail User",
   });
   await mailCredentials.set(withCred.id, "mailbox-pw");
+  userId = withCred.id;
   token = (await sessions.create(withCred.id, 1)).token;
 
   const withCredNoEventSource = await users.create({
@@ -219,6 +223,68 @@ describe("GET /api/mail/events", () => {
       expect(upstreamSignal?.aborted).toBe(false);
 
       client.abort();
+      expect(upstreamSignal?.aborted).toBe(true);
+    });
+  });
+
+  // GH #241. This route clears Bun's idle timeout for its socket (correct — GH
+  // #204), which left it as the one route with no deadline, no ceiling and no
+  // bookkeeping at all. The registry in ./streams.ts owns all three; these pin
+  // the two properties that are only observable through the route.
+  describe("stream lifetime (GH #241)", () => {
+    /** A live event stream: connected, nothing sent yet. */
+    function liveUpstream(): Response {
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }
+
+    function connect(app: ReturnType<typeof makeApp>) {
+      return app.request("/api/mail/events", { headers: { cookie: `session=${token}` } });
+    }
+
+    it("caps how many streams one user can hold open", async () => {
+      upstreamResponse = liveUpstream();
+      const app = makeApp(stubJmap, stubFetch());
+      const open: Response[] = [];
+      for (let i = 0; i < DEFAULT_MAX_STREAMS_PER_USER; i += 1) {
+        upstreamResponse = liveUpstream();
+        const res = await connect(app);
+        expect(res.status).toBe(200);
+        open.push(res);
+      }
+
+      // One client looping on connect used to pin an unbounded number of
+      // upstream Stalwart sockets, one per attempt, forever.
+      const beforeCount = fetchCallCount;
+      const refused = await connect(app);
+      expect(refused.status).toBe(429);
+      expect(((await refused.json()) as { code: string }).code).toBe("too_many_streams");
+      // Refused BEFORE the upstream call, so it costs no Stalwart connection.
+      expect(fetchCallCount).toBe(beforeCount);
+
+      // Releasing one frees exactly one slot.
+      await open[0]!.body?.cancel();
+      upstreamResponse = liveUpstream();
+      const readmitted = await connect(app);
+      expect(readmitted.status).toBe(200);
+
+      await Promise.all([...open.slice(1), readmitted].map((res) => res.body?.cancel()));
+    });
+
+    it("ends an in-flight stream when the session is invalidated", async () => {
+      // The defect: evicting a session dropped the cached JMAP session and
+      // nothing else, so a stream opened before logout kept delivering that
+      // mailbox's events afterwards, on credentials that had been revoked.
+      upstreamResponse = liveUpstream();
+      const res = await connect(makeApp(stubJmap, stubFetch()));
+      expect(res.status).toBe(200);
+      const upstreamSignal = capturedInit?.signal;
+      const reader = res.body!.getReader();
+      const pending = reader.read();
+
+      evictMailSession(userId);
+
+      await expect(pending).resolves.toEqual({ done: true, value: undefined });
+      // And the Stalwart connection went with it rather than being abandoned.
       expect(upstreamSignal?.aborted).toBe(true);
     });
   });

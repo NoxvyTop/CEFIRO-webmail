@@ -12,11 +12,20 @@ import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadl
  *
  * The request carries the same outbound deadline as every other Stalwart call
  * (core/deadline.ts) so a hung Stalwart can never hang the health endpoint.
+ *
+ * It also carries the probe's own `signal` (GH #242). The two bound different
+ * things and both are needed: the deadline is this dependency's ceiling (~10s),
+ * while the signal is the health probe's much tighter budget (2s). Without the
+ * signal, a check the probe had already given up on kept running to the FULL
+ * outbound deadline — the request was abandoned, never cancelled, so every
+ * cold-cache poll of a slow Stalwart left seconds of outbound work behind it.
  */
 export async function checkStalwart(input: {
   url: string;
   timeoutMs?: number;
   fetchFn?: typeof fetch;
+  /** The health probe's budget, from core/health.ts. */
+  signal?: AbortSignal;
 }): Promise<boolean> {
   const base = input.url.replace(/\/$/, "");
   const deadlineFetch = withDeadlineFetch(
@@ -28,6 +37,9 @@ export async function checkStalwart(input: {
     const res = await deadlineFetch(`${base}/.well-known/jmap`, {
       method: "GET",
       headers: { accept: "application/json" },
+      // withDeadlineFetch composes this with its own deadline rather than
+      // replacing it, so whichever fires first aborts the request.
+      signal: input.signal,
     });
     return res.status < 500;
   } catch {

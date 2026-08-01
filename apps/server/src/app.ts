@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { InstanceSettingsView } from "@webmail/shared";
 import type { InstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { logAccess, loggedPath } from "./core/access-log";
+import { DEFAULT_TRUSTED_PROXY_HOPS, rateLimitKey } from "./core/client-ip";
 import { DEFAULT_MAX_BODY_BYTES } from "./core/config";
 import { errorResponse } from "./core/error-response";
 import { DomainError } from "./core/errors";
@@ -13,6 +14,7 @@ import {
   bearerTokenMatches,
   createMetrics,
   PROMETHEUS_CONTENT_TYPE,
+  registerMetrics,
   routeLabel,
 } from "./core/metrics";
 import { createRateLimiter, type RateLimiter } from "./core/rate-limit";
@@ -66,6 +68,11 @@ export type CreateAppOptions = {
   metricsRateLimiter?: RateLimiter;
   /** Global request-body ceiling in bytes (GH #195). See core/config.ts. */
   maxBodyBytes?: number;
+  /**
+   * How many proxy hops to trust in `X-Forwarded-For` (GH #238). Keys both
+   * ceilings below; see core/client-ip.ts for the attribution rule.
+   */
+  trustedProxyHops?: number;
   instanceSettings?: InstanceSettingsRepo;
   authRouter?: Hono<any>;
   setupRouter?: Hono<any>;
@@ -109,20 +116,20 @@ const SECURITY_HEADERS: Record<string, string> = {
   "strict-transport-security": "max-age=31536000; includeSubDomains",
 };
 
-/**
- * Rate-limit key for a request that carries no session to key on. Takes the
- * first hop of `x-forwarded-for` — the same identifier the break-glass login
- * paths use — and falls back to one shared bucket for a direct connection,
- * which behind a reverse proxy is only ever the container's own probe.
- */
-function clientKey(forwardedFor: string | undefined): string {
-  return forwardedFor?.split(",")[0]?.trim() || "direct";
-}
-
 export function createApp(options: CreateAppOptions = {}) {
   const checks = options.checks ?? {};
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  // Rate-limit key for the two routes here that carry no session to key on.
+  // This used to be a local helper taking the FIRST hop of `x-forwarded-for`,
+  // which under an appending proxy is the part the caller wrote — see
+  // core/client-ip.ts for why that let one client rotate through unlimited
+  // buckets, and why the same helper now serves all five ceilings (GH #238).
+  const trustedProxyHops = options.trustedProxyHops ?? DEFAULT_TRUSTED_PROXY_HOPS;
   const metrics = createMetrics();
+  // Outbound calls (core/deadline.ts) and open SSE streams (modules/mail/
+  // streams.ts) happen far from here and report in through the module-level
+  // handle (GH #240).
+  registerMetrics(metrics);
   // An empty value counts as unset: an operator who declares METRICS_TOKEN= in
   // a compose file has not configured a token, and must not get an endpoint
   // unlocked by the empty string. core/config.ts already refuses one; this
@@ -193,8 +200,35 @@ export function createApp(options: CreateAppOptions = {}) {
     options.healthRateLimiter ??
     createRateLimiter({ limit: HEALTH_MAX_REQUESTS, windowMs: HEALTH_RATE_WINDOW_MS });
 
+  // Liveness, deliberately separate from the readiness answer below (GH #242).
+  //
+  // It reports one thing — this process is up and serving HTTP — and it is what
+  // the container's own HEALTHCHECK probes. The two questions had been
+  // collapsed into `/api/health`, so a Stalwart outage marked the webmail
+  // container UNHEALTHY: an orchestrator then restarts (or refuses to start) a
+  // process that is working perfectly, serving the SPA and correctly answering
+  // 503 on the readiness endpoint. Restarting this container has never fixed a
+  // down Postgres or Stalwart, so tying container health to a dependency turns
+  // one outage into two. Dependency state stays where a load balancer and an
+  // orchestrator's READINESS probe read it: `/api/health`. See
+  // docs/OPERATIONS.md and the Dockerfile's HEALTHCHECK.
+  //
+  // Shares the readiness ceiling rather than opening a second one: it is the
+  // same operator surface, the response is a constant, and the container probe
+  // connects directly (no `x-forwarded-for`) into a bucket no proxied caller
+  // can reach.
+  app.get("/api/health/live", (c) => {
+    const gate = healthRateLimiter.check(rateLimitKey(c, trustedProxyHops));
+    if (!gate.allowed) {
+      c.header("Retry-After", String(gate.retryAfterSeconds));
+      return errorResponse(c, "rate_limited", 429);
+    }
+    c.header("cache-control", "no-store");
+    return c.json({ status: "alive" });
+  });
+
   app.get("/api/health", async (c) => {
-    const gate = healthRateLimiter.check(clientKey(c.req.header("x-forwarded-for")));
+    const gate = healthRateLimiter.check(rateLimitKey(c, trustedProxyHops));
     if (!gate.allowed) {
       c.header("Retry-After", String(gate.retryAfterSeconds));
       return errorResponse(c, "rate_limited", 429);
@@ -242,7 +276,7 @@ export function createApp(options: CreateAppOptions = {}) {
     app.get("/metrics", async (c) => {
       // Ahead of the token check: an endpoint that verifies a secret must bound
       // how fast it can be asked to, or it is a guessing oracle.
-      const gate = metricsRateLimiter.check(clientKey(c.req.header("x-forwarded-for")));
+      const gate = metricsRateLimiter.check(rateLimitKey(c, trustedProxyHops));
       if (!gate.allowed) {
         c.header("Retry-After", String(gate.retryAfterSeconds));
         return errorResponse(c, "rate_limited", 429);

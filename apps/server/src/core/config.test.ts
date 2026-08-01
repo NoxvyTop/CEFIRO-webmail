@@ -496,6 +496,33 @@ describe("loadConfig", () => {
     });
   });
 
+  // GH #238: the proxy contract every per-IP ceiling and the audit `ip` column
+  // are keyed on. It travels through the same schema as the rest so a
+  // fat-fingered value refuses to boot instead of silently changing who the
+  // rate limiters think is calling.
+  describe("TRUSTED_PROXY_HOPS (GH #238)", () => {
+    it("defaults to the single appending proxy this repository documents", () => {
+      expect(loadConfig(validEnv).trustedProxyHops).toBe(1);
+    });
+
+    it("accepts a longer chain", () => {
+      expect(loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops).toBe(2);
+    });
+
+    it("accepts zero, which means the header is not trusted at all", () => {
+      // Unlike every other numeric knob here, zero is a legitimate setting: it
+      // is the right answer for a process exposed directly, at the price of the
+      // ceilings becoming global.
+      expect(loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops).toBe(0);
+    });
+
+    it("refuses a negative or fractional hop count", () => {
+      expect(() => loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "-1" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "1.5" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "one" })).toThrow();
+    });
+  });
+
   // GH #235: the break-glass credential is the operator's to set now — the
   // process used to mint one and print it to the log stream in plaintext.
   describe("BOOTSTRAP_PASSWORD (GH #235)", () => {

@@ -3,7 +3,10 @@ import {
   bearerTokenMatches,
   createMetrics,
   methodLabel,
+  recordOutbound,
+  registerMetrics,
   routeLabel,
+  setOpenStreams,
   UNMATCHED_ROUTE,
 } from "./metrics";
 
@@ -153,6 +156,115 @@ describe("request metrics (GH #208)", () => {
     const metrics = createMetrics();
     metrics.recordRequest({ method: "GET", route: 'a"b\\c', status: 200, durationMs: 1 });
     expect(metrics.render({})).toContain('route="a\\"b\\\\c"');
+  });
+});
+
+// GH #240. Everything above is inbound: it shows THAT a request was slow or
+// failed, never which of the three services this process calls was the reason.
+describe("outbound metrics (GH #240)", () => {
+  it("counts calls per dependency and outcome", () => {
+    const metrics = createMetrics();
+    metrics.recordOutbound({ dependency: "stalwart", outcome: "ok", durationMs: 12 });
+    metrics.recordOutbound({ dependency: "stalwart", outcome: "ok", durationMs: 8 });
+    metrics.recordOutbound({ dependency: "stalwart", outcome: "timeout", durationMs: 10_000 });
+    metrics.recordOutbound({ dependency: "oidc", outcome: "error", durationMs: 3 });
+
+    const rendered = metrics.render({});
+    expect(sample(rendered, 'cefiro_outbound_requests_total{dependency="stalwart",outcome="ok"}')).toBe("2");
+    expect(
+      sample(rendered, 'cefiro_outbound_requests_total{dependency="stalwart",outcome="timeout"}'),
+    ).toBe("1");
+    expect(sample(rendered, 'cefiro_outbound_requests_total{dependency="oidc",outcome="error"}')).toBe("1");
+  });
+
+  it("separates a deadline from a refused connection", () => {
+    // The distinction on-call needs: `timeout` is a dependency that accepts the
+    // connection and does not answer, `error` is one that is not there. The
+    // first move is different, so they cannot share a label.
+    const metrics = createMetrics();
+    metrics.recordOutbound({ dependency: "ai", outcome: "timeout", durationMs: 60_000 });
+    const rendered = metrics.render({});
+    expect(rendered).toContain('cefiro_outbound_requests_total{dependency="ai",outcome="timeout"} 1');
+    expect(rendered).not.toContain('dependency="ai",outcome="error"');
+  });
+
+  it("records latency in cumulative buckets reaching the longest deadline", () => {
+    // The AI deadline is 60s (core/deadline.ts), so a bucket set ending at 10s
+    // would report every AI call as +Inf — the one dependency whose latency
+    // actually varies would be the one whose latency is unreadable.
+    const metrics = createMetrics();
+    metrics.recordOutbound({ dependency: "ai", outcome: "ok", durationMs: 25_000 });
+    const rendered = metrics.render({});
+
+    expect(sample(rendered, 'cefiro_outbound_request_duration_seconds_bucket{dependency="ai",le="10"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_outbound_request_duration_seconds_bucket{dependency="ai",le="30"}')).toBe("1");
+    expect(sample(rendered, 'cefiro_outbound_request_duration_seconds_bucket{dependency="ai",le="60"}')).toBe("1");
+    expect(sample(rendered, 'cefiro_outbound_request_duration_seconds_bucket{dependency="ai",le="+Inf"}')).toBe("1");
+    expect(sample(rendered, 'cefiro_outbound_request_duration_seconds_count{dependency="ai"}')).toBe("1");
+    expect(sample(rendered, 'cefiro_outbound_request_duration_seconds_sum{dependency="ai"}')).toBe("25");
+  });
+
+  it("collapses an unknown dependency instead of minting a series for it", () => {
+    // Same cardinality guard as the method label: a label value is kept for the
+    // life of the process, so the set has to be closed by construction.
+    const metrics = createMetrics();
+    metrics.recordOutbound({ dependency: "whatever-comes-next", outcome: "ok", durationMs: 1 });
+    const rendered = metrics.render({});
+    expect(rendered).not.toContain("whatever-comes-next");
+    expect(rendered).toContain('cefiro_outbound_requests_total{dependency="other",outcome="ok"} 1');
+  });
+
+  it("exposes the open SSE stream count, which no request counter can show", () => {
+    // /api/mail/events is a single request that runs for hours, so it does not
+    // appear in the inbound counters until it ends.
+    const metrics = createMetrics();
+    expect(sample(metrics.render({}), "cefiro_sse_streams_open")).toBe("0");
+    metrics.setOpenStreams(3);
+    expect(sample(metrics.render({}), "cefiro_sse_streams_open")).toBe("3");
+    metrics.setOpenStreams(-1);
+    expect(sample(metrics.render({}), "cefiro_sse_streams_open")).toBe("0");
+  });
+
+  it("declares a type for every family it exposes", () => {
+    // A family without a TYPE line is one Prometheus guesses at.
+    const rendered = createMetrics().render({});
+    expect(rendered).toContain("# TYPE cefiro_outbound_requests_total counter");
+    expect(rendered).toContain("# TYPE cefiro_outbound_request_duration_seconds histogram");
+    expect(rendered).toContain("# TYPE cefiro_sse_streams_open gauge");
+  });
+});
+
+describe("process-wide reporting handle (GH #240)", () => {
+  it("routes observations from far-away modules into the registered registry", () => {
+    // core/deadline.ts and modules/mail/streams.ts are imported by half the
+    // server and receive no registry; threading one through five constructors
+    // to reach a counter would be the worse trade in a process that only ever
+    // builds one app.
+    const metrics = createMetrics();
+    registerMetrics(metrics);
+
+    recordOutbound({ dependency: "stalwart", outcome: "error", durationMs: 4 });
+    setOpenStreams(2);
+
+    const rendered = metrics.render({});
+    expect(rendered).toContain(
+      'cefiro_outbound_requests_total{dependency="stalwart",outcome="error"} 1',
+    );
+    expect(sample(rendered, "cefiro_sse_streams_open")).toBe("2");
+  });
+
+  it("sends observations to the registry built most recently", () => {
+    // Registering is what createApp does, so a second app takes over. It also
+    // means a test that builds its own app always starts from clean counters.
+    const first = createMetrics();
+    registerMetrics(first);
+    const second = createMetrics();
+    registerMetrics(second);
+
+    recordOutbound({ dependency: "oidc", outcome: "ok", durationMs: 1 });
+
+    expect(second.render({})).toContain('cefiro_outbound_requests_total{dependency="oidc",outcome="ok"} 1');
+    expect(first.render({})).not.toContain('dependency="oidc"');
   });
 });
 

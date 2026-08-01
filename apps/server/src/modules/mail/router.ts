@@ -26,6 +26,7 @@ import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthVerdict } from "./sender-auth";
+import { guardStream, mailStreams } from "./streams";
 import {
   withStalwartTransportErrors,
   type JmapAuth,
@@ -517,27 +518,57 @@ export function createMailRouter(deps: MailDeps) {
       return errorResponse(c, "stalwart_unavailable", 502);
     }
 
+    const streamUser = c.get("user");
+    // Registered BEFORE the upstream call, so a client looping on connect is
+    // refused without costing a Stalwart connection each time (GH #241). A
+    // refused EventSource fails that one connection instead of retrying, so
+    // this cannot become a reconnect storm — see ./streams.ts.
+    const stream = mailStreams.open(streamUser.userId);
+    if (!stream) {
+      return errorResponse(c, "too_many_streams", 429);
+    }
+
     const upstreamUrl = session.eventSourceUrl
       .replaceAll("{types}", "Email,Mailbox")
       .replaceAll("{closeafter}", "no")
       .replaceAll("{ping}", "30");
 
-    const upstream = await fetchFn(upstreamUrl, {
-      headers: {
-        authorization: basicAuthHeader(c.get("jmapAuth")),
-        accept: "text/event-stream",
-      },
-      signal: c.req.raw.signal,
-    });
+    let upstream: Response;
+    try {
+      upstream = await fetchFn(upstreamUrl, {
+        headers: {
+          authorization: basicAuthHeader(c.get("jmapAuth")),
+          accept: "text/event-stream",
+        },
+        // The stream's own signal, not the request's: it is aborted by a client
+        // disconnect (wired just below), by the silence watchdog, and by
+        // `evictMailSession` at logout, so every one of those tears the
+        // Stalwart connection down instead of abandoning it.
+        signal: stream.signal,
+      });
+    } catch (error) {
+      // Nothing downstream will release the registration if the call that was
+      // supposed to produce the stream never returns one.
+      stream.close();
+      throw error;
+    }
 
     if (!upstream.ok || !upstream.body) {
+      stream.close();
       return errorResponse(c, "stalwart_unavailable", 502);
     }
+
+    // A client that goes away must take its registration and its upstream
+    // socket with it, whatever the body stream is doing at that moment.
+    if (c.req.raw.signal.aborted) stream.close();
+    else c.req.raw.signal.addEventListener("abort", () => stream.close(), { once: true });
 
     // This connection legitimately sits idle between Stalwart's 30s keepalive
     // pings, longer than Bun.serve's 10s global idleTimeout. Clear the idle
     // deadline for THIS socket only so it isn't force-closed and reconnect-
     // stormed (GH #204); the global default still guards every other route.
+    // What replaces it for this socket is the per-stream silence watchdog in
+    // ./streams.ts — clearing Bun's deadline must not mean having none.
     clearIdleTimeout(c.req.raw);
 
     const headers = {
@@ -554,7 +585,7 @@ export function createMailRouter(deps: MailDeps) {
     const contacts = deps.contacts;
     const jmap = deps.jmap;
     if (contacts && jmap) {
-      const user = c.get("user");
+      const user = streamUser;
       const auth = c.get("jmapAuth");
       // The harvest runs whenever mail arrives, which is long after this
       // handler returned — carry the request's log context with it so its
@@ -575,10 +606,10 @@ export function createMailRouter(deps: MailDeps) {
             }),
           ),
       });
-      return new Response(tapped, { headers });
+      return new Response(guardStream({ source: tapped, handle: stream }), { headers });
     }
 
-    return new Response(upstream.body, { headers });
+    return new Response(guardStream({ source: upstream.body, handle: stream }), { headers });
   });
 
   router.post("/blobs", requireMail(deps), async (c) => {

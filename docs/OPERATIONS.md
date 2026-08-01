@@ -129,6 +129,82 @@ cuelgue el servicio.
 |---|---|---|
 | `OIDC_TIMEOUT_MS` | `10000` | Plazo de las llamadas al proveedor OIDC. |
 | `MAX_BODY_BYTES` | `2097152` | Techo global del cuerpo de petición (2 MiB). Excepto la subida de adjuntos, que va en streaming. |
+| `TRUSTED_PROXY_HOPS` | `1` | Cuántos proxies añaden su salto a `X-Forwarded-For`. De ello dependen los cinco límites por IP y la columna `ip` de la auditoría. Ver [Proxies de confianza](#proxies-de-confianza). |
+
+### Proxies de confianza
+
+Este proceso no ve nunca la IP del cliente: ve la del proxy. Lo único que puede
+decirle quién llamó es `X-Forwarded-For`, y esa cabecera es una **lista de
+afirmaciones** en la que solo valen las que ha escrito un proxy nuestro.
+
+**El contrato.** `TRUSTED_PROXY_HOPS` declara cuántos proxies **añaden** su salto
+a esa cabecera entre internet y el contenedor. La IP del cliente se lee contando
+ese número de entradas **desde la derecha**, que es el extremo al que el cliente
+no llega: cada salto de confianza escribe *después* de lo que le entregaron.
+
+```
+El cliente manda:   X-Forwarded-For: 9.9.9.9, 8.8.8.8      ← inventado
+nginx añade:        X-Forwarded-For: 9.9.9.9, 8.8.8.8, 203.0.113.7
+                                                    └──────┘ TRUSTED_PROXY_HOPS=1
+```
+
+Antes se tomaba la entrada de la **izquierda**, que bajo un proxy que anexa es
+exactamente la parte que escribe quien llama (#238): rotando la cabecera se
+conseguía un cubo nuevo por petición y **los cinco límites por IP dejaban de
+acotar nada** — incluido el que limita los intentos contra el token de
+`/metrics` —, además de llenar la columna `ip` de la auditoría con direcciones
+elegidas por el atacante.
+
+**Qué tiene que mandar el proxy.** Que **anexe**, no que sustituya, y que sea el
+único camino de red hasta el contenedor:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # anexa $remote_addr
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header Host $host;
+```
+
+Traefik (`forwardedHeaders`) y Caddy (`X-Forwarded-For`) anexan por defecto y no
+necesitan nada más. Un proxy configurado con `proxy_set_header X-Forwarded-For
+$remote_addr` (sustituir) **también funciona** con `1`: deja una cadena de un
+solo elemento escrito por él.
+
+**Cómo se cuenta.** Uno por cada proxy que anexa, en el camino real de la
+petición:
+
+| Topología | Valor |
+|---|---|
+| Un nginx/Traefik delante del contenedor (lo que despliega `docker-cefiro`) | `1` |
+| CDN o balanceador → nginx → contenedor | `2` |
+| El contenedor expuesto directamente a internet | `0` |
+
+**Los dos modos de equivocarse no son simétricos, y eso es deliberado.** Un valor
+**mayor** que la cadena real deja la petición sin atribuir y la manda a un cubo
+compartido: se pierde granularidad, no seguridad. Un valor **menor** devuelve una
+entrada que eligió el cliente, que es el fallo original. Ante la duda, redondear
+hacia arriba.
+
+Con `0` la cabecera se ignora por completo y **todos los límites pasan a ser
+globales**: un solo atacante puede gastar el presupuesto del login de emergencia
+para todo el mundo. Es la respuesta correcta solo si de verdad no hay proxy.
+
+**Cómo comprobarlo.** Con `BOOTSTRAP_MODE` apagado, `POST /api/auth/bootstrap`
+responde 404 sin tocar nada, así que no sirve. La comprobación limpia es
+`/api/health`, que lleva su propio techo de 60/min por IP:
+
+```sh
+# Desde fuera, atravesando el proxy: 60 peticiones deben pasar y la 61 dar 429.
+for i in $(seq 1 61); do
+  curl -s -o /dev/null -w '%{http_code}\n' https://<APP_URL>/api/health
+done | tail -3
+
+# Y lo que prueba el arreglo: falsificar la cabecera NO da presupuesto nuevo.
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-For: 1.2.3.4' https://<APP_URL>/api/health   # sigue 429
+```
+
+Si esa última línea vuelve a dar `200`, el conteo de saltos no cuadra con la
+topología real.
 
 **IA (opcional, apagada por defecto).** Inerte salvo que `AI_ENABLED=true` **y**
 haya `AI_API_KEY`.
@@ -398,6 +474,7 @@ no texto para el operador. El `code` es lo que se busca.
 | `too_many_requests` | 429 | Límite del login de emergencia. |
 | `rate_limited` | 429 | Límite de `/api/health` o `/metrics`. |
 | `ai_rate_limited` | 429 | Cuota de IA por usuario agotada. |
+| `too_many_streams` | 429 | El usuario ya tiene 8 streams SSE abiertos (#241). Casi siempre un cliente en bucle de reconexión, no un usuario con muchas pestañas. |
 | `internal` | 500 | **Error no controlado.** Siempre viene con un `unhandled error` en el log. |
 | `ai_disabled` | 501 | Se pidió IA con `AI_ENABLED=false` o sin `AI_API_KEY`. |
 | `stalwart_unavailable`, `jmap_error`, `mail_auth_failed`, `send_failed`, `save_draft_failed`, `mailbox_roles_missing` | 502 | Stalwart contestó mal, o no contestó. Mirar Stalwart, no la app. |
@@ -433,12 +510,51 @@ Un `503` aquí **no se arregla reiniciando el contenedor**: es un contenedor san
 informando de que una dependencia suya no lo está. Reiniciar en bucle solo
 esconde el síntoma. Ir a Postgres o a Stalwart.
 
-Detalles que evitan sustos: los chequeos corren en paralelo, el resultado se
+Detalles que evitan sustos: los chequeos corren en paralelo, cada uno con un
+presupuesto de 2 s que ahora además **cancela** la llamada al vencer (#242 —
+antes se dejaba de esperar sin abortar, y cada sondeo con caché fría dejaba
+corriendo por detrás un fetch a Stalwart de hasta 10 s), el resultado se
 **cachea unos segundos** (N sondeos no son N llamadas a Stalwart) y el endpoint
-lleva su propio límite de tasa. El `HEALTHCHECK` del contenedor sondea cada 30 s
-con 5 s de plazo y 3 reintentos, dos órdenes de magnitud por debajo del límite,
-así que ese límite nunca puede ser lo que marque una instancia sana como
-enferma.
+lleva su propio límite de tasa.
+
+### Vivacidad (`/api/health/live`) frente a readiness (`/api/health`)
+
+Son dos preguntas distintas y desde #242 tienen dos endpoints distintos:
+
+| Endpoint | Pregunta | Quién lo sondea | Qué hacer con un fallo |
+|---|---|---|---|
+| `/api/health/live` | ¿Está en pie este proceso? | El `HEALTHCHECK` del contenedor | Reiniciar el contenedor |
+| `/api/health` | ¿Puede servir tráfico ahora? | El balanceador / la readiness del orquestador | Sacar la instancia de rotación e ir a la dependencia |
+
+`/api/health/live` no toca ninguna dependencia: responde `200 {"status":"alive"}`
+mientras el proceso conteste HTTP.
+
+**Por qué el `HEALTHCHECK` del contenedor mira solo la vivacidad.** Sondeaba
+`/api/health`, que devuelve 503 cuando una dependencia está caída — así que con
+Stalwart caído Docker marcaba **enfermo** el contenedor del webmail. Y `unhealthy`
+no es una etiqueta: Swarm reinicia la tarea, `depends_on: service_healthy` no
+arranca lo que espera por ella, y el panel enseña el webmail roto. El proceso,
+mientras tanto, está perfectamente: sirve la SPA, atiende el resto de las rutas y
+responde 503 en readiness, que es justo lo que se le pide. Reiniciar este
+contenedor nunca ha arreglado un Postgres o un Stalwart caído, así que atar la
+salud del contenedor a sus dependencias convierte un incidente en dos.
+
+El estado de las dependencias **no se ha movido a ningún sitio**: sigue en
+`/api/health`, con el detalle por chequeo, que es donde lo leen el balanceador y
+la readiness del orquestador.
+
+```yaml
+# docker-compose / swarm: la vivacidad la comprueba la imagen; la readiness, quien
+# reparte el tráfico. En Kubernetes serían livenessProbe y readinessProbe.
+healthcheck:
+  test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+```
+
+El `HEALTHCHECK` sondea cada 30 s con 5 s de plazo y 3 reintentos, dos órdenes de
+magnitud por debajo del límite de tasa que comparte con `/api/health`, y además
+conecta directo (sin `X-Forwarded-For`), o sea en un cubo al que no llega ningún
+cliente que venga por el proxy: ese límite nunca puede ser lo que marque una
+instancia sana como enferma.
 
 ## Métricas y alertas
 
@@ -476,9 +592,30 @@ ver una variable cuyo nombre nunca se escribió**: eso lo caza la alerta
 | Métrica | Tipo | Para qué |
 |---|---|---|
 | `cefiro_http_requests_total{method,route,status}` | contador | Tráfico y tasa de error por ruta. `route` es el patrón, y todo lo no ruteado cae en `<unmatched>` (un escáner no puede inflar la cardinalidad). |
-| `cefiro_http_request_duration_seconds{method,route}` | histograma | Latencia; percentiles con `histogram_quantile`. |
+| `cefiro_http_request_duration_seconds{method,route}` | histograma | Latencia de entrada; percentiles con `histogram_quantile`. |
+| `cefiro_outbound_requests_total{dependency,outcome}` | contador | Llamadas **salientes** por dependencia (`stalwart`\|`oidc`\|`ai`) y desenlace (`ok`\|`error`\|`timeout`). |
+| `cefiro_outbound_request_duration_seconds{dependency}` | histograma | Latencia saliente hasta las cabeceras de respuesta. |
+| `cefiro_sse_streams_open` | gauge | Streams SSE (`/api/mail/events`) abiertos ahora mismo. |
 | `cefiro_dependency_up{dependency}` | gauge | `1`/`0` por dependencia, del último chequeo de salud. |
 | `cefiro_process_start_time_seconds` | gauge | Arranque del proceso. Delata un bucle de reinicios y explica un contador que vuelve a cero. |
+
+**Las tres familias salientes son las que contestan "¿qué dependencia va
+lenta?"** (#240). Hasta ellas solo había métricas de **entrada**: se veía que
+una petición había fallado o tardado, nunca por culpa de cuál — y
+`cefiro_dependency_up` no ayuda, porque es un booleano que sigue valiendo `1`
+con un Stalwart que contesta cada sondeo en 1,9 s. Salen del único sitio por el
+que pasan todas las llamadas salientes (`core/deadline.ts`), que es también lo
+único que sabe distinguir un **plazo agotado** (`timeout`: la dependencia acepta
+la conexión y no contesta) de una **conexión rechazada** (`error`: no está). Los
+primeros movimientos son distintos, por eso son etiquetas distintas.
+
+`cefiro_sse_streams_open` es el otro punto ciego: `/api/mail/events` es una
+petición que dura horas, así que no aparece en los contadores de entrada hasta
+que termina. Un valor que sube y no baja es una fuga de conexiones; comparado
+con el número de usuarios activos, dice si alguien está en bucle de reconexión.
+Cada usuario tiene un tope de 8 simultáneos y el servidor cierra el stream tras
+90 s sin recibir nada de Stalwart (#241), así que en régimen normal esta línea
+se estabiliza sola.
 
 Scrape (en el Prometheus del despliegue, no en este repo):
 
@@ -511,6 +648,22 @@ fallidas**: si el backup de hoy falla, ahí sigue la marca de la última copia
 buena, que es lo que distingue un fallo de una hora de uno de tres semanas. Un
 `0` significa "nunca", y la alerta de abajo también lo caza.
 
+**Se recoge por otra vía que `/metrics`, y tiene que ser así.** Son dos fuentes
+en el mismo Prometheus:
+
+| | `/metrics` | El `.prom` de la dbSOS |
+|---|---|---|
+| Qué mide | El proceso del webmail | Un trabajo de backup que corre **fuera** del contenedor |
+| Cómo se recoge | Scrape HTTP directo, con `METRICS_TOKEN` | *Textfile collector* de node_exporter en la máquina que lo ejecuta |
+| Si el proceso está caído | La serie desaparece (→ `CefiroSinMetricasDeApp`) | Sigue publicándose: el backup no depende del webmail |
+
+El endpoint del servidor **no** sirve ese fichero a propósito. La imagen no lleva
+`pg_dump` ni `openssl` y la dbSOS corre en otro sitio (ver [dbSOS](#dbsos--copia-de-emergencia-de-la-base-de-datos)),
+así que para servirlo tendría que leer un fichero que no le pertenece y que, el
+día que de verdad importa, es justo el que sobrevive al contenedor caído. Un
+backup que se deja de ver porque el webmail se cayó es exactamente el fallo que
+`CefiroSinBackup24h` existe para no tener.
+
 Para que Prometheus lo lea, apuntarlo al directorio del *textfile collector* de
 node_exporter en la máquina que corre la dbSOS:
 
@@ -518,6 +671,11 @@ node_exporter en la máquina que corre la dbSOS:
 # node_exporter --collector.textfile.directory=/var/lib/node_exporter/textfile
 DBSOS_STATUS_FILE=/var/lib/node_exporter/textfile/cefiro-dbsos.prom
 ```
+
+Con las dos fuentes en el mismo Prometheus, las alertas de más abajo se escriben
+igual estén donde estén las métricas; solo hay que recordar que las
+`cefiro_dbsos_*` llevan las etiquetas del `job` de node_exporter y no las del
+webmail, así que no se pueden unir por `instance` sin más.
 
 **Contrato de códigos de salida** para el planificador (cron, systemd timer, o
 el orquestador que lo lance):
@@ -597,6 +755,25 @@ groups:
         expr: changes(cefiro_process_start_time_seconds[15m]) > 3
         for: 0m
         labels: { severity: warning }
+
+      # Lo que CefiroDependenciaCaida no ve (#240): una dependencia que
+      # responde a la sonda de salud y agota el plazo en las llamadas reales.
+      - alert: CefiroDependenciaLenta
+        expr: >
+          sum by (dependency) (rate(cefiro_outbound_requests_total{outcome="timeout"}[5m]))
+          / sum by (dependency) (rate(cefiro_outbound_requests_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.dependency }} agota el plazo en más del 5% de las llamadas"
+
+      # Una fuga de streams SSE crece y no baja. El umbral depende del tamaño
+      # del despliegue: el tope es de 8 por usuario, así que hay que ponerlo por
+      # encima de (usuarios activos x pestañas habituales).
+      - alert: CefiroStreamsSseAcumulados
+        expr: cefiro_sse_streams_open > 200
+        for: 30m
+        labels: { severity: warning }
 ```
 
 Latencia p95 por ruta, para un panel:
@@ -605,6 +782,16 @@ Latencia p95 por ruta, para un panel:
 histogram_quantile(
   0.95,
   sum by (le, route) (rate(cefiro_http_request_duration_seconds_bucket[5m]))
+)
+```
+
+Y la que responde "¿qué dependencia va lenta?" a las 3 de la mañana, que es la
+misma pregunta con la mirada hacia fuera:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, dependency) (rate(cefiro_outbound_request_duration_seconds_bucket[5m]))
 )
 ```
 

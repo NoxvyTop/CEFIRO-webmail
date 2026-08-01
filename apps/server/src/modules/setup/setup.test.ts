@@ -162,10 +162,20 @@ describe("setup api hardening", () => {
     return rows[0]?.n ?? 0;
   }
 
+  /**
+   * A distinct address per test: audit_log is append-only and shared by the
+   * whole suite, so an assertion has to count rows only its own test could have
+   * written. Shaped like a real address rather than a suffixed UUID because
+   * core/client-ip.ts refuses anything longer than the longest possible IPv6
+   * (GH #238) — a rate-limit key and an audit row must not be arbitrary-length
+   * attacker text.
+   */
+  function uniqueIp(): string {
+    return `203.0.113.${1 + Math.floor(Math.random() * 250)}:${crypto.randomUUID().slice(0, 8)}`;
+  }
+
   it("audits a rejected setup token with the client IP", async () => {
-    // Unique per run: audit_log is append-only and shared by the whole suite,
-    // so the assertion has to count rows this test alone could have written.
-    const ip = `203.0.113.7-${crypto.randomUUID()}`;
+    const ip = uniqueIp();
     const res = await app.request("/api/setup/status", {
       headers: { "x-setup-token": "wrong", "x-forwarded-for": ip },
     });
@@ -176,7 +186,7 @@ describe("setup api hardening", () => {
 
   it("rate limits repeated attempts per IP and answers 429 with Retry-After", async () => {
     const limited = limitedApp(2);
-    const ip = `198.51.100.7-${crypto.randomUUID()}`;
+    const ip = uniqueIp();
     const attempt = () =>
       limited.request("/api/setup/status", {
         headers: { "x-setup-token": "wrong", "x-forwarded-for": ip },
@@ -194,7 +204,7 @@ describe("setup api hardening", () => {
 
   it("gates a valid token too, so a flood cannot ride on a leaked one", async () => {
     const limited = limitedApp(1);
-    const ip = `198.51.100.9-${crypto.randomUUID()}`;
+    const ip = uniqueIp();
     const attempt = () =>
       limited.request("/api/setup/status", {
         headers: { "x-setup-token": bootstrap.password!, "x-forwarded-for": ip },
@@ -202,6 +212,44 @@ describe("setup api hardening", () => {
 
     expect((await attempt()).status).toBe(200);
     expect((await attempt()).status).toBe(429);
+  });
+
+  // GH #238. This middleware used to key on the RAW header, so the whole
+  // comma-separated string was the bucket: one junk hop per request bought an
+  // unlimited number of fresh budgets against an unauthenticated router that
+  // holds the same 144-bit secret as the break-glass login.
+  it("cannot be escaped by prepending forged hops to X-Forwarded-For", async () => {
+    const limited = limitedApp(2);
+    const real = uniqueIp();
+    const attempt = (forwardedFor: string) =>
+      limited.request("/api/setup/status", {
+        headers: { "x-setup-token": "wrong", "x-forwarded-for": forwardedFor },
+      });
+
+    expect((await attempt(real)).status).toBe(401);
+    // Same client, a different forged prefix each time. The trusted hop is
+    // still the rightmost entry, so all three land in one bucket.
+    expect((await attempt(`1.2.3.4, ${real}`)).status).toBe(401);
+    expect((await attempt(`5.6.7.8, 9.9.9.9, ${real}`)).status).toBe(429);
+    // And nothing it forged became an audit row of its own.
+    expect(await failedAuthCount(real)).toBe(2);
+    expect(await failedAuthCount("1.2.3.4")).toBe(0);
+  });
+
+  it("sends a request with a shorter chain than declared to the shared bucket", async () => {
+    // A caller that reaches this process without passing the trusted proxy
+    // carries no attributable hop. It must land in ONE shared bucket rather
+    // than in a bucket of its own choosing — the failure has to lean that way.
+    const limited = limitedApp(1);
+    expect(
+      (await limited.request("/api/setup/status", { headers: { "x-setup-token": "wrong" } }))
+        .status,
+    ).toBe(401);
+    expect(
+      (await limited.request("/api/setup/status", {
+        headers: { "x-setup-token": "wrong", "x-forwarded-for": "" },
+      })).status,
+    ).toBe(429);
   });
 
   it("answers 400, not 500, when PUT /sso carries a malformed JSON body", async () => {

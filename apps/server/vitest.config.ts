@@ -52,20 +52,39 @@ export default defineConfig({
       // the package must clear. That is the stronger guarantee for the failure
       // this issue is about; the aggregate figures stay visible in the report.
       //
-      // The floor sits under the worst-covered file measured today —
-      // infra/db/migrate.ts (60% lines, most of its work happening in
-      // globalSetup, outside the instrumented workers), modules/auth/router.ts
-      // (40% functions) and modules/ai/router.ts (71.15% branches) — with room
-      // left for the ordinary churn of a file being edited. A ratchet floor,
-      // not a target: raise it as the weakest files improve. For reference,
-      // today's aggregate is lines/statements 95.80%, functions 95.16%,
-      // branches 87.34%.
+      // The floor sits one notch under the worst-covered file measured today:
+      //
+      //   lines/statements  modules/profile/router.ts   90.00%
+      //   branches          modules/ai/router.ts        71.15%
+      //   functions         modules/auth/router.ts      50.00%
+      //
+      // Today's aggregate, for reference, is lines/statements 97.76%,
+      // functions 97.04%, branches 88.95%.
+      //
+      // GH #245 re-measured all of this, because the numbers below had drifted
+      // into meaning nothing. They were set to 55/35/60 while several agents
+      // were editing at once, and the paragraph that justified them named
+      // infra/db/migrate.ts "at 60% lines" — a file that measures 100% today,
+      // and may well have by the time that sentence was written. A floor 35
+      // points under the worst real file is not a ratchet: a new module could
+      // land at 56% lines, pass the gate, and become the weakest file in the
+      // package without anything objecting. The gap is now 3-5 points.
+      //
+      // The functions figure is the one to treat with care. It is set by
+      // modules/auth/router.ts, and it is a LOWER bound rather than a
+      // measurement: that file was being edited while this was measured, and
+      // the edit stops one of its tests short — code that does not run counts
+      // as uncovered. 45 leaves room for the real number to be higher, which
+      // is the only direction it can be.
+      //
+      // A ratchet, not a target: raise these as the weakest files improve, and
+      // close a gap by testing the file rather than by lowering the floor.
       thresholds: {
         perFile: true,
-        lines: 55,
-        statements: 55,
-        functions: 35,
-        branches: 60,
+        lines: 85,
+        statements: 85,
+        functions: 45,
+        branches: 68,
       },
     },
   },

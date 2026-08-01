@@ -46,10 +46,24 @@ ENV NODE_ENV=production
 ENV STATIC_DIR=/app/apps/web/dist
 USER bun
 EXPOSE 8080
-# Readiness probe (GH #197): /api/health returns 503 when Postgres or Stalwart
-# is degraded, so `r.ok` (200 only) is the health signal. Uses bun rather than
-# curl/wget, which the slim image does not ship. The app listens on PORT
-# (default 8080); keep this in sync if PORT is overridden.
+# LIVENESS probe (GH #242), not readiness. It answers one question — is this
+# process up and serving HTTP — and nothing about its dependencies.
+#
+# It used to probe /api/health, which returns 503 when Postgres or Stalwart is
+# degraded (GH #197). That made Docker mark this container UNHEALTHY whenever a
+# DEPENDENCY was down: Swarm restarts an unhealthy task, `depends_on:
+# service_healthy` refuses to start what waits on it, and every dashboard shows
+# the webmail as broken — while the process is fine, still serving the SPA and
+# still answering the readiness endpoint correctly. Restarting this container
+# has never fixed a down Postgres or Stalwart, so making a dependency outage
+# restart it converts one incident into two.
+#
+# Dependency state has NOT moved: /api/health still answers 200/503 with the
+# per-check detail, and that is what a load balancer or an orchestrator's
+# READINESS probe must poll to drain this instance. See docs/OPERATIONS.md.
+#
+# Uses bun rather than curl/wget, which the slim image does not ship. The app
+# listens on PORT (default 8080); keep this in sync if PORT is overridden.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD bun -e "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD bun -e "fetch('http://127.0.0.1:8080/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["bun", "apps/server/src/index.ts"]
