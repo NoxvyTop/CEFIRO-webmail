@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { apiErrorSchema, healthResponseSchema } from "@webmail/shared";
 import { createApp } from "./app";
@@ -239,6 +239,159 @@ describe("health rate limit (GH #220)", () => {
     expect((await poll(app, "10.0.0.1")).status).toBe(200);
     expect((await poll(app, "10.0.0.1")).status).toBe(429);
     expect((await poll(app)).status).toBe(200);
+  });
+});
+
+describe("metrics endpoint (GH #208)", () => {
+  const TOKEN = "scrape-token";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function scrape(app: ReturnType<typeof createApp>, token = TOKEN, ip?: string) {
+    return app.request("/metrics", {
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(ip ? { "x-forwarded-for": ip } : {}),
+      },
+    });
+  }
+
+  it("does not exist at all when no token is configured", async () => {
+    // The route is not registered, so it answers exactly like any other unknown
+    // path — an instance that never enabled metrics must not confirm the
+    // endpoint is there, not even by answering 401.
+    vi.stubEnv("METRICS_TOKEN", "");
+    const app = createApp();
+    const res = await app.request("/metrics");
+    const unknown = await app.request("/definitely-not-a-route");
+
+    expect(res.status).toBe(404);
+    expect(res.status).toBe(unknown.status);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe(
+      apiErrorSchema.parse(await unknown.json()).code,
+    );
+  });
+
+  it("treats an empty configured token as unset rather than as a valid secret", async () => {
+    vi.stubEnv("METRICS_TOKEN", "   ");
+    expect((await createApp().request("/metrics")).status).toBe(404);
+  });
+
+  it("reads the token from the environment when the caller passes none", async () => {
+    vi.stubEnv("METRICS_TOKEN", TOKEN);
+    expect((await scrape(createApp())).status).toBe(200);
+  });
+
+  it("refuses a scrape with no credentials or the wrong token", async () => {
+    const app = createApp({ metricsToken: TOKEN });
+    const anonymous = await app.request("/metrics");
+    expect(anonymous.status).toBe(401);
+    expect(apiErrorSchema.parse(await anonymous.json()).code).toBe("unauthorized");
+    expect((await scrape(app, "wrong-token")).status).toBe(401);
+  });
+
+  it("serves the Prometheus text format", async () => {
+    const app = createApp({ metricsToken: TOKEN });
+    const res = await scrape(app);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    expect(res.headers.get("content-type")).toContain("version=0.0.4");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.text()).toContain("# TYPE cefiro_http_requests_total counter");
+  });
+
+  it("counts served requests by route and status", async () => {
+    const app = createApp({
+      metricsToken: TOKEN,
+      mailRouter: new Hono().get("/messages/:id", (c) => c.json({ ok: true })),
+    });
+    await app.request("/api/mail/messages/m-1");
+    await app.request("/api/mail/messages/m-2");
+
+    const body = await (await scrape(app)).text();
+    expect(body).toContain(
+      'cefiro_http_requests_total{method="GET",route="/api/mail/messages/:id",status="200"} 2',
+    );
+    expect(body).toContain(
+      'cefiro_http_request_duration_seconds_count{method="GET",route="/api/mail/messages/:id"} 2',
+    );
+  });
+
+  it("never turns a scanned path into a metric label", async () => {
+    // Route labels are kept for the life of the process; a per-path series
+    // would let anyone grow this endpoint without bound.
+    const app = createApp({ metricsToken: TOKEN });
+    await app.request("/wp-login.php");
+    await app.request("/api/mail/messages/m-secret-id");
+
+    const body = await (await scrape(app)).text();
+    expect(body).not.toContain("wp-login");
+    expect(body).not.toContain("m-secret-id");
+    expect(body).toContain('route="<unmatched>"');
+  });
+
+  it("reports dependency state without making a single new outbound call", async () => {
+    // The whole point of reusing the cached health probe (GH #220): scraping
+    // must not be a way to generate load on Stalwart.
+    let probes = 0;
+    const app = createApp({
+      metricsToken: TOKEN,
+      checks: {
+        postgres: async () => true,
+        stalwart: async () => {
+          probes += 1;
+          return false;
+        },
+      },
+      healthCacheMs: 60_000,
+    });
+
+    await app.request("/api/health");
+    for (let i = 0; i < 3; i += 1) await scrape(app);
+
+    expect(probes).toBe(1);
+    const body = await (await scrape(app)).text();
+    expect(body).toContain('cefiro_dependency_up{dependency="postgres"} 1');
+    expect(body).toContain('cefiro_dependency_up{dependency="stalwart"} 0');
+  });
+
+  it("returns 429 with Retry-After once a caller exceeds the limit", async () => {
+    const app = createApp({
+      metricsToken: TOKEN,
+      metricsRateLimiter: createRateLimiter({ limit: 1, windowMs: 60_000 }),
+    });
+
+    expect((await scrape(app, TOKEN, "10.0.0.1")).status).toBe(200);
+    const blocked = await scrape(app, TOKEN, "10.0.0.1");
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
+  });
+
+  it("bounds token guessing, refusing a flood before it can check the secret", async () => {
+    const app = createApp({
+      metricsToken: TOKEN,
+      metricsRateLimiter: createRateLimiter({ limit: 1, windowMs: 60_000 }),
+    });
+
+    expect((await scrape(app, "guess-1", "10.0.0.2")).status).toBe(401);
+    expect((await scrape(app, "guess-2", "10.0.0.2")).status).toBe(429);
+  });
+
+  it("keeps its budget separate from the health poll's", async () => {
+    // A scraper hammering /metrics must never be able to make the orchestrator's
+    // readiness poll start failing.
+    const app = createApp({
+      metricsToken: TOKEN,
+      metricsRateLimiter: createRateLimiter({ limit: 1, windowMs: 60_000 }),
+    });
+
+    expect((await scrape(app, TOKEN, "10.0.0.3")).status).toBe(200);
+    expect((await scrape(app, TOKEN, "10.0.0.3")).status).toBe(429);
+    expect(
+      (await app.request("/api/health", { headers: { "x-forwarded-for": "10.0.0.3" } })).status,
+    ).toBe(200);
   });
 });
 

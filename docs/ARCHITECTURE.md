@@ -133,28 +133,52 @@ Un despliegue que solo define `MASTER_KEY` sigue funcionando sin cambios: es la
 versión 1 sin historial, que es justo lo que el esquema pone por defecto en
 todas las columnas `key_version`.
 
-Procedimiento de rotación:
+#### La clave se genera, nunca se copia (#223)
 
-1. Generar la clave nueva y mover la anterior a `MASTER_KEY_PREVIOUS` con la
-   versión que llevan sus filas (por ejemplo `1:<clave anterior>`).
-2. Poner la clave nueva en `MASTER_KEY` y subir `MASTER_KEY_VERSION` a `2`.
-3. Redesplegar. En el arranque el servidor comprueba que el llavero cubre todas
-   las `key_version` presentes en `mail_credentials`, `sso_config` e
-   `integrations`; si falta alguna, **no arranca** y registra qué versión falta.
-4. Las filas se vuelven a cifrar solas: al leerlas con una clave retirada se
-   reescriben con la actual. La reescritura es best-effort — si falla, la
-   lectura sigue siendo válida y solo se registra un aviso, porque el correo del
-   usuario no puede depender de ella.
-5. Cuando ninguna fila conserve la versión antigua se puede retirar la clave de
-   `MASTER_KEY_PREVIOUS`. Para comprobarlo:
+```sh
+bun apps/server/scripts/generate-master-key.ts
+```
 
-   ```sql
-   select key_version, count(*) from mail_credentials group by key_version;
-   select key_version, count(*) from sso_config group by key_version;
-   ```
+Esa es la **única** forma admitida de obtener un `MASTER_KEY`. La clave que
+trae `docker-compose.dev.yml` es literalmente `dev-master-key-dev-master-key-01`
+en base64: existe para que el entorno de desarrollo arranque sin ceremonia y es
+pública, porque está en el repositorio. Copiada a producción descifra todas las
+credenciales de buzón y el client secret de SSO.
+
+Antes solo se validaba la **longitud** de la clave, así que esa copia pasaba sin
+una queja. Ahora el arranque rechaza claves publicadas en el repositorio y
+claves de baja entropía (todos los bytes iguales, muy pocos valores distintos, o
+enteramente ASCII imprimible — es decir, una frase escrita a mano en vez de 32
+bytes generados).
+
+La comprobación **no se aplica cuando `NODE_ENV` es `development` o `test`**, y
+sí en cualquier otro valor (`production`, `staging`, `preproduc`, o el nombre
+que se invente el despliegue). Es una lista de permitidos, no de prohibidos:
+para saltarse la validación hay que declarar explícitamente que el entorno no es
+real. El compose de desarrollo y la suite de tests siguen funcionando sin tocar
+nada.
+
+Las claves retiradas de `MASTER_KEY_PREVIOUS` **no** se validan: sirven para
+leer filas selladas antes de una rotación, así que rechazarlas dejaría sin
+arrancar justo al despliegue que está rotando *para salir* de una clave débil.
+Ese es el camino de salida si alguna instancia arrancó con la clave de
+desarrollo: rotar (la nueva clave generada pasa a `MASTER_KEY`, la débil queda
+listada en `MASTER_KEY_PREVIOUS`) y esperar a que el re-cifrado progresivo mueva
+todas las filas antes de retirarla.
+
+Dos garantías sostienen el diseño: en el arranque el servidor comprueba que el
+llavero cubre todas las `key_version` presentes en `mail_credentials`,
+`sso_config` e `integrations` y **no arranca** si falta alguna; y las filas se
+vuelven a cifrar solas al leerlas con una clave retirada, de forma best-effort,
+porque el correo del usuario no puede depender de esa reescritura.
 
 Mientras queden filas en la versión antigua, su clave debe seguir listada: es
 lo que evita que una rotación deje credenciales indescifrables.
+
+El **procedimiento de rotación** —paso a paso, con las consultas para saber
+cuándo se puede retirar una clave y su interacción con los backups— es
+operación, no diseño, y vive en el runbook:
+[OPERATIONS.md → Rotación de `MASTER_KEY`](OPERATIONS.md#rotación-de-master_key).
 
 ### Configuración OIDC administrable
 
@@ -382,6 +406,12 @@ adaptadores de Odoo llegan en F4.
   debajo del `--timeout=5s` del `HEALTHCHECK` del contenedor, y su resultado se
   **cachea unos segundos**: N sondeos no son N llamadas salientes a Stalwart.
   El endpoint es anónimo, así que además lleva límite de tasa por origen.
+- **Métricas**: `/metrics` expone en formato Prometheus los contadores de
+  petición por ruta/método/estado, la latencia como histograma y el estado de
+  cada dependencia, reutilizando la sonda de salud ya cacheada en vez de añadir
+  llamadas salientes. Es superficie de operador, no del SPA: se abre con un
+  token portador (`METRICS_TOKEN`) y sin él el endpoint no existe. Procedimiento
+  y reglas de alerta en [OPERATIONS.md](OPERATIONS.md#métricas-y-alertas).
 
 ## Testing
 
@@ -407,6 +437,52 @@ compilación y en runtime.
 - Secretos (clave maestra de cifrado, client secret de Authentik) por
   variables de entorno del servidor — nunca en el repositorio ni en la
   imagen.
+
+### Migraciones de esquema (#207)
+
+Las migraciones corren **en el arranque** del propio servidor
+(`apps/server/src/index.ts` → `infra/db/migrate.ts`), no como paso separado
+del despliegue: un contenedor que arranca deja la base al día por sí solo.
+
+Todo el runner va dentro de una transacción que sostiene un **advisory lock**
+(`pg_advisory_xact_lock`). Sin él, dos réplicas que arrancan a la vez pasaban
+ambas la comprobación `select 1 from schema_migrations`, ejecutaban el mismo
+DDL y la perdedora moría — un crash loop, porque cada reinicio repite la
+carrera. Con el lock una réplica migra y las demás esperan; cuando entran,
+todas las migraciones ya constan aplicadas. Es la variante *xact* del lock
+porque se libera tanto al confirmar como al abortar: una réplica que muere a
+mitad no puede dejar el lock tomado y bloquear a las demás.
+
+Consecuencia de diseño: como el runner corre dentro de una transacción, una
+migración **no puede usar sentencias no transaccionales** (`CREATE INDEX
+CONCURRENTLY`, `VACUUM`). Ya era así antes de #207 — cada archivo se aplicaba
+dentro de su propia transacción — pero conviene tenerlo escrito.
+
+#### Reversibilidad: solo cambios compatibles hacia atrás
+
+**No hay down-migrations, y es una decisión deliberada.** El rollback de #190
+vuelve a una imagen exacta, es decir revierte el *código*; el esquema no
+vuelve solo, y una down-migration que borre una columna o una tabla destruye
+datos justo en el momento en que el sistema ya está en incidente. La red de
+seguridad real del esquema es el backup (`scripts/db-restore.sh`), no un
+script inverso.
+
+Por eso la regla es que **toda migración debe ser compatible con la imagen
+anterior**: la versión N-1 del código tiene que seguir funcionando contra el
+esquema de la versión N. En la práctica:
+
+- Añadir columnas siempre como nullable o con `default`; nunca `not null` sin
+  default en una tabla con filas.
+- Añadir tablas, índices y columnas es libre. **Borrar y renombrar no**: se
+  hace en dos despliegues (expandir → migrar datos y dejar de usar el campo →
+  contraer en un despliegue posterior, cuando ya no queda código que lo lea).
+- Cambiar el tipo de una columna se trata como borrar + añadir.
+- Nada de DML destructivo dentro de una migración.
+
+Deshacer un cambio de esquema es, entonces, **otra migración hacia delante**
+(o una restauración de backup si ya hubo pérdida de datos), nunca un rollback
+de esquema. Un cambio que no se pueda expresar de forma compatible hacia atrás
+necesita ventana de mantenimiento explícita y backup previo verificado.
 
 ### Restricción de egress (regla de diseño)
 

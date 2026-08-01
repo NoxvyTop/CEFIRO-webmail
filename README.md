@@ -49,6 +49,8 @@ docker compose -f docker-compose.dev.yml exec dev bun run typecheck
 
 Guía completa (bootstrap, migraciones, hot reload): [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 Arquitectura y principios de diseño: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Runbook de producción (desplegar, revertir, diagnosticar, backups y alertas):
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Configuración
 
