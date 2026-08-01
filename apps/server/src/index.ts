@@ -17,6 +17,7 @@ import { createSsoConfigRepo } from "./infra/repos/sso-config";
 import { createUserPreferencesRepo } from "./infra/repos/user-preferences";
 import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
+import { createSieveSyncStateRepo } from "./infra/repos/sieve-sync-state";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { createContactsRepo } from "./infra/repos/contacts";
 import { findUncoveredKeyVersions } from "./infra/db/key-versions";
@@ -102,6 +103,7 @@ const mailCredentials = createMailCredentialsRepo(db, keyring);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
 const filterRules = createFilterRulesRepo(db);
+const sieveSyncState = createSieveSyncStateRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode);
@@ -205,7 +207,14 @@ const app = createApp({
     contacts,
     timeoutMs: config.stalwartTimeoutMs,
   }),
-  sieveRouter: createSieveRouter({ sessions, mailCredentials, filterRules, vacationSettings, jmap }),
+  sieveRouter: createSieveRouter({
+    sessions,
+    mailCredentials,
+    filterRules,
+    vacationSettings,
+    sieveSyncState,
+    jmap,
+  }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
   profileRouter: createProfileRouter({ sessions, users, audit }),

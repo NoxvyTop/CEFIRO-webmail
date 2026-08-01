@@ -48,6 +48,29 @@ export const filterOrderSchema = z.object({
 });
 export type FilterOrder = z.infer<typeof filterOrderSchema>;
 
+/**
+ * Whether the Sieve script Stalwart enforces still matches the filter rules and
+ * vacation settings this server stores (GH #221).
+ *
+ * - `synced`: the last push succeeded; what is listed is what runs.
+ * - `pending`: there is a change this server has not managed to push yet —
+ *   typically Stalwart was unreachable, or mail is not configured for this user.
+ *   The rules are saved but NOT being applied.
+ * - `failed`: the last push was refused. `lastError` carries the code
+ *   (`sieve_invalid` means the generated script itself was rejected and
+ *   retrying will not help; anything else is worth another attempt).
+ */
+export const sieveSyncStateSchema = z.object({
+  status: z.enum(["synced", "pending", "failed"]),
+  /** Consecutive failed attempts since the last successful push. */
+  attempts: z.number().int(),
+  /** Error code of the last failure, never a raw message. */
+  lastError: z.string().nullable(),
+  /** When this state was last written; null when nothing was ever pushed. */
+  updatedAt: z.string().nullable(),
+});
+export type SieveSyncState = z.infer<typeof sieveSyncStateSchema>;
+
 export const vacationSettingsSchema = z.object({
   enabled: z.boolean(),
   subject: z.string(),
