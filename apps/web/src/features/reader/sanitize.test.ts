@@ -385,6 +385,232 @@ describe("sanitizeEmailHtml", () => {
     });
   });
 
+  // GH #239: the CSS remote-reference patterns used to run against the raw
+  // attribute/element text, so any spelling of a remote URL that a browser
+  // resolves before acting on it walked straight through — a tracking pixel
+  // with #182/#224 fully on. The decision is now taken on the NORMALISED value
+  // (escapes resolved, comments removed), which is what these pin.
+  describe("CSS escapes and comments evading the remote block (GH #239)", () => {
+    // The two vectors named in the issue, run through BOTH passes: the inline
+    // [style] attribute and the <style> element (which is checked separately,
+    // before DOMPurify — see stripRemoteStyleElements).
+    const evasions: [name: string, css: string][] = [
+      // \68 is the CSS escape for "h"; the space terminates the escape and is
+      // consumed with it, so the browser reads "https".
+      ["a CSS escape for the scheme's first letter", String.raw`url(\68 ttps://evil.test/p.png)`],
+      // A comment interleaved in the value, discarded before the value is read.
+      ["an interleaved comment", "url(/*x*/https://evil.test/p.png)"],
+      // Same two tricks in the other positions the patterns cover.
+      ["an escaped colon in the scheme", String.raw`url(https\3a //evil.test/p.png)`],
+      ["escapes spelling the protocol-relative slashes", String.raw`url(\2f \2f evil.test/p.png)`],
+      ["a comment splitting the url token", "url/*x*/(https://evil.test/p.png)"],
+      ["a comment inside image-set()", `image-set(/*x*/"https://evil.test/p.png" 1x)`],
+      ["an escape inside a quoted url()", String.raw`url("\68 ttps://evil.test/p.png")`],
+    ];
+
+    // Single-quoted HTML attribute so a double quote inside the CSS is part of
+    // the value rather than the end of the attribute.
+    it.each(evasions)("blocks %s in a style attribute", (_name, css) => {
+      const out = sanitizeEmailHtml(`<div style='background:${css}'>x</div>`, {
+        allowRemoteImages: false,
+      });
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+      expect(out.html).not.toContain("style=");
+    });
+
+    it.each(evasions)("blocks %s inside a <style> element", (_name, css) => {
+      const out = sanitizeEmailHtml(`<style>body{background:${css}}</style><p>hi</p>`, {
+        allowRemoteImages: false,
+      });
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+      expect(out.html).toContain("hi");
+    });
+
+    it("blocks an @import whose scheme is written with a CSS escape", () => {
+      const out = sanitizeEmailHtml(
+        String.raw`<style>@import "\68 ttps://evil.test/tracker.css";</style><p>hi</p>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("blocks an @import split by a comment", () => {
+      const out = sanitizeEmailHtml(
+        `<style>@import/*x*/url("https://evil.test/tracker.css");</style><p>hi</p>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("resolves a six-digit escape and its \\r\\n terminator", () => {
+      // \000068 is "h" written to the six-digit maximum, terminated by a CRLF
+      // that counts as the single whitespace terminator rather than as two.
+      const out = sanitizeEmailHtml(
+        `<style>body{background:url(\\000068\r\nttps://evil.test/p.png)}</style>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("drops a backslash-newline continuation inside a quoted url()", () => {
+      // Only the LF form is exercised: HTML input-stream preprocessing turns
+      // every CR and CRLF into a bare LF before the parser hands us either the
+      // <style> text or a style attribute, so a CR can never reach the
+      // normaliser through this entry point (readCssEscape still handles it —
+      // see the note there).
+      const out = sanitizeEmailHtml(
+        `<style>body{background:url("htt\\\nps://evil.test/p.png")}</style>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("treats a bare escaped character as itself (\\h is h)", () => {
+      const out = sanitizeEmailHtml(
+        String.raw`<style>body{background:url(\https://evil.test/p.png)}</style>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("resolves an invalid escape to U+FFFD rather than to nothing", () => {
+      // A lone surrogate must not vanish: if it did, `htt\d800 ps://` would
+      // normalise to a remote URL that the browser never fetches, and the
+      // normaliser would be inventing detections instead of resolving them.
+      const out = sanitizeEmailHtml(
+        String.raw`<style>body{background:url(htt\d800 ps://evil.test/p.png)}</style>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(false);
+    });
+
+    it("runs an unterminated comment to the end of the value", () => {
+      const out = sanitizeEmailHtml(
+        `<div style="background:url(https://evil.test/p.png)/*trailing">x</div>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    // The normalisation must not become a bypass of its own. Each of these is a
+    // way of trying to make it DELETE part of a live remote reference.
+    describe("normalisation cannot be steered into hiding a reference", () => {
+      it("does not treat /* inside a quoted string as a comment", () => {
+        // If the "comment" were stripped here the value would become
+        // url("https://evil.test/p.png") -> still caught; the point is the
+        // opposite direction: the quoted text is left whole, so the reference
+        // is still there to be seen.
+        const out = sanitizeEmailHtml(
+          `<div style="background:url('https://evil.test/*x*/p.png')">x</div>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(true);
+        expect(out.html).not.toContain("evil.test");
+      });
+
+      it("does not let an escaped quote open a string that swallows a later comment", () => {
+        // The \" is a literal quote, not a string delimiter. Resolve escapes
+        // second and this bypasses the whole check: the value would read as
+        // "string open from here to the end", the /*x*/ would be left in place
+        // as string content, and url(ht/*x*/tps://…) would match nothing.
+        const out = sanitizeEmailHtml(
+          String.raw`<div style='content:\"; background:url(ht/*x*/tps://evil.test/p.png)'>x</div>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(true);
+        expect(out.html).not.toContain("evil.test");
+      });
+
+      it("does not let an unterminated string hide a later remote url()", () => {
+        // Being inside a string only suspends comment stripping; it never drops
+        // anything. So even a string the author never closed leaves every later
+        // reference in the text the patterns run over.
+        const out = sanitizeEmailHtml(
+          `<style>.a{content:"oops}.b{background:url(https://evil.test/p.png)}</style><p>hi</p>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(true);
+        expect(out.html).not.toContain("evil.test");
+      });
+
+      it("closes a quoted string at the matching quote, not at the other kind", () => {
+        const out = sanitizeEmailHtml(
+          `<style>body::after{content:"'"}\n.x{background:url(ht/*x*/tps://evil.test/p.png)}</style>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(true);
+        expect(out.html).not.toContain("evil.test");
+      });
+
+      it("survives a trailing backslash without dropping the rest of the value", () => {
+        const out = sanitizeEmailHtml(
+          `<div style="background:url(https://evil.test/p.png);color:red\\">x</div>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(true);
+        expect(out.html).not.toContain("evil.test");
+      });
+    });
+
+    // The flip side: normalisation must not start flagging CSS that fetches
+    // nothing, or every message with a commented-out rule shows the banner.
+    describe("still reports nothing for CSS that fetches nothing", () => {
+      it("does not flag a remote url() that only exists inside a comment", () => {
+        const out = sanitizeEmailHtml(
+          `<style>.x{color:red}/* was: background:url(https://cdn.ok/p.png) */</style>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(false);
+      });
+
+      it("reads an escaped slash as a slash, not as the start of a comment", () => {
+        // url(\/*x*/https://evil.test/p.png) is NOT the comment vector wearing a
+        // backslash: the \/ resolves to a plain "/", nothing opens a comment,
+        // and what the browser is left holding is the relative path
+        // /*x*/https://evil.test/p.png — same origin, no third party, nothing
+        // to block. Reporting it as remote would mean the normaliser had
+        // invented a reference rather than resolved one.
+        const out = sanitizeEmailHtml(
+          String.raw`<div style='background:url(\/*x*/https://evil.test/p.png)'>x</div>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(false);
+      });
+
+      it("does not flag a data: url() written with escapes", () => {
+        const out = sanitizeEmailHtml(
+          String.raw`<div style="background:url(\64 ata:image/png;base64,AA)">x</div>`,
+          { allowRemoteImages: false },
+        );
+        expect(out.hasRemoteImages).toBe(false);
+      });
+
+      it("leaves a comment-free, escape-free style attribute byte-for-byte intact", () => {
+        const out = sanitizeEmailHtml(`<p style="color:blue;text-align:center">y</p>`, {
+          allowRemoteImages: false,
+        });
+        expect(out.hasRemoteImages).toBe(false);
+        expect(out.html).toContain(`style="color:blue;text-align:center"`);
+      });
+    });
+
+    it("still reports the evaded reference under the remote-content opt-in", () => {
+      const out = sanitizeEmailHtml(
+        String.raw`<style>body{background:url(\68 ttps://evil.test/p.png)}</style>`,
+        { allowRemoteImages: true },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+    });
+  });
+
   describe("composer image size/alignment and text-align (RichTextEditor)", () => {
     // Builds the HTML the same way RichTextEditor's toolbar actually would —
     // through a real TipTap editor with the exact same extensions — instead

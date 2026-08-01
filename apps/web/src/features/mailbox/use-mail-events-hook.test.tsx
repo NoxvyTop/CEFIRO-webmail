@@ -3,19 +3,26 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
-import { useMailEvents } from "./useMailEvents";
+import { retryDelayMs, useMailEvents } from "./useMailEvents";
 
-// Must match RETRY_DELAY_MS in useMailEvents.ts — the backoff before a dropped
-// stream is reopened.
-const RETRY_DELAY_MS = 15_000;
+// The first rung of the backoff ladder in useMailEvents.ts (GH #243), with
+// Math.random pinned to the 0.5 the timing tests below stub in: base 2 s, half
+// fixed and half jittered, so 1000 + 0.5 * 1000.
+const FIXED_RANDOM = 0.5;
+const FIRST_RETRY_MS = 1_500;
+// Comfortably past the 60 s cap, for asserting that nothing reconnects at all.
+const WELL_PAST_THE_CAP_MS = 10 * 60_000;
 
 // Minimal EventSource stand-in: records every instance the hook opens, lets a
-// test push "message"/"error" events at it, and remembers whether it was
+// test push "open"/"message"/"error" events at it, and remembers whether it was
 // closed — enough to observe connect, reconnect and teardown without a network.
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   url: string;
   closed = false;
+  // The real readyState the hook reads to tell a transport drop (the browser
+  // leaves it CONNECTING) from a handshake the server refused (CLOSED).
+  readyState = 0;
   private listeners: Record<string, ((event: unknown) => void)[]> = {};
 
   constructor(url: string) {
@@ -34,15 +41,44 @@ class FakeEventSource {
 
   close() {
     this.closed = true;
+    this.readyState = 2;
+  }
+
+  emitOpen() {
+    this.readyState = 1;
+    for (const listener of this.listeners.open ?? []) listener({});
   }
 
   emitMessage(data = "{}") {
     for (const listener of this.listeners.message ?? []) listener({ data });
   }
 
+  // A transport-level drop: the browser means to retry, so readyState stays at
+  // CONNECTING and the hook takes the ordinary backoff path.
   emitError() {
     for (const listener of this.listeners.error ?? []) listener({});
   }
+
+  // The server answered and the answer was unusable (401, 502, 503…): the
+  // browser has already moved the stream to CLOSED before the handler runs.
+  refuseHandshake() {
+    this.readyState = 2;
+    this.emitError();
+  }
+}
+
+function stubAuthProbe(status: number) {
+  const probe = vi.fn(async () => new Response(null, { status }));
+  vi.stubGlobal("fetch", probe);
+  return probe;
+}
+
+// Drains the microtasks the /api/auth/me probe queues, without letting any
+// pending backoff timer fire.
+async function flushProbe() {
+  await act(async () => {
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+  });
 }
 
 function makeWrapper() {
@@ -103,6 +139,7 @@ describe("useMailEvents (hook lifecycle)", () => {
 
   it("closes the dropped stream and reopens exactly one after the backoff delay", () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
     const { wrapper } = makeWrapper();
     renderHook(() => useMailEvents(true), { wrapper });
     const first = FakeEventSource.instances[0];
@@ -112,7 +149,7 @@ describe("useMailEvents (hook lifecycle)", () => {
     expect(first?.closed).toBe(true);
 
     // Nothing reconnects before the delay elapses...
-    act(() => vi.advanceTimersByTime(RETRY_DELAY_MS - 1));
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS - 1));
     expect(FakeEventSource.instances).toHaveLength(1);
 
     // ...and exactly one fresh stream opens once it does.
@@ -174,7 +211,177 @@ describe("useMailEvents (hook lifecycle)", () => {
     expect(source?.closed).toBe(true);
 
     // The cancelled retry must not open a new stream after unmount.
-    act(() => vi.advanceTimersByTime(RETRY_DELAY_MS * 2));
+    act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+});
+
+// GH #243: the retry was a flat 15 s with no jitter, so a server restart —
+// which drops every stream in the fleet at the same instant — brought every
+// client back at the same instant, against a server that had only just
+// finished starting.
+describe("useMailEvents reconnect backoff (GH #243)", () => {
+  describe("retryDelayMs", () => {
+    // Half the window fixed, half jittered: base 2 s doubling per consecutive
+    // failure, capped at 60 s. The fixed half is the floor that keeps the first
+    // retry from being effectively instant.
+    it.each([
+      [0, 1_000, 2_000],
+      [1, 2_000, 4_000],
+      [2, 4_000, 8_000],
+      [3, 8_000, 16_000],
+      [4, 16_000, 32_000],
+      // Capped from here on: 2 s * 2^5 would be 64 s.
+      [5, 30_000, 60_000],
+      [6, 30_000, 60_000],
+      [40, 30_000, 60_000],
+    ])("attempt %i falls between %i ms and %i ms", (attempt, min, max) => {
+      expect(retryDelayMs(attempt, 0)).toBe(min);
+      expect(retryDelayMs(attempt, 1)).toBe(max);
+      expect(retryDelayMs(attempt, FIXED_RANDOM)).toBe((min + max) / 2);
+    });
+
+    it("grows strictly until it reaches the cap", () => {
+      const ladder = [0, 1, 2, 3, 4, 5, 6].map((attempt) => retryDelayMs(attempt, FIXED_RANDOM));
+      expect(ladder).toEqual([1_500, 3_000, 6_000, 12_000, 24_000, 45_000, 45_000]);
+    });
+
+    it("spreads clients that failed together across the window", () => {
+      // The whole point of the jitter: identical inputs must NOT produce one
+      // delay that every client in the fleet shares.
+      const delays = [0, 0.2, 0.4, 0.6, 0.8, 1].map((random) => retryDelayMs(3, random));
+      expect(new Set(delays).size).toBe(delays.length);
+      for (const delay of delays) {
+        expect(delay).toBeGreaterThanOrEqual(8_000);
+        expect(delay).toBeLessThanOrEqual(16_000);
+      }
+    });
+  });
+
+  it("backs off exponentially across consecutive failures", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    // Each rung: the stream that just opened fails again without ever reaching
+    // "open", so the next wait is the next (longer) rung.
+    for (const [index, delay] of [1_500, 3_000, 6_000, 12_000].entries()) {
+      const source = FakeEventSource.instances[index];
+      act(() => source?.emitError());
+      act(() => vi.advanceTimersByTime(delay - 1));
+      expect(FakeEventSource.instances).toHaveLength(index + 1);
+      act(() => vi.advanceTimersByTime(1));
+      expect(FakeEventSource.instances).toHaveLength(index + 2);
+    }
+  });
+
+  it("restarts the ladder from the bottom once a stream opens again", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    // Two failures in a row put the next wait on the second rung.
+    act(() => FakeEventSource.instances[0]?.emitError());
+    act(() => vi.advanceTimersByTime(1_500));
+    act(() => FakeEventSource.instances[1]?.emitError());
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(FakeEventSource.instances).toHaveLength(3);
+
+    // The third stream connects, proving the server is serving again, so the
+    // next outage waits the FIRST rung rather than the third.
+    act(() => FakeEventSource.instances[2]?.emitOpen());
+    act(() => FakeEventSource.instances[2]?.emitError());
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS - 1));
+    expect(FakeEventSource.instances).toHaveLength(3);
+    act(() => vi.advanceTimersByTime(1));
+    expect(FakeEventSource.instances).toHaveLength(4);
+  });
+
+  it("stops reconnecting for good once /api/auth/me confirms a 401", async () => {
+    vi.useFakeTimers();
+    const probe = stubAuthProbe(401);
+    const { invalidate, wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.refuseHandshake());
+    await flushProbe();
+
+    expect(probe).toHaveBeenCalledWith("/api/auth/me");
+    // No amount of waiting reopens the stream: only a fresh login can.
+    act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
+    expect(FakeEventSource.instances).toHaveLength(1);
+    // And the session is re-read, so RequireAuth routes to the login screen
+    // instead of leaving a mailbox that quietly stopped updating.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+  });
+
+  it("keeps retrying when the handshake was refused but the session is still good", async () => {
+    // A 502/503 from a server still coming back up closes the stream exactly
+    // like a 401 does — and giving up on those is the restart this backoff
+    // exists to survive.
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    stubAuthProbe(200);
+    const { invalidate, wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.refuseHandshake());
+    await flushProbe();
+
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+  });
+
+  it("keeps retrying when the session probe itself cannot be made", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.refuseHandshake());
+    await flushProbe();
+
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS));
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  it("does not probe the session for an ordinary transport drop", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    const probe = stubAuthProbe(401);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    // readyState stays at CONNECTING: the browser dropped the socket and means
+    // to retry, so there is nothing to ask /api/auth/me about.
+    act(() => FakeEventSource.instances[0]?.emitError());
+    await flushProbe();
+
+    expect(probe).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS));
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  it("does not reconnect after unmount even if the session probe resolves late", async () => {
+    vi.useFakeTimers();
+    stubAuthProbe(200);
+    const { wrapper } = makeWrapper();
+    const { unmount } = renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.refuseHandshake());
+    unmount();
+    await flushProbe();
+
+    act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 });
