@@ -44,8 +44,11 @@ export interface ShutdownDeps {
   exit?: (code: number) => void;
 }
 
-const DEFAULT_GRACE_MS = 15_000;
-const DEFAULT_DB_TIMEOUT_MS = 5_000;
+// Exported so core/config.ts can default SHUTDOWN_GRACE_MS /
+// SHUTDOWN_DB_TIMEOUT_MS to the same numbers it falls back to here (GH #218) —
+// one source of truth rather than a copy that can drift.
+export const DEFAULT_GRACE_MS = 15_000;
+export const DEFAULT_DB_TIMEOUT_MS = 5_000;
 
 /**
  * Builds an idempotent shutdown handler. The first invocation runs the full

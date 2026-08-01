@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import { createRateLimiter } from "../../core/rate-limit";
 import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
@@ -110,6 +111,92 @@ describe("setup api", () => {
       method: "POST",
       headers: { "x-setup-token": bootstrap.password!, "content-type": "application/json" },
       body: JSON.stringify({ email: "not-an-email", displayName: "", mailPassword: "x" }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+// GH #222. The setup API accepts the same 144-bit break-glass secret as the
+// bootstrap login but had none of the hardening #183/#194 gave that path.
+describe("setup api hardening", () => {
+  /** A router with a limit small enough to exhaust in a test. */
+  function limitedApp(limit: number) {
+    return createApp({
+      setupRouter: createSetupRouter({
+        bootstrap,
+        users: createUsersRepo(sql),
+        mailCredentials: createMailCredentialsRepo(sql, masterKey),
+        ssoConfig: createSsoConfigRepo(sql, masterKey),
+        audit: createAuditRepo(sql),
+        rateLimiter: createRateLimiter({ limit, windowMs: 60_000 }),
+      }),
+    });
+  }
+
+  async function failedAuthCount(ip: string): Promise<number> {
+    const rows = await sql<{ n: number }[]>`
+      select count(*)::int as n from audit_log
+      where action = 'setup.auth_failed' and ip = ${ip}
+    `;
+    return rows[0]?.n ?? 0;
+  }
+
+  it("audits a rejected setup token with the client IP", async () => {
+    // Unique per run: audit_log is append-only and shared by the whole suite,
+    // so the assertion has to count rows this test alone could have written.
+    const ip = `203.0.113.7-${crypto.randomUUID()}`;
+    const res = await app.request("/api/setup/status", {
+      headers: { "x-setup-token": "wrong", "x-forwarded-for": ip },
+    });
+
+    expect(res.status).toBe(401);
+    expect(await failedAuthCount(ip)).toBe(1);
+  });
+
+  it("rate limits repeated attempts per IP and answers 429 with Retry-After", async () => {
+    const limited = limitedApp(2);
+    const ip = `198.51.100.7-${crypto.randomUUID()}`;
+    const attempt = () =>
+      limited.request("/api/setup/status", {
+        headers: { "x-setup-token": "wrong", "x-forwarded-for": ip },
+      });
+
+    expect((await attempt()).status).toBe(401);
+    expect((await attempt()).status).toBe(401);
+    const blocked = await attempt();
+
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get("Retry-After"))).toBeGreaterThan(0);
+    // The point of the gate: a blocked attempt writes no audit row at all.
+    expect(await failedAuthCount(ip)).toBe(2);
+  });
+
+  it("gates a valid token too, so a flood cannot ride on a leaked one", async () => {
+    const limited = limitedApp(1);
+    const ip = `198.51.100.9-${crypto.randomUUID()}`;
+    const attempt = () =>
+      limited.request("/api/setup/status", {
+        headers: { "x-setup-token": bootstrap.password!, "x-forwarded-for": ip },
+      });
+
+    expect((await attempt()).status).toBe(200);
+    expect((await attempt()).status).toBe(429);
+  });
+
+  it("answers 400, not 500, when PUT /sso carries a malformed JSON body", async () => {
+    const res = await app.request("/api/setup/sso", {
+      method: "PUT",
+      headers: { "x-setup-token": bootstrap.password!, "content-type": "application/json" },
+      body: "{ not json",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("answers 400, not 500, when POST /users carries a malformed JSON body", async () => {
+    const res = await app.request("/api/setup/users", {
+      method: "POST",
+      headers: { "x-setup-token": bootstrap.password!, "content-type": "application/json" },
+      body: "{ not json",
     });
     expect(res.status).toBe(400);
   });

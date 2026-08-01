@@ -28,8 +28,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 // Must match apps/server's MASTER_KEY (also hardcoded in playwright.config.ts's
 // webServer.env) so the mailbox credential this seeds is decryptable by the
-// running server.
-const MASTER_KEY_B64 = "ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=";
+// running server. Generated, not the readable docker-compose.dev.yml key: that
+// server boots with NODE_ENV=production, which refuses published or low-entropy
+// keys (GH #223). Throwaway — this database is created and dropped per run.
+const MASTER_KEY_B64 = "JdJVpkA5AKBg+8w5V7XOqXnOXGuEgkybDHOvDiVYfJE=";
 // Baked into the e2e/stalwart fixture (see e2e/stalwart/README.md) — only
 // valid for this local/E2E fixture, never production credentials.
 const STALWART_ACCOUNT_EMAIL = "admin@cefiro.test";

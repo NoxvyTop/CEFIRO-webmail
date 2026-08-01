@@ -7,6 +7,18 @@ const validEnv = {
   APP_URL: "http://localhost:5173",
 };
 
+// Stands in for a key produced by scripts/generate-master-key.ts: 32 distinct
+// bytes, not all printable, so it passes the weakness check of GH #223.
+const GENERATED_KEY = btoa(
+  String.fromCharCode(...Array.from({ length: 32 }, (_, i) => (i * 61 + 7) % 256)),
+);
+
+/** 32 zero bytes: the right length, no entropy at all. */
+const ZERO_KEY = btoa(String.fromCharCode(...new Uint8Array(32)));
+
+/** `validEnv` with a key that is acceptable outside development. */
+const generatedKeyEnv = { ...validEnv, MASTER_KEY: GENERATED_KEY };
+
 describe("loadConfig", () => {
   it("parses a valid environment with defaults", () => {
     const config = loadConfig(validEnv);
@@ -269,13 +281,75 @@ describe("loadConfig", () => {
     });
 
     it("marks isProduction true only when NODE_ENV is exactly production", () => {
-      expect(loadConfig({ ...validEnv, NODE_ENV: "production" }).isProduction).toBe(true);
-      expect(loadConfig({ ...validEnv, NODE_ENV: "staging" }).isProduction).toBe(false);
+      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "production" }).isProduction).toBe(true);
+      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "staging" }).isProduction).toBe(false);
       expect(loadConfig({ ...validEnv, NODE_ENV: "test" }).isProduction).toBe(false);
     });
 
     it("carries the raw NODE_ENV value through", () => {
-      expect(loadConfig({ ...validEnv, NODE_ENV: "staging" }).nodeEnv).toBe("staging");
+      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "staging" }).nodeEnv).toBe("staging");
+    });
+  });
+
+  // GH #223: MASTER_KEY was validated for length only, so the key published in
+  // docker-compose.dev.yml passed unchanged in production.
+  describe("MASTER_KEY quality", () => {
+    const DEV_COMPOSE_KEY = "ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=";
+
+    it("refuses the published dev compose key outside development", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, MASTER_KEY: DEV_COMPOSE_KEY, NODE_ENV: "production" }),
+      ).toThrow(/docker-compose\.dev\.yml/);
+    });
+
+    it("refuses a low-entropy key outside development", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, MASTER_KEY: ZERO_KEY, NODE_ENV: "production" }),
+      ).toThrow(/MASTER_KEY/);
+    });
+
+    it("refuses a weak key in any environment that is not development or test", () => {
+      // The exemption is an allowlist on purpose: a deployment that calls
+      // itself "staging" or "prod" is covered without having to be enumerated.
+      for (const nodeEnv of ["staging", "prod", "produccion", "preproduc"]) {
+        expect(() =>
+          loadConfig({ ...validEnv, MASTER_KEY: DEV_COMPOSE_KEY, NODE_ENV: nodeEnv }),
+        ).toThrow(/MASTER_KEY/);
+      }
+    });
+
+    it("keeps the dev compose key working in development and test", () => {
+      expect(loadConfig({ ...validEnv, MASTER_KEY: DEV_COMPOSE_KEY }).masterKey).toBe(
+        DEV_COMPOSE_KEY,
+      );
+      expect(
+        loadConfig({ ...validEnv, MASTER_KEY: DEV_COMPOSE_KEY, NODE_ENV: "test" }).masterKey,
+      ).toBe(DEV_COMPOSE_KEY);
+    });
+
+    it("accepts a generated key in production", () => {
+      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "production" }).masterKey).toBe(
+        GENERATED_KEY,
+      );
+    });
+
+    it("points at the generator script instead of just refusing", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, MASTER_KEY: ZERO_KEY, NODE_ENV: "production" }),
+      ).toThrow(/generate-master-key/);
+    });
+
+    it("does not check retired keys, so rotating away from a weak one can boot", () => {
+      // A deployment stuck on a weak key rotates out of it: the new key becomes
+      // current and the weak one stays listed only to read rows sealed before
+      // the rotation. Refusing it there would make the fix impossible to apply.
+      const config = loadConfig({
+        ...generatedKeyEnv,
+        NODE_ENV: "production",
+        MASTER_KEY_VERSION: "2",
+        MASTER_KEY_PREVIOUS: `1:${DEV_COMPOSE_KEY}`,
+      });
+      expect(config.previousMasterKeys).toEqual([{ version: 1, key: DEV_COMPOSE_KEY }]);
     });
   });
 
@@ -339,6 +413,54 @@ describe("loadConfig", () => {
 
     it("rejects a fractional DB limit", () => {
       expect(() => loadConfig({ ...validEnv, DB_IDLE_TIMEOUT_S: "12.5" })).toThrow();
+    });
+  });
+
+  // GH #218: these three used to bypass the schema entirely. The shutdown
+  // budgets went through a local `positiveIntEnv` in index.ts that swallowed a
+  // malformed value and silently used the default, and STATIC_DIR was read
+  // straight from the environment.
+  describe("shutdown budgets and STATIC_DIR", () => {
+    it("defaults both shutdown budgets to core/shutdown.ts's own fallbacks", () => {
+      const config = loadConfig(validEnv);
+      expect(config.shutdownGraceMs).toBe(15_000);
+      expect(config.shutdownDbTimeoutMs).toBe(5_000);
+    });
+
+    it("reads SHUTDOWN_GRACE_MS and SHUTDOWN_DB_TIMEOUT_MS overrides", () => {
+      const config = loadConfig({
+        ...validEnv,
+        SHUTDOWN_GRACE_MS: "30000",
+        SHUTDOWN_DB_TIMEOUT_MS: "2000",
+      });
+      expect(config.shutdownGraceMs).toBe(30_000);
+      expect(config.shutdownDbTimeoutMs).toBe(2000);
+    });
+
+    it("treats an empty shutdown budget as absent", () => {
+      expect(loadConfig({ ...validEnv, SHUTDOWN_GRACE_MS: "" }).shutdownGraceMs).toBe(15_000);
+    });
+
+    it("fails loudly on a malformed shutdown budget instead of using the default", () => {
+      expect(() => loadConfig({ ...validEnv, SHUTDOWN_GRACE_MS: "30s" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, SHUTDOWN_DB_TIMEOUT_MS: "soon" })).toThrow();
+    });
+
+    it("rejects a zero, negative or fractional shutdown budget", () => {
+      expect(() => loadConfig({ ...validEnv, SHUTDOWN_GRACE_MS: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, SHUTDOWN_GRACE_MS: "-1" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, SHUTDOWN_DB_TIMEOUT_MS: "1.5" })).toThrow();
+    });
+
+    it("defaults staticDir to the path a source checkout produces", () => {
+      expect(loadConfig(validEnv).staticDir).toBe("../web/dist");
+    });
+
+    it("reads a STATIC_DIR override and treats an empty one as absent", () => {
+      expect(loadConfig({ ...validEnv, STATIC_DIR: "/app/apps/web/dist" }).staticDir).toBe(
+        "/app/apps/web/dist",
+      );
+      expect(loadConfig({ ...validEnv, STATIC_DIR: "" }).staticDir).toBe("../web/dist");
     });
   });
 });

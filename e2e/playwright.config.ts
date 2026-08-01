@@ -68,7 +68,12 @@ export default defineConfig({
           // Playwright starts webServer before globalSetup. serve.ts creates it
           // first, and needs a connectable admin URL to do so, which this is.
           [BASE_DATABASE_URL_ENV]: BASE_DATABASE_URL,
-          MASTER_KEY: "ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=",
+          // Throwaway key for this harness only, and it must stay identical to
+          // global-setup.ts's MASTER_KEY_B64 so the credential it seeds is
+          // decryptable here. It is a GENERATED key rather than the readable
+          // dev-compose one because this server boots with NODE_ENV=production,
+          // which now refuses published or low-entropy keys (GH #223).
+          MASTER_KEY: "JdJVpkA5AKBg+8w5V7XOqXnOXGuEgkybDHOvDiVYfJE=",
           APP_URL: BASE_URL,
           PORT: String(PORT),
           BOOTSTRAP_MODE: "true",

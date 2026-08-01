@@ -221,8 +221,12 @@ const app = createApp({
   contactsRouter: createContactsRouter({ sessions, contacts }),
 });
 
-if (process.env.NODE_ENV === "production") {
-  const root = process.env.STATIC_DIR ?? "../web/dist";
+// Both signals come from the validated config rather than a second read of the
+// environment (GH #218): NODE_ENV has exactly one interpretation in this
+// process — `config.isProduction`, the same one that forces Secure cookies —
+// and STATIC_DIR is checked for being non-empty before we mount anything on it.
+if (config.isProduction) {
+  const root = config.staticDir;
   app.use("*", serveStatic({ root }));
   app.use("*", serveStatic({ root, path: "index.html" }));
 }
@@ -240,19 +244,16 @@ registerServer(server);
 // Graceful shutdown (GH #193). Both budgets are env-tunable; the drain budget
 // bounds how long in-flight requests may finish before connections are
 // force-closed, and the DB budget bounds the pool close. Defaults live in
-// core/shutdown.ts.
+// core/shutdown.ts and are applied by core/config.ts, which now validates both
+// values instead of the local parser that used to swallow a malformed one and
+// fall back to the default (GH #218).
 const shutdown = createShutdown({
   server,
   sql: db,
   log,
-  graceMs: positiveIntEnv(process.env.SHUTDOWN_GRACE_MS),
-  dbTimeoutMs: positiveIntEnv(process.env.SHUTDOWN_DB_TIMEOUT_MS),
+  graceMs: config.shutdownGraceMs,
+  dbTimeoutMs: config.shutdownDbTimeoutMs,
 });
 installProcessHandlers({ shutdown, log });
 
 log("info", "server started", { port: server.port, bootstrapMode: config.bootstrapMode });
-
-function positiveIntEnv(raw: string | undefined): number | undefined {
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : undefined;
-}
