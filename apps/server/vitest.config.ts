@@ -19,16 +19,53 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       // index.ts only boots the HTTP listener (a process entrypoint, not a
       // unit); tests and generated typings are not units under test either.
-      exclude: ["src/**/*.test.ts", "src/**/*.d.ts", "src/index.ts"],
-      // Thresholds sit just under today's measured coverage (statements/lines
-      // 95.04%, functions 94.19%, branches 86.26%), floored to fives so the gate
-      // is green now but a genuine regression trips it. A ratchet floor, not a
-      // target — raise it as coverage climbs.
+      exclude: [
+        "src/**/*.test.ts",
+        "src/**/*.d.ts",
+        "src/index.ts",
+        // Type-only modules (GH #228). These declare interfaces and dependency
+        // bundles and emit no runtime code at all, so every importer uses
+        // `import type` and the module is never loaded — v8 reports each of
+        // them as a flat 0%, which is not a coverage gap and cannot be closed
+        // by any test. Excluding them is what lets the per-file floor below be
+        // a real floor instead of being pinned at zero by files that contain
+        // nothing to execute.
+        "src/core/ai.ts",
+        "src/modules/ai/context.ts",
+        "src/modules/contacts/context.ts",
+        // Test harness, not a unit under test: this is the accessor the suite
+        // uses to reach the throwaway database vitest.global-setup.ts
+        // provisions (GH #181). It is only ever imported by tests, the same
+        // reason the web package excludes src/test/**.
+        "src/infra/db/test-db.ts",
+      ],
+      // Thresholds are checked PER FILE (GH #228). Before this they were
+      // aggregate-only, so a file could rot all the way to zero while the
+      // package average stayed comfortably above the gate — and infra/db/
+      // health.ts had (0%, now covered), alongside the type-only modules
+      // excluded above.
+      //
+      // Note that `perFile` is a single switch over every threshold set, not a
+      // per-set option (vitest's BaseCoverageProvider.checkThresholds reads
+      // `options.thresholds.perFile` once for all of them), so these numbers
+      // are now a floor each individual file must clear rather than an average
+      // the package must clear. That is the stronger guarantee for the failure
+      // this issue is about; the aggregate figures stay visible in the report.
+      //
+      // The floor sits under the worst-covered file measured today —
+      // infra/db/migrate.ts (60% lines, most of its work happening in
+      // globalSetup, outside the instrumented workers), modules/auth/router.ts
+      // (40% functions) and modules/ai/router.ts (71.15% branches) — with room
+      // left for the ordinary churn of a file being edited. A ratchet floor,
+      // not a target: raise it as the weakest files improve. For reference,
+      // today's aggregate is lines/statements 95.80%, functions 95.16%,
+      // branches 87.34%.
       thresholds: {
-        lines: 90,
-        statements: 90,
-        functions: 90,
-        branches: 85,
+        perFile: true,
+        lines: 55,
+        statements: 55,
+        functions: 35,
+        branches: 60,
       },
     },
   },

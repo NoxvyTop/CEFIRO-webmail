@@ -5,10 +5,22 @@
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { BASE_DATABASE_URL_ENV, createTestDatabase, isThrowawayDatabase } from "./test-db";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webDir = resolve(here, "../apps/web");
 const serverEntry = resolve(here, "../apps/server/src/index.ts");
+
+// The run's throwaway database (GH #230) has to exist before the server below
+// starts: apps/server/src/index.ts connects and migrates on boot, and Playwright
+// runs `webServer` as a plugin *before* globalSetup, so global-setup.ts is too
+// late to be the only creator. Guarded on the name being a throwaway one, so a
+// caller who pinned E2E_DATABASE_URL at a database they own gets it left alone.
+const testDatabaseUrl = process.env.DATABASE_URL;
+const baseDatabaseUrl = process.env[BASE_DATABASE_URL_ENV];
+if (testDatabaseUrl && baseDatabaseUrl && isThrowawayDatabase(testDatabaseUrl)) {
+  await createTestDatabase(baseDatabaseUrl, testDatabaseUrl);
+}
 
 const build = spawnSync("bunx", ["vite", "build"], {
   cwd: webDir,

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { readResponse, withConversationRetry } from "./smtp-seed.ts";
+import type { Socket } from "node:net";
+import { readResponse, withConversationRetry } from "./smtp-seed";
 
 // Regression cover for GH #184. A Stalwart that is still finishing startup
 // accepts the TCP/TLS socket and then closes it *mid-conversation* — before it
@@ -13,18 +14,26 @@ import { readResponse, withConversationRetry } from "./smtp-seed.ts";
 // path (fed by a bare EventEmitter standing in for the socket), so they exercise
 // the exact error the seeder throws in CI, not a hand-rolled stand-in.
 
+// readResponse only ever uses the socket's EventEmitter surface (on/off for
+// "data"/"error"/"close"), so a bare EventEmitter is a faithful stand-in — but
+// its declared parameter is the full net.Socket, hence the widening cast. Kept
+// in one helper so the cast is stated once, with this reason.
+function asSocket(emitter: EventEmitter): Socket {
+  return emitter as unknown as Socket;
+}
+
 // Produces the exact premature-close rejection (empty buffer) via the real
 // readResponse "close" handler.
 function prematureClose(): Promise<unknown> {
   const socket = new EventEmitter();
-  const pending = readResponse(socket);
+  const pending = readResponse(asSocket(socket));
   socket.emit("close");
   return pending;
 }
 
 test("readResponse resolves on a final SMTP reply line", async () => {
   const socket = new EventEmitter();
-  const pending = readResponse(socket);
+  const pending = readResponse(asSocket(socket));
   socket.emit("data", Buffer.from("250 OK\r\n"));
   const response = await pending;
   expect(response.code).toBe(250);

@@ -16,6 +16,13 @@ import { importMasterKey } from "../apps/server/src/modules/credentials/crypto";
 import { seedInbox, seedJunk } from "./smtp-seed";
 import { SEED_EMAILS, SPAM_SEED_EMAILS } from "./fixtures/mail";
 import { ensureArchiveMailbox } from "./jmap-admin";
+import {
+  TEST_DATABASE_URL_ENV,
+  createTestDatabase,
+  dropTestDatabase,
+  isThrowawayDatabase,
+  requireBaseDatabaseUrl,
+} from "./test-db";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -44,9 +51,34 @@ const STALWART_SMTP_PORT = Number(process.env.STALWART_SMTP_PORT ?? 8465);
 // classifier (see smtp-seed.ts's file header).
 const STALWART_SMTP_PLAIN_PORT = Number(process.env.STALWART_SMTP_PLAIN_PORT ?? 8025);
 
-export default async function globalSetup() {
-  const url =
-    process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
+/**
+ * Seeds this run's throwaway database and returns the teardown that drops it
+ * (Playwright calls a function returned from globalSetup as global teardown).
+ *
+ * GH #230: this used to fall back to the shared development database, migrate
+ * it, write users/sessions/mail credentials into it and never clean up. The
+ * database is now created per run — see test-db.ts — so everything below writes
+ * into a database that did not exist a moment ago and will not exist a moment
+ * after the run.
+ */
+export default async function globalSetup(): Promise<() => Promise<void>> {
+  const baseUrl = requireBaseDatabaseUrl();
+  // Minted by playwright.config.ts, which runs in this same process. Absent it,
+  // this file is being invoked outside the Playwright runner.
+  const url = process.env[TEST_DATABASE_URL_ENV];
+  if (!url) {
+    throw new Error(
+      `${TEST_DATABASE_URL_ENV} is not set — global-setup.ts expects to be run by ` +
+        "Playwright, whose config (playwright.config.ts) mints the run's throwaway " +
+        "database URL and publishes it there.",
+    );
+  }
+  // A no-op when serve.ts already created it; the one that creates it when the
+  // webServer was skipped (E2E_BASE_URL, or reuseExistingServer finding a live
+  // server). Left alone entirely for a caller-pinned E2E_DATABASE_URL.
+  const disposable = isThrowawayDatabase(url);
+  if (disposable) await createTestDatabase(baseUrl, url);
+
   const sql = createDb(url);
   try {
     await migrate(sql, resolve(here, "../apps/server/migrations"));
@@ -62,20 +94,19 @@ export default async function globalSetup() {
     // working exactly as before this task for every non-mail spec.
     const stalwartUrl = process.env.E2E_STALWART_URL;
 
-    let user: Awaited<ReturnType<typeof users.create>>;
-    if (stalwartUrl) {
-      // Mail specs need the seeded user's email to match the Stalwart
-      // account's email (JMAP Basic auth is keyed on the user's own email),
-      // so reuse the same row across runs instead of minting a fresh random
-      // address every time — the dev/CI Postgres this points at isn't reset
-      // between E2E runs.
-      user =
-        (await users.findByEmail(STALWART_ACCOUNT_EMAIL)) ??
-        (await users.create({ email: STALWART_ACCOUNT_EMAIL, displayName: "Cefiro Admin" }));
-    } else {
-      const email = `e2e-${crypto.randomUUID()}@noxvytop.com`;
-      user = await users.create({ email, displayName: "E2E Admin" });
-    }
+    // Mail specs need the seeded user's email to match the Stalwart account's
+    // email (JMAP Basic auth is keyed on the user's own email), so that address
+    // is fixed rather than random when the fixture is in play.
+    //
+    // It used to be looked up with findByEmail and only created if missing,
+    // because the database was shared and not reset between runs (GH #230). The
+    // database is created fresh for this run now, so the row cannot already
+    // exist and a plain create is both correct and free of cross-run carryover.
+    const user = await users.create(
+      stalwartUrl
+        ? { email: STALWART_ACCOUNT_EMAIL, displayName: "Cefiro Admin" }
+        : { email: `e2e-${crypto.randomUUID()}@noxvytop.com`, displayName: "E2E Admin" },
+    );
     await sql`update users set role = 'admin' where id = ${user.id}`;
     const { token } = await createSessionStore(sql).create(user.id, 24);
 
@@ -152,4 +183,13 @@ export default async function globalSetup() {
   } finally {
     await sql.end();
   }
+
+  // Global teardown. Dropping the database is what makes the suite
+  // self-cleaning by construction: every user, session and encrypted mail
+  // credential it wrote goes with it, so nothing can be carried into the next
+  // run and nothing is left behind in a shared database. A caller-pinned
+  // E2E_DATABASE_URL is never dropped — the suite did not create it.
+  return async () => {
+    if (disposable) await dropTestDatabase(baseUrl, url);
+  };
 }

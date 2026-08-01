@@ -40,7 +40,12 @@ test("star a message into Destacados, then archive it out of the inbox into Arch
   await page.goto("/");
   await expect(page.getByRole("alert")).toHaveCount(0);
 
-  const row = page.getByRole("option", { name: new RegExp(SUBJECT) });
+  // Scoped to the row WRAPPER, not to the role="option" element (GH #225): an
+  // ARIA option must not contain interactive descendants, so the star button
+  // was moved out of the option and sits beside it inside the wrapper. Nesting
+  // into the option to reach the star therefore resolves to nothing now; the
+  // wrapper's data-testid is the stable handle for "this row's controls".
+  const row = page.getByTestId("conversation-row").filter({ hasText: SUBJECT });
   await expect(row).toBeVisible();
 
   await row.getByRole("button", { name: "Destacar" }).click();
