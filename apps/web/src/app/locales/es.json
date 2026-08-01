@@ -164,6 +164,7 @@
     "closeNav": "Cerrar menú",
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
+    "messageListLabel": "Lista de mensajes",
     "messageCount_one": "{{count}} correo",
     "messageCount_other": "{{count}} correos",
     "conversationCount_one": "{{count}} mensaje",
@@ -316,6 +317,9 @@
       "ai_rate_limited": "Has usado la IA demasiadas veces en poco tiempo. Espera un momento e inténtalo de nuevo",
       "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
       "invalid_body": "Escribe un asunto antes de redactar con IA",
+      "mail_not_configured": "El servidor de correo no está configurado",
+      "mail_credentials_missing": "Tu buzón no está vinculado todavía",
+      "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
       "generic": "Ocurrió un error"
     },
     "draftWithAi": "✦ Redactar con IA",

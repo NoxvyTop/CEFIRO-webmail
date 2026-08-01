@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
@@ -298,6 +298,45 @@ describe("contact harvest on the mail-arrival event stream (GH #180)", () => {
     // The Email/query batch was attempted (and threw); no harvest followed.
     expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
     expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(0);
+  });
+
+  it("attributes a harvest failure to the request that opened the stream (GH #219)", async () => {
+    // The harvest runs off the stream, after the handler returned, so its
+    // context is not the ambient one any more. Without the traceId this line
+    // says a harvest failed for someone, somewhere — the exact shape of log
+    // that cannot be followed back to the report a user filed.
+    const user = await createTestUser();
+    const jmap = makeStubJmap({ emails: [], calls: [], queryThrows: true });
+    const frames = [stateChangeFrame({ email: "s1" }), stateChangeFrame({ email: "s2" })];
+
+    const lines: Record<string, unknown>[] = [];
+    const record = (...args: unknown[]) => {
+      lines.push(JSON.parse(String(args[0])) as Record<string, unknown>);
+    };
+    const spies = [
+      vi.spyOn(console, "log").mockImplementation(record),
+      vi.spyOn(console, "warn").mockImplementation(record),
+    ];
+    try {
+      const res = await makeApp(jmap, sseFetch(frames), contacts).request("/api/mail/events", {
+        headers: { cookie: `session=${user.token}` },
+      });
+      await res.text();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+
+    // The access record names the request; the harvest failure has to be
+    // findable by the same id.
+    const access = lines.find((line) => line.msg === "request" && line.path === "/api/mail/events");
+    expect(access?.traceId).toBeTruthy();
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        msg: "contacts harvest on mail arrival failed",
+        userId: user.userId,
+        traceId: access!.traceId,
+      }),
+    );
   });
 
   it("does not harvest when the recent page comes back empty", async () => {

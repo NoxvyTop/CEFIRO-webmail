@@ -400,55 +400,77 @@ export function MessageList({
     const starred = Boolean(email.keywords.$flagged);
     const rowLabels = userLabels(email.keywords).slice(0, 2);
 
+    // GH #225: the star used to be a <button> INSIDE the role="option"
+    // element. An option must not have interactive descendants — a screen
+    // reader announces the option as a single selectable unit, so a control
+    // buried in it is neither announced as its own control nor reliably
+    // operable. The row is now a presentational wrapper holding the option and
+    // the star side by side, so the star is a real, focusable button again and
+    // the option contains nothing focusable.
+    //
+    // The wrapper keeps every one of the row's own styles (border, padding,
+    // selection highlight, hover), and the option takes flex-1 so it still
+    // spans everything left of the star — the click target, the roving
+    // tabIndex, the Arrow-key handler and the ref the roving focus moves
+    // between (GH #200) all stay exactly where they were.
     return (
+      // data-testid, not a role: the wrapper is deliberately presentational
+      // (the option is what carries the semantics). It exists so callers that
+      // need "this row's star button" — which is no longer inside the option —
+      // have one stable handle for the whole row.
       <div
         key={conversation.threadId}
-        ref={(el) => {
-          if (el) optionRefs.current.set(conversation.threadId, el);
-          else optionRefs.current.delete(conversation.threadId);
-        }}
-        role="option"
-        aria-selected={selected}
-        tabIndex={conversation.threadId === rovingThreadId ? 0 : -1}
-        onClick={() => handleSelect(conversation)}
-        onKeyDown={(event) => handleOptionKeyDown(event, conversation)}
+        data-testid="conversation-row"
         className={rowClassName(selected)}
       >
-        <Avatar name={email.from[0]?.name ?? null} email={email.from[0]?.email ?? "?"} size={38} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span
-              aria-hidden="true"
-              className={`h-[7px] w-[7px] shrink-0 rounded-full ${unread ? "bg-accent" : "bg-transparent"}`}
-            />
-            <span className={`min-w-0 flex-1 truncate text-[14px] ${unread ? "font-bold" : "font-medium"}`}>
-              {fromLabel}
-            </span>
-            {conversation.count > 1 && (
+        <div
+          ref={(el) => {
+            if (el) optionRefs.current.set(conversation.threadId, el);
+            else optionRefs.current.delete(conversation.threadId);
+          }}
+          role="option"
+          aria-selected={selected}
+          tabIndex={conversation.threadId === rovingThreadId ? 0 : -1}
+          onClick={() => handleSelect(conversation)}
+          onKeyDown={(event) => handleOptionKeyDown(event, conversation)}
+          className="flex min-w-0 flex-1 items-start gap-3"
+        >
+          <Avatar name={email.from[0]?.name ?? null} email={email.from[0]?.email ?? "?"} size={38} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2">
               <span
-                aria-label={t("mail.conversationCount", { count: conversation.count })}
-                className="shrink-0 text-xs font-semibold text-muted"
-              >
-                {conversation.count}
+                aria-hidden="true"
+                className={`h-[7px] w-[7px] shrink-0 rounded-full ${unread ? "bg-accent" : "bg-transparent"}`}
+              />
+              <span className={`min-w-0 flex-1 truncate text-[14px] ${unread ? "font-bold" : "font-medium"}`}>
+                {fromLabel}
               </span>
-            )}
-            <span className="shrink-0 text-xs text-muted">{dateLabel}</span>
-          </div>
-          <div className={`truncate text-[13.5px] ${unread ? "font-[650]" : "font-[420]"}`}>{subjectLabel}</div>
-          <div className="truncate text-[12.5px] text-muted">{email.preview}</div>
-          {rowLabels.length > 0 && (
-            <div className="mt-1 flex gap-1">
-              {rowLabels.map((label) => (
+              {conversation.count > 1 && (
                 <span
-                  key={label}
-                  className="rounded-full px-2 py-[2px] text-[11px] font-semibold"
-                  style={{ color: labelColor(label, customLabels), background: labelBackground(label, customLabels) }}
+                  aria-label={t("mail.conversationCount", { count: conversation.count })}
+                  className="shrink-0 text-xs font-semibold text-muted"
                 >
-                  {labelDisplayName(label, customLabels)}
+                  {conversation.count}
                 </span>
-              ))}
+              )}
+              <span className="shrink-0 text-xs text-muted">{dateLabel}</span>
             </div>
-          )}
+            <div className={`truncate text-[13.5px] ${unread ? "font-[650]" : "font-[420]"}`}>{subjectLabel}</div>
+            <div className="truncate text-[12.5px] text-muted">{email.preview}</div>
+            {rowLabels.length > 0 && (
+              <div className="mt-1 flex gap-1">
+                {rowLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="rounded-full px-2 py-[2px] text-[11px] font-semibold"
+                    style={{ color: labelColor(label, customLabels), background: labelBackground(label, customLabels) }}
+                  >
+                    {labelDisplayName(label, customLabels)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <button
           type="button"
@@ -462,6 +484,14 @@ export function MessageList({
     );
   }
 
+  // GH #225: neither listbox had an accessible name, so a screen reader
+  // announced only "list box" with no idea which mailbox or view it belongs
+  // to — and this component renders several of them across the app (folder,
+  // label, group and starred views). `title` is the view's own visible
+  // heading, which is exactly the right name when there is one; the generic
+  // label covers the callers that render the list without a header.
+  const listboxLabel = title ?? t("mail.messageListLabel");
+
   let content: ReactNode;
 
   if (messagesQuery.isError) {
@@ -474,7 +504,7 @@ export function MessageList({
     content = <p className="p-4 text-sm text-muted">{t("mail.empty")}</p>;
   } else if (virtualized) {
     content = (
-      <div ref={parentRef} role="listbox" className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={parentRef} role="listbox" aria-label={listboxLabel} className="min-h-0 flex-1 overflow-y-auto">
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
           {virtualItems.map((virtualRow) => {
             const conversation = conversations[virtualRow.index];
@@ -500,7 +530,7 @@ export function MessageList({
     );
   } else {
     content = (
-      <div role="listbox" className="min-h-0 flex-1 overflow-y-auto">
+      <div role="listbox" aria-label={listboxLabel} className="min-h-0 flex-1 overflow-y-auto">
         {conversations.map((conversation) => renderRow(conversation))}
         {messagesQuery.hasNextPage && <div ref={sentinelRef} aria-hidden="true" data-testid="load-more-sentinel" />}
       </div>

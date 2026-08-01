@@ -5,13 +5,28 @@ import {
   DEFAULT_STALWART_TIMEOUT_MS,
 } from "./deadline";
 import {
+  DEFAULT_DB_TIMEOUT_MS as DEFAULT_SHUTDOWN_DB_TIMEOUT_MS,
+  DEFAULT_GRACE_MS as DEFAULT_SHUTDOWN_GRACE_MS,
+} from "./shutdown";
+import {
   DEFAULT_DB_CONNECT_TIMEOUT_S,
   DEFAULT_DB_IDLE_TIMEOUT_S,
   DEFAULT_DB_POOL_MAX,
   DEFAULT_DB_STATEMENT_TIMEOUT_MS,
 } from "../infra/db/client";
+import { masterKeyWeakness } from "../modules/credentials/crypto";
 
 const masterKeySchema = z.string().length(44);
+
+// Where the built SPA is served from in production (src/index.ts). The default
+// is the path relative to apps/server that a source checkout produces; the
+// Docker image overrides it with STATIC_DIR (see Dockerfile).
+export const DEFAULT_STATIC_DIR = "../web/dist";
+
+// Environments where a weak MASTER_KEY is tolerated (GH #223). Everything else
+// — production, staging, or any other name an operator invents — must carry a
+// generated key. See the superRefine below for the full reasoning.
+const WEAK_MASTER_KEY_ENVS = new Set(["development", "test"]);
 
 // Global request-body ceiling (GH #195). A few MB rather than the "few hundred
 // KB" a plain JSON API would need, because send/drafts/signatures legitimately
@@ -92,7 +107,50 @@ const configSchema = z.object({
   // Global request-body ceiling in bytes (GH #195). A zero/negative/fractional
   // limit is a misconfiguration, not tuning — same shape as the pool sizes.
   maxBodyBytes: positiveIntSchema.default(DEFAULT_MAX_BODY_BYTES),
+  // Graceful-shutdown budgets (GH #193), validated here rather than parsed ad
+  // hoc at the call site (GH #218). They used to go through a local
+  // `positiveIntEnv` in index.ts that silently swallowed a malformed value and
+  // fell back to the default — so a fat-fingered SHUTDOWN_GRACE_MS in
+  // production quietly changed the drain budget instead of refusing to boot,
+  // the one thing every other knob here does. Same shape as the pool sizes: a
+  // zero, negative or fractional budget is a misconfiguration, not tuning.
+  shutdownGraceMs: positiveIntSchema.default(DEFAULT_SHUTDOWN_GRACE_MS),
+  shutdownDbTimeoutMs: positiveIntSchema.default(DEFAULT_SHUTDOWN_DB_TIMEOUT_MS),
+  // Directory the production build serves the SPA from (GH #218). Read from
+  // the environment at the call site before, which meant an empty STATIC_DIR
+  // was accepted and served nothing.
+  staticDir: z.string().min(1).default(DEFAULT_STATIC_DIR),
 }).superRefine((config, ctx) => {
+  // GH #223: MASTER_KEY was only ever checked for LENGTH, so the key shipped in
+  // docker-compose.dev.yml (`dev-master-key-dev-master-key-01`, base64) passed
+  // validation unchanged in production — and it decrypts every stored mailbox
+  // credential and the SSO client secret.
+  //
+  // The check is scoped to non-development environments rather than applied
+  // everywhere, deliberately: the dev compose file has to keep booting with a
+  // key a developer can read in a diff, and the test suite builds keys out of
+  // fixed bytes. Making the exemption an allowlist (`development`, `test`)
+  // instead of `!isProduction` means a deployment that calls itself `staging`,
+  // `prod` or anything else is covered too — the only way to opt out is to
+  // declare, explicitly, that this is not a real environment.
+  //
+  // Retired keys in MASTER_KEY_PREVIOUS are NOT checked: they exist to read
+  // rows sealed before a rotation, so refusing them would leave a deployment
+  // rotating AWAY from a weak key unable to boot — exactly backwards. Rotating
+  // is the supported way out (see docs/ARCHITECTURE.md).
+  if (!WEAK_MASTER_KEY_ENVS.has(config.nodeEnv)) {
+    const weakness = masterKeyWeakness(config.masterKey);
+    if (weakness) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["masterKey"],
+        message:
+          `MASTER_KEY is unusable with NODE_ENV=${config.nodeEnv}: ${weakness}. ` +
+          "Generate one with `bun apps/server/scripts/generate-master-key.ts`; " +
+          "never copy the key from docker-compose.dev.yml or any example.",
+      });
+    }
+  }
   const declared = new Set<number>();
   for (const previous of config.previousMasterKeys) {
     if (previous.version === config.masterKeyVersion) {
@@ -167,6 +225,9 @@ export function loadConfig(
     aiModel: env.AI_MODEL || undefined,
     aiBaseUrl: env.AI_BASE_URL || undefined,
     maxBodyBytes: env.MAX_BODY_BYTES || undefined,
+    shutdownGraceMs: env.SHUTDOWN_GRACE_MS || undefined,
+    shutdownDbTimeoutMs: env.SHUTDOWN_DB_TIMEOUT_MS || undefined,
+    staticDir: env.STATIC_DIR || undefined,
   });
   return { ...parsed, isProduction: parsed.nodeEnv === "production" };
 }

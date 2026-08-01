@@ -58,6 +58,10 @@ function stubFetch(): typeof fetch {
   }) as typeof fetch;
 }
 
+/** Stalwart is down: the connection is refused, so fetch rejects (GH #211). */
+const refusingFetch = (() =>
+  Promise.reject(new TypeError("fetch failed"))) as unknown as typeof fetch;
+
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
   const users = createUsersRepo(sql);
@@ -160,6 +164,17 @@ describe("GET /api/mail/events", () => {
     expect(res.status).toBe(502);
     expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
     expect(fetchCallCount).toBe(beforeCount);
+  });
+
+  it("returns 502 stalwart_unavailable when the connection to Stalwart is refused", async () => {
+    // GH #211: a Stalwart that is DOWN makes fetch reject instead of answering
+    // !ok, and that rejection used to reach app.onError as a 500 "internal".
+    const res = await makeApp(stubJmap, refusingFetch).request("/api/mail/events", {
+      headers: { cookie: `session=${token}` },
+    });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
   });
 
   describe("outbound deadline (GH #165)", () => {

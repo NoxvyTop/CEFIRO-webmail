@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -199,5 +199,61 @@ describe("SettingsPage sectioned console", () => {
     const main = screen.getByRole("main");
     expect(main.className).not.toContain("max-w-3xl");
     expect(main.className).not.toContain("mx-auto");
+  });
+});
+
+// GH #226: below md the nav is a single horizontal row, and the five Spanish
+// tabs need ~440px — more than a 375px phone has. Without wrapping (or
+// scrolling) the last ones were simply clipped off the screen with no way to
+// reach them.
+describe("SettingsPage nav at a narrow viewport (GH #226)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+  const originalInnerWidth = window.innerWidth;
+
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: NARROW_VIEWPORT_WIDTH,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: originalInnerWidth,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("lets the tab row wrap below md instead of overflowing off-screen", async () => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("settings.nav.label") });
+    expect(nav.className).toContain("flex-wrap");
+    // …and goes back to a plain single column from md up, where the nav is
+    // vertical and wrapping would have nothing to do.
+    expect(nav.className).toContain("md:flex-col");
+    expect(nav.className).toContain("md:flex-nowrap");
+  });
+
+  it("keeps all five sections present and reachable", async () => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("settings.nav.label") });
+    for (const labelKey of [
+      "settings.nav.profile",
+      "settings.nav.signatures",
+      "settings.nav.filters",
+      "settings.nav.vacation",
+      "settings.nav.contacts",
+    ]) {
+      expect(within(nav).getByRole("button", { name: i18n.t(labelKey) })).toBeVisible();
+    }
+
+    fireEvent.click(within(nav).getByRole("button", { name: i18n.t("settings.nav.contacts") }));
+    expect(
+      await screen.findByRole("heading", { name: i18n.t("contacts.title") }),
+    ).toBeInTheDocument();
   });
 });

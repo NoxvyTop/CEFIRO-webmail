@@ -86,3 +86,34 @@ describe("ShortcutsOverlay", () => {
     expect(document.activeElement).toBe(dialog);
   });
 });
+
+// GH #226: the card was a hard w-[400px] with no cap, so on a 375px phone it
+// was wider than the screen and its right-hand key column sat off it.
+describe("ShortcutsOverlay at a narrow viewport (GH #226)", () => {
+  it("caps the card at the viewport width instead of a fixed 400px", () => {
+    render(<ShortcutsOverlay open={true} onClose={vi.fn()} />);
+
+    const dialog = screen.getByRole("dialog");
+    const classes = dialog.className.split(/\s+/);
+    expect(classes).toContain("max-w-[400px]");
+    expect(classes).toContain("w-full");
+    // The uncapped fixed width the issue is about — checked as a whole class
+    // token, since "max-w-[400px]" contains it as a substring.
+    expect(classes).not.toContain("w-[400px]");
+  });
+
+  it("pads the backdrop so the capped card never touches the screen edges", () => {
+    render(<ShortcutsOverlay open={true} onClose={vi.fn()} />);
+
+    const backdrop = screen.getByRole("dialog").parentElement as HTMLElement;
+    expect(backdrop.className).toContain("p-6");
+  });
+
+  it("still shows every shortcut row at 375px", () => {
+    render(<ShortcutsOverlay open={true} onClose={vi.fn()} />);
+
+    for (const key of ["j", "k", "e", "s", "r", "c", "/", "Esc"]) {
+      expect(screen.getByText(key)).toBeVisible();
+    }
+  });
+});

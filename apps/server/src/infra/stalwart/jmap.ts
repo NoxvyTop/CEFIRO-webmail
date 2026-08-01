@@ -16,11 +16,45 @@ function basicAuth(auth: JmapAuth): string {
   return `Basic ${btoa(`${auth.email}:${auth.password}`)}`;
 }
 
+export function stalwartUnavailable(): DomainError {
+  return new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+}
+
 function toDomainError(status: number): DomainError {
   if (status === 401) {
     return new DomainError("mail_auth_failed", 502, "errors.mail_auth_failed");
   }
-  return new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+  return stalwartUnavailable();
+}
+
+/**
+ * Wraps `fetchFn` so a transport failure — connection refused, reset, DNS
+ * error — surfaces as 502 `stalwart_unavailable` rather than propagating raw.
+ *
+ * A transport failure makes fetch REJECT rather than return a response, so it
+ * never reaches the status-based toDomainError mapping. Left alone it reached
+ * app.onError and surfaced as a 500 "internal", reporting a known dependency
+ * being down as if it were our own bug — and logging it as an unhandled error,
+ * burying the real ones (GH #187).
+ *
+ * Exported because the mapping must not live only inside the JMAP client: the
+ * event stream and the blob upload/download routes talk to Stalwart over raw
+ * fetch and were still answering 500 for a Stalwart that is simply down
+ * (GH #211). One wrapper, one behaviour, wherever this server calls Stalwart.
+ *
+ * A DomainError already in flight — notably the upstream_timeout (504) that
+ * withDeadlineFetch raises (GH #165) — is a correct dependency error with its
+ * own status, so it passes through untouched.
+ */
+export function withStalwartTransportErrors(fetchFn: typeof fetch): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      return await fetchFn(input, init);
+    } catch (err) {
+      if (err instanceof DomainError) throw err;
+      throw stalwartUnavailable();
+    }
+  }) as typeof fetch;
 }
 
 // Some reverse-proxied Stalwart deployments advertise an internal/unreachable
@@ -49,24 +83,10 @@ export function createJmapClient(input: {
     input.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS,
   );
 
-  // A transport failure — connection refused, reset, DNS error — makes fetch
-  // REJECT rather than return a response, so it never reaches the status-based
-  // toDomainError mapping. Left alone it propagated raw to app.onError and
-  // surfaced as a 500 "internal", reporting a known dependency being down as if
-  // it were our own bug — and logging it as an unhandled error, burying the
-  // real ones (GH #187). Map it to stalwart_unavailable, the same as an
-  // unreachable-status response. A DomainError already in flight — notably the
-  // upstream_timeout (504) that withDeadlineFetch raises (GH #165) — is a
-  // correct dependency error with its own status, so it passes through
-  // untouched.
-  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    try {
-      return await deadlineFetch(input, init);
-    } catch (err) {
-      if (err instanceof DomainError) throw err;
-      throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
-    }
-  }) as typeof fetch;
+  // A Stalwart that is down makes fetch reject instead of answering, which
+  // would surface as a 500 "internal" without this (GH #187) — see
+  // withStalwartTransportErrors above.
+  const fetchFn = withStalwartTransportErrors(deadlineFetch);
 
   const baseUrl = input.baseUrl.replace(/\/$/, "");
   const forceBase = input.forceBase ?? false;
@@ -86,7 +106,7 @@ export function createJmapClient(input: {
       };
       const accountId = body.primaryAccounts?.["urn:ietf:params:jmap:mail"];
       if (!body.apiUrl || !accountId) {
-        throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+        throw stalwartUnavailable();
       }
       if (!forceBase) {
         return {
@@ -157,7 +177,7 @@ export function createJmapClient(input: {
       if (!res.ok) throw toDomainError(res.status);
       const body = (await res.json()) as { blobId?: string };
       if (!body.blobId) {
-        throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+        throw stalwartUnavailable();
       }
       return body.blobId;
     },

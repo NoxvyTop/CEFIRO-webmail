@@ -173,6 +173,11 @@ jobs:
           restore-keys: bun-cache-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      # Fans out to every workspace, which since GH #216 includes the e2e
+      # package: its bun:test suite over the SMTP seeder's protocol helpers (the
+      # GH #184 regression cover) had no `test` script, so nothing ran it. Those
+      # tests need neither Postgres nor a browser, so they belong here rather
+      # than in the heavy `e2e` job.
       - run: bun run test
         env:
           # Reached by service name, not localhost: the job and its services
@@ -195,6 +200,15 @@ jobs:
   # self-migrates, exactly like `test`; the web suite needs no database but shares
   # the step. Runs as its own job (rather than folded into `test`) so `test` keeps
   # covering every workspace unchanged; gated behind `lint` to fail fast.
+  #
+  # `bun run coverage` now fans out to all three testable packages: web, server
+  # AND packages/shared, which had no vitest config and therefore sat outside
+  # this gate entirely until GH #229 — including the Sieve schemas that are the
+  # input contract of an injection-sensitive generator.
+  #
+  # The thresholds are also checked per file rather than only in aggregate
+  # (GH #228), so a single module can no longer rot to zero behind a healthy
+  # package average.
   coverage:
     needs: [lint]
     runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}

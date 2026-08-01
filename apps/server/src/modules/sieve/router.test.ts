@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import { sieveSyncStateSchema } from "@webmail/shared";
 import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
@@ -7,6 +8,7 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createFilterRulesRepo } from "../../infra/repos/filter-rules";
 import { createVacationSettingsRepo } from "../../infra/repos/vacation-settings";
+import { createSieveSyncStateRepo } from "../../infra/repos/sieve-sync-state";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -20,11 +22,15 @@ let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
 let filterRules: ReturnType<typeof createFilterRulesRepo>;
 let vacationSettings: ReturnType<typeof createVacationSettingsRepo>;
+let sieveSyncState: ReturnType<typeof createSieveSyncStateRepo>;
 let token: string;
 let token2: string;
 let token3: string;
+let token4: string;
+let token5: string;
 let userId: string;
 let user3Id: string;
+let user4Id: string;
 
 const ruleBody = {
   name: "invoices",
@@ -43,6 +49,7 @@ beforeAll(async () => {
   mailCredentials = createMailCredentialsRepo(sql, key);
   filterRules = createFilterRulesRepo(sql);
   vacationSettings = createVacationSettingsRepo(sql);
+  sieveSyncState = createSieveSyncStateRepo(sql);
   sessions = createSessionStore(sql);
 
   const user1 = await users.create({
@@ -69,17 +76,34 @@ beforeAll(async () => {
     insert into mail_credentials (user_id, ciphertext, iv, key_version)
     values (${user3Id}, ${crypto.getRandomValues(new Uint8Array(32))}, ${crypto.getRandomValues(new Uint8Array(12))}, 1)
   `;
+
+  const user4 = await users.create({
+    email: `sieve-r4-${crypto.randomUUID()}@noxvytop.com`,
+    displayName: "Sieve Router User 4",
+  });
+  user4Id = user4.id;
+  token4 = (await sessions.create(user4.id, 1)).token;
+  await mailCredentials.set(user4Id, "mailbox-pw");
+
+  // Never touches a filter: the "nothing was ever pushed" baseline.
+  const user5 = await users.create({
+    email: `sieve-r5-${crypto.randomUUID()}@noxvytop.com`,
+    displayName: "Sieve Router User 5",
+  });
+  token5 = (await sessions.create(user5.id, 1)).token;
 });
 afterAll(() => sql.end());
 
-function makeApp(jmap: JmapClient | null) {
+function makeApp(jmap: JmapClient | null, reconcileCooldownMs?: number) {
   return createApp({
     sieveRouter: createSieveRouter({
       sessions,
       mailCredentials,
       filterRules,
       vacationSettings,
+      sieveSyncState,
       jmap,
+      reconcileCooldownMs,
     }),
   });
 }
@@ -283,5 +307,121 @@ describe("sieve routes", () => {
       message: "   ",
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("sieve sync state (GH #221)", () => {
+  /** Never reconciles on read, so a test can inspect the stored state as-is. */
+  const NO_RECONCILE_MS = 600_000;
+
+  function readState(app: ReturnType<typeof makeApp>, cookie = token4) {
+    return app.request("/api/mail/filters/sync-state", {
+      headers: { cookie: `session=${cookie}` },
+    });
+  }
+
+  it("records a rule that was saved but never applied, and exposes it as such", async () => {
+    // The 502 tells the caller of THIS request that the push failed. It says
+    // nothing to the next reader, who sees a filter list full of rules Stalwart
+    // has never heard of — that is what this state is for.
+    const app = makeApp(brokenJmap(), NO_RECONCILE_MS);
+    const created = await post(app, "/api/mail/filters", { ...ruleBody, name: "unapplied" }, token4);
+    expect(created.status).toBe(502);
+
+    const state = sieveSyncStateSchema.parse(await (await readState(app)).json());
+    expect(state.status).toBe("failed");
+    expect(state.lastError).toBe("sieve_sync_failed");
+    expect(state.attempts).toBe(1);
+    expect(state.updatedAt).not.toBeNull();
+  });
+
+  it("keeps counting consecutive failures across further edits during the outage", async () => {
+    const app = makeApp(brokenJmap(), NO_RECONCILE_MS);
+    const second = await post(app, "/api/mail/filters", { ...ruleBody, name: "second" }, token4);
+    expect(second.status).toBe(502);
+
+    const state = sieveSyncStateSchema.parse(await (await readState(app)).json());
+    expect(state.status).toBe("failed");
+    expect(state.attempts).toBe(2);
+  });
+
+  it("does not push again while the cooldown is running", async () => {
+    const { client, uploads } = stubJmap();
+    const res = await readState(makeApp(client, NO_RECONCILE_MS));
+
+    expect(sieveSyncStateSchema.parse(await res.json()).status).toBe("failed");
+    expect(uploads).toHaveLength(0);
+  });
+
+  it("reconciles on read once Stalwart answers again", async () => {
+    // The outage ended. Nobody has to remember to re-save every rule: reading
+    // the state re-pushes what the database holds and settles back to synced.
+    const { client, uploads } = stubJmap();
+    const res = await readState(makeApp(client, 0));
+
+    const state = sieveSyncStateSchema.parse(await res.json());
+    expect(state.status).toBe("synced");
+    expect(state.attempts).toBe(0);
+    expect(state.lastError).toBeNull();
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toContain("# rule: unapplied");
+  });
+
+  it("stops re-pushing once synced, however often the state is read", async () => {
+    const { client, uploads } = stubJmap();
+    const app = makeApp(client, 0);
+    await readState(app);
+    await readState(app);
+
+    expect(uploads).toHaveLength(0);
+  });
+
+  it("reports rules stored with no mail configured as pending, not as applied", async () => {
+    // Nothing is enforcing these filters: there is no Stalwart to push them to.
+    // Reporting that as synced would be a lie the settings page repeats.
+    const app = makeApp(null, NO_RECONCILE_MS);
+    const created = await post(app, "/api/mail/filters", { ...ruleBody, name: "no mail" }, token2);
+    expect(created.status).toBe(200);
+
+    const state = sieveSyncStateSchema.parse(await (await readState(app, token2)).json());
+    expect(state.status).toBe("pending");
+    expect(state.lastError).toBeNull();
+  });
+
+  it("reports a user who never saved a filter as synced", async () => {
+    const state = sieveSyncStateSchema.parse(
+      await (await readState(makeApp(null), token5)).json(),
+    );
+    expect(state).toEqual({ status: "synced", attempts: 0, lastError: null, updatedAt: null });
+  });
+
+  it("records the script itself being rejected as a failure that names it", async () => {
+    const invalidJmap = {
+      ...stubJmap().client,
+      async request(_auth: unknown, _session: unknown, calls: JmapMethodCall[]) {
+        const [method] = calls[0]!;
+        if (method === "Mailbox/get") {
+          return [["Mailbox/get", { list: [] }, "0"]];
+        }
+        if (method === "SieveScript/validate") {
+          return [["SieveScript/validate", { error: "syntax error" }, "0"]];
+        }
+        return [[method, { list: [] }, "0"]];
+      },
+    } as unknown as JmapClient;
+
+    const app = makeApp(invalidJmap, NO_RECONCILE_MS);
+    const res = await put(
+      app,
+      "/api/mail/vacation",
+      { enabled: true, subject: "Out", message: "Away" },
+      token4,
+    );
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("sieve_invalid");
+
+    const state = sieveSyncStateSchema.parse(await (await readState(app)).json());
+    expect(state.status).toBe("failed");
+    expect(state.lastError).toBe("sieve_invalid");
   });
 });

@@ -2,9 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
-import { sanitizeEmailHtml } from "../reader/sanitize";
 import { IMAGE_SIZE_PRESETS } from "./resizableImageExtension";
-import { isSafeLinkUrl, RichTextEditor } from "./RichTextEditor";
+import {
+  ContentEditableFallback,
+  htmlToPlainText,
+  isSafeLinkUrl,
+  RichTextEditor,
+} from "./RichTextEditor";
 
 function pngFile(name: string, byteLength: number, type = "image/png"): File {
   return new File([new Uint8Array(byteLength)], name, { type });
@@ -63,33 +67,87 @@ describe("isSafeLinkUrl", () => {
   });
 });
 
-describe("RichTextEditor fallback sanitization", () => {
-  it("sanitizes remote images in the initial seed", () => {
-    const dangerousHtml = '<p>Hello</p><img src="https://evil.test/x.png" />';
-    const result = sanitizeEmailHtml(dangerousHtml, { allowRemoteImages: false });
+// GH #213: the fallback renders in the app's own document, with none of the
+// `sandbox=""` isolation the reader gives email HTML (reader/EmailBody.tsx).
+// These pin that it therefore renders NO markup at all — not "sanitized
+// markup", which is what it used to do and what the issue is about: DOMPurify
+// keeps <style>, and sanitize's parse/serialize/re-parse round trip ran here
+// with the app's full privileges.
+const HOSTILE_QUOTE = [
+  "<style>body{background:url(https://tracker.test/p.png)}</style>",
+  "<p>Hola <b>equipo</b></p>",
+  '<img src="https://tracker.test/pixel.png" alt="pixel">',
+  '<video poster="https://tracker.test/poster.png"></video>',
+  '<a href="https://evil.test/phish">Pulsa aqui</a>',
+  '<script>alert("xss")</script>',
+].join("");
 
-    // The remote image src should be removed and replaced with data-blocked-src
-    expect(result.html).not.toMatch(/src="https:\/\/evil\.test/);
-    expect(result.html).toMatch(/data-blocked-src=/);
-    expect(result.hasRemoteImages).toBe(true);
+describe("htmlToPlainText", () => {
+  it("keeps the readable text and drops every element", () => {
+    const text = htmlToPlainText(HOSTILE_QUOTE);
+
+    expect(text).toContain("Hola equipo");
+    expect(text).toContain("Pulsa aqui");
+    expect(text).not.toMatch(/[<>]/);
   });
 
-  it("sanitizes scripts from the initial seed", () => {
-    const dangerousHtml = '<p>Hello</p><script>alert("xss")</script>';
-    const result = sanitizeEmailHtml(dangerousHtml, { allowRemoteImages: false });
+  it("drops the text content of style and script elements", () => {
+    const text = htmlToPlainText(HOSTILE_QUOTE);
 
-    // Scripts should be completely removed by DOMPurify
-    expect(result.html).not.toMatch(/<script>/i);
-    expect(result.hasRemoteImages).toBe(false);
+    expect(text).not.toContain("tracker.test");
+    expect(text).not.toContain("alert");
   });
 
-  it("allows safe HTML in the initial seed", () => {
-    const safeHtml = "<p><strong>Bold text</strong></p>";
-    const result = sanitizeEmailHtml(safeHtml, { allowRemoteImages: false });
+  it("turns block and <br> boundaries into newlines instead of run-on text", () => {
+    expect(htmlToPlainText("<p>uno</p><p>dos</p>")).toBe("uno\ndos");
+    expect(htmlToPlainText("uno<br>dos")).toBe("uno\ndos");
+  });
 
-    // Safe HTML should be preserved
-    expect(result.html).toContain("<strong>Bold text</strong>");
-    expect(result.hasRemoteImages).toBe(false);
+  it("returns an empty string for empty input", () => {
+    expect(htmlToPlainText("")).toBe("");
+  });
+});
+
+describe("RichTextEditor fallback isolation (GH #213)", () => {
+  it("renders no element at all inside the unsandboxed textbox", () => {
+    render(
+      <ContentEditableFallback html={HOSTILE_QUOTE} onChange={() => {}} ariaLabel="Message" />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Message" });
+    // The strongest form of "never renders unsandboxed HTML": there is no
+    // element node in this subtree to render, sanitized or otherwise.
+    expect(textbox.querySelectorAll("*")).toHaveLength(0);
+    expect(textbox.innerHTML).not.toContain("<");
+  });
+
+  it("never emits the hostile URLs into the app document", () => {
+    render(
+      <ContentEditableFallback html={HOSTILE_QUOTE} onChange={() => {}} ariaLabel="Message" />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Message" });
+    expect(textbox.innerHTML).not.toContain("tracker.test");
+    expect(textbox.innerHTML).not.toContain("evil.test");
+  });
+
+  it("still shows the quoted message as readable text", () => {
+    render(
+      <ContentEditableFallback html={HOSTILE_QUOTE} onChange={() => {}} ariaLabel="Message" />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveTextContent("Hola equipo");
+  });
+
+  it("reports edits back through onChange", () => {
+    const onChange = vi.fn();
+    render(<ContentEditableFallback html="" onChange={onChange} ariaLabel="Message" />);
+
+    const textbox = screen.getByRole("textbox", { name: "Message" });
+    textbox.textContent = "respuesta";
+    fireEvent.input(textbox);
+
+    expect(onChange).toHaveBeenCalledWith("respuesta");
   });
 });
 

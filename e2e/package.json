@@ -3,11 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "bun test smtp-seed.test.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
+    "@types/bun": "^1.2.0",
     "@types/node": "^22.10.0",
     "@webmail/server": "workspace:*",
     "@webmail/shared": "workspace:*",

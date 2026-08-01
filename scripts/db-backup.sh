@@ -27,27 +27,88 @@
 # Optional env:
 #   DBSOS_DIR              output dir for .dump.enc files (default: ./backups).
 #   DBSOS_RETENTION_DAYS   delete encrypted dumps older than this (default: 7).
+#   DBSOS_STATUS_FILE      where the run outcome is published, in Prometheus
+#                          text format (default: $DBSOS_DIR/dbsos-status.prom).
+#                          Point it at a node_exporter textfile-collector dir to
+#                          have it scraped; see docs/OPERATIONS.md.
 #
+# Exit codes — the scheduler's contract (GH #208). A cron entry that only knows
+# "non-zero" can still alert; these let it say WHAT broke:
+#   0  backup written and verified
+#   1  configuration/preflight error (missing env var, missing tool, unreadable
+#      key, key stored next to the backups)
+#   2  the dump or its encryption failed — nothing was published
+#   3  the integrity check failed — the dump was written, found unreadable, and
+#      discarded, which is the one case that needs a human before the next run
+#
+# Why a status file at all: a cron job's non-zero exit goes into the void, so
+# backups can stop for weeks without anyone noticing — a verified backup that
+# nobody monitors is not DR. This run publishes its own outcome, and crucially
+# the timestamp of the last SUCCESSFUL one, which is the number an alert has to
+# watch: a failing run is not the emergency, a stale last-success is.
 set -euo pipefail
 
-fail() { echo "db-backup: $*" >&2; exit 1; }
+EXIT_CONFIG=1
+EXIT_DUMP=2
+EXIT_VERIFY=3
+
+fail() { code="$1"; shift; echo "db-backup: $*" >&2; exit "$code"; }
 
 : "${DATABASE_URL:?DATABASE_URL is required}"
 : "${DBSOS_KEY_FILE:?DBSOS_KEY_FILE is required (path to the AES passphrase, stored separately from the backups)}"
 DBSOS_DIR="${DBSOS_DIR:-./backups}"
 DBSOS_RETENTION_DAYS="${DBSOS_RETENTION_DAYS:-7}"
 
-command -v pg_dump    >/dev/null 2>&1 || fail "pg_dump not found on PATH"
-command -v pg_restore >/dev/null 2>&1 || fail "pg_restore not found on PATH"
-command -v openssl    >/dev/null 2>&1 || fail "openssl not found on PATH"
-[ -r "$DBSOS_KEY_FILE" ] || fail "DBSOS_KEY_FILE ($DBSOS_KEY_FILE) is not readable"
+command -v pg_dump    >/dev/null 2>&1 || fail "$EXIT_CONFIG" "pg_dump not found on PATH"
+command -v pg_restore >/dev/null 2>&1 || fail "$EXIT_CONFIG" "pg_restore not found on PATH"
+command -v openssl    >/dev/null 2>&1 || fail "$EXIT_CONFIG" "openssl not found on PATH"
+[ -r "$DBSOS_KEY_FILE" ] || fail "$EXIT_CONFIG" "DBSOS_KEY_FILE ($DBSOS_KEY_FILE) is not readable"
 
 # Guardrail: refuse to write backups into the same directory the key lives in,
 # which would defeat the point of encrypting them.
 key_dir="$(cd "$(dirname "$DBSOS_KEY_FILE")" && pwd)"
 mkdir -p "$DBSOS_DIR"
 out_dir="$(cd "$DBSOS_DIR" && pwd)"
-[ "$key_dir" != "$out_dir" ] || fail "DBSOS_KEY_FILE must not live inside DBSOS_DIR ($out_dir)"
+[ "$key_dir" != "$out_dir" ] || fail "$EXIT_CONFIG" "DBSOS_KEY_FILE must not live inside DBSOS_DIR ($out_dir)"
+
+status_file="${DBSOS_STATUS_FILE:-$out_dir/dbsos-status.prom}"
+
+# Reads one sample back out of the status file a PREVIOUS run wrote. This is
+# what lets a failed run carry the last success forward instead of erasing it:
+# without it, "last good backup" would reset on every failure and an operator
+# could not tell a one-hour outage from a three-week one.
+previous_sample() {
+  [ -r "$status_file" ] || { echo 0; return 0; }
+  awk -v name="$1" '$1 == name { value = $2 } END { print (value == "" ? 0 : value) }' \
+    "$status_file" 2>/dev/null || echo 0
+}
+
+success_ts="$(previous_sample cefiro_dbsos_last_success_timestamp_seconds)"
+success_size="$(previous_sample cefiro_dbsos_last_success_size_bytes)"
+
+# Written atomically (temp + rename), which the node_exporter textfile collector
+# requires: a scrape landing mid-write must never read a half-file.
+write_status() {
+  status_tmp="$status_file.$$.tmp"
+  {
+    echo "# HELP cefiro_dbsos_last_run_timestamp_seconds When the last dbSOS run finished, successful or not."
+    echo "# TYPE cefiro_dbsos_last_run_timestamp_seconds gauge"
+    echo "cefiro_dbsos_last_run_timestamp_seconds $(date -u +%s)"
+    echo "# HELP cefiro_dbsos_last_run_exit_code Exit code of the last dbSOS run (0 ok, 1 config, 2 dump, 3 integrity)."
+    echo "# TYPE cefiro_dbsos_last_run_exit_code gauge"
+    echo "cefiro_dbsos_last_run_exit_code $1"
+    echo "# HELP cefiro_dbsos_last_success_timestamp_seconds When the last VERIFIED backup was published (0 = never)."
+    echo "# TYPE cefiro_dbsos_last_success_timestamp_seconds gauge"
+    echo "cefiro_dbsos_last_success_timestamp_seconds $success_ts"
+    echo "# HELP cefiro_dbsos_last_success_size_bytes Size of the last verified backup, in bytes."
+    echo "# TYPE cefiro_dbsos_last_success_size_bytes gauge"
+    echo "cefiro_dbsos_last_success_size_bytes $success_size"
+  } > "$status_tmp" 2>/dev/null && mv -f "$status_tmp" "$status_file" 2>/dev/null || {
+    rm -f "$status_tmp" 2>/dev/null || true
+    echo "db-backup: could not publish status to $status_file" >&2
+  }
+  return 0
+}
 
 # UTC, second-granularity, sortable. Not using Date-derived randomness — the
 # timestamp is the only variable and it sorts lexicographically.
@@ -55,16 +116,29 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 final="$out_dir/dbsos-$stamp.dump.enc"
 tmp="$out_dir/.dbsos-$stamp.partial"
 
-cleanup() { rm -f "$tmp" "$tmp.verify"; }
-trap cleanup EXIT
+# One exit path for both jobs: drop the partial files AND publish the outcome,
+# whichever way the script leaves — success, `fail`, or an unexpected error
+# `set -e` aborts on. Publishing only on the happy path would leave exactly the
+# silence this exists to remove. The captured code is re-raised at the end so
+# the trap cannot mask the script's own result.
+on_exit() {
+  code=$?
+  [ -z "$tmp" ] || rm -f "$tmp" "$tmp.verify" 2>/dev/null || true
+  write_status "$code"
+  exit "$code"
+}
+trap on_exit EXIT
 
 echo "db-backup: dumping to $final"
 # -Fc custom format: compressed + parallel-restorable. Encrypt streaming so the
 # plaintext dump is never written to disk. pbkdf2 + salt so the passphrase file
-# isn't used as a raw key.
-pg_dump -Fc --no-owner --no-privileges "$DATABASE_URL" \
+# isn't used as a raw key. `if !` rather than bare `set -e` so the failure is
+# reported under the documented exit code instead of pg_dump's own.
+if ! pg_dump -Fc --no-owner --no-privileges "$DATABASE_URL" \
   | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$DBSOS_KEY_FILE" \
-  > "$tmp"
+  > "$tmp"; then
+  fail "$EXIT_DUMP" "pg_dump/openssl failed — nothing was published"
+fi
 
 # Verify BEFORE publishing: decrypt and let pg_restore parse the archive TOC.
 # If this fails the dump is corrupt/truncated and must not be kept as if good.
@@ -76,12 +150,16 @@ verify="$tmp.verify"
 if ! openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$DBSOS_KEY_FILE" -in "$tmp" -out "$verify" 2>/dev/null \
    || ! pg_restore -l "$verify" >/dev/null 2>&1; then
   rm -f "$verify"
-  fail "integrity check failed (could not decrypt or read the archive) — dump discarded"
+  fail "$EXIT_VERIFY" "integrity check failed (could not decrypt or read the archive) — dump discarded"
 fi
 rm -f "$verify"
 
 mv "$tmp" "$final"
-trap - EXIT
+# Only now is there a backup to report: the status file's "last success" must
+# mean a dump that exists AND verified, never one that merely got as far as
+# being written.
+success_ts="$(date -u +%s)"
+success_size="$(wc -c < "$final" | tr -d ' ')"
 size="$(du -h "$final" | cut -f1)"
 echo "db-backup: OK $final ($size)"
 

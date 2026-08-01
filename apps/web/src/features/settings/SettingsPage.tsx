@@ -31,9 +31,17 @@ export function SettingsPage() {
       </div>
 
       <div className="flex flex-1 flex-col gap-6 md:flex-row md:items-start">
+        {/* GH #226: below md this is a single horizontal row, and the five
+            Spanish tabs ("Vacaciones", "Contactos", …) want ~440px — more than
+            a 375px phone has — with nothing to wrap or scroll them back into
+            reach. It wraps onto as many lines as it needs instead of
+            scrolling: the nav has no fixed height to preserve, and a wrapped
+            row leaves every tab visible rather than hiding some behind an
+            overlay scrollbar nothing hints at. From md up the nav is a column
+            again, where wrapping has nothing to do. */}
         <nav
           aria-label={t("settings.nav.label")}
-          className="flex w-full shrink-0 flex-row gap-1 rounded-[14px] border border-line bg-panel p-3 md:w-[184px] md:flex-col"
+          className="flex w-full shrink-0 flex-row flex-wrap gap-1 rounded-[14px] border border-line bg-panel p-3 md:w-[184px] md:flex-col md:flex-nowrap"
         >
           {NAV_ITEMS.map((item) => (
             <button

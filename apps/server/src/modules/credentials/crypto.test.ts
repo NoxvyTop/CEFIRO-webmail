@@ -7,6 +7,7 @@ import {
   encryptSecret,
   encryptWithKeyring,
   importMasterKey,
+  masterKeyWeakness,
 } from "./crypto";
 
 function randomKeyB64(): string {
@@ -44,6 +45,55 @@ describe("credential crypto", () => {
 
   it("rejects keys that are not 32 bytes", async () => {
     await expect(importMasterKey(btoa("short"))).rejects.toThrow();
+  });
+});
+
+// GH #223. Length was the only property ever checked, so the key published in
+// docker-compose.dev.yml validated in production and decrypted every stored
+// credential.
+describe("master key weakness", () => {
+  const DEV_COMPOSE_KEY = "ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=";
+
+  it("names the dev compose key and where it is published", () => {
+    expect(atob(DEV_COMPOSE_KEY)).toBe("dev-master-key-dev-master-key-01");
+    expect(masterKeyWeakness(DEV_COMPOSE_KEY)).toMatch(/docker-compose\.dev\.yml/);
+  });
+
+  it("ignores surrounding whitespace when matching a published key", () => {
+    expect(masterKeyWeakness(` ${DEV_COMPOSE_KEY} `)).toMatch(/docker-compose\.dev\.yml/);
+  });
+
+  it("rejects an all-zero key", () => {
+    const zeroKey = btoa(String.fromCharCode(...new Uint8Array(32)));
+    expect(masterKeyWeakness(zeroKey)).toMatch(/identical/);
+  });
+
+  it("rejects a key built by repeating a short pattern", () => {
+    const repeated = btoa("ab".repeat(16));
+    expect(masterKeyWeakness(repeated)).toBeTruthy();
+  });
+
+  it("rejects a typed passphrase that is not a published key", () => {
+    const passphrase = btoa("Correct-Horse-Battery-Staple2026"); // exactly 32 chars
+    expect(passphrase).not.toBe(DEV_COMPOSE_KEY);
+    expect(masterKeyWeakness(passphrase)).toMatch(/printable ASCII/);
+  });
+
+  it("accepts generated keys", () => {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      expect(masterKeyWeakness(randomKeyB64())).toBeNull();
+    }
+  });
+
+  it("says nothing about a key that is not valid base64 or not 32 bytes", async () => {
+    // importMasterKey is what reports a malformed key, with a message about its
+    // shape rather than its quality; this must not shadow that.
+    expect(masterKeyWeakness("!!!not base64!!!")).toBeNull();
+    expect(masterKeyWeakness(btoa("short"))).toBeNull();
+    // 44 unpadded base64 characters decode to 33 bytes, not 32 — the right
+    // length as a string, the wrong length as a key.
+    expect(masterKeyWeakness("A".repeat(44))).toBeNull();
+    await expect(importMasterKey("A".repeat(44))).rejects.toThrow(/32 bytes/);
   });
 });
 

@@ -21,12 +21,18 @@ import { requireSession } from "../auth/middleware";
 import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { errorResponse } from "../../core/error-response";
 import { clearIdleTimeout } from "../../core/idle-timeout";
-import { log } from "../../core/logger";
+import { currentLogContext, log, withLogContext } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthVerdict } from "./sender-auth";
-import type { JmapAuth, JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
+import {
+  withStalwartTransportErrors,
+  type JmapAuth,
+  type JmapClient,
+  type JmapMethodCall,
+  type JmapSession,
+} from "../../infra/stalwart/jmap";
 
 type JmapMailbox = {
   id: string;
@@ -370,16 +376,20 @@ async function trashSupersededDraft(input: {
 
 export function createMailRouter(deps: MailDeps) {
   const router = new Hono<{ Variables: MailVariables }>();
-  const rawFetch = deps.fetchFn ?? fetch;
-  // GH #165: these three routes talk to Stalwart directly instead of through
-  // the JMAP client, so they need their own deadline. It only covers
+  const baseFetch = deps.fetchFn ?? fetch;
+  // GH #211: these three routes talk to Stalwart directly instead of through
+  // the JMAP client, so the client's "a rejecting fetch means the dependency is
+  // down" mapping did not reach them — a Stalwart that refuses the connection
+  // answered 500 "internal" on the event stream and on attachments while every
+  // other route already answered 502 stalwart_unavailable. Same wrapper, same
+  // verdict, for every call this server makes to Stalwart.
+  const uploadFetch = withStalwartTransportErrors(baseFetch);
+  // GH #165: they also need their own deadline. It only covers
   // time-to-response-headers, which is what lets the event stream stay open
   // for as long as the client wants while still failing fast on a Stalwart
   // that accepts the connection and never answers.
-  const fetchFn = withDeadlineFetch(
-    rawFetch,
-    "stalwart",
-    deps.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS,
+  const fetchFn = withStalwartTransportErrors(
+    withDeadlineFetch(baseFetch, "stalwart", deps.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS),
   );
 
   router.use("*", requireSession(deps.sessions));
@@ -546,18 +556,24 @@ export function createMailRouter(deps: MailDeps) {
     if (contacts && jmap) {
       const user = c.get("user");
       const auth = c.get("jmapAuth");
+      // The harvest runs whenever mail arrives, which is long after this
+      // handler returned — carry the request's log context with it so its
+      // diagnostics are still findable by this stream's traceId (GH #219).
+      const logContext = currentLogContext();
       const tapped = tapEmailStateChanges({
         source: upstream.body,
         accountId: session.accountId,
         onEmailStateChange: () =>
-          harvestOnMailArrival({
-            contacts,
-            jmap,
-            auth,
-            session,
-            userId: user.userId,
-            ownerEmail: user.email,
-          }),
+          withLogContext(logContext, () =>
+            harvestOnMailArrival({
+              contacts,
+              jmap,
+              auth,
+              session,
+              userId: user.userId,
+              ownerEmail: user.email,
+            }),
+          ),
       });
       return new Response(tapped, { headers });
     }
@@ -582,7 +598,8 @@ export function createMailRouter(deps: MailDeps) {
     // relayed upstream, so a fixed time-to-headers ceiling would reject large
     // attachments on slow uplinks — a worse, user-visible failure than the one
     // it would prevent. Bounding an upload needs a rate-aware budget, not this.
-    const upstream = await rawFetch(uploadUrl, {
+    // It is still wrapped for transport failures (GH #211).
+    const upstream = await uploadFetch(uploadUrl, {
       method: "POST",
       headers: {
         authorization: basicAuthHeader(c.get("jmapAuth")),

@@ -5,10 +5,16 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
-    "types": ["node"],
+    // "bun" alongside "node" so the bun:test unit suite (smtp-seed.test.ts) is
+    // typecheckable here — see the `exclude` note below for why it now is.
+    "types": ["node", "bun"],
     "skipLibCheck": true,
     "esModuleInterop": true
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  // Only node_modules is excluded. `**/*.test.ts` used to be excluded too,
+  // which — combined with the package having no `test` script and Playwright's
+  // testDir pointing at ./tests — meant smtp-seed.test.ts was neither run nor
+  // typechecked by anything (GH #216). It is now both.
+  "exclude": ["node_modules"]
 }

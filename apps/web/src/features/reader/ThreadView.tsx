@@ -7,8 +7,10 @@ import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
+import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
 import { fetchIdentities } from "../composer/api";
 import { replyRecipients } from "../composer/reply";
+import { errorMessageKey } from "../../app/errorMessages";
 import { Avatar } from "../../app/ui/Avatar";
 import { Button } from "../../app/ui/Button";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
@@ -146,6 +148,18 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
   return replyRecipients(email, identities, true).cc.length > 0;
 }
 
+// GH #227: archiving, un-archiving, deleting and destroying all move (or
+// remove) one email, so exactly three things can have changed: the listings it
+// appears in, the thread it belongs to, and the unread/total counts of the
+// mailboxes on either side of the move.
+//
+// These used to invalidate the whole ["mail"] namespace instead, which swept
+// identities, preferences and signatures — none of which a mailbox move can
+// touch — along with every page an infinite listing had already loaded. That is
+// the same cost GH #167 removed from the SSE path; useMailEvents.ts documents
+// it in full, and this reuses that module's own key sets so the two can't drift.
+const MAILBOX_MOVE_INVALIDATION_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS];
+
 export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
@@ -255,13 +269,21 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
     };
   }, [labelMenuOpen]);
 
+  // See MAILBOX_MOVE_INVALIDATION_KEYS above for why this is not one
+  // invalidateQueries({ queryKey: ["mail"] }).
+  function invalidateAfterMailboxMove() {
+    for (const queryKey of MAILBOX_MOVE_INVALIDATION_KEYS) {
+      queryClient.invalidateQueries({ queryKey });
+    }
+  }
+
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
       return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      invalidateAfterMailboxMove();
       showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
       backToList();
     },
@@ -276,7 +298,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
       return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      invalidateAfterMailboxMove();
       showToast(t("mail.unarchived"));
       backToList();
     },
@@ -292,7 +314,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
       return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      invalidateAfterMailboxMove();
       showToast(t("mail.deleted"));
       backToList();
     },
@@ -308,15 +330,17 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const destroyMutation = useMutation({
     mutationFn: (email: EmailDetail) => destroyMessage(email.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["mail"] });
+      invalidateAfterMailboxMove();
       setDeletePermanentlyConfirmOpen(false);
       setDestroyError(null);
       showToast(t("mail.deletedPermanently"));
       backToList();
     },
     onError: (err) => {
-      const error = err instanceof MailApiError ? `mail.errors.${err.code || "generic"}` : "mail.errors.generic";
-      setDestroyError(error);
+      // GH #215: this used to interpolate the raw server code into the key with
+      // no existence check, so an unmapped one (jmap_error, stalwart_unavailable,
+      // internal) was shown to the user as the literal key.
+      setDestroyError(errorMessageKey("mail", err instanceof MailApiError ? err.code : null));
     },
   });
 
@@ -518,9 +542,19 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
 
   return (
     <div className="flex h-full flex-col">
+      {/* GH #214: the bar used to be overflow-x-hidden while its buttons are
+          all shrink-0 whitespace-nowrap — anything past the viewport's width
+          was simply clipped away with no way to reach it. In Archive, in
+          Spanish, the row wants ~450px inside the ~331px a 375px phone leaves,
+          which put Delete and Labels permanently out of reach. `auto` keeps
+          the same single-row layout (wrapping would push the bar past its
+          fixed 52px) and makes the overflow scrollable instead of lost.
+          The label popover is unaffected: it renders into a document.body
+          portal (see the labelMenuRef comment above), so it never depended on
+          this axis being hidden in the first place. */}
       <div
         data-testid="thread-actions-bar"
-        className="flex h-[52px] shrink-0 items-center gap-[6px] overflow-x-hidden border-b border-line px-[22px]"
+        className="flex h-[52px] shrink-0 items-center gap-[6px] overflow-x-auto border-b border-line px-[22px]"
       >
         <button
           type="button"

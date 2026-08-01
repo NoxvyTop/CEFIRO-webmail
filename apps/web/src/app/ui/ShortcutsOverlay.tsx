@@ -34,8 +34,11 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
   const kbdClass = "rounded-[5px] border border-line bg-soft px-2 py-[2px] text-[11.5px]";
 
   return (
+    // GH #226: the backdrop gains the same padding ThreadView's
+    // DeletePermanentlyConfirmDialog already uses, so the card below can cap
+    // itself at the viewport width without touching its edges on a phone.
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-6"
       onClick={onClose}
     >
       <div
@@ -45,7 +48,11 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
         aria-label={t("shortcuts.overlayTitle")}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="w-[400px] rounded-[14px] border border-line bg-panel px-[26px] py-6 shadow-pop outline-none"
+        // GH #226: was a hard w-[400px] with no cap, so on a 375px phone the
+        // card was wider than the screen and its right-hand key column sat off
+        // it. Same shape as DeletePermanentlyConfirmDialog's card: full width
+        // of the padded backdrop, capped at the design width.
+        className="w-full max-w-[400px] rounded-[14px] border border-line bg-panel px-[26px] py-6 shadow-pop outline-none"
         style={{ animation: "popIn 0.18s ease" }}
       >
         <h2 className="mb-4 text-[16px] font-[650]">{t("shortcuts.overlayTitle")}</h2>

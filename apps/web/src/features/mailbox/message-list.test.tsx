@@ -530,6 +530,17 @@ describe("MessageList", () => {
   // order, an opaque selected background (bg-sel) on the row below covered
   // the chip. The fix makes estimateSize grow for a labeled row so its box
   // actually fits the content — no overflow, nothing to paint over.
+  // The virtualizer's own absolutely-positioned box for a row. GH #225 put a
+  // presentational wrapper between it and the option (so the star button could
+  // leave the option), so this climbs to the nearest ancestor the virtualizer
+  // actually sized rather than assuming a fixed depth.
+  function virtualRowBox(option: Element): HTMLElement {
+    let current = option.parentElement;
+    while (current && !current.style.height) current = current.parentElement;
+    if (!current) throw new Error("no virtualized row box above this option");
+    return current;
+  }
+
   describe("virtualized row sizing (GH #87)", () => {
     it("gives a virtualized row with a label chip a taller box than a plain row, so its content isn't overlapped by the row below", async () => {
       stubFetch({ total: 2, position: 0, emails: [emailLabeled, emailRead] });
@@ -540,13 +551,8 @@ describe("MessageList", () => {
       expect(labeledRow).toBeTruthy();
       expect(plainRow).toBeTruthy();
 
-      // The row wrapper is the virtualizer's absolutely-positioned box —
-      // it's the direct parent of the row content rendered by renderRow().
-      const labeledWrapper = labeledRow!.parentElement as HTMLElement;
-      const plainWrapper = plainRow!.parentElement as HTMLElement;
-
-      const labeledHeight = parseFloat(labeledWrapper.style.height);
-      const plainHeight = parseFloat(plainWrapper.style.height);
+      const labeledHeight = parseFloat(virtualRowBox(labeledRow!).style.height);
+      const plainHeight = parseFloat(virtualRowBox(plainRow!).style.height);
 
       expect(plainHeight).toBe(84);
       expect(labeledHeight).toBeGreaterThan(plainHeight);
@@ -559,8 +565,8 @@ describe("MessageList", () => {
       const firstRow = (await screen.findByText("Hello there")).closest('[role="option"]');
       const secondRow = (await screen.findByText(i18n.t("mail.noSubject"))).closest('[role="option"]');
 
-      const firstHeight = parseFloat((firstRow!.parentElement as HTMLElement).style.height);
-      const secondHeight = parseFloat((secondRow!.parentElement as HTMLElement).style.height);
+      const firstHeight = parseFloat(virtualRowBox(firstRow!).style.height);
+      const secondHeight = parseFloat(virtualRowBox(secondRow!).style.height);
 
       expect(firstHeight).toBe(secondHeight);
     });
@@ -752,5 +758,121 @@ describe("MessageList", () => {
         expect(positions).toContain("4");
       });
     });
+  });
+});
+
+// GH #225: an automated a11y check over the list. It encodes, as executable
+// assertions, the two ARIA rules the list was breaking — the same two an axe
+// run reports as `aria-input-field-name` (a listbox with no accessible name)
+// and `nested-interactive` (an option with focusable content). axe itself is
+// not a dependency of this package; these assertions are written against the
+// rendered accessibility-relevant DOM so the invariants are pinned either way.
+describe("MessageList accessibility (GH #225)", () => {
+  // Every way a browser will let the user Tab or click into something. Kept in
+  // one place so "the option has no interactive descendants" is checked
+  // against the whole set, not just <button>.
+  const FOCUSABLE_SELECTOR = [
+    "a[href]",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "iframe",
+    "[tabindex]",
+    "[contenteditable]",
+  ].join(", ");
+
+  it("names both listboxes after the view they belong to", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailUnread] });
+    renderList(vi.fn(), { title: "Recibidos", virtualized: false });
+
+    expect(await screen.findByRole("listbox", { name: "Recibidos" })).toBeInTheDocument();
+  });
+
+  it("names a headerless list generically rather than leaving it unnamed", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailUnread] });
+    renderList(vi.fn(), { virtualized: false });
+
+    expect(
+      await screen.findByRole("listbox", { name: i18n.t("mail.messageListLabel") }),
+    ).toBeInTheDocument();
+  });
+
+  it("names the virtualized listbox too, not just the plain one", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailUnread] });
+    renderList(vi.fn(), { title: "Destacados", virtualized: true });
+
+    expect(await screen.findByRole("listbox", { name: "Destacados" })).toBeInTheDocument();
+  });
+
+  it("leaves no focusable element inside any option", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList(vi.fn(), { virtualized: false });
+
+    await screen.findByText("Hello there");
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(2);
+    for (const option of options) {
+      expect(option.querySelectorAll(FOCUSABLE_SELECTOR)).toHaveLength(0);
+    }
+  });
+
+  it("keeps the star a real button, just outside the option", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailUnread] });
+    renderList(vi.fn(), { virtualized: false });
+
+    const star = await screen.findByRole("button", { name: i18n.t("mail.star") });
+    const option = screen.getByRole("option");
+    expect(option.contains(star)).toBe(false);
+    // Still in the same row, so it reads and looks exactly as before.
+    expect(star.closest('[class*="border-b"]')).toBe(option.parentElement);
+  });
+
+  it("still stars from that button without opening the conversation", async () => {
+    const fetchMock = stubFetch({ total: 1, position: 0, emails: [emailUnread] });
+    const { onSelect } = renderList(vi.fn(), { virtualized: false });
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.star") }));
+
+    expect(onSelect).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).includes("/api/mail/messages/") && init?.method === "PATCH",
+      );
+      expect(patchCall).toBeTruthy();
+      expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({ keywords: { $flagged: true } });
+    });
+  });
+
+  it("keeps exactly one option in the tab order (roving tabindex, GH #200)", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList(vi.fn(), { virtualized: false });
+
+    await screen.findByText("Hello there");
+    const tabbable = screen
+      .getAllByRole("option")
+      .filter((option) => option.getAttribute("tabindex") === "0");
+    expect(tabbable).toHaveLength(1);
+  });
+});
+
+// GH #225: the star button left the option, so "the star of the row showing X"
+// can no longer be found by descending into that option. The row wrapper is
+// the handle that replaces it — pinned here because callers outside this
+// package (the E2E suite) rely on it.
+describe("MessageList row handle (GH #225)", () => {
+  it("exposes each row as a single testable unit holding both the option and its star", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList(vi.fn(), { virtualized: false });
+
+    await screen.findByText("Hello there");
+    const rows = screen.getAllByTestId("conversation-row");
+    expect(rows).toHaveLength(2);
+
+    for (const row of rows) {
+      expect(row.querySelector('[role="option"]')).toBeTruthy();
+      expect(row.querySelector("button")).toBeTruthy();
+    }
   });
 });

@@ -2095,3 +2095,207 @@ describe("sender authentication badge (GH #136)", () => {
     expect(screen.queryByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).not.toBeInTheDocument();
   });
 });
+
+// GH #214: the action bar is a single 52px row of shrink-0 whitespace-nowrap
+// buttons. It used to be overflow-x-hidden, so on a 375px phone — worst case
+// Archive, in Spanish, where the row wants ~450px inside ~331px of usable
+// width — Eliminar and Etiquetas were clipped away with nothing to scroll them
+// back into view.
+describe("ThreadView action bar at a narrow viewport (GH #214)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+  const originalInnerWidth = window.innerWidth;
+
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: NARROW_VIEWPORT_WIDTH,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: originalInnerWidth,
+      configurable: true,
+      writable: true,
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("makes the overflow scrollable instead of clipping it away", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", "inbox1", "trash1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    expect(actionsBar.className).toContain("overflow-x-auto");
+    expect(actionsBar.className).not.toContain("overflow-x-hidden");
+  });
+
+  it("keeps every action of the worst-case (Archive) row reachable", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", "inbox1", "trash1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    for (const name of [
+      i18n.t("mail.unarchive"),
+      i18n.t("mail.delete"),
+      i18n.t("mail.star"),
+      i18n.t("composer.reply"),
+      i18n.t("composer.forward"),
+      i18n.t("mail.labels"),
+    ]) {
+      expect(within(actionsBar).getByRole("button", { name })).toBeVisible();
+    }
+  });
+
+  it("still fires the two actions the clipping used to swallow", async () => {
+    const fetchMock = stubArchivedThread();
+    vi.stubGlobal("fetch", fetchMock);
+    renderThread("t1", "arch1", "inbox1", "trash1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.delete") }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).includes("/api/mail/messages/") && init?.method === "PATCH",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("still opens the label popover, which the hidden overflow was there for", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    renderThread("t1", "arch1", "inbox1", "trash1");
+
+    const labelsButton = await screen.findByRole("button", { name: i18n.t("mail.labels") });
+    fireEvent.click(labelsButton);
+
+    // Portaled to document.body, so it escapes the bar's overflow entirely —
+    // which is why the bar no longer has to hide that axis on its account.
+    const menu = await screen.findByRole("menu");
+    expect(menu).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="thread-actions-bar"]')?.contains(menu)).toBe(false);
+  });
+});
+
+// GH #227: the mutation path used to invalidate the whole ["mail"] namespace
+// on every archive/delete/star, sweeping identities, preferences, signatures
+// and every already-loaded page of the infinite listing. These pin the exact
+// key set each mutation invalidates, so a future edit can't quietly widen it
+// back — the same cost GH #167 removed from the SSE path in useMailEvents.
+describe("ThreadView cache invalidation (GH #227)", () => {
+  const MAILBOX_MOVE_KEYS = [
+    ["mail", "messages"],
+    ["mail", "thread"],
+    ["mail", "mailboxes"],
+  ];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function renderWithInvalidationSpy(
+    archiveMailboxId: string | null = null,
+    inboxMailboxId: string | null = null,
+    trashMailboxId: string | null = null,
+  ) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ToastProvider>
+            <ThreadView
+              threadId="t1"
+              archiveMailboxId={archiveMailboxId}
+              inboxMailboxId={inboxMailboxId}
+              trashMailboxId={trashMailboxId}
+            />
+          </ToastProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return invalidateQueries;
+  }
+
+  type InvalidateSpy = { mock: { calls: unknown[][] } };
+
+  function invalidatedKeys(spy: InvalidateSpy): unknown[] {
+    return spy.mock.calls.map((call) => (call[0] as { queryKey?: unknown } | undefined)?.queryKey);
+  }
+
+  it("invalidates only messages, thread and mailboxes when archiving", async () => {
+    stubFetch();
+    const spy = renderWithInvalidationSpy("arch1", null, "trash1");
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await waitFor(() => expect(invalidatedKeys(spy)).toEqual(MAILBOX_MOVE_KEYS));
+  });
+
+  it("invalidates the same narrow set when deleting to Trash", async () => {
+    stubFetch();
+    const spy = renderWithInvalidationSpy("arch1", null, "trash1");
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.delete") }));
+
+    await waitFor(() => expect(invalidatedKeys(spy)).toEqual(MAILBOX_MOVE_KEYS));
+  });
+
+  it("invalidates the same narrow set when moving back to the inbox", async () => {
+    vi.stubGlobal("fetch", stubArchivedThread());
+    const spy = renderWithInvalidationSpy("arch1", "inbox1", "trash1");
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.unarchive") }));
+
+    await waitFor(() => expect(invalidatedKeys(spy)).toEqual(MAILBOX_MOVE_KEYS));
+  });
+
+  it("invalidates the same narrow set when destroying permanently", async () => {
+    vi.stubGlobal("fetch", stubTrashedThread());
+    const spy = renderWithInvalidationSpy("arch1", "inbox1", "trash1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    fireEvent.click(
+      within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }),
+    );
+    // The bar's trigger and the dialog's confirm share the same label, so the
+    // confirm has to be looked up inside the dialog.
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: i18n.t("mail.deletePermanentlyConfirm.confirm") }),
+    );
+
+    await waitFor(() => expect(invalidatedKeys(spy)).toEqual(MAILBOX_MOVE_KEYS));
+  });
+
+  it("never sweeps the whole mail namespace, nor preferences/identities", async () => {
+    stubFetch();
+    const spy = renderWithInvalidationSpy("arch1", null, "trash1");
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await waitFor(() => expect(invalidatedKeys(spy).length).toBeGreaterThan(0));
+    const keys = invalidatedKeys(spy);
+    expect(keys).not.toContainEqual(["mail"]);
+    expect(keys).not.toContainEqual(["mail", "preferences"]);
+    expect(keys).not.toContainEqual(["mail", "identities"]);
+  });
+
+  it("keeps starring narrowed to this thread and the listings", async () => {
+    stubFetch();
+    const spy = renderWithInvalidationSpy("arch1", null, "trash1");
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.star") }));
+
+    await waitFor(() =>
+      expect(invalidatedKeys(spy)).toEqual([
+        ["mail", "thread", "t1"],
+        ["mail", "messages"],
+      ]),
+    );
+  });
+});

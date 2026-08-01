@@ -58,6 +58,10 @@ function stubFetch(): typeof fetch {
   }) as typeof fetch;
 }
 
+/** Stalwart is down: the connection is refused, so fetch rejects (GH #211). */
+const refusingFetch = (() =>
+  Promise.reject(new TypeError("fetch failed"))) as unknown as typeof fetch;
+
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
   const users = createUsersRepo(sql);
@@ -155,6 +159,20 @@ describe("POST /api/mail/blobs", () => {
     upstreamResponse = new Response(null, { status: 500 });
 
     const res = await makeApp(stubJmap, stubFetch()).request("/api/mail/blobs", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
+  });
+
+  it("returns 502 stalwart_unavailable when the connection to Stalwart is refused", async () => {
+    // GH #211: the upload deliberately uses the undeadlined fetch, so nothing
+    // else was mapping its transport failures — a Stalwart that is DOWN made
+    // the attachment upload answer 500 "internal".
+    const res = await makeApp(stubJmap, refusingFetch).request("/api/mail/blobs", {
       method: "POST",
       headers: { cookie: `session=${token}`, "content-type": "image/png" },
       body: new Uint8Array([1, 2, 3]),
@@ -272,6 +290,18 @@ describe("GET /api/mail/blobs/:blobId", () => {
     const res = await makeApp(stubJmap, stubFetch()).request("/api/mail/blobs/b1?name=x&type=y", {
       headers: { cookie: `session=${token}` },
     });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
+  });
+
+  it("returns 502 stalwart_unavailable when the connection to Stalwart is refused", async () => {
+    // GH #211: a rejecting fetch, not an !ok response — the download used to
+    // surface a down Stalwart as a 500 "internal".
+    const res = await makeApp(stubJmap, refusingFetch).request(
+      "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf",
+      { headers: { cookie: `session=${token}` } },
+    );
 
     expect(res.status).toBe(502);
     expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");

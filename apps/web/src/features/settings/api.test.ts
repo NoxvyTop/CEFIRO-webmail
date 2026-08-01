@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MailApiError } from "../mailbox/api";
 import {
   createFilterRule,
+  deleteFilterRule,
   fetchFilterRules,
   fetchProfile,
   fetchVacationSettings,
   reorderFilterRules,
   syncFilters,
+  updateFilterRule,
   updateProfile,
+  updateVacationSettings,
 } from "./api";
 import { settingsErrorKey } from "./errors";
 
@@ -130,6 +133,114 @@ describe("settings api", () => {
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body as string)).toEqual({ displayName: "New" });
     expect(result.displayName).toBe("New");
+  });
+});
+
+// GH #228: this module sat at 69% lines / 50% branches while the package-wide
+// gate stayed green. The gap was concentrated in the three write endpoints
+// below (never called by any test) and in the not-ok branch of every reader,
+// which is the branch that decides what the UI shows when the server says no.
+describe("settings api — write endpoints and error branches", () => {
+  const ruleInput = {
+    name: "invoices",
+    matchType: "all" as const,
+    conditions: [{ field: "from" as const, op: "contains" as const, value: "billing@" }],
+    actions: [{ type: "fileinto" as const, folder: "Invoices" }],
+    enabled: true,
+  };
+
+  it("PUTs an updated rule to the id-scoped endpoint, encoding the id", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(rule), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await updateFilterRule("r 1/2", ruleInput);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mail/filters/r%201%2F2");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toMatchObject({ name: "invoices" });
+    expect(updated.id).toBe("r1");
+  });
+
+  it("DELETEs the id-scoped endpoint and resolves with nothing", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteFilterRule("r1")).resolves.toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mail/filters/r1");
+    expect(init.method).toBe("DELETE");
+  });
+
+  const vacationInput = {
+    enabled: true,
+    subject: "Fuera",
+    message: "Vuelvo el lunes",
+    startsAt: null,
+    endsAt: null,
+    intervalDays: 7,
+  };
+
+  it("PUTs vacation settings and returns the stored view", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(vacationInput), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await updateVacationSettings(vacationInput);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mail/vacation");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual(vacationInput);
+    expect(result).toEqual(vacationInput);
+  });
+
+  it("re-validates vacation settings client-side before sending", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(vacationInput), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // enabled with a blank message is the refinement the schema rejects.
+    await expect(updateVacationSettings({ ...vacationInput, message: "   " })).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the envelope code from every endpoint's not-ok branch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: "sieve_sync_failed", message: "errors.sieve_sync_failed" }), {
+            status: 502,
+          }),
+      ),
+    );
+    const failing: Array<[string, Promise<unknown>]> = [
+      ["fetchFilterRules", fetchFilterRules()],
+      ["updateFilterRule", updateFilterRule("r1", ruleInput)],
+      ["deleteFilterRule", deleteFilterRule("r1")],
+      ["reorderFilterRules", reorderFilterRules(["r1"])],
+      ["syncFilters", syncFilters()],
+      ["fetchVacationSettings", fetchVacationSettings()],
+      ["updateVacationSettings", updateVacationSettings(vacationInput)],
+      ["fetchProfile", fetchProfile()],
+      ["updateProfile", updateProfile({ displayName: "New" })],
+    ];
+    for (const [name, pending] of failing) {
+      await expect(pending, name).rejects.toMatchObject({ status: 502, code: "sieve_sync_failed" });
+    }
+  });
+
+  it("falls back to the internal code when the error body is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 })));
+    await expect(fetchFilterRules()).rejects.toMatchObject({ status: 502, code: "internal" });
+  });
+
+  it("falls back to the internal code when the error body is JSON without a code", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ message: "nope" }), { status: 500 })),
+    );
+    await expect(fetchProfile()).rejects.toMatchObject({ status: 500, code: "internal" });
   });
 });
 

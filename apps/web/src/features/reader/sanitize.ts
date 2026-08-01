@@ -6,12 +6,47 @@ export type SanitizedEmail = { html: string; hasRemoteImages: boolean };
 // which browsers resolve using the current page's protocol and are just as capable
 // of leaking a tracking pixel as a fully-qualified https:// URL.
 const REMOTE_URL_PATTERN = /^(https?:)?\/\//i;
-const CSS_REMOTE_URL_PATTERN = /url\(\s*['"]?\s*(https?:)?\/\//i;
-// Same idea as CSS_REMOTE_URL_PATTERN, plus @import — which pulls a whole
-// remote stylesheet and takes a bare-string form (@import "https://…";) with
-// no url() wrapper. Both are remote references that leak on load.
-const CSS_REMOTE_REFERENCE_PATTERN =
-  /url\(\s*['"]?\s*(https?:)?\/\/|@import\s+(url\(\s*)?['"]?\s*(https?:)?\/\//i;
+
+// The three shapes a remote reference takes inside CSS, assembled from shared
+// fragments so the inline-[style] check and the <style>-element check can
+// never drift apart on which of them they recognise.
+//
+//  - url(…)          the obvious one, valid anywhere a <url> is.
+//  - image-set(…)    GH #224: takes BARE quoted URLs as candidates, with no
+//                    url() wrapper — image-set("https://tracker/p.png" 1x) —
+//                    so the url() fragment alone never saw it. The legacy
+//                    -webkit- prefixed form is still what most mail-authoring
+//                    tools emit, and Chromium still honours it.
+//  - @import         pulls a whole remote stylesheet and likewise has a
+//                    bare-string form (@import "https://…";).
+//
+// All three fetch the moment the rule applies, so all three leak.
+const CSS_URL_REFERENCE = String.raw`url\(\s*['"]?\s*(https?:)?\/\/`;
+const CSS_IMAGE_SET_REFERENCE = String.raw`(?:-webkit-)?image-set\(\s*['"]?\s*(https?:)?\/\/`;
+const CSS_IMPORT_REFERENCE = String.raw`@import\s+(url\(\s*)?['"]?\s*(https?:)?\/\/`;
+
+const CSS_REMOTE_URL_PATTERN = new RegExp(
+  `${CSS_URL_REFERENCE}|${CSS_IMAGE_SET_REFERENCE}`,
+  "i",
+);
+// Everything the inline-[style] pattern covers, plus @import — which is only
+// legal inside a stylesheet, never in a style attribute.
+const CSS_REMOTE_REFERENCE_PATTERN = new RegExp(
+  `${CSS_URL_REFERENCE}|${CSS_IMAGE_SET_REFERENCE}|${CSS_IMPORT_REFERENCE}`,
+  "i",
+);
+
+// GH #224: attributes the browser fetches as soon as the element renders.
+// This used to be just src/srcset on a hard-coded "img, source" query, which
+// left <video poster="https://tracker/p.png"> downloading on render — a
+// tracking pixel by another name, and enough on its own to defeat the
+// remote-image block (GH #182), since the CSP allows img-src https:.
+//
+// Matching on attribute PRESENCE rather than on a tag list is deliberate and
+// fails closed: any element DOMPurify lets through carrying one of these
+// attributes is checked, including tags nobody enumerated here.
+const REMOTE_FETCH_ATTRIBUTES = ["src", "srcset", "poster"] as const;
+const REMOTE_FETCH_SELECTOR = REMOTE_FETCH_ATTRIBUTES.map((name) => `[${name}]`).join(", ");
 
 // The "cid:" URI scheme (RFC 2392) referencing a Content-ID body part —
 // case-insensitive per the URI spec.
@@ -141,29 +176,29 @@ export function sanitizeEmailHtml(
     }
   }
 
-  for (const el of Array.from(doc.querySelectorAll("img, source"))) {
-    const src = el.getAttribute("src");
-    const srcset = el.getAttribute("srcset");
-    const srcsetCandidates = srcset ? extractSrcsetCandidates(srcset) : [];
+  for (const el of Array.from(doc.querySelectorAll(REMOTE_FETCH_SELECTOR))) {
+    for (const attribute of REMOTE_FETCH_ATTRIBUTES) {
+      const value = el.getAttribute(attribute);
+      if (!value) continue;
 
-    const srcIsRemote = Boolean(src && REMOTE_URL_PATTERN.test(src));
-    const remoteSrcsetCandidate = srcsetCandidates.find((url) => REMOTE_URL_PATTERN.test(url));
+      // srcset is the one attribute holding a LIST of candidates; every other
+      // one is a single URL, so wrapping it keeps a single code path.
+      const candidates = attribute === "srcset" ? extractSrcsetCandidates(value) : [value];
+      const remoteCandidate = candidates.find((url) => REMOTE_URL_PATTERN.test(url));
+      if (!remoteCandidate) continue;
 
-    if (srcIsRemote || remoteSrcsetCandidate) {
       hasRemoteImages = true;
-      if (!options.allowRemoteImages) {
-        const original = srcIsRemote ? (src as string) : remoteSrcsetCandidate;
-        if (srcIsRemote) el.removeAttribute("src");
-        if (remoteSrcsetCandidate) el.removeAttribute("srcset");
-        // Percent-encode the original URL rather than storing it verbatim:
-        // it stays recoverable (decodeURIComponent) for a future "load
-        // images" opt-in, but the raw tracking URL never appears as a
-        // plain substring in the sanitized output (e.g. in logs, copy-paste,
-        // or naive URL scanners).
-        if (original) {
-          el.setAttribute("data-blocked-src", encodeURIComponent(original));
-        }
-      }
+      if (options.allowRemoteImages) continue;
+
+      el.removeAttribute(attribute);
+      // Percent-encode the original URL rather than storing it verbatim: it
+      // stays recoverable (decodeURIComponent) for a future "load images"
+      // opt-in, but the raw tracking URL never appears as a plain substring
+      // in the sanitized output (e.g. in logs, copy-paste, or naive URL
+      // scanners). One data-blocked-* per source attribute, so an element
+      // carrying several (an <img src+srcset>, a <video src+poster>) doesn't
+      // silently drop all but one of them.
+      el.setAttribute(`data-blocked-${attribute}`, encodeURIComponent(remoteCandidate));
     }
   }
 

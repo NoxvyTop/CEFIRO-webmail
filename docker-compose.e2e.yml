@@ -44,3 +44,11 @@ services:
 # The Playwright E2E config should point DATABASE_URL at the same dev
 # Postgres (postgres://webmail:webmail@localhost:5434/webmail) rather than
 # expecting a second instance here.
+#
+# What DATABASE_URL means to the E2E suite changed with GH #230: it is the
+# *admin* connection, not the database under test. The suite creates a uniquely
+# named sibling database from it for each run and drops it afterwards (see
+# e2e/test-db.ts), so it no longer migrates or writes into the dev database —
+# only CREATE/DROP DATABASE are issued against it. There is no longer a default
+# either: with DATABASE_URL unset the suite fails loudly instead of silently
+# falling back to the dev database.

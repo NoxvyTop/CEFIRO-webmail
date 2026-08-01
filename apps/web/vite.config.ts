@@ -81,15 +81,32 @@ export default defineConfig({
         "src/main.tsx",
         "src/vite-env.d.ts",
       ],
-      // Thresholds sit just under today's measured coverage (lines 95.46%,
-      // statements 95.46%, functions 86.02%, branches 90.29%), floored to fives
-      // so the gate is green now but a genuine regression trips it. They are a
-      // ratchet floor, not a target — raise them as coverage climbs.
+      // Thresholds are checked PER FILE (GH #228). Before this they were
+      // aggregate-only, so a file could rot all the way to zero while the
+      // package average stayed comfortably above the gate — and two already
+      // had: app/ui/themeInit.ts at 0% and features/composer/aiApi.ts at
+      // 10.52% lines / 0% functions, both now covered.
+      //
+      // Note that `perFile` is a single switch over every threshold set, not a
+      // per-set option (vitest's BaseCoverageProvider.checkThresholds reads
+      // `options.thresholds.perFile` once for all of them), so these numbers
+      // are now a floor each individual file must clear rather than an average
+      // the package must clear. That is the stronger guarantee for the failure
+      // this issue is about; the aggregate figures stay visible in the report.
+      //
+      // The floor sits under the worst-covered file measured today — App.tsx
+      // (82.23% lines / 36.36% functions) for lines/statements/functions and
+      // features/admin/api.ts (58.33%) for branches — with room left for the
+      // ordinary churn of a file being edited. A ratchet floor, not a target:
+      // raise it as the weakest files improve. For reference, today's
+      // aggregate is lines/statements 96.02%, functions 86.90%, branches
+      // 90.73%.
       thresholds: {
-        lines: 90,
-        statements: 90,
-        functions: 85,
-        branches: 85,
+        perFile: true,
+        lines: 75,
+        statements: 75,
+        functions: 30,
+        branches: 50,
       },
     },
   },
