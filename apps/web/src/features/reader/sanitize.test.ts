@@ -102,6 +102,100 @@ describe("sanitizeEmailHtml", () => {
     expect(out.html).not.toContain("evil.test");
   });
 
+  // GH #224: the remote-fetch walk used to query "img, source" and read only
+  // src/srcset, so a <video poster> downloaded on render and worked as a
+  // tracking pixel with the remote-image block (GH #182) fully on.
+  describe("media elements that fetch on render (GH #224)", () => {
+    it("blocks a remote <video poster>", () => {
+      const out = sanitizeEmailHtml(
+        `<video poster="https://tracker.evil/p.png"></video>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("https://tracker.evil");
+      expect(out.html).toContain("data-blocked-poster");
+    });
+
+    it("blocks a protocol-relative <video poster>", () => {
+      const out = sanitizeEmailHtml(
+        `<video poster="//tracker.evil/p.png"></video>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("//tracker.evil");
+    });
+
+    it("keeps a <video poster> once remote images are allowed", () => {
+      const out = sanitizeEmailHtml(
+        `<video poster="https://cdn.ok/p.png"></video>`,
+        { allowRemoteImages: true },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).toContain("https://cdn.ok/p.png");
+    });
+
+    it("blocks every fetching attribute on one element, not just the first", () => {
+      const out = sanitizeEmailHtml(
+        `<video src="https://tracker.evil/v.mp4" poster="https://tracker.evil/p.png"></video>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("https://tracker.evil");
+      expect(out.html).toContain("data-blocked-src");
+      expect(out.html).toContain("data-blocked-poster");
+    });
+
+    it("blocks a remote <audio src> and <track src>", () => {
+      const out = sanitizeEmailHtml(
+        `<audio src="https://tracker.evil/a.mp3"></audio><video><track src="https://tracker.evil/t.vtt"></video>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("https://tracker.evil");
+    });
+  });
+
+  // GH #224: image-set() takes bare quoted URLs as candidates, with no url()
+  // wrapper for the url()-shaped patterns to match on.
+  describe("CSS image-set() references (GH #224)", () => {
+    it("blocks a remote image-set() in a style attribute", () => {
+      const out = sanitizeEmailHtml(
+        `<div style="background-image:image-set('https://evil.test/t.png' 1x)">x</div>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("blocks the legacy -webkit-image-set() form in a style attribute", () => {
+      const out = sanitizeEmailHtml(
+        `<div style="background-image:-webkit-image-set('https://evil.test/t.png' 1x)">x</div>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+    });
+
+    it("blocks a remote image-set() inside a <style> element", () => {
+      const out = sanitizeEmailHtml(
+        `<style>body{background-image:image-set("https://evil.test/t.png" 1x)}</style><p>hi</p>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(true);
+      expect(out.html).not.toContain("evil.test");
+      expect(out.html).toContain("hi");
+    });
+
+    it("keeps a data: image-set(), which fetches nothing", () => {
+      const out = sanitizeEmailHtml(
+        `<div style="background-image:image-set(url(data:image/png;base64,AA) 1x)">x</div>`,
+        { allowRemoteImages: false },
+      );
+      expect(out.hasRemoteImages).toBe(false);
+      expect(out.html).toContain("data:image/png");
+    });
+  });
+
   // A <style> element carrying a remote url() is a tracking pixel that the
   // per-attribute checks above miss: the remote reference lives in the element's
   // text content, not in a [style]/[background] attribute. Confirmed live — the

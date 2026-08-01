@@ -9,12 +9,15 @@ const RETRY_DELAY_MS = 15000;
 // handler in apps/server/src/modules/mail/router.ts), so a change to
 // identities, preferences or signatures cannot arrive here at all — refetching
 // them on a mail event is provably wasted work, not caution.
-const EMAIL_KEYS = [
+// Exported so the mutation paths can reuse the exact same narrowing instead of
+// each re-deriving (or, as ThreadView did until GH #227, skipping) it — one
+// definition of "what a change to an email or a mailbox can possibly affect".
+export const EMAIL_QUERY_KEYS = [
   ["mail", "messages"],
   ["mail", "thread"],
 ];
-const MAILBOX_KEYS = [["mail", "mailboxes"]];
-const ALL_MAIL_DATA_KEYS = [...EMAIL_KEYS, ...MAILBOX_KEYS];
+export const MAILBOX_QUERY_KEYS = [["mail", "mailboxes"]];
+const ALL_MAIL_DATA_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS];
 
 /**
  * Query keys a JMAP StateChange (RFC 8620 §7.1) should invalidate, derived from
@@ -51,8 +54,8 @@ export function invalidationKeysForStateChange(raw: string): string[][] {
   }
 
   const keys = [
-    ...(types.has("Email") ? EMAIL_KEYS : []),
-    ...(types.has("Mailbox") ? MAILBOX_KEYS : []),
+    ...(types.has("Email") ? EMAIL_QUERY_KEYS : []),
+    ...(types.has("Mailbox") ? MAILBOX_QUERY_KEYS : []),
   ];
   return keys.length > 0 ? keys : ALL_MAIL_DATA_KEYS;
 }

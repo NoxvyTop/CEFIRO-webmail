@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { AdminSsoView, AdminUser, AdminUsersPage } from "@webmail/shared";
 import "../../app/i18n";
@@ -174,5 +174,57 @@ describe("AdminPage console shell", () => {
     expect(await screen.findByText(i18n.t("admin.settings.title"))).toBeInTheDocument();
     const toggle = screen.getByLabelText(i18n.t("admin.settings.footer.label"));
     expect(toggle).not.toBeChecked();
+  });
+});
+
+// GH #226: same clipped horizontal tab row as the settings console — see
+// SettingsPage's own narrow-viewport suite.
+describe("AdminPage nav at a narrow viewport (GH #226)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+  const originalInnerWidth = window.innerWidth;
+
+  beforeEach(() => {
+    fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
+    fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
+    Object.defineProperty(window, "innerWidth", {
+      value: NARROW_VIEWPORT_WIDTH,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: originalInnerWidth,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("lets the tab row wrap below md instead of overflowing off-screen", async () => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("admin.nav.label") });
+    expect(nav.className).toContain("flex-wrap");
+    expect(nav.className).toContain("md:flex-col");
+    expect(nav.className).toContain("md:flex-nowrap");
+  });
+
+  it("keeps every section present and reachable", async () => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("admin.nav.label") });
+    for (const labelKey of [
+      "admin.nav.resumen",
+      "admin.nav.users",
+      "admin.nav.sso",
+      "admin.nav.settings",
+    ]) {
+      expect(within(nav).getByRole("button", { name: i18n.t(labelKey) })).toBeVisible();
+    }
+
+    fireEvent.click(within(nav).getByRole("button", { name: i18n.t("admin.nav.sso") }));
+    expect(await screen.findByText(i18n.t("admin.sso.title"))).toBeInTheDocument();
   });
 });

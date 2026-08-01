@@ -4,6 +4,7 @@ import { saveDraft as saveDraftRequest, sendEmail, uploadAttachment } from "./ap
 import { fetchAiDraft } from "./aiApi";
 import { isComposerDraftEmpty } from "./emptiness";
 import { MailApiError, updateMessage } from "../mailbox/api";
+import { errorMessageKey } from "../../app/errorMessages";
 import type { ComposerDraft } from "./reply";
 import { stripSignatureMarkers } from "./signature";
 
@@ -476,7 +477,9 @@ export function useComposer(
       dispatch({ type: "sendSucceeded" });
       return true;
     } catch (err) {
-      const error = err instanceof MailApiError ? `composer.errors.${err.code || "generic"}` : "composer.errors.generic";
+      // GH #215: resolved through the one shared code -> key map instead of
+      // interpolating the raw server code into a key that may not exist.
+      const error = errorMessageKey("composer", err instanceof MailApiError ? err.code : null);
       dispatch({ type: "sendFailed", error });
       return false;
     }
@@ -518,7 +521,9 @@ export function useComposer(
       dispatch({ type: "autosaveSaved" });
       return true;
     } catch (err) {
-      const error = err instanceof MailApiError ? `composer.errors.${err.code || "generic"}` : "composer.errors.generic";
+      // GH #215: resolved through the one shared code -> key map instead of
+      // interpolating the raw server code into a key that may not exist.
+      const error = errorMessageKey("composer", err instanceof MailApiError ? err.code : null);
       dispatch({ type: "saveDraftFailed", error });
       return false;
     } finally {
@@ -544,8 +549,8 @@ export function useComposer(
         dispatch({ type: "aiDraftFailed", error: null, unavailable: true });
         return;
       }
-      const code = err instanceof MailApiError ? err.code || "generic" : "generic";
-      dispatch({ type: "aiDraftFailed", error: `composer.errors.${code}`, unavailable: false });
+      const error = errorMessageKey("composer", err instanceof MailApiError ? err.code : null);
+      dispatch({ type: "aiDraftFailed", error, unavailable: false });
     }
   }
 

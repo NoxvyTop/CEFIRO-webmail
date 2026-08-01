@@ -163,9 +163,14 @@ export function AdminPage() {
       </div>
 
       <div className="flex flex-1 flex-col gap-6 md:flex-row md:items-start">
+        {/* GH #226: same overflow as the settings console's nav, same fix —
+            below md the tabs are one horizontal row that needs more width than
+            a 375px phone has, so they wrap instead of being clipped. See
+            SettingsPage.tsx's nav for why wrapping is preferred to scrolling
+            here. */}
         <nav
           aria-label={t("admin.nav.label")}
-          className="flex w-full shrink-0 flex-row gap-1 rounded-[14px] border border-line bg-panel p-3 md:w-[184px] md:flex-col"
+          className="flex w-full shrink-0 flex-row flex-wrap gap-1 rounded-[14px] border border-line bg-panel p-3 md:w-[184px] md:flex-col md:flex-nowrap"
         >
           {NAV_ITEMS.map((item) => (
             <button

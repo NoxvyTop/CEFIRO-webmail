@@ -15,7 +15,6 @@ import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import TextAlign from "@tiptap/extension-text-align";
 import { useTranslation } from "react-i18next";
-import { sanitizeEmailHtml } from "../reader/sanitize";
 import { MarkerBlock } from "./markerBlockExtension";
 import {
   IMAGE_SIZE_PRESETS,
@@ -87,12 +86,84 @@ class EditorErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
-function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorProps) {
+// Elements whose text content is machinery rather than message text — CSS
+// rules, script source, an unrendered <template>'s markup. textContent would
+// otherwise splice them into the visible quote verbatim.
+const NON_RENDERED_TEXT_SELECTOR = "script, style, noscript, template, title";
+
+// Elements that end a visual line when rendered, so their boundary becomes a
+// newline rather than silently concatenating two paragraphs into one run-on.
+const LINE_BREAKING_TAGS = new Set([
+  "address", "article", "blockquote", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+  "header", "li", "p", "pre", "section", "table", "tr", "ul", "ol",
+]);
+
+/**
+ * Renders `html` as the plain text a reader would see, dropping every element
+ * and attribute. Parsing happens in a detached DOMParser document — the same
+ * pattern reader/sanitize.ts and reader/EmailBody.tsx already rely on: it only
+ * reads nodes into a document that is never attached to this page, so nothing
+ * in the untrusted markup executes, loads a resource, or applies a style.
+ *
+ * Only text nodes survive, so the returned string carries no markup at all —
+ * which is the point: see ContentEditableFallback below for why this path
+ * cannot render live HTML.
+ */
+export function htmlToPlainText(html: string): string {
+  if (!html) return "";
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const el of Array.from(doc.querySelectorAll(NON_RENDERED_TEXT_SELECTOR))) {
+    el.remove();
+  }
+
+  const parts: string[] = [];
+
+  function walk(node: ChildNode) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as Element;
+    const tag = element.tagName.toLowerCase();
+    if (tag === "br") {
+      parts.push("\n");
+      return;
+    }
+    for (const child of Array.from(element.childNodes)) walk(child);
+    if (LINE_BREAKING_TAGS.has(tag)) parts.push("\n");
+  }
+
+  for (const child of Array.from(doc.body.childNodes)) walk(child);
+
+  // Collapse the runs of blank lines that nested block wrappers produce (a
+  // <div><p>…</p></div> contributes two newlines for one visual break).
+  return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// GH #213: this fallback is a plain contentEditable div in the APP's own
+// document — nothing isolates what it renders, unlike the reader, whose email
+// HTML always lands inside a `sandbox=""` iframe (see reader/EmailBody.tsx).
+// It used to be seeded with sanitizeEmailHtml's output via
+// dangerouslySetInnerHTML, which is not the same guarantee: DOMPurify keeps
+// <style>, and sanitize's own parse → serialize → re-parse round trip
+// (reader/sanitize.ts) ran here with the app's full privileges rather than
+// being absorbed by a sandbox. A hostile quoted email reached that path just
+// by the user opening a reply while the editor happened to fail.
+//
+// The seed is therefore PLAIN TEXT only. An iframe isn't an option here — the
+// fallback exists precisely to stay editable when TipTap is unavailable, and
+// an `sandbox=""` document can't be typed into or read back — while text is
+// the one seed that carries no markup to isolate in the first place. Losing
+// the quote's formatting is the deliberate cost, on an emergency path the
+// user only ever reaches when the real editor has already crashed.
+export function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorProps) {
   const { t } = useTranslation();
-  // Sanitize initial HTML seed only once to prevent rendering remote/active content.
-  // Do not re-sanitize on every render to avoid resetting contentEditable cursor position.
-  const safeHtml = useMemo(
-    () => sanitizeEmailHtml(html, { allowRemoteImages: false }).html,
+  // Flattened once, not on every render: re-deriving it would reset the
+  // contentEditable's DOM (and the caret with it) while the user types.
+  const seedText = useMemo(
+    () => htmlToPlainText(html),
     [], // Empty dependency array: capture initial html value only
   );
   // Tracked locally (not derived from the `html` prop on every render) so the
@@ -119,11 +190,11 @@ function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorPr
         aria-multiline="true"
         contentEditable
         suppressContentEditableWarning
-        className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6] field-focus-line"
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: initial seed is sanitized via sanitizeEmailHtml (DOMPurify, allowRemoteImages:false); ongoing edits are captured through onInput
-        dangerouslySetInnerHTML={{ __html: safeHtml }}
+        className="min-h-[220px] whitespace-pre-wrap px-0.5 py-3.5 text-[14.5px] leading-[1.6] field-focus-line"
         onInput={handleInput}
-      />
+      >
+        {seedText}
+      </div>
     </div>
   );
 }
