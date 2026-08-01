@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import { AUTH_ERROR_CODES } from "@webmail/shared";
 import i18n from "../../app/i18n";
 import { errorMessageKey } from "../../app/errorMessages";

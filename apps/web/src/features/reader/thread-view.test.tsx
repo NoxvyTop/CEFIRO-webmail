@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, useSearchParams } from "react-router-dom";
+import { MemoryRouter, useSearchParams } from "react-router";
 import type { CustomLabel, ThreadDetail } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -1060,6 +1060,44 @@ describe("ThreadView", () => {
       // Reader renders fully; the branding footer stays hidden on the errored flag.
       await screen.findByTestId("thread-footer-actions");
       expect(screen.queryByTestId("sent-with-footer")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #42: the design's brand footer carries a muted second line under the
+  // sender's name. Its prototype value is a job title, which no real mail
+  // carries — the address stands in for it, except where the name line
+  // already IS the address.
+  describe("brand footer sender line (GH #42)", () => {
+    it("shows the sender's address under their name when the name is a display name", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.from = [{ name: "Carol Díaz", email: "carol@example.com" }];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const footer = await screen.findByTestId("thread-footer-sender-address");
+      expect(footer).toHaveTextContent("carol@example.com");
+    });
+
+    it("omits it when the sender has no display name, so the address is not printed twice", async () => {
+      // The default fixture's newest message (e2) has `name: null`, so
+      // addressLabel already renders the address as the name line.
+      stubFetch();
+      renderThread();
+
+      await screen.findByTestId("thread-footer-actions");
+      expect(screen.queryByTestId("thread-footer-sender-address")).not.toBeInTheDocument();
     });
   });
 

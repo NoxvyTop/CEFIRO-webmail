@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import type { CustomLabel, EmailSummary } from "@webmail/shared";
 import { fetchMailboxes, fetchThread } from "./api";
 import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";

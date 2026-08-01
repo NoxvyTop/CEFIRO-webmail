@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
-import type { RouteObject } from "react-router-dom";
-import { Navigate } from "react-router-dom";
+import type { RouteObject } from "react-router";
+import { Navigate } from "react-router";
 import { RequireAuth } from "../features/auth/RequireAuth";
 import { RequireAdmin } from "../features/admin/RequireAdmin";
 import { MailPage } from "../features/mailbox/MailPage";

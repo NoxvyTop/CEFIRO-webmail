@@ -39,16 +39,3 @@ vulnerabilities:
       ruta, y el TLS de entrada lo termina el proxy del despliegue, no este
       contenedor. Pendiente de que la base recoja 3.5.6-1~deb13u2.
     expired_at: 2026-11-01
-
-  # Dependencia del frontend. Viaja en node_modules porque `bun install
-  # --production` instala las dependencias de producción de TODO el workspace,
-  # pero el servidor no la importa jamás: el navegador recibe el bundle ya
-  # construido de apps/web/dist. Subir a 8.x es un salto mayor en apps/web, con
-  # su propio issue; no entra por la puerta de atrás de un cambio de CI.
-  - id: GHSA-qwww-vcr4-c8h2
-    statement: >-
-      react-router 7.18.1: bypass de CSRF en modo RSC. Esta aplicación es una
-      SPA construida con Vite, sin RSC ni servidor de react-router, y la copia
-      en node_modules no se ejecuta en ningún momento. La corrección (8.3.0) es
-      un cambio de versión mayor del frontend y se aborda en su propio issue.
-    expired_at: 2026-11-01

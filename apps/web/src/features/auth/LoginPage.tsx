@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router";
 import { authModeSchema, type AuthMode } from "@webmail/shared";
 import { bootstrapLogin } from "./useAuth";
 import { errorMessageKey } from "../../app/errorMessages";

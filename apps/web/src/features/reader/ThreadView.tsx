@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
@@ -863,6 +863,25 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>
+                      {/* GH #42: the design's brand footer puts a second,
+                          muted 12.5px line under the sender's name — a job
+                          title ("Ingeniería de plataforma") in the prototype,
+                          which is mock data: no such field exists on a JMAP
+                          Email, in the contacts schema, or anywhere else the
+                          server can supply. The address is the only real
+                          identity fact available, so it takes that slot.
+                          Skipped when the name line already IS the address —
+                          addressLabel falls back to `email` for senders with
+                          no display name, and printing it twice reads as a
+                          rendering bug rather than as design parity. */}
+                      {sender?.name && (
+                        <p
+                          data-testid="thread-footer-sender-address"
+                          className="mt-0.5 text-[12.5px] text-muted"
+                        >
+                          {sender.email}
+                        </p>
+                      )}
                       {sentWithFooter && (
                         <p
                           data-testid="sent-with-footer"

@@ -22,6 +22,12 @@ configure({ asyncUtilTimeout: 10000 });
 // AbortController's own signal, so the signal can never be threaded through
 // the native Request constructor here.
 //
+// Re-checked on the react-router 8 upgrade (GH #263) by deleting this block
+// and running the suite: still needed. `createClientSideRequest` in
+// react-router 8.3.0 (dist/.../lib/router/router.js) constructs the Request
+// exactly as 7.x did, and every navigation spec fails with the same
+// "Expected signal to be an instance of AbortSignal".
+//
 // Bridge it instead of silently dropping it: construct the Request without
 // `signal` (that path is unaffected), then override the resulting instance's
 // `.signal` so any code that reads it still gets a real, working
