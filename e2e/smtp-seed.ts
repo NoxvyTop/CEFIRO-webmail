@@ -271,7 +271,13 @@ function sendRaw(socket: Socket, payload: string): Promise<SmtpResponse> {
 // authored with ordinary "\n" template literals) and dot-stuffs any line
 // that starts with "." per RFC 5321 §4.5.2, so an accidental leading dot in
 // a fixture body/HTML part can't be mistaken for the end-of-DATA terminator.
-function prepareMimePart(text: string): string {
+//
+// Exported for smtp-seed.test.ts (GH #247). This is pure string work on the
+// wire format, and getting it wrong does not fail the seed — it corrupts or
+// truncates a delivered message, which surfaces as a mail spec asserting
+// against a body the fixture never actually says. That is the harness bug
+// class worth a unit test rather than a Stalwart round-trip.
+export function prepareMimePart(text: string): string {
   return text
     .replace(/\r\n/g, "\n")
     .split("\n")
@@ -279,7 +285,8 @@ function prepareMimePart(text: string): string {
     .join("\r\n");
 }
 
-function buildRawMessage(message: SeedEmail, runId: string): string {
+// Exported for smtp-seed.test.ts (GH #247) — see prepareMimePart above.
+export function buildRawMessage(message: SeedEmail, runId: string): string {
   const date = new Date().toUTCString().replace("GMT", "+0000");
   // Stalwart deduplicates inbound mail by Message-ID (the "duplicate" Sieve
   // extension in its default ruleset) — silently keeping only the first
@@ -329,7 +336,12 @@ function buildRawMessage(message: SeedEmail, runId: string): string {
 // to the message's own (external, unverified) sender address instead of an
 // authenticated identity, which is exactly what makes Stalwart's spam filter
 // classify the delivery into Junk Mail.
-function extractEnvelopeAddress(from: string): string {
+//
+// Exported for smtp-seed.test.ts (GH #247): if this returns the whole display
+// string instead of the bare address, seedJunk's MAIL FROM is malformed and the
+// junk fixtures never arrive — leaving every Junk-folder assertion to fail for
+// a reason that has nothing to do with the application.
+export function extractEnvelopeAddress(from: string): string {
   const match = from.match(/<([^>]+)>/);
   return match ? match[1]! : from;
 }

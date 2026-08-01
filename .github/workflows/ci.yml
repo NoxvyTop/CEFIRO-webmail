@@ -382,6 +382,21 @@ jobs:
         with:
           name: playwright-report
           path: e2e/playwright-report
+      # The retry record (GH #246), published on EVERY run — including the green
+      # ones, which are the whole point. `retries: 1` means a spec that fails
+      # half the time still exits this job 0, so the only place the instability
+      # exists is this file; uploading it only on failure would drop exactly the
+      # runs it was written for. A run with nothing to report still uploads an
+      # empty list, so a missing artifact means a broken step rather than a
+      # clean suite. See e2e/README.md for what is expected to happen when the
+      # same spec keeps showing up in it.
+      - name: publish the e2e retry record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-retries
+          path: e2e/test-results/retries.json
+          if-no-files-found: warn
       # A containerised job runs as root, so everything it writes into the
       # shared workspace ends up root-owned. On a self-hosted runner that
       # workspace persists between runs, and the next job that is NOT

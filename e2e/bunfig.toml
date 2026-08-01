@@ -1,0 +1,36 @@
+# Coverage settings for the harness's own unit suite (GH #247).
+#
+# The e2e harness — the SMTP seeder, the test identity provider and the
+# throwaway-database plumbing — is ~50 KB of code that decides whether a
+# Playwright run proves anything, and until now it sat outside every coverage
+# configuration in the repo. The three vitest packages measure their own `src/`;
+# this directory is none of them. So it is measured by the runner it already
+# uses: `bun test`, because the suite is bun:test already (smtp-seed.test.ts
+# predates this) and because oidc-idp.ts calls `Bun.serve`, which only exists
+# under Bun.
+[test]
+# Test files are not units under test — the same reason each vitest config
+# excludes `src/**/*.test.ts`. Left on, they inflate every figure below by
+# ~12 points of code that is 100% covered by definition.
+coverageSkipTestFiles = true
+
+# MUST be written as a scalar. Bun 1.3.14 accepts the documented
+# `{ line = …, function = … }` table form without complaint and then never
+# enforces it — a gate that passes at any coverage, which is worse than having
+# none. Verified by setting 0.95 both ways: the table exits 0, the scalar exits 1.
+#
+# The scalar is checked PER FILE (also verified: 0.36 passes, 0.40 fails, and
+# the only file under 0.40 is smtp-seed.ts). Same guarantee the vitest packages
+# get from `thresholds.perFile`, so a new harness module cannot land at 0%.
+#
+# 0.35 is therefore a floor set by the WORST file, not by the healthy ones:
+# smtp-seed.ts measures 53.85% functions / 37.34% lines because most of it is a
+# live SMTP/TLS conversation that cannot run without a real server — reaching
+# for it here would just rebuild the Playwright suite inside a unit test. The
+# rest is far above it (oidc-idp.ts 100%/99.49%, test-db.ts 83.33%/88.24%,
+# aggregate 79.06%/75.02%), and the parts that can be wrong SILENTLY — the wire
+# format, the PKCE and client checks, the drop guard — are the covered ones.
+#
+# A ratchet, not a target: raise it as smtp-seed.ts's untestable share shrinks.
+# Never lower it to make a run pass.
+coverageThreshold = 0.35

@@ -171,9 +171,13 @@ function loginPage(requestId: string): Response {
 }
 
 /**
- * Starts the provider on `port` and resolves once it is listening; the process
- * stays alive on the open listener and Playwright kills it when the run ends
- * (see idp-serve.ts), so there is deliberately no shutdown handle here.
+ * Starts the provider on `port` and resolves once it is listening.
+ *
+ * Under Playwright nothing calls `stop()`: the process stays alive on the open
+ * listener and the runner kills it when the run ends (see idp-serve.ts). The
+ * handle is returned anyway for oidc-idp.test.ts (GH #247), which starts a
+ * provider per test and has to close it — a listener left open there would keep
+ * the `bun test` process from exiting.
  *
  * `issuer` must be the URL the server reaches this process at, byte for byte:
  * it is both what discovery advertises and the `iss` claim `jose` checks on the
@@ -186,7 +190,7 @@ export async function startTestIdp(options: {
   port: number;
   issuer: string;
   redirectUri: string;
-}): Promise<void> {
+}): Promise<{ stop(closeActiveConnections?: boolean): void }> {
   const { issuer, redirectUri } = options;
   const keyPair = (await crypto.subtle.generateKey(
     {
@@ -337,7 +341,7 @@ export async function startTestIdp(options: {
     });
   }
 
-  Bun.serve({
+  return Bun.serve({
     port: options.port,
     fetch(request) {
       const url = new URL(request.url);

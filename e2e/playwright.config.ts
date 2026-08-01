@@ -3,12 +3,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
   BASE_DATABASE_URL_ENV,
+  SETUP_DATABASE_URL_ENV,
   TEST_DATABASE_URL_ENV,
   requireBaseDatabaseUrl,
   uniqueDbName,
   withDatabase,
 } from "./test-db";
 import { IDP_ISSUER_ENV } from "./oidc-idp";
+import { SETUP_BASE_URL_ENV, SETUP_TOKEN, SETUP_TOKEN_ENV } from "./setup-server";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.E2E_PORT ?? 8199);
@@ -59,6 +61,21 @@ const DATABASE_URL =
   process.env[TEST_DATABASE_URL_ENV] ?? withDatabase(BASE_DATABASE_URL, uniqueDbName());
 process.env[TEST_DATABASE_URL_ENV] = DATABASE_URL;
 
+// GH #248: a third app server, for the first-run wizard. Same binary, same
+// bootstrap mode as the default one — the difference that matters is the
+// database. This one is minted here and seeded by NOBODY, so the instance has
+// no administrator and no SSO config, which is the only state in which the
+// setup router is open at all (GH #234's completion latch closes it the moment
+// both exist, and global-setup.ts creates both in the default database).
+// See setup-server.ts.
+const SETUP_PORT = Number(process.env.E2E_SETUP_PORT ?? PORT + 3);
+const SETUP_BASE_URL = process.env[SETUP_BASE_URL_ENV] ?? `http://localhost:${SETUP_PORT}`;
+process.env[SETUP_BASE_URL_ENV] = SETUP_BASE_URL;
+process.env[SETUP_TOKEN_ENV] = SETUP_TOKEN;
+const SETUP_DATABASE_URL =
+  process.env[SETUP_DATABASE_URL_ENV] ?? withDatabase(BASE_DATABASE_URL, uniqueDbName());
+process.env[SETUP_DATABASE_URL_ENV] = SETUP_DATABASE_URL;
+
 // Shared by both app servers; each one adds its own PORT, APP_URL and
 // BOOTSTRAP_MODE on top.
 const appServerEnv = {
@@ -105,8 +122,21 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
+  // One retry on CI, none locally: a genuine infrastructure hiccup should not
+  // turn the pipeline red, but the tolerance stays at one because a spec that
+  // needs two is not flaky, it is broken.
+  //
+  // The cost of that tolerance used to be invisible (GH #246). A spec that
+  // failed and passed on the retry produced a green job and no record anywhere,
+  // so it looked exactly like a healthy one for as long as nobody opened the
+  // log. ./retry-reporter.ts below writes every retry down — annotations, job
+  // summary, and a JSON artifact that can be compared across runs — and
+  // e2e/README.md states what has to happen when the same spec keeps appearing
+  // there. Raising this number is not one of the options.
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
+  reporter: process.env.CI
+    ? [["github"], ["./retry-reporter.ts"], ["html", { open: "never" }]]
+    : [["list"], ["./retry-reporter.ts"]],
   use: {
     baseURL: BASE_URL,
     storageState: resolve(here, ".auth/state.json"),
@@ -116,7 +146,7 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /oidc-login\.spec\.ts/,
+      testIgnore: /(oidc-login|setup-wizard)\.spec\.ts/,
     },
     {
       // The OIDC login flow drives the bootstrap-free server instead, and starts
@@ -126,6 +156,18 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: SSO_BASE_URL,
+        storageState: { cookies: [], origins: [] },
+      },
+    },
+    {
+      // The first-run wizard drives the unseeded server (GH #248), and — like a
+      // real first run — starts with no session, because the instance has no
+      // account to hold one yet.
+      name: "setup",
+      testMatch: /setup-wizard\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: SETUP_BASE_URL,
         storageState: { cookies: [], origins: [] },
       },
     },
@@ -187,6 +229,32 @@ export default defineConfig({
             // Playwright starts every webServer at once, but these two share one
             // database and one apps/web/dist. Waiting for the first means this
             // one neither races it to CREATE DATABASE nor rebuilds the SPA.
+            E2E_WAIT_FOR: `${BASE_URL}/api/health`,
+            E2E_SKIP_BUILD: "1",
+          },
+        },
+        {
+          // The first-run wizard server (GH #248). Its DATABASE_URL is the one
+          // thing that separates it from the default server above: a database
+          // global-setup.ts never touches, so the instance still has no admin
+          // and no SSO config and the setup router is genuinely open. serve.ts
+          // creates it on boot from the admin URL, exactly like the other one.
+          command: bun("serve.ts"),
+          cwd: resolve(here, ".."),
+          url: `${SETUP_BASE_URL}/api/health`,
+          timeout: 120_000,
+          reuseExistingServer: !process.env.CI,
+          env: {
+            ...appServerEnv,
+            DATABASE_URL: SETUP_DATABASE_URL,
+            APP_URL: SETUP_BASE_URL,
+            PORT: String(SETUP_PORT),
+            BOOTSTRAP_MODE: "true",
+            BOOTSTRAP_PASSWORD: SETUP_TOKEN,
+            // Shares apps/web/dist with the servers above, so it waits on the
+            // first rather than rebuilding the SPA underneath it. It does NOT
+            // share their database, so there is no CREATE DATABASE race to
+            // serialize here — only the build.
             E2E_WAIT_FOR: `${BASE_URL}/api/health`,
             E2E_SKIP_BUILD: "1",
           },

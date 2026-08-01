@@ -7,7 +7,7 @@
     "lint": "biome ci .",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun run --filter '*' test",
-    "coverage": "bun run --filter '@webmail/web' coverage && bun run --filter '@webmail/server' coverage && bun run --filter '@webmail/shared' coverage"
+    "coverage": "bun run --filter '@webmail/web' coverage && bun run --filter '@webmail/server' coverage && bun run --filter '@webmail/shared' coverage && bun run --filter '@webmail/e2e' coverage"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",

@@ -94,19 +94,34 @@ export default defineConfig({
       // the package must clear. That is the stronger guarantee for the failure
       // this issue is about; the aggregate figures stay visible in the report.
       //
-      // The floor sits under the worst-covered file measured today — App.tsx
-      // (82.23% lines / 36.36% functions) for lines/statements/functions and
-      // features/admin/api.ts (58.33%) for branches — with room left for the
-      // ordinary churn of a file being edited. A ratchet floor, not a target:
-      // raise it as the weakest files improve. For reference, today's
-      // aggregate is lines/statements 96.02%, functions 86.90%, branches
-      // 90.73%.
+      // The floor sits one notch under the worst-covered file measured today —
+      // App.tsx (82.23% lines/statements, 36.36% functions) and
+      // features/admin/api.ts (58.33% branches). Today's aggregate, for
+      // reference, is lines/statements 96.70%, functions 87.93%, branches
+      // 91.30%.
+      //
+      // GH #245 re-measured these. They were set to 75/30/50 while several
+      // agents were editing at once, which left functions 6 points and branches
+      // 8 points below the real worst file — enough that a NEW file could land
+      // at 31% functions, fail nothing, and become the new worst. The gap is
+      // now 2-3 points, which is the margin an ordinary edit needs and not
+      // more.
+      //
+      // Why not sit exactly on the measurement: these are small files, so a
+      // percentage point is not a fine-grained unit. App.tsx covers 4 of its 11
+      // functions; adding a twelfth uncovered one drops it to 33.33%. A floor
+      // at 36 would fail on that, which is churn rather than regression. A
+      // floor at 34 fails on a real DROP — a function that used to be covered
+      // and no longer is — which is what a ratchet is for.
+      //
+      // A ratchet, not a target: raise it as the weakest files improve, and
+      // close the gap on a file by testing it rather than by lowering this.
       thresholds: {
         perFile: true,
-        lines: 75,
-        statements: 75,
-        functions: 30,
-        branches: 50,
+        lines: 80,
+        statements: 80,
+        functions: 34,
+        branches: 55,
       },
     },
   },

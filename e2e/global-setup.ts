@@ -25,6 +25,7 @@ import {
   TEST_IDP_SCOPES,
 } from "./oidc-idp";
 import {
+  SETUP_DATABASE_URL_ENV,
   TEST_DATABASE_URL_ENV,
   createTestDatabase,
   dropTestDatabase,
@@ -226,7 +227,17 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // credential it wrote goes with it, so nothing can be carried into the next
   // run and nothing is left behind in a shared database. A caller-pinned
   // E2E_DATABASE_URL is never dropped — the suite did not create it.
+  //
+  // The wizard server's database (GH #248) is dropped here too, even though
+  // this file never creates or seeds it — serve.ts creates it on boot and
+  // nothing else would ever clean it up, and a first-run database that
+  // survives the run is a database whose SECOND run is not a first run. The
+  // drop is unconditional on the row contents and guarded only by the
+  // throwaway-name check, so a caller who pinned E2E_SETUP_DATABASE_URL at a
+  // database they own gets it left alone, exactly like the one above.
+  const setupUrl = process.env[SETUP_DATABASE_URL_ENV];
   return async () => {
     if (disposable) await dropTestDatabase(baseUrl, url);
+    if (setupUrl && isThrowawayDatabase(setupUrl)) await dropTestDatabase(baseUrl, setupUrl);
   };
 }
