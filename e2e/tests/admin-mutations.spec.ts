@@ -70,7 +70,12 @@ test.describe("admin mutations", () => {
 
     // The server answers 409 and the console has to surface it: silently doing
     // nothing looks identical to success from the operator's side.
-    await expect(page.getByRole("alert")).toHaveText("No se pudo completar la acción");
+    //
+    // The specific message, not the generic one: GH #46 gave the admin 409s
+    // their own translations, so "No se pudo completar la acción" is now the
+    // fallback for a code nobody mapped — asserting it here would pin the
+    // vaguer behaviour that issue removed.
+    await expect(page.getByRole("alert")).toHaveText("Ya existe un usuario con ese correo");
     await expect(page.getByRole("row").filter({ hasText: SUBJECT_EMAIL })).toHaveCount(1);
   });
 

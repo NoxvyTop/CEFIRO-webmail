@@ -132,8 +132,14 @@ test("an unverified email is refused", async ({ page }) => {
   // `jose` verifies the signature and then createIdTokenVerifier rejects the
   // claim set, so the callback's failure path is what runs — not a bad-signature
   // path. The user is never provisioned.
-  await expect(page).toHaveURL("/?auth_error=oidc");
-  await expect(page.getByRole("alert")).toHaveText("No se pudo completar el inicio de sesión");
+  // Its own code, not the generic `oidc`: GH #46 split this case out precisely
+  // because it is the one OIDC failure the user can act on — every other cause
+  // (provider down, bad secret, clock skew) deliberately stays generic so the
+  // server does not map its internals for an unauthenticated caller.
+  await expect(page).toHaveURL("/?auth_error=oidc_email_unverified");
+  await expect(page.getByRole("alert")).toHaveText(
+    "Tu proveedor de identidad no ha verificado tu dirección de correo. Verifícala y vuelve a intentarlo.",
+  );
   expect((await page.request.get("/api/auth/me")).status()).toBe(401);
 });
 
