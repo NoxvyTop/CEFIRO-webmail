@@ -194,6 +194,14 @@ export function useMailEvents(enabled: boolean): void {
       if (cancelled || stopped) return;
       source = new EventSource("/api/mail/events");
       source.addEventListener("open", handleOpen);
+      // JMAP names its push frames `event: state` (RFC 8887 §7.1), and the
+      // server proxies Stalwart's stream through untouched. An SSE listener on
+      // "message" only ever fires for frames with NO `event:` field, so
+      // listening on "message" alone means every StateChange is dropped and the
+      // mailbox never updates until a manual reload (GH #265). "message" stays
+      // registered for a provider that emits unnamed frames; handleMessage is
+      // idempotent, and no server sends both for one change.
+      source.addEventListener("state", handleMessage);
       source.addEventListener("message", handleMessage);
       source.addEventListener("error", handleError);
     }

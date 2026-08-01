@@ -53,6 +53,20 @@ class FakeEventSource {
     for (const listener of this.listeners.message ?? []) listener({ data });
   }
 
+  // What the real stream actually sends. JMAP names its push frames
+  // `event: state` (RFC 8887 §7.1) and the server proxies Stalwart's stream
+  // through untouched, so this — not emitMessage — is the production path.
+  //
+  // GH #265: the hook listened only on "message", which in SSE fires just for
+  // frames with NO `event:` field, so every StateChange was dropped and the
+  // mailbox never updated without a manual reload. The whole suite stayed green
+  // because this double only ever emitted "message": it agreed with the client
+  // instead of with the server, which is exactly how a test double hides the
+  // bug it was written to catch.
+  emitState(data = "{}") {
+    for (const listener of this.listeners.state ?? []) listener({ data });
+  }
+
   // A transport-level drop: the browser means to retry, so readyState stays at
   // CONNECTING and the hook takes the ordinary backoff path.
   emitError() {
@@ -127,6 +141,27 @@ describe("useMailEvents (hook lifecycle)", () => {
     renderHook(() => useMailEvents(true), { wrapper });
 
     FakeEventSource.instances[0]?.emitMessage(
+      JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
+    );
+
+    const keys = invalidate.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    expect(keys).toEqual([
+      ["mail", "messages"],
+      ["mail", "thread"],
+    ]);
+  });
+
+  // GH #265. This is the production path: the server proxies Stalwart's stream
+  // untouched and JMAP names its frames `event: state` (RFC 8887 §7.1). Before
+  // the fix the hook listened only on "message" — which in SSE fires solely for
+  // frames with no `event:` field — so new mail never appeared until the user
+  // reloaded, while every test here passed because the double emitted the same
+  // wrong name the client was listening for.
+  it("invalidates on a StateChange delivered as the named `state` event, as the server really sends it", () => {
+    const { invalidate, wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    FakeEventSource.instances[0]?.emitState(
       JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
     );
 
