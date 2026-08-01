@@ -1,13 +1,15 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import type { HealthResponse, InstanceSettingsView } from "@webmail/shared";
+import type { InstanceSettingsView } from "@webmail/shared";
 import type { InstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { logAccess, loggedPath } from "./core/access-log";
 import { DEFAULT_MAX_BODY_BYTES } from "./core/config";
 import { errorResponse } from "./core/error-response";
 import { DomainError } from "./core/errors";
-import { log } from "./core/logger";
+import { createHealthProbe, type HealthCheck } from "./core/health";
+import { log, withLogContext } from "./core/logger";
+import { createRateLimiter, type RateLimiter } from "./core/rate-limit";
 
 type Env = { Variables: { traceId: string } };
 
@@ -18,10 +20,25 @@ type Env = { Variables: { traceId: string } };
 // memory-exhaustion guard (GH #195).
 const STREAMED_UPLOAD_PATH = "/api/mail/blobs";
 
-export type HealthCheck = () => Promise<boolean>;
+// Flood ceiling for the one route that answers without a session (GH #220).
+// Deliberately generous: the container's own probe polls twice a minute
+// (`HEALTHCHECK --interval=30s`), two orders of magnitude below this, so the
+// limit can never be what marks a healthy instance unhealthy. The probe result
+// is cached (core/health.ts), so what is left to bound here is only the cost of
+// serving the cached line — the same protection the break-glass login path gets.
+const HEALTH_MAX_REQUESTS = 60;
+const HEALTH_RATE_WINDOW_MS = 60_000;
+
+export type { HealthCheck };
 
 export type CreateAppOptions = {
   checks?: Record<string, HealthCheck>;
+  /** Per-check budget for /api/health in ms (GH #212). See core/health.ts. */
+  healthBudgetMs?: number;
+  /** How long a health probe result is reused, in ms (GH #220). */
+  healthCacheMs?: number;
+  /** Injectable so tests drive a small limit; see core/rate-limit.ts. */
+  healthRateLimiter?: RateLimiter;
   /** Global request-body ceiling in bytes (GH #195). See core/config.ts. */
   maxBodyBytes?: number;
   instanceSettings?: InstanceSettingsRepo;
@@ -67,6 +84,16 @@ const SECURITY_HEADERS: Record<string, string> = {
   "strict-transport-security": "max-age=31536000; includeSubDomains",
 };
 
+/**
+ * Rate-limit key for a request that carries no session to key on. Takes the
+ * first hop of `x-forwarded-for` — the same identifier the break-glass login
+ * paths use — and falls back to one shared bucket for a direct connection,
+ * which behind a reverse proxy is only ever the container's own probe.
+ */
+function clientKey(forwardedFor: string | undefined): string {
+  return forwardedFor?.split(",")[0]?.trim() || "direct";
+}
+
 export function createApp(options: CreateAppOptions = {}) {
   const checks = options.checks ?? {};
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
@@ -77,7 +104,11 @@ export function createApp(options: CreateAppOptions = {}) {
     const startedAt = Date.now();
     c.set("traceId", traceId);
     c.header("x-trace-id", traceId);
-    await next();
+    // GH #219: every log line written while this request runs — including the
+    // ones deep in core/deadline.ts, the JMAP routes, the sieve sync and the AI
+    // adapter — carries this traceId, without threading a logger through every
+    // signature. See core/logger.ts.
+    await withLogContext({ traceId }, () => next());
     // Apply global security headers as defaults only: route-specific headers
     // (e.g. the attachment proxy's `content-security-policy: sandbox`) are set
     // during the handler and must not be clobbered here.
@@ -109,16 +140,27 @@ export function createApp(options: CreateAppOptions = {}) {
     return globalBodyLimit(c, next);
   });
 
+  // Checks in parallel under their own budget (GH #212), result cached and
+  // de-duplicated so N polls are not N outbound probes (GH #220).
+  const healthProbe = createHealthProbe({
+    checks,
+    budgetMs: options.healthBudgetMs,
+    cacheMs: options.healthCacheMs,
+  });
+  const healthRateLimiter =
+    options.healthRateLimiter ??
+    createRateLimiter({ limit: HEALTH_MAX_REQUESTS, windowMs: HEALTH_RATE_WINDOW_MS });
+
   app.get("/api/health", async (c) => {
-    const results: Record<string, boolean> = {};
-    for (const [name, check] of Object.entries(checks)) {
-      results[name] = await check();
+    const gate = healthRateLimiter.check(clientKey(c.req.header("x-forwarded-for")));
+    if (!gate.allowed) {
+      c.header("Retry-After", String(gate.retryAfterSeconds));
+      return errorResponse(c, "rate_limited", 429);
     }
-    const healthy = Object.values(results).every(Boolean);
-    const body: HealthResponse = {
-      status: healthy ? "ok" : "degraded",
-      checks: results,
-    };
+    const { body, healthy } = await healthProbe();
+    // A readiness answer is a point-in-time fact about THIS instance; nothing
+    // between here and the poller may serve a stale one on our behalf.
+    c.header("cache-control", "no-store");
     // Readiness, not liveness (GH #197): a degraded instance returns 503 so a
     // load balancer / orchestrator drains it from rotation, while a healthy one
     // returns 200. One endpoint rather than split liveness/readiness — this is a

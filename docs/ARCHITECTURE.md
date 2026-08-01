@@ -364,7 +364,11 @@ adaptadores de Odoo llegan en F4.
 - **traceId de punta a punta**: cada petición lleva un identificador que la
   sigue por SPA → BFF → Stalwart y aparece en todos los logs relacionados.
 - **Logs estructurados** (JSON), filtrables por usuario, ruta y traceId.
-  Ninguna credencial aparece jamás en logs.
+  Ninguna credencial aparece jamás en logs. El traceId viaja en un contexto
+  asíncrono (`core/logger.ts`), así que las líneas de diagnóstico profundas
+  —deadline saliente, sincronización Sieve, cosecha de contactos, adaptador de
+  IA— se correlacionan sin arrastrar un logger por cada firma. `LOG_LEVEL`
+  (`debug`|`info`|`warn`|`error`, por defecto `info`) filtra la salida.
 - **Frontend resiliente**: reintentos con backoff para fallos transitorios;
   si Stalwart no responde, banner de desconexión manteniendo visible el
   contenido cacheado.
@@ -373,7 +377,11 @@ adaptadores de Odoo llegan en F4.
   chequeo falla, para que un balanceador/orquestador saque de rotación una
   instancia degradada. Authentik (OIDC) no se sondea en cada poll a propósito:
   su `discover()` es una llamada saliente al IdP y golpearla en cada health
-  reintroduciría el vector de amplificación que cierra #194.
+  reintroduciría el vector de amplificación que cierra #194. Los chequeos
+  corren **en paralelo** y con presupuesto propio (`core/health.ts`), muy por
+  debajo del `--timeout=5s` del `HEALTHCHECK` del contenedor, y su resultado se
+  **cachea unos segundos**: N sondeos no son N llamadas salientes a Stalwart.
+  El endpoint es anónimo, así que además lleva límite de tasa por origen.
 
 ## Testing
 
