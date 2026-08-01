@@ -269,6 +269,68 @@ describe("SignatureSettings", () => {
     });
   });
 
+  // GH #148: the load half of this was closed by #250; the write half was not.
+  // A failed create/edit/delete changed nothing visible at all, so "saved" and
+  // "silently lost" looked the same — the sibling sections (profile, vacation,
+  // contacts) have surfaced the mutation error in a role="alert" all along.
+  describe("failed save (GH #148)", () => {
+    it("says a failed create failed, and keeps the draft on screen to retry", async () => {
+      createSignature.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      renderSettings([]);
+
+      const nameInput = await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.change(nameInput, { target: { value: "Draft" } });
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      // The whole point of reporting it: the editor is still there, still
+      // holding what the user typed, so pressing save again is the retry.
+      expect(screen.getByLabelText(i18n.t("settings.name"))).toHaveValue("Draft");
+    });
+
+    it("says a failed edit failed instead of leaving the form looking saved", async () => {
+      updateSignature.mockRejectedValueOnce(new MailApiError(400, "invalid_body"));
+      renderSettings([signature]);
+
+      const nameInput = await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.change(nameInput, { target: { value: "Renamed" } });
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+      // The server's code, not the generic message: the alert goes through the
+      // same settingsErrorKey map the sibling sections use.
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        i18n.t("settings.errors.invalid_body"),
+      );
+    });
+
+    it("says a failed delete failed, with the signature still listed", async () => {
+      deleteSignature.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      renderSettings([signature, secondSignature]);
+
+      await screen.findByText("Alt");
+      fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[1]!);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      expect(screen.getByText("Alt")).toBeInTheDocument();
+    });
+
+    it("clears the alert once a later save succeeds", async () => {
+      updateSignature
+        .mockRejectedValueOnce(new MailApiError(503, "database_unavailable"))
+        .mockResolvedValueOnce({ ...signature, name: "Renamed" });
+      renderSettings([signature]);
+
+      const nameInput = await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.change(nameInput, { target: { value: "Renamed" } });
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+      await screen.findByRole("alert");
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    });
+  });
+
   it("applies the unified field-focus class to the name input", async () => {
     renderSettings([signature]);
 

@@ -5,10 +5,15 @@ import type {
   VacationSettings as VacationSettingsData,
   VacationSettingsInput,
 } from "@webmail/shared";
-import { fetchVacationSettings, updateVacationSettings } from "./api";
+import { fetchSieveCapability, fetchVacationSettings, updateVacationSettings } from "./api";
 import { settingsErrorKey } from "./errors";
+import { SettingsUnavailable } from "./PanelStates";
 
 const VACATION_QUERY_KEY = ["mail", "vacation"] as const;
+// Shared verbatim with FilterSettings (GH #36): both features are the same
+// generated Sieve script, so they are the same question and must not each pay
+// for their own answer.
+const SIEVE_CAPABILITY_QUERY_KEY = ["mail", "sieve-capability"] as const;
 
 function toInput(settings: VacationSettingsData): VacationSettingsInput {
   return {
@@ -25,6 +30,10 @@ export function VacationSettings() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const vacationQuery = useQuery({ queryKey: VACATION_QUERY_KEY, queryFn: fetchVacationSettings });
+  const capabilityQuery = useQuery({
+    queryKey: SIEVE_CAPABILITY_QUERY_KEY,
+    queryFn: fetchSieveCapability,
+  });
 
   const [form, setForm] = useState<VacationSettingsInput | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -46,6 +55,14 @@ export function VacationSettings() {
     },
     onError: (error) => setErrorKey(settingsErrorKey(error)),
   });
+
+  // GH #36: an automatic reply is a Sieve `vacation` action, so a mail server
+  // without the extension can never send one. Checked ahead of the form —
+  // there is no point waiting on settings that could not be applied — and only
+  // on a positive `false`, so an undecided or failed read changes nothing.
+  if (capabilityQuery.data?.supported === false) {
+    return <SettingsUnavailable messageKey="vacation.unavailable" />;
+  }
 
   if (!form) {
     return null;

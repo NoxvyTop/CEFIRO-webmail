@@ -106,12 +106,23 @@ describe("migrate under concurrent boots", () => {
     const holderReleased = new Promise<void>((resolve) => {
       releaseHolder = resolve;
     });
+    let holderHasLock: () => void = () => {};
+    const lockTaken = new Promise<void>((resolve) => {
+      holderHasLock = resolve;
+    });
     // Takes the same lock the runner takes and parks, standing in for a replica
     // that is midway through a slow migration.
     const holding = holder.begin(async (tx) => {
       await tx`select pg_advisory_xact_lock(${MIGRATION_LOCK_CLASS}::int, ${MIGRATION_LOCK_ID}::int)`;
+      holderHasLock();
       await holderReleased;
     });
+    // Started only once the holder demonstrably owns the lock. Without this the
+    // two race for it, and on a busy machine the "waiter" could win, take the
+    // lock, apply the migration and settle — failing the assertion below for a
+    // reason that has nothing to do with the behaviour under test. Serial
+    // execution hid it; GH #14's parallelism did not.
+    await lockTaken;
     let settled = false;
     const running = migrate(waiter, fixture.dir).then(() => {
       settled = true;

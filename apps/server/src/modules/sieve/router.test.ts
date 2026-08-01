@@ -425,3 +425,141 @@ describe("sieve sync state (GH #221)", () => {
     expect(state.lastError).toBe("sieve_invalid");
   });
 });
+
+// GH #36. `urn:ietf:params:jmap:sieve` is an EXTENSION: a JMAP provider is free
+// not to implement it, and this server used to assume it — putting it in every
+// `using` array, so against such a provider every filter save and every
+// vacation change came back as a generic JMAP failure with nothing anywhere
+// saying the feature simply does not exist there.
+describe("sieve capability (GH #36)", () => {
+  const NO_RECONCILE_MS = 600_000;
+
+  /** A provider whose session advertises everything EXCEPT the Sieve extension. */
+  function sieveLessJmap(): { client: JmapClient; methods: string[] } {
+    const methods: string[] = [];
+    const client = {
+      async getSession(): Promise<JmapSession> {
+        return {
+          apiUrl: "http://other/jmap/api",
+          accountId: "acc1",
+          eventSourceUrl: "",
+          uploadUrl: "http://other/upload/{accountId}/",
+          downloadUrl: "",
+          capabilities: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+        };
+      },
+      async request(_auth: unknown, _session: unknown, calls: JmapMethodCall[]) {
+        methods.push(calls[0]![0]);
+        return [[calls[0]![0], { list: [] }, "0"]];
+      },
+      async uploadBlob() {
+        methods.push("uploadBlob");
+        return "blob1";
+      },
+    } as unknown as JmapClient;
+    return { client, methods };
+  }
+
+  /** A provider that does advertise it — the Stalwart case, unchanged. */
+  function sieveCapableJmap(): JmapClient {
+    return {
+      ...stubJmap().client,
+      async getSession(): Promise<JmapSession> {
+        return {
+          apiUrl: "http://stalwart/jmap/api",
+          accountId: "acc1",
+          eventSourceUrl: "",
+          uploadUrl: "http://stalwart/upload/{accountId}/",
+          downloadUrl: "",
+          capabilities: [
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:mail",
+            "urn:ietf:params:jmap:sieve",
+          ],
+        };
+      },
+    } as unknown as JmapClient;
+  }
+
+  function readCapability(app: ReturnType<typeof makeApp>, cookie = token4) {
+    return app.request("/api/mail/sieve/capability", {
+      headers: { cookie: `session=${cookie}` },
+    });
+  }
+
+  it("requires a session", async () => {
+    const res = await makeApp(null).request("/api/mail/sieve/capability");
+    expect(res.status).toBe(401);
+  });
+
+  it("reports a provider that advertises the extension as supported", async () => {
+    const res = await readCapability(makeApp(sieveCapableJmap()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ supported: true });
+  });
+
+  it("reports a provider that does not advertise it as unsupported", async () => {
+    const { client } = sieveLessJmap();
+    const res = await readCapability(makeApp(client));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ supported: false });
+  });
+
+  // The three "not known" cases below all answer supported. A wrong yes costs
+  // the same failure the user got before this existed; a wrong no would hide a
+  // working feature and every rule already saved behind it.
+  it("reports supported when no mail backend is configured at all", async () => {
+    expect(await (await readCapability(makeApp(null))).json()).toEqual({ supported: true });
+  });
+
+  it("reports supported when the user has no mailbox linked yet", async () => {
+    const { client } = sieveLessJmap();
+    // token2 — a user with no mail credentials: there is no session to ask.
+    expect(await (await readCapability(makeApp(client), token2)).json()).toEqual({
+      supported: true,
+    });
+  });
+
+  it("reports supported when the provider cannot be reached", async () => {
+    expect(await (await readCapability(makeApp(brokenJmap()))).json()).toEqual({
+      supported: true,
+    });
+  });
+
+  it("does not send a single Sieve request to a provider that cannot answer one", async () => {
+    const { client, methods } = sieveLessJmap();
+    const app = makeApp(client, NO_RECONCILE_MS);
+
+    const res = await put(
+      app,
+      "/api/mail/vacation",
+      { enabled: true, subject: "Out", message: "Away" },
+      token4,
+    );
+
+    // The rule is still stored — the local write is not the thing that cannot
+    // work — but the push is refused up front, with a code that says why.
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("sieve_unsupported");
+    expect(methods).toEqual([]);
+  });
+
+  it("records the unsupported push as a failure that names itself", async () => {
+    const { client } = sieveLessJmap();
+    const app = makeApp(client, NO_RECONCILE_MS);
+
+    await put(app, "/api/mail/vacation", { enabled: true, message: "Away" }, token4);
+
+    const state = sieveSyncStateSchema.parse(
+      await (
+        await app.request("/api/mail/filters/sync-state", {
+          headers: { cookie: `session=${token4}` },
+        })
+      ).json(),
+    );
+    expect(state.status).toBe("failed");
+    // Distinct from sieve_sync_failed on purpose: that one is worth retrying
+    // and this one never will be.
+    expect(state.lastError).toBe("sieve_unsupported");
+  });
+});

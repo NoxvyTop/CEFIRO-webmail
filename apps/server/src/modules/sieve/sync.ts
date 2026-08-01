@@ -7,6 +7,26 @@ export const SIEVE_CAPABILITY = "urn:ietf:params:jmap:sieve";
 export const MANAGED_SCRIPT_NAME = "webmail";
 const DEFAULT_TRASH_FOLDER = "Trash";
 
+/**
+ * Whether this account's JMAP provider can run the Sieve scripts filters and
+ * vacation are built out of (GH #36).
+ *
+ * `urn:ietf:params:jmap:sieve` is an extension, not part of the mail spec. This
+ * server used to ASSUME it and put it in every `using` array below, so against
+ * a provider without it every filter save and every vacation change failed with
+ * a generic JMAP error and nothing anywhere said the feature simply does not
+ * exist there. Reading the session's own advertisement is the answer the
+ * protocol already provides.
+ *
+ * An UNKNOWN capability list — a session this client did not build, i.e. only
+ * ever a test fixture — is treated as supported rather than unsupported: the
+ * cost of a wrong "yes" is the error the user got before, while a wrong "no"
+ * would hide a working feature. Only a positive absence disables anything.
+ */
+export function supportsSieve(session: JmapSession): boolean {
+  return session.capabilities === undefined || session.capabilities.includes(SIEVE_CAPABILITY);
+}
+
 function assertSetSucceeded(result: Record<string, unknown>): void {
   for (const key of ["notCreated", "notUpdated", "notDestroyed"]) {
     const failures = result[key];

@@ -8,16 +8,21 @@ import {
   deleteFilterRule,
   fetchFilterRules,
   fetchFilterSyncState,
+  fetchSieveCapability,
   reorderFilterRules,
   syncFilters,
   updateFilterRule,
 } from "./api";
 import { settingsErrorKey } from "./errors";
 import { FilterRuleForm } from "./FilterRuleForm";
-import { SettingsLoadError, SettingsLoading } from "./PanelStates";
+import { SettingsLoadError, SettingsLoading, SettingsUnavailable } from "./PanelStates";
 import { ChevronDownIcon, ChevronUpIcon } from "../../app/ui/icons";
 
 const FILTERS_QUERY_KEY = ["mail", "filters"] as const;
+// GH #36. NOT a child of FILTERS_QUERY_KEY: what a mail server is capable of
+// does not change because a rule was saved, and re-asking on every mutation
+// would spend a JMAP session fetch to learn the same answer.
+const SIEVE_CAPABILITY_QUERY_KEY = ["mail", "sieve-capability"] as const;
 // A child of FILTERS_QUERY_KEY on purpose: every mutation below already
 // invalidates the `["mail", "filters"]` prefix, so the sync state is re-read
 // after each save without a second invalidation to keep in step with it.
@@ -88,6 +93,13 @@ export function FilterSettings() {
   // trustworthy to say about the sync state, so the banner simply stays away
   // rather than inventing a warning out of a failed request.
   const syncStateQuery = useQuery({ queryKey: SYNC_STATE_QUERY_KEY, queryFn: fetchFilterSyncState });
+  // GH #36: whether this mail server can enforce filters at all. Also advisory
+  // in the same sense as the sync state — a read that fails says nothing, and
+  // the editor stays as it is rather than being withdrawn on a failed request.
+  const capabilityQuery = useQuery({
+    queryKey: SIEVE_CAPABILITY_QUERY_KEY,
+    queryFn: fetchSieveCapability,
+  });
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -191,6 +203,14 @@ export function FilterSettings() {
 
   if (filtersQuery.isLoading) {
     return <SettingsLoading />;
+  }
+
+  // GH #36: only a positive `false` withdraws the editor, and only after the
+  // rules themselves have loaded — so an undecided or failed capability read
+  // leaves the panel exactly as it was, and there is no flash of "unavailable"
+  // on the way to a server that supports it perfectly well.
+  if (capabilityQuery.data?.supported === false) {
+    return <SettingsUnavailable messageKey="filters.unavailable" />;
   }
 
   return (

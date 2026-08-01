@@ -3,6 +3,7 @@ import {
   filterRuleInputSchema,
   filterRuleSchema,
   profileViewSchema,
+  sieveCapabilitySchema,
   sieveSyncStateSchema,
   updateProfileSchema,
   vacationSettingsInputSchema,
@@ -10,6 +11,7 @@ import {
   type FilterRule,
   type FilterRuleInput,
   type ProfileView,
+  type SieveCapability,
   type SieveSyncState,
   type UpdateProfileInput,
   type VacationSettings,
@@ -33,6 +35,21 @@ function jsonRequest(method: string, body: unknown): RequestInit {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+/**
+ * Whether this account's mail server can run Sieve at all (GH #36) — filters
+ * and vacation are one generated script pushed over a JMAP EXTENSION, so a
+ * provider that does not implement it can enforce neither.
+ *
+ * Asked before either editor is offered. Anything the server cannot determine
+ * (no mail backend, no linked mailbox, provider unreachable) comes back as
+ * supported, so a transient outage never hides a working feature.
+ */
+export async function fetchSieveCapability(): Promise<SieveCapability> {
+  const res = await fetch("/api/mail/sieve/capability");
+  if (!res.ok) return parseError(res);
+  return sieveCapabilitySchema.parse(await res.json());
 }
 
 export async function fetchFilterRules(): Promise<FilterRule[]> {

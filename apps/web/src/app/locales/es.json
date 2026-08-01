@@ -74,8 +74,13 @@
       "create": "Crear"
     },
     "errors": {
+      "forbidden": "Necesitas permisos de administrador para hacer esto",
+      "generic": "No se pudo completar la acción",
+      "last_admin": "No se puede: es el único administrador activo. Nombra a otro antes de cambiar este.",
       "load": "No se pudieron cargar los usuarios",
-      "action": "No se pudo completar la acción"
+      "self_archive": "No puedes archivar tu propia cuenta",
+      "self_demotion": "No puedes quitarte a ti mismo el rol de administrador",
+      "user_exists": "Ya existe un usuario con ese correo"
     },
     "search": {
       "placeholder": "Buscar por nombre o correo…",
@@ -113,9 +118,10 @@
     "subtitle": "Inicia sesión en el correo de tu equipo",
     "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
     "errors": {
-      "state": "La sesión de inicio expiró, inténtalo de nuevo",
-      "unknown_user": "Tu cuenta no está registrada en el correo",
-      "oidc": "No se pudo completar el inicio de sesión"
+      "account_archived": "Tu cuenta está archivada. Pide a un administrador que la reactive.",
+      "generic": "No se pudo completar el inicio de sesión",
+      "oidc_email_unverified": "Tu proveedor de identidad no ha verificado tu dirección de correo. Verifícala y vuelve a intentarlo.",
+      "state": "La sesión de inicio expiró, inténtalo de nuevo"
     },
     "bootstrap": {
       "title": "Acceso de emergencia",
@@ -244,6 +250,10 @@
       "passLabel": "Autenticación del remitente verificada (SPF/DKIM/DMARC)",
       "failLabel": "Autenticación del remitente fallida — este mensaje podría ser falsificado"
     },
+    "bodyTruncated": {
+      "title": "Este mensaje está incompleto",
+      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondés o reenviás, se citará únicamente la parte que se ve acá."
+    },
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
     "showFullMessage": "Ver todo el mensaje",
@@ -261,6 +271,9 @@
     "showInInbox": "Mostrar en bandeja principal"
   },
   "composer": {
+    "showQuoted": "Mostrar mensaje citado",
+    "hideQuoted": "Ocultar mensaje citado",
+    "quotedReadOnly": "Se muestra como texto plano. El formato original se conserva en el mensaje que se envía.",
     "title": "Redactar",
     "newMessage": "Nuevo mensaje",
     "from": "De",
@@ -384,6 +397,7 @@
       "not_found": "No encontrado",
       "sieve_invalid": "El script de filtros generado fue rechazado; contacta con tu administrador",
       "sieve_sync_failed": "Guardado, pero aún no aplicado en el servidor de correo",
+      "sieve_unsupported": "Tu servidor de correo no admite filtros ni respuestas automáticas",
       "vacationMessageRequired": "Escribe un mensaje para la respuesta automática",
       "vacationDateOrder": "La fecha de fin no puede ser anterior a la de inicio",
       "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG o WebP)",
@@ -428,6 +442,7 @@
     "reapply": "Reaplicar filtros",
     "reapplied": "Filtros aplicados",
     "empty": "Aún no hay reglas",
+    "unavailable": "Tu servidor de correo no admite filtros, así que aquí no podría aplicarse ninguna regla.",
     "sync": {
       "pending": "Tus reglas están guardadas, pero todavía no se aplican: el servidor de correo aún no las ha aceptado.",
       "failed": "El último intento de aplicar tus reglas en el servidor de correo falló. Están guardadas, pero aún no filtran nada.",
@@ -443,7 +458,8 @@
     "endsAt": "Fecha de fin (opcional)",
     "intervalDays": "Días entre respuestas al mismo remitente",
     "save": "Guardar",
-    "saved": "Guardado"
+    "saved": "Guardado",
+    "unavailable": "Tu servidor de correo no admite respuestas automáticas."
   },
   "contacts": {
     "title": "Contactos",

@@ -1,17 +1,31 @@
 import { defineConfig } from "vitest/config";
+import { TEST_WORKER_COUNT } from "./vitest.workers";
 
 export default defineConfig({
   test: {
-    // Provisions an isolated, throwaway Postgres database for the whole run and
-    // drops it afterwards, so the suite never writes into a shared/development
-    // database and cleans up after itself (GH #181). Requires DATABASE_URL.
+    // Provisions isolated, throwaway Postgres databases for the run — one per
+    // worker slot — and drops them afterwards, so the suite never writes into a
+    // shared/development database and cleans up after itself (GH #181, GH #14).
+    // Requires DATABASE_URL.
     globalSetup: ["./vitest.global-setup.ts"],
-    // Integration tests share one Postgres instance and a singleton
-    // sso_config row (id = 1). Running test files in parallel lets
-    // concurrent beforeAll() calls stomp each other's encrypted
-    // client secret, causing intermittent AES-GCM decrypt failures.
-    // Serialize file execution to keep the shared row consistent.
-    fileParallelism: false,
+    // GH #14. This used to be `fileParallelism: false`, because integration
+    // tests shared one Postgres database and therefore one `sso_config`
+    // singleton row (id = 1): concurrent beforeAll() calls stomped each other's
+    // encrypted client secret and produced intermittent AES-GCM decrypt
+    // failures. Serializing every file was a stopgap that made the whole suite
+    // pay for one row.
+    //
+    // The sharing is gone instead: each worker slot gets its own database (see
+    // vitest.global-setup.ts and src/infra/db/test-db.ts), which also closes
+    // the two neighbours of that bug parallelism exposed — admin-users.test.ts
+    // asserting a delta on aggregate user counts another file was moving, and
+    // migrate.test.ts holding a database-wide advisory lock.
+    //
+    // Pinned rather than left to the CPU count: the databases are minted before
+    // any worker exists, so the count has to be known up front. See
+    // vitest.workers.ts.
+    maxWorkers: TEST_WORKER_COUNT,
+    minWorkers: 1,
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "text"],

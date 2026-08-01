@@ -6,14 +6,15 @@ import i18n from "../../app/i18n";
 import type { VacationSettings as VacationSettingsData } from "@webmail/shared";
 import { VacationSettings } from "./VacationSettings";
 
-const { fetchVacationSettings, updateVacationSettings } = vi.hoisted(() => ({
+const { fetchVacationSettings, updateVacationSettings, fetchSieveCapability } = vi.hoisted(() => ({
   fetchVacationSettings: vi.fn(),
   updateVacationSettings: vi.fn(),
+  fetchSieveCapability: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, fetchVacationSettings, updateVacationSettings };
+  return { ...actual, fetchVacationSettings, updateVacationSettings, fetchSieveCapability };
 });
 
 const settings: VacationSettingsData = {
@@ -38,6 +39,9 @@ function renderVacation(data: VacationSettingsData = settings) {
 describe("VacationSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The Stalwart case, assumed by every test that does not say otherwise:
+    // the mail server can run the Sieve `vacation` action (GH #36).
+    fetchSieveCapability.mockResolvedValue({ supported: true });
   });
 
   afterEach(() => {
@@ -103,5 +107,32 @@ describe("VacationSettings", () => {
     expect(
       await screen.findByText(i18n.t("settings.errors.sieve_sync_failed")),
     ).toBeInTheDocument();
+  });
+});
+
+// GH #36: an automatic reply is a Sieve `vacation` action, so a provider
+// without the extension can never send one — however carefully the form is
+// filled in and however successfully the settings are stored here.
+describe("VacationSettings without Sieve (GH #36)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("says automatic replies are unavailable instead of offering the form", async () => {
+    fetchSieveCapability.mockResolvedValue({ supported: false });
+    renderVacation();
+
+    expect(await screen.findByTestId("settings-unavailable")).toHaveTextContent(
+      i18n.t("vacation.unavailable"),
+    );
+    expect(screen.queryByLabelText(i18n.t("vacation.message"))).not.toBeInTheDocument();
+  });
+
+  it("keeps the form when the capability is unknown or unreadable", async () => {
+    fetchSieveCapability.mockRejectedValue(new Error("offline"));
+    renderVacation();
+
+    expect(await screen.findByLabelText(i18n.t("vacation.message"))).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-unavailable")).not.toBeInTheDocument();
   });
 });

@@ -3,8 +3,8 @@ import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import { settingsErrorKey } from "./errors";
 
 /**
- * GH #250: the shared loading and load-failed states for the query-backed
- * settings panels.
+ * The shared non-content states for the settings panels: loading and
+ * load-failed (GH #250), save-failed (GH #148), and unsupported-here (GH #36).
  *
  * Before this, SignatureSettings and ContactsSettings both did
  * `if (!query.data) return null`, and FilterSettings gated its empty state on
@@ -20,6 +20,60 @@ export function SettingsLoading() {
     <div data-testid="settings-loading" className="flex justify-center p-4">
       <CefiroLoader />
     </div>
+  );
+}
+
+interface SettingsUnavailableProps {
+  /** Message key explaining what this particular panel cannot do here. */
+  messageKey: string;
+}
+
+/**
+ * Unsupported state (GH #36): the panel's feature does not exist on this
+ * account's mail server, so there is nothing to load, retry or save.
+ *
+ * Deliberately not an error. Neutral rather than danger-coloured, and it
+ * replaces the editor instead of sitting above it — an editor whose every save
+ * is bound to fail is the thing this exists to remove, and a red alert would
+ * suggest something went wrong and could be tried again.
+ */
+export function SettingsUnavailable({ messageKey }: SettingsUnavailableProps) {
+  const { t } = useTranslation();
+
+  return (
+    <p data-testid="settings-unavailable" className="text-sm text-muted">
+      {t(messageKey)}
+    </p>
+  );
+}
+
+interface SettingsMutationErrorProps {
+  /** The mutation's error, resolved through the shared settings code → message map. */
+  error: unknown;
+}
+
+/**
+ * Failed WRITE state (GH #148), the other half of the pair #250 started.
+ *
+ * A failed load replaces the panel and offers a retry; a failed save leaves the
+ * panel — and the user's unsaved input — exactly where it was, so there is
+ * nothing to refetch and the retry affordance is the save button they already
+ * pressed. What was missing is any sign that it failed at all: without this,
+ * SignatureSettings answered a failed create/edit/delete with no `role="alert"`
+ * and no visible change, so a save that never happened looked identical to one
+ * that did.
+ *
+ * `role="alert"` and the same danger colour as SettingsLoadError, in the plain
+ * inline shape ProfileSettings, VacationSettings and ContactsSettings already
+ * use for the same event — a save failure is not panel-level chrome.
+ */
+export function SettingsMutationError({ error }: SettingsMutationErrorProps) {
+  const { t } = useTranslation();
+
+  return (
+    <p role="alert" className="text-sm text-danger">
+      {t(settingsErrorKey(error))}
+    </p>
   );
 }
 

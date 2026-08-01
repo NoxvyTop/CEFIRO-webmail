@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_STALWART_TIMEOUT_MS } from "../../core/deadline";
-import { createJmapClient, type JmapSession } from "./jmap";
+import { createJmapClient, type JmapMethodCall, type JmapSession } from "./jmap";
 
 const auth = { email: "u@noxvytop.com", password: "mailbox-pw" };
 const sessionBody = {
@@ -208,6 +208,181 @@ describe("jmap client", () => {
       // Well past the deadline: a settled call must never be timed out later.
       await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS * 10);
       expect(result.apiUrl).toBe("https://mail.test/jmap/");
+    });
+  });
+
+  describe("advertised capabilities (GH #36)", () => {
+    it("exposes the session's capability URIs", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning({
+          ...sessionBody,
+          capabilities: {
+            "urn:ietf:params:jmap:core": {},
+            "urn:ietf:params:jmap:mail": {},
+            "urn:ietf:params:jmap:sieve": {},
+          },
+        }),
+      });
+
+      const session = await client.getSession(auth);
+
+      expect(session.capabilities).toEqual([
+        "urn:ietf:params:jmap:core",
+        "urn:ietf:params:jmap:mail",
+        "urn:ietf:params:jmap:sieve",
+      ]);
+    });
+
+    it("reports an empty list — not undefined — when the session advertises none", async () => {
+      // "Advertises nothing" is an answer; only a session this client never
+      // built (a test fixture) may be `undefined`. See JmapSession.capabilities.
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning(sessionBody),
+      });
+
+      const session = await client.getSession(auth);
+
+      expect(session.capabilities).toEqual([]);
+    });
+  });
+
+  // GH #144. RFC 8621 §4.2 obliges a server to reject an unrecognised property
+  // with a method-level `invalidArguments`, and a method error fails the whole
+  // batch — so a provider that does not implement `messageId`/`references`/
+  // `inReplyTo` made GET /threads/:id answer 502 and no conversation could be
+  // opened at all, while the message list (which never asks for them) kept
+  // working. Losing the headers is acceptable; losing the reader is not.
+  describe("degradable properties (GH #144)", () => {
+    const session: JmapSession = {
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    };
+
+    const threadCalls: JmapMethodCall[] = [
+      ["Thread/get", { accountId: "acc-1", ids: ["t1"] }, "t"],
+      [
+        "Email/get",
+        {
+          accountId: "acc-1",
+          properties: ["id", "subject", "messageId", "references", "inReplyTo", "headers"],
+        },
+        "g",
+      ],
+    ];
+
+    /** Answers each call with the next body, so a retry can be told from the first attempt. */
+    function fetchSequence(bodies: unknown[]) {
+      let call = 0;
+      return vi.fn(async () => {
+        const body = bodies[Math.min(call, bodies.length - 1)];
+        call += 1;
+        return new Response(JSON.stringify(body));
+      }) as unknown as typeof fetch;
+    }
+
+    function sentProperties(fetchFn: typeof fetch, callIndex: number): unknown {
+      const [, init] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[callIndex]!;
+      return JSON.parse(init.body as string).methodCalls[1][1].properties;
+    }
+
+    const invalidArguments = {
+      methodResponses: [["error", { type: "invalidArguments", arguments: ["properties"] }, "g"]],
+    };
+    const threadOk = {
+      methodResponses: [
+        ["Thread/get", { list: [{ id: "t1", emailIds: ["e1"] }] }, "t"],
+        ["Email/get", { list: [{ id: "e1", subject: "Hi" }] }, "g"],
+      ],
+    };
+
+    it("retries once without the optional properties and serves the degraded answer", async () => {
+      const fetchFn = fetchSequence([invalidArguments, threadOk]);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+      const responses = await client.request(auth, session, threadCalls);
+
+      expect(responses[1]?.[1]).toEqual({ list: [{ id: "e1", subject: "Hi" }] });
+      expect(sentProperties(fetchFn, 0)).toEqual([
+        "id",
+        "subject",
+        "messageId",
+        "references",
+        "inReplyTo",
+        "headers",
+      ]);
+      // Only the degradable ones are dropped: the properties the view actually
+      // needs are still asked for, so this is degradation, not a blank retry.
+      expect(sentProperties(fetchFn, 1)).toEqual(["id", "subject"]);
+    });
+
+    it("stops asking for them once a provider has refused them", async () => {
+      const fetchFn = fetchSequence([invalidArguments, threadOk]);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+      await client.request(auth, session, threadCalls);
+      await client.request(auth, session, threadCalls);
+
+      // Three posts, not four: the second conversation costs one round trip.
+      expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+      expect(sentProperties(fetchFn, 2)).toEqual(["id", "subject"]);
+    });
+
+    it("does not retry an error that is not about an argument", async () => {
+      const fetchFn = fetchSequence([{ methodResponses: [["error", { type: "serverFail" }, "g"]] }]);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+      await expect(client.request(auth, session, threadCalls)).rejects.toMatchObject({
+        code: "jmap_error",
+      });
+      expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it("never retries a batch that changes state", async () => {
+      // A retry re-runs every call in the batch. Reading twice is free; sending
+      // or filing a message twice is not, so a mutating batch fails as before.
+      const fetchFn = fetchSequence([invalidArguments, threadOk]);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+      await expect(
+        client.request(auth, session, [
+          ["Email/set", { accountId: "acc-1", create: {} }, "s"],
+          ["Email/get", { accountId: "acc-1", properties: ["id", "messageId"] }, "g"],
+        ]),
+      ).rejects.toMatchObject({ code: "jmap_error" });
+      expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it("does not retry when nothing degradable was asked for", async () => {
+      const fetchFn = fetchSequence([invalidArguments]);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+      await expect(
+        client.request(auth, session, [
+          ["Email/get", { accountId: "acc-1", properties: ["id", "subject"] }, "g"],
+        ]),
+      ).rejects.toMatchObject({ code: "jmap_error" });
+      expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it("still fails when the degraded retry is refused too", async () => {
+      const fetchFn = fetchSequence([invalidArguments, invalidArguments]);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+      await expect(client.request(auth, session, threadCalls)).rejects.toMatchObject({
+        code: "jmap_error",
+      });
+      expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
+      // A refused retry is not evidence about the provider, so the next call
+      // must still ask for everything rather than degrade on a guess.
+      await expect(client.request(auth, session, threadCalls)).rejects.toMatchObject({
+        code: "jmap_error",
+      });
+      expect(sentProperties(fetchFn, 2)).toContain("messageId");
     });
   });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FilterRule } from "@webmail/shared";
 import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
-import { MANAGED_SCRIPT_NAME, SIEVE_CAPABILITY, syncSieveScript } from "./sync";
+import { MANAGED_SCRIPT_NAME, SIEVE_CAPABILITY, supportsSieve, syncSieveScript } from "./sync";
 
 const auth = { email: "u@noxvytop.com", password: "pw" };
 const session: JmapSession = {
@@ -125,5 +125,32 @@ describe("syncSieveScript", () => {
     await expect(
       syncSieveScript({ jmap: client, auth, session, rules: [sampleRule], vacation: null }),
     ).rejects.toMatchObject({ code: "sieve_sync_failed" });
+  });
+});
+
+// GH #36: `urn:ietf:params:jmap:sieve` is an extension, so whether filters and
+// vacation can work at all is a property of the account's provider — a fact the
+// JMAP session already states and this server used to ignore.
+describe("supportsSieve", () => {
+  it("is true when the session advertises the Sieve capability", () => {
+    expect(
+      supportsSieve({ ...session, capabilities: ["urn:ietf:params:jmap:mail", SIEVE_CAPABILITY] }),
+    ).toBe(true);
+  });
+
+  it("is false when the session advertises capabilities and Sieve is not among them", () => {
+    expect(supportsSieve({ ...session, capabilities: ["urn:ietf:params:jmap:mail"] })).toBe(false);
+  });
+
+  it("is false for a provider that advertises nothing at all", () => {
+    // An empty list is a real answer ("no extensions"), not a missing one.
+    expect(supportsSieve({ ...session, capabilities: [] })).toBe(false);
+  });
+
+  it("is true when the capability list is unknown", () => {
+    // Only a hand-built session gets here (getSession always sets the field).
+    // Unknown stays optimistic: a wrong yes costs the error that already
+    // existed, a wrong no would hide a working feature.
+    expect(supportsSieve(session)).toBe(true);
   });
 });

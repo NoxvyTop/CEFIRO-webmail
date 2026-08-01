@@ -71,6 +71,25 @@ export const sieveSyncStateSchema = z.object({
 });
 export type SieveSyncState = z.infer<typeof sieveSyncStateSchema>;
 
+/**
+ * Whether this account's JMAP provider can run Sieve at all (GH #36).
+ *
+ * Filters and vacation are one generated Sieve script pushed over
+ * `urn:ietf:params:jmap:sieve`, which is an EXTENSION: a provider is free not
+ * to implement it, and one that does not cannot enforce either feature. The
+ * server reads the session's own capability advertisement and reports it here,
+ * so the client can present them as unavailable instead of offering editors
+ * whose every save fails.
+ *
+ * `true` also covers "not known" — no mail backend configured, no linked
+ * mailbox, an unreachable provider. Only a provider that positively does not
+ * advertise the extension answers `false`.
+ */
+export const sieveCapabilitySchema = z.object({
+  supported: z.boolean(),
+});
+export type SieveCapability = z.infer<typeof sieveCapabilitySchema>;
+
 export const vacationSettingsSchema = z.object({
   enabled: z.boolean(),
   subject: z.string(),

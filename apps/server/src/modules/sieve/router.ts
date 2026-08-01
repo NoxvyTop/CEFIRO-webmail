@@ -12,7 +12,7 @@ import type { SieveSyncStateRepo } from "../../infra/repos/sieve-sync-state";
 import type { VacationSettingsRepo } from "../../infra/repos/vacation-settings";
 import { requireSession } from "../auth/middleware";
 import type { MailDeps, MailVariables } from "../mail/context";
-import { syncSieveScript } from "./sync";
+import { supportsSieve, syncSieveScript } from "./sync";
 
 // How long a reconcile attempt waits before it may be retried on read (GH
 // #221). Without it, a settings page polling the state while Stalwart is down
@@ -33,7 +33,7 @@ export type SieveDeps = {
   reconcileCooldownMs?: number;
 };
 
-type SyncOutcome = "ok" | "skipped" | "failed" | "invalid";
+type SyncOutcome = "ok" | "skipped" | "failed" | "invalid" | "unsupported";
 
 async function trySync(
   deps: SieveDeps,
@@ -51,6 +51,11 @@ async function trySync(
   try {
     const auth = { email: user.email, password };
     const session = await deps.jmap.getSession(auth);
+    // GH #36: checked BEFORE anything is pushed, so a provider without the
+    // Sieve extension is never sent a request it is bound to reject. The
+    // outcome is distinct from "failed" because it is not a transient one:
+    // there is nothing here to retry, and the UI has to say so.
+    if (!supportsSieve(session)) return "unsupported";
     const [rules, vacation] = await Promise.all([
       deps.filterRules.list(user.userId),
       deps.vacationSettings.get(user.userId),
@@ -95,7 +100,33 @@ async function syncAndRecord(
 function syncFailureCode(outcome: SyncOutcome): string | null {
   if (outcome === "invalid") return "sieve_invalid";
   if (outcome === "failed") return "sieve_sync_failed";
+  if (outcome === "unsupported") return "sieve_unsupported";
   return null;
+}
+
+/**
+ * Whether this user's JMAP provider advertises the Sieve extension (GH #36).
+ *
+ * Answers `true` for everything that is not a positive absence — no mail
+ * backend configured, no credentials linked yet, a provider that cannot be
+ * reached right now. Those are all "not known", and the two wrong answers are
+ * not symmetric: a wrong `true` costs the same error the user already got
+ * before this existed, while a wrong `false` would hide a working feature and
+ * the rules already saved behind it.
+ */
+async function sieveSupported(
+  deps: SieveDeps,
+  user: { userId: string; email: string },
+): Promise<boolean> {
+  if (!deps.jmap) return true;
+  try {
+    const password = await deps.mailCredentials.get(user.userId);
+    if (password === null) return true;
+    const session = await deps.jmap.getSession({ email: user.email, password });
+    return supportsSieve(session);
+  } catch {
+    return true;
+  }
 }
 
 /** Whether an unapplied state is old enough to be worth another push. */
@@ -110,6 +141,17 @@ export function createSieveRouter(deps: SieveDeps) {
   const reconcileCooldownMs = deps.reconcileCooldownMs ?? DEFAULT_RECONCILE_COOLDOWN_MS;
 
   router.use("*", requireSession(deps.sessions));
+
+  /**
+   * Whether filters and vacation can work at all against this account's mail
+   * provider (GH #36). Both features are one Sieve script, so they share one
+   * answer, and the client asks before offering either — the alternative is
+   * what this replaced: a full editor whose every save fails.
+   */
+  router.get("/sieve/capability", async (c) => {
+    const user = c.get("user");
+    return c.json({ supported: await sieveSupported(deps, user) });
+  });
 
   router.get("/filters", async (c) => {
     const user = c.get("user");

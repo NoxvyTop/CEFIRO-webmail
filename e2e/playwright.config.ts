@@ -9,6 +9,7 @@ import {
   uniqueDbName,
   withDatabase,
 } from "./test-db";
+import { bunCommand } from "./app-env";
 import { IDP_ISSUER_ENV } from "./oidc-idp";
 import { SETUP_BASE_URL_ENV, SETUP_TOKEN, SETUP_TOKEN_ENV } from "./setup-server";
 
@@ -98,21 +99,25 @@ const appServerEnv = {
   //   export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
   //   docker compose -f docker-compose.e2e.yml up -d --build
   //
-  // Explicitly EMPTY rather than simply omitted when there is no fixture: `bun`
-  // auto-loads the repo-root .env into every process it starts, so a developer's
-  // own STALWART_URL — pointing at a remote mail host, as the committed example
-  // does — otherwise reaches the app server and quietly defeats the paragraph
-  // above. It also makes /api/health probe that host, which degrades the
-  // instance to 503 and leaves Playwright waiting on a `url` that never goes
-  // ready. A real environment variable outranks .env, and core/config.ts reads
-  // `env.STALWART_URL || undefined`, so "" is exactly "no mail backend".
+  // Explicitly EMPTY rather than simply omitted when there is no fixture, so
+  // "no mail backend" is stated rather than inferred: core/config.ts reads
+  // `env.STALWART_URL || undefined`, so "" is exactly that.
+  //
+  // This line was once the ONLY thing standing between the harness and a
+  // developer's own STALWART_URL, because `bun` auto-loads the repo-root .env
+  // into every process it starts (GH #217). Pointed at a remote mail host — as
+  // the committed example does — it made /api/health probe that host, degrade
+  // the instance to 503, and leave Playwright waiting out its 120s on a server
+  // that would never go ready. That whole class is closed at the source now:
+  // every `bun` here runs with --env-file (see app-env.ts, GH #231), so no
+  // variable this file does not set can reach a server under test.
   STALWART_URL: process.env.E2E_STALWART_URL ?? "",
 };
 
-// Quoted: Playwright hands `command` to a shell, so an unquoted path splits on
-// its first space and the checkout only has to live under a directory such as
-// "cefiro web" for the webServer to never start (GH #151).
-const bun = (script: string) => `bun "${resolve(here, script)}"`;
+// GH #151 (quoting) and GH #231 (the env-file pin) — see app-env.ts. Every
+// `bun` process this harness starts goes through here, so none of them can
+// auto-load the repository root's `.env` into a server under test.
+const bun = (script: string) => bunCommand(resolve(here, script));
 
 export default defineConfig({
   testDir: "./tests",

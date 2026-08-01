@@ -15,9 +15,11 @@ const {
   deleteFilterRule,
   reorderFilterRules,
   syncFilters,
+  fetchSieveCapability,
 } = vi.hoisted(() => ({
   fetchFilterRules: vi.fn(),
   fetchFilterSyncState: vi.fn(),
+  fetchSieveCapability: vi.fn(),
   createFilterRule: vi.fn(),
   updateFilterRule: vi.fn(),
   deleteFilterRule: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock("./api", async (importOriginal) => {
     deleteFilterRule,
     reorderFilterRules,
     syncFilters,
+    fetchSieveCapability,
   };
 });
 
@@ -88,6 +91,9 @@ function renderFilters(rules: FilterRule[] = [ruleA, ruleB], sync: SieveSyncStat
 describe("FilterSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The Stalwart case, and the one every test below assumes unless it says
+    // otherwise: the mail server can run Sieve (GH #36).
+    fetchSieveCapability.mockResolvedValue({ supported: true });
   });
 
   it("lists rules in order with their state toggles", async () => {
@@ -322,6 +328,42 @@ describe("FilterSettings", () => {
       // warning out of it would be its own lie.
       expect(screen.queryByTestId("sieve-sync-warning")).not.toBeInTheDocument();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #36: filters are a Sieve script pushed over a JMAP extension the
+  // provider is free not to implement. Against one that does not, the editor
+  // was fully offered and every single save came back as a JMAP failure.
+  describe("mail server without Sieve (GH #36)", () => {
+    it("says filters are unavailable instead of offering an editor that cannot save", async () => {
+      fetchSieveCapability.mockResolvedValue({ supported: false });
+      renderFilters();
+
+      expect(await screen.findByTestId("settings-unavailable")).toHaveTextContent(
+        i18n.t("filters.unavailable"),
+      );
+      expect(screen.queryByRole("button", { name: i18n.t("filters.newRule") })).not.toBeInTheDocument();
+      // Not an error state: nothing went wrong and nothing can be retried.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("leaves the editor alone when the capability read itself fails", async () => {
+      // An unreadable capability says nothing about the server. Withdrawing the
+      // feature on it would take a working editor away over a failed request.
+      fetchSieveCapability.mockRejectedValue(new MailApiError(503, "database_unavailable"));
+      renderFilters();
+
+      expect(await screen.findByText("invoices")).toBeInTheDocument();
+      expect(screen.queryByTestId("settings-unavailable")).not.toBeInTheDocument();
+    });
+
+    it("keeps the editor while the capability is still unknown", async () => {
+      fetchSieveCapability.mockReturnValue(new Promise(() => {}));
+      renderFilters();
+
+      // No flash of "unavailable" on the way to a server that supports it.
+      expect(await screen.findByText("invoices")).toBeInTheDocument();
+      expect(screen.queryByTestId("settings-unavailable")).not.toBeInTheDocument();
     });
   });
 
