@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
@@ -7,6 +7,8 @@ import { useComposer, type PendingUpload } from "./useComposer";
 import { isComposerDraftEmpty } from "./emptiness";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
+import { htmlToPlainText } from "./plainText";
+import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
 import type { ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
 import { Button } from "../../app/ui/Button";
@@ -156,6 +158,8 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   // session (on open), not on every render once signatures finish loading.
   const appliedDefaultRef = useRef(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // GH #142: the quoted original is collapsed by default, like Gmail's "•••".
+  const [quoteRevealed, setQuoteRevealed] = useState(false);
   // GH #158: focus-in/Tab-cycling/restore-on-close for the composer's own
   // dialog — previously unmanaged entirely (no initial focus, no restore,
   // no Tab trap). Stays active for the composer's whole mounted lifetime
@@ -282,6 +286,16 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     const signature = signatures.find((candidate) => candidate.id === signatureId) ?? null;
     setField("bodyHtml", applySignature(state.draft.bodyHtml, signature));
   }
+
+  // GH #142. Memoized because it runs DOMParser, and because the identity of
+  // `editable` is what RichTextEditor compares against its own serialization
+  // to decide whether to re-parse the document.
+  //
+  // Note both signature paths above still operate on the FULL state.draft
+  // .bodyHtml, quote included: applySignature places the signature relative to
+  // the quote marker, so hiding the marker from it would move the signature
+  // below the quoted original.
+  const bodySplit = useMemo(() => splitQuotedTail(state.draft.bodyHtml), [state.draft.bodyHtml]);
 
   async function handleSend() {
     const ok = await send();
@@ -457,11 +471,44 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             </label>
           )}
 
+          {/* GH #142: only the editable half reaches the editor; the quoted
+              original stays out of the ProseMirror document entirely and is
+              concatenated back on every change (see quoteSplit.ts). */}
           <RichTextEditor
-            html={state.draft.bodyHtml}
-            onChange={(html) => setField("bodyHtml", html)}
+            html={bodySplit.editable}
+            onChange={(html) => setField("bodyHtml", joinQuotedTail(html, bodySplit.quoted))}
             ariaLabel={t("composer.body")}
           />
+
+          {bodySplit.quoted && (
+            <div className="border-t border-line pt-2">
+              <button
+                type="button"
+                onClick={() => setQuoteRevealed((open) => !open)}
+                aria-expanded={quoteRevealed}
+                className="flex items-center gap-1.5 text-xs font-semibold text-muted transition hover:text-ink"
+              >
+                <span aria-hidden="true">•••</span>
+                {quoteRevealed ? t("composer.hideQuoted") : t("composer.showQuoted")}
+              </button>
+              {quoteRevealed && (
+                <>
+                  {/* Rendered as PLAIN TEXT, never as live markup. This block
+                      sits in the app's own document, which — unlike the
+                      reader's `sandbox=""` iframe — has nothing isolating it,
+                      the same reasoning that made ContentEditableFallback a
+                      text-only seed (GH #213). The structure the user cannot
+                      see here is still preserved exactly in what gets sent;
+                      this is a read-only confirmation of what is attached,
+                      not the copy of record. */}
+                  <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-md bg-soft px-2 py-1.5 text-xs leading-[1.6] text-muted">
+                    {htmlToPlainText(bodySplit.quoted)}
+                  </pre>
+                  <p className="mt-1 text-[11px] text-muted">{t("composer.quotedReadOnly")}</p>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-col gap-2">
             <div>

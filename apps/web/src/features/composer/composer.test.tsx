@@ -647,7 +647,14 @@ describe("Composer", () => {
       // freshly opened reply would.
       const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
       await waitFor(() => expect(body.textContent).toContain("Thanks"));
-      expect(body.textContent).toContain("Original message");
+      // GH #142: the quoted original is deliberately NOT inside the editable
+      // document any more — it lives in the collapsed block beside it — so the
+      // precondition is checked there instead. What the assertion is really
+      // guarding is unchanged: quote AND signature are both present, and an
+      // untouched reply carrying both still closes without a confirmation.
+      expect(body.textContent).not.toContain("Original message");
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("composer.showQuoted") }));
+      expect(screen.getByText(/Original message/)).toBeInTheDocument();
 
       pressEscape();
 

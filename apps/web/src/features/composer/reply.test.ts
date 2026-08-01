@@ -46,6 +46,7 @@ function makeEmail(overrides: Partial<EmailDetail> = {}): EmailDetail {
     references: null,
     inReplyTo: null,
     senderAuth: "unknown",
+    bodyTruncated: false,
     ...overrides,
   };
 }
@@ -607,19 +608,113 @@ describe("buildEditDraft", () => {
     ]);
   });
 
-  // GH #120, KNOWN LIMITATION: reopening a draft does not reconstruct
-  // inReplyTo/references. email.messageId is the draft's own id, not its
-  // parent's, so it must not be reused as inReplyTo here. EmailDetail now
-  // exposes the draft's own In-Reply-To header too, but wiring it into the
-  // draft-edit path is a separate behavior change, out of scope here.
-  it("leaves inReplyTo and references unset when reopening a draft (documented limitation)", () => {
-    const email = makeEmail({
-      messageId: ["draft@example.com"],
-      references: ["parent@example.com"],
-      inReplyTo: ["grandparent@example.com"],
+  // GH #146 (was the GH #120 known limitation): a reopened reply draft keeps
+  // the thread it belonged to. Unlike replyDraft these headers are restored,
+  // not derived — the draft already stores the ones that describe its own
+  // position in the thread.
+  describe("threading headers (GH #146)", () => {
+    it("restores the draft's own inReplyTo and references verbatim", () => {
+      const email = makeEmail({
+        messageId: ["draft@example.com"],
+        references: ["root@example.com", "parent@example.com"],
+        inReplyTo: ["parent@example.com"],
+      });
+      const draft = buildEditDraft(email, identities);
+      expect(draft.inReplyTo).toEqual(["parent@example.com"]);
+      expect(draft.references).toEqual(["root@example.com", "parent@example.com"]);
     });
-    const draft = buildEditDraft(email, identities);
-    expect(draft.inReplyTo).toBeUndefined();
-    expect(draft.references).toBeUndefined();
+
+    // The draft's Message-ID names the draft itself. Folding it into either
+    // header would make the reply claim to be its own parent — the exact
+    // misuse the original limitation was written to avoid.
+    it("never folds the draft's own messageId into the restored headers", () => {
+      const email = makeEmail({
+        messageId: ["draft@example.com"],
+        references: ["parent@example.com"],
+        inReplyTo: ["parent@example.com"],
+      });
+      const draft = buildEditDraft(email, identities);
+      expect(draft.inReplyTo).not.toContain("draft@example.com");
+      expect(draft.references).not.toContain("draft@example.com");
+    });
+
+    it("leaves both headers unset for a draft that was never a reply", () => {
+      const email = makeEmail({
+        messageId: ["draft@example.com"],
+        references: null,
+        inReplyTo: null,
+      });
+      const draft = buildEditDraft(email, identities);
+      expect(draft.inReplyTo).toBeUndefined();
+      expect(draft.references).toBeUndefined();
+    });
+
+    it("restores one header when the draft carries only that one", () => {
+      const email = buildEditDraft(
+        makeEmail({ messageId: null, references: null, inReplyTo: ["parent@example.com"] }),
+        identities,
+      );
+      expect(email.inReplyTo).toEqual(["parent@example.com"]);
+      expect(email.references).toBeUndefined();
+    });
+
+    // A draft written by another client against the same account is the only
+    // way to reach this builder, so its stored chain is untrusted input.
+    it("drops unsendable ids instead of losing the whole send", () => {
+      const email = makeEmail({
+        references: ["parent@example.com", "x".repeat(MAX_MESSAGE_ID_LENGTH + 1)],
+        inReplyTo: ["parent@example.com"],
+      });
+      const draft = buildEditDraft(email, identities);
+      expect(draft.references).toEqual(["parent@example.com"]);
+    });
+
+    it("trims an over-long stored chain to the entry-count limit, keeping anchor and tail", () => {
+      const references = Array.from(
+        { length: MAX_MESSAGE_ID_COUNT + 50 },
+        (_, i) => `m-${i}@example.com`,
+      );
+      const draft = buildEditDraft(makeEmail({ references }), identities);
+      expect(draft.references).toHaveLength(MAX_MESSAGE_ID_COUNT);
+      expect(draft.references?.[0]).toBe("m-0@example.com");
+      expect(draft.references?.at(-1)).toBe(`m-${MAX_MESSAGE_ID_COUNT + 49}@example.com`);
+      expect(
+        sendEmailSchema.safeParse({
+          identityId: draft.identityId,
+          to: draft.to,
+          cc: draft.cc,
+          bcc: draft.bcc,
+          subject: draft.subject,
+          textBody: "body",
+          htmlBody: draft.bodyHtml,
+          inReplyTo: draft.inReplyTo,
+          references: draft.references,
+        }).success,
+      ).toBe(true);
+    });
+  });
+});
+
+// GH #140, second half: a truncated body used to be quoted verbatim, so the
+// cut silently became part of the thread record from that reply onward.
+describe("quoting a truncated original (GH #140)", () => {
+  it("marks the quote as elided when the original body was truncated", () => {
+    const draft = replyDraft(makeEmail({ bodyTruncated: true }), identities, false);
+    expect(draft.bodyHtml).toContain("[&hellip;]");
+  });
+
+  it("adds no marker when the original was complete", () => {
+    const draft = replyDraft(makeEmail({ bodyTruncated: false }), identities, false);
+    expect(draft.bodyHtml).not.toContain("[&hellip;]");
+  });
+
+  it("places the marker inside the quote, after the quoted content", () => {
+    const draft = replyDraft(makeEmail({ bodyTruncated: true }), identities, false);
+    expect(draft.bodyHtml.indexOf("Hello")).toBeLessThan(draft.bodyHtml.indexOf("[&hellip;]"));
+    expect(draft.bodyHtml.indexOf("[&hellip;]")).toBeLessThan(draft.bodyHtml.indexOf("</blockquote>"));
+  });
+
+  it("marks a forwarded truncated original too — it quotes the same body", () => {
+    expect(forwardDraft(makeEmail({ bodyTruncated: true }), identities).bodyHtml).toContain("[&hellip;]");
   });
 });

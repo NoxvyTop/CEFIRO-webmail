@@ -301,3 +301,115 @@ describe("GET /api/mail/threads/:threadId — sender authentication (GH #136)", 
     expect(authNone?.senderAuth).toBe("unknown");
   });
 });
+
+// GH #140: JMAP marks a body value it had to cut with `isTruncated` (RFC 8621
+// §4.1.4). The router used to read only `.value` and drop that flag, so a
+// message cut at the maxBodyValueBytes budget reached the client looking
+// exactly like a message that genuinely ends there. Own stub/describe block,
+// leaving the fixtures above untouched.
+const truncatedStubJmap: JmapClient = {
+  getSession: async () => ({
+    apiUrl: "https://mail.test/jmap/",
+    accountId: "acc-1",
+    eventSourceUrl: "https://mail.test/es",
+    uploadUrl: "https://mail.test/upload/{accountId}/",
+    downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+  }),
+  request: async (_auth, _session, methodCalls) => {
+    calls = methodCalls;
+    const base = {
+      threadId: "t3",
+      mailboxIds: { mb1: true },
+      from: [{ name: "Ana", email: "ana@x.test" }],
+      to: [],
+      subject: "Long thread",
+      receivedAt: "2026-07-07T10:00:00Z",
+      preview: "",
+      keywords: {},
+      hasAttachment: false,
+      size: 10,
+      messageId: null,
+      references: null,
+      inReplyTo: null,
+    };
+    return [
+      ["Thread/get", { list: [{ id: "t3", emailIds: ["cut-html", "whole", "cut-text"] }] }, "t"],
+      [
+        "Email/get",
+        {
+          list: [
+            {
+              ...base,
+              id: "cut-html",
+              htmlBody: [{ partId: "1" }, { partId: "2" }],
+              bodyValues: {
+                "1": { value: "<p>first part</p>" },
+                // Only the SECOND part hit the ceiling — the flag has to be
+                // read per body value, not just off the first one.
+                "2": { value: "<p>cut here", isTruncated: true },
+              },
+            },
+            {
+              ...base,
+              id: "whole",
+              htmlBody: [{ partId: "3" }],
+              bodyValues: { "3": { value: "<p>complete</p>", isTruncated: false } },
+            },
+            {
+              ...base,
+              id: "cut-text",
+              textBody: [{ partId: "4" }],
+              // A server that simply omits the flag must read as "not
+              // truncated", never as unknown-and-therefore-suspect.
+              bodyValues: { "4": { value: "plain, complete" } },
+            },
+          ],
+        },
+        "g",
+      ],
+    ];
+  },
+  uploadBlob: async () => "blob-id",
+};
+
+describe("GET /api/mail/threads/:threadId — truncated bodies (GH #140)", () => {
+  it("reports a body JMAP had to cut as truncated, without losing the part it did return", async () => {
+    const res = await makeApp(truncatedStubJmap).request("/api/mail/threads/t3", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = threadDetailSchema.parse(await res.json());
+
+    const cut = body.emails.find((e) => e.id === "cut-html");
+    expect(cut?.bodyTruncated).toBe(true);
+    expect(cut?.bodyHtml).toBe("<p>first part</p><p>cut here");
+  });
+
+  it("leaves a complete body unflagged", async () => {
+    const res = await makeApp(truncatedStubJmap).request("/api/mail/threads/t3", {
+      headers: { cookie: `session=${token}` },
+    });
+    const body = threadDetailSchema.parse(await res.json());
+
+    expect(body.emails.find((e) => e.id === "whole")?.bodyTruncated).toBe(false);
+  });
+
+  it("treats an omitted isTruncated as not truncated", async () => {
+    const res = await makeApp(truncatedStubJmap).request("/api/mail/threads/t3", {
+      headers: { cookie: `session=${token}` },
+    });
+    const body = threadDetailSchema.parse(await res.json());
+
+    const plain = body.emails.find((e) => e.id === "cut-text");
+    expect(plain?.bodyTruncated).toBe(false);
+    expect(plain?.bodyText).toBe("plain, complete");
+  });
+
+  it("still asks JMAP for a bounded body budget — the flag reports the cut, it does not remove it", async () => {
+    await makeApp(truncatedStubJmap).request("/api/mail/threads/t3", {
+      headers: { cookie: `session=${token}` },
+    });
+    const [, getCall] = calls;
+    expect((getCall?.[1] as { maxBodyValueBytes: number }).maxBodyValueBytes).toBe(524288);
+  });
+});

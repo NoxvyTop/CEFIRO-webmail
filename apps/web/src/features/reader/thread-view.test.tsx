@@ -40,6 +40,7 @@ const thread: ThreadDetail = {
       references: null,
       inReplyTo: null,
       senderAuth: "unknown",
+      bodyTruncated: false,
     },
     {
       id: "e2",
@@ -62,6 +63,7 @@ const thread: ThreadDetail = {
       references: ["e1@example.com"],
       inReplyTo: ["e1@example.com"],
       senderAuth: "unknown",
+      bodyTruncated: false,
     },
   ],
 };
@@ -1091,6 +1093,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m2",
@@ -1114,6 +1117,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m3",
@@ -1137,6 +1141,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1229,6 +1234,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m2",
@@ -1252,6 +1258,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m3",
@@ -1276,6 +1283,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1377,6 +1385,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1427,6 +1436,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "n2",
@@ -1449,6 +1459,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1588,6 +1599,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "p2",
@@ -1610,6 +1622,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1637,6 +1650,7 @@ describe("ThreadView", () => {
         references: null,
         inReplyTo: null,
         senderAuth: "unknown",
+        bodyTruncated: false,
       };
     }
 
@@ -2414,5 +2428,59 @@ describe("ThreadView accessibility (GH #252)", () => {
 
     await screen.findByRole("alertdialog");
     await expectNoAxeViolations(document.body);
+  });
+});
+
+// GH #140: JMAP cut the body at the fetch budget and the flag was thrown away,
+// so the reader showed a message ending mid-sentence with nothing saying it was
+// incomplete. The notice must reach the user on whichever body path renders.
+describe("truncated body notice (GH #140)", () => {
+  function stubTruncatedThread(bodyTruncated: boolean, asPlainText = false) {
+    const state = structuredClone(thread);
+    const target = state.emails[1]!;
+    target.bodyTruncated = bodyTruncated;
+    if (!asPlainText) {
+      target.bodyHtml = "<p>A very long message that stops right here";
+      target.bodyText = null;
+    }
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+      if (url.includes("/api/mail/preferences")) {
+        return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  it("tells the user the message is incomplete when the body was truncated", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(true));
+    renderThread();
+
+    expect(await screen.findByText(i18n.t("mail.bodyTruncated.title"))).toBeInTheDocument();
+  });
+
+  it("warns that replying will carry the truncation into the thread", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(true));
+    renderThread();
+
+    expect(await screen.findByText(i18n.t("mail.bodyTruncated.hint"))).toBeInTheDocument();
+  });
+
+  it("shows the notice on the plain-text body path too, not only the HTML one", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(true, true));
+    renderThread();
+
+    expect(await screen.findByText(i18n.t("mail.bodyTruncated.title"))).toBeInTheDocument();
+  });
+
+  it("stays silent for a complete message", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(false));
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    expect(screen.queryByText(i18n.t("mail.bodyTruncated.title"))).not.toBeInTheDocument();
   });
 });

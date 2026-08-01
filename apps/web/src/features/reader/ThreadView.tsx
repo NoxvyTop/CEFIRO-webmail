@@ -840,7 +840,12 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                   <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
                 )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
-                  <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} attachments={email.attachments} />
+                  <EmailBody
+                    bodyHtml={email.bodyHtml}
+                    bodyText={email.bodyText}
+                    attachments={email.attachments}
+                    bodyTruncated={email.bodyTruncated}
+                  />
                 </div>
                 {visibleAttachments.length > 0 && (
                   <div className="mt-5">

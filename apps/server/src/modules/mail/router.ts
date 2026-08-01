@@ -61,8 +61,18 @@ type JmapEmail = {
   size?: number;
 };
 
+// Per-body-value ceiling asked of JMAP when fetching a thread. The thread
+// endpoint fetches EVERY message in the conversation in one Email/get, so this
+// bounds the whole response, not one message — which is why it stays in place
+// rather than being raised. GH #140 makes the resulting cut visible instead of
+// silent (see collectBodyValues / EmailDetail.bodyTruncated).
+const MAX_BODY_VALUE_BYTES = 524288;
+
 type JmapBodyPart = { partId: string; type?: string | null };
-type JmapBodyValue = { value: string };
+// RFC 8621 §4.1.4: isTruncated is set by the server when `value` had to be cut
+// to honour the request's maxBodyValueBytes budget. Optional because a server
+// may omit it when nothing was truncated (GH #140).
+type JmapBodyValue = { value: string; isTruncated?: boolean };
 type JmapAttachment = {
   blobId?: string;
   name?: string | null;
@@ -165,14 +175,22 @@ function toEmailSummary(email: JmapEmail): EmailSummary {
   };
 }
 
-function concatBodyValues(
+// GH #140: returns the concatenated body alongside whether JMAP reported any
+// of the parts it was assembled from as truncated. The flag used to be dropped
+// on the floor here, which is what made the 512 KB cut (see MAX_BODY_VALUE_BYTES
+// below) silent: the caller could not tell a message that ends mid-sentence
+// from one that genuinely ends there.
+function collectBodyValues(
   parts: JmapBodyPart[] | undefined,
   bodyValues: Record<string, JmapBodyValue> | undefined,
-): string | null {
+): { value: string | null; truncated: boolean } {
   const values = (parts ?? [])
-    .map((part) => bodyValues?.[part.partId]?.value)
-    .filter((value): value is string => value !== undefined);
-  return values.length === 0 ? null : values.join("");
+    .map((part) => bodyValues?.[part.partId])
+    .filter((entry): entry is JmapBodyValue => entry !== undefined);
+  return {
+    value: values.length === 0 ? null : values.map((entry) => entry.value).join(""),
+    truncated: values.some((entry) => entry.isTruncated === true),
+  };
 }
 
 function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
@@ -188,12 +206,22 @@ function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
 }
 
 function toEmailDetail(email: JmapEmailDetail): EmailDetail {
+  const html = collectBodyValues(email.htmlBody, email.bodyValues);
+  const text = collectBodyValues(email.textBody, email.bodyValues);
   return {
     ...toEmailSummary(email),
     cc: toEmailAddresses(email.cc),
     replyTo: toEmailAddresses(email.replyTo),
-    bodyHtml: concatBodyValues(email.htmlBody, email.bodyValues),
-    bodyText: concatBodyValues(email.textBody, email.bodyValues),
+    bodyHtml: html.value,
+    bodyText: text.value,
+    // GH #140: the OR of both alternatives rather than only the one the client
+    // happens to render. Which alternative that is, is the client's choice
+    // (the reader prefers HTML and falls back to text; composer/reply.ts's
+    // quotedBody does the same), so reporting per-alternative here would push
+    // the decision to the wrong layer. The asymmetry is deliberate: warning
+    // about a message that turns out to be renderable in full costs a notice,
+    // while staying quiet about a truncated one is the bug being fixed.
+    bodyTruncated: html.truncated || text.truncated,
     attachments: toAttachments(email.attachments),
     messageId: email.messageId ?? null,
     references: email.references ?? null,
@@ -844,7 +872,7 @@ export function createMailRouter(deps: MailDeps) {
           ],
           fetchHTMLBodyValues: true,
           fetchTextBodyValues: true,
-          maxBodyValueBytes: 524288,
+          maxBodyValueBytes: MAX_BODY_VALUE_BYTES,
         },
         "g",
       ],

@@ -7,6 +7,11 @@ interface EmailBodyProps {
   bodyHtml: string | null;
   bodyText: string | null;
   attachments?: AttachmentMeta[];
+  // GH #140: JMAP reported the fetched body as truncated, so bodyHtml/bodyText
+  // below are only the beginning of the real message. Optional (defaulting to
+  // "not truncated") so the many existing call sites and fixtures that predate
+  // the flag keep their meaning.
+  bodyTruncated?: boolean;
 }
 
 // Mirrors the server's SAFE_INLINE_CONTENT_TYPES image subset (see also
@@ -599,7 +604,47 @@ function useContentHeight(resetKey: string): {
   return { height, onLoad };
 }
 
-export function EmailBody({ bodyHtml, bodyText, attachments }: EmailBodyProps) {
+/**
+ * GH #140: the message the server handed us is a prefix of the real one — it
+ * exceeded the per-body budget the thread fetch asks JMAP for (see
+ * MAX_BODY_VALUE_BYTES in apps/server/src/modules/mail/router.ts) and was cut.
+ * Until this notice existed the cut was invisible: a message ending
+ * mid-sentence looked exactly like a message that ends there.
+ *
+ * It deliberately also warns about the knock-on effect, because that one is
+ * the more damaging half and the user is the only one who can avoid it —
+ * composer/reply.ts quotes whatever body it was given, so replying from a
+ * truncated message carries the truncation forward into the thread.
+ */
+function TruncatedBodyNotice() {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-2 rounded-md border border-warn/40 bg-soft px-2 py-1.5 text-xs text-warn">
+      <p className="font-semibold">{t("mail.bodyTruncated.title")}</p>
+      <p className="mt-0.5 text-muted">{t("mail.bodyTruncated.hint")}</p>
+    </div>
+  );
+}
+
+/**
+ * Thin wrapper carrying the GH #140 truncation notice above whichever of
+ * EmailBodyContent's four render paths (sandboxed HTML iframe, plain-text
+ * <pre>, trivial-HTML extraction, empty body) ends up being taken — the notice
+ * is about the body as a whole, so pinning it to one path would silently miss
+ * the others. The untruncated case returns EmailBodyContent unwrapped so the
+ * common path keeps exactly the DOM it had before.
+ */
+export function EmailBody({ bodyTruncated = false, ...props }: EmailBodyProps) {
+  if (!bodyTruncated) return <EmailBodyContent {...props} />;
+  return (
+    <div>
+      <TruncatedBodyNotice />
+      <EmailBodyContent {...props} />
+    </div>
+  );
+}
+
+function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyProps, "bodyTruncated">) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
   const [quoteRevealed, setQuoteRevealed] = useState(false);

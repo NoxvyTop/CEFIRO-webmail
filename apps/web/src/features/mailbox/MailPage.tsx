@@ -539,6 +539,23 @@ export function MailPage() {
       {composeDraft && (
         <Suspense fallback={null}>
           <Composer
+            // GH #145: useComposer consumes `initial` at mount only — the
+            // reducer seed plus every ref derived from it (the owned draft id,
+            // the last-saved fingerprint). A `compose` param that changed under
+            // a still-mounted Composer would therefore keep the previous
+            // message's state, and the dangerous part of that state is the part
+            // the user cannot see: stale inReplyTo/references would graft the
+            // new reply onto an unrelated thread and disclose that thread's
+            // Message-IDs to someone who was never in it.
+            //
+            // Keying on the param makes the whole class unreachable by
+            // construction — a different compose target is a different
+            // Composer. Remounting is safe for both draft mechanisms: the
+            // outgoing instance's unmount flush (GH #176) persists its own
+            // content against its own currentDraftIdRef, so the draft it owned
+            // is superseded rather than duplicated, and the incoming instance
+            // re-seeds every ref from its own `initial` (GH #178).
+            key={composeParam}
             initial={composeDraft}
             onClose={removeComposeParam}
             trashMailboxId={trashMailboxId}

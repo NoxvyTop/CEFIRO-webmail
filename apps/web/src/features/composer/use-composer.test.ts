@@ -418,6 +418,62 @@ describe("useComposer", () => {
     });
   });
 
+  // GH #141: the text/plain alternative of a reply must mark the quoted
+  // conversation. It used to be derived from the marker-STRIPPED html, which
+  // removed the very attribute the quote is found by, so the quote reached
+  // plain-text readers indistinguishable from what the user had just typed.
+  describe("outgoing text/plain quoting (#141)", () => {
+    const REPLY_BODY =
+      "<p>Sounds good to me.</p>" +
+      '<div data-cefiro-quote="true"><p>2026-07-01 — Alice:</p>' +
+      "<blockquote><p>Can you confirm the numbers?</p></blockquote></div>";
+
+    // These assert on the FIRST recorded payload, so the shared module-level
+    // mock (accumulated by earlier tests in this file) must start clean.
+    beforeEach(() => {
+      sendEmail.mockReset();
+    });
+
+    it("prefixes the quoted original with '>' while leaving the new text alone", async () => {
+      sendEmail.mockResolvedValueOnce({ id: "m1" });
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        bodyHtml: REPLY_BODY,
+        to: [{ name: null, email: "alice@example.com" }],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.send();
+      });
+
+      const payload = sendEmail.mock.calls[0]?.[0] as { textBody: string; htmlBody: string };
+      expect(payload.textBody).toContain("Sounds good to me.");
+      expect(payload.textBody).toContain("> Can you confirm the numbers?");
+      expect(payload.textBody).not.toContain("> Sounds good to me.");
+      // The HTML alternative is still the marker-stripped one — the two
+      // alternatives are derived from different inputs on purpose.
+      expect(payload.htmlBody).not.toContain("data-cefiro-quote");
+    });
+
+    it("leaves a brand-new message's text body unquoted", async () => {
+      sendEmail.mockResolvedValueOnce({ id: "m2" });
+      const draft: ComposerDraft = {
+        ...baseDraft(),
+        bodyHtml: "<p>Just saying hi</p>",
+        to: [{ name: null, email: "alice@example.com" }],
+      };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.send();
+      });
+
+      const payload = sendEmail.mock.calls[0]?.[0] as { textBody: string };
+      expect(payload.textBody).toBe("Just saying hi");
+    });
+  });
+
   // GH #125: saveDraft() wires composer/api.ts's saveDraft into useComposer,
   // reusing send()'s payload construction (identity, recipients, subject,
   // plain-text derivation, attachments, threading headers). GH #156: the one
@@ -798,6 +854,119 @@ describe("useComposer", () => {
       unmount();
 
       expect(saveDraftApi).not.toHaveBeenCalled();
+    });
+
+    // GH #145 keys <Composer> on the compose param, which turns "switch compose
+    // target" into unmount-then-mount. That lands directly on top of the two
+    // draft mechanisms living in this hook — the GH #176 unmount flush and GH
+    // #178 autosave — so the interaction is asserted here rather than assumed:
+    // the outgoing session must persist its own work exactly once, and the
+    // incoming one must start from its own `initial` without adopting, resaving
+    // or duplicating the previous draft.
+    describe("remount on a new compose target (GH #145)", () => {
+      function draftFor(subject: string, originalDraftId?: string): ComposerDraft {
+        return { identityId: "id1", to: [], cc: [], bcc: [], subject, bodyHtml: "", originalDraftId };
+      }
+
+      it("flushes the outgoing session's work once, then starts the new one clean", async () => {
+        saveDraftApi.mockResolvedValue({ id: "draft-alpha" });
+        const first = renderHook(() => useComposer(draftFor("Alpha")));
+
+        act(() => {
+          first.result.current.setField("bodyHtml", "<p>half-written reply to Alpha</p>");
+        });
+        // Torn down before the debounce fires, exactly as a compose-param
+        // change would tear it down.
+        first.unmount();
+
+        expect(saveDraftApi).toHaveBeenCalledTimes(1);
+        expect(saveDraftApi).toHaveBeenCalledWith(
+          expect.objectContaining({ subject: "Alpha", originalDraftId: undefined }),
+        );
+
+        const second = renderHook(() => useComposer(draftFor("Beta")));
+        expect(second.result.current.state.draft.subject).toBe("Beta");
+        expect(second.result.current.state.draft.bodyHtml).toBe("");
+        // Nothing about the new session is dirty yet, so the debounce must not
+        // fire a save for content it never authored.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+        });
+        await flushMicrotasks();
+        expect(saveDraftApi).toHaveBeenCalledTimes(1);
+      });
+
+      // The duplication hazard: the id an autosave advanced to belongs to the
+      // session that created it. A remounted composer editing a DIFFERENT
+      // message must not send that id as originalDraftId, or its first save
+      // would overwrite the previous message's draft instead of creating one.
+      it("does not carry the previous session's owned draft id into the new one", async () => {
+        saveDraftApi.mockResolvedValue({ id: "draft-alpha" });
+        const first = renderHook(() => useComposer(draftFor("Alpha")));
+
+        act(() => {
+          first.result.current.setField("bodyHtml", "<p>Alpha body</p>");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+        });
+        await flushMicrotasks();
+        expect(saveDraftApi).toHaveBeenCalledTimes(1);
+        first.unmount();
+
+        saveDraftApi.mockResolvedValue({ id: "draft-beta" });
+        const second = renderHook(() => useComposer(draftFor("Beta")));
+        act(() => {
+          second.result.current.setField("bodyHtml", "<p>Beta body</p>");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+        });
+        await flushMicrotasks();
+
+        expect(saveDraftApi).toHaveBeenCalledTimes(2);
+        expect(saveDraftApi).toHaveBeenLastCalledWith(
+          expect.objectContaining({ subject: "Beta", originalDraftId: undefined }),
+        );
+      });
+
+      // The mirror case: reopening an EXISTING draft must still supersede that
+      // draft rather than fork a copy — the remount reseeds the owned id from
+      // the new `initial`, it does not clear it.
+      it("adopts the new session's own originalDraftId when one is reopened", async () => {
+        saveDraftApi.mockResolvedValue({ id: "draft-x" });
+        const { result } = renderHook(() => useComposer(draftFor("Reopened", "draft-x")));
+
+        act(() => {
+          result.current.setField("bodyHtml", "<p>edited</p>");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+        });
+        await flushMicrotasks();
+
+        expect(saveDraftApi).toHaveBeenCalledWith(
+          expect.objectContaining({ originalDraftId: "draft-x" }),
+        );
+      });
+
+      // A remount must not resurrect a message that was already sent: the
+      // outgoing instance finalized itself, and the flush has to respect that
+      // even though the teardown now comes from a key change rather than a
+      // deliberate close.
+      it("does not flush a sent message on the teardown that follows the send", async () => {
+        sendEmail.mockResolvedValueOnce({ id: "sent-1" });
+        const { result, unmount } = renderHook(() =>
+          useComposer({ ...draftFor("Sent one"), to: [{ name: null, email: "b@example.com" }] }),
+        );
+
+        await act(async () => {
+          await result.current.send();
+        });
+        unmount();
+
+        expect(saveDraftApi).not.toHaveBeenCalled();
+      });
     });
   });
 });
