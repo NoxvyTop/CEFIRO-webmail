@@ -189,7 +189,7 @@ describe("AdminPage users table", () => {
       target: { value: "admin" },
     });
 
-    expect(await within(row).findByText(i18n.t("admin.errors.action"))).toBeInTheDocument();
+    expect(await within(row).findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });
 
   it("submits the new-user form and calls createAdminUser", async () => {

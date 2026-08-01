@@ -4,6 +4,7 @@ import { apiErrorSchema, healthResponseSchema } from "@webmail/shared";
 import { createApp } from "./app";
 import { withDeadlineFetch } from "./core/deadline";
 import { errorResponse } from "./core/error-response";
+import { DomainError } from "./core/errors";
 import { DEFAULT_HEALTH_BUDGET_MS } from "./core/health";
 import { log } from "./core/logger";
 import { createRateLimiter } from "./core/rate-limit";
@@ -67,6 +68,119 @@ describe("app", () => {
     const body = apiErrorSchema.parse(await res.json());
     expect(body.code).toBe("not_found");
     expect(body.message).toBe("errors.not_found");
+  });
+});
+
+// GH #47. Every directive here was measured against the real `vite build`
+// output served behind these exact headers, not against the dev server: the
+// bundle was loaded in a browser under this policy (nothing blocked) and again
+// under a tightened one, to find out which parts are load-bearing rather than
+// assumed. These assertions record that measurement, because a CSP that is
+// wrong in the tightening direction breaks silently, at runtime, on the
+// production build only — which is the failure mode this issue is about.
+describe("the deployed Content-Security-Policy (GH #47)", () => {
+  async function policy(): Promise<string> {
+    const res = await createApp().request("/api/health");
+    return res.headers.get("content-security-policy") ?? "";
+  }
+
+  it("never relaxes script execution", async () => {
+    const csp = await policy();
+    // The built index.html carries no inline script (apps/web/vite.config.ts
+    // fails the build if that changes), so neither of these is ever needed.
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+  });
+
+  it("keeps the inline styles the email body cannot render without", async () => {
+    // A srcdoc iframe inherits this policy, and every message body carries its
+    // own <style> plus the message's inline styles. Measured: under `style-src
+    // 'self'` the whole email renders unstyled.
+    expect(await policy()).toContain("style-src 'self' 'unsafe-inline'");
+  });
+
+  it("allows the attachment viewer's blob: object-URL iframe", async () => {
+    // Measured under `frame-src 'self'`: the browser reports a frame-src
+    // violation for `blob` and the preview does not render.
+    expect(await policy()).toContain("frame-src 'self' blob:");
+  });
+
+  it("still pins everything a self-hosted SPA has no reason to allow", async () => {
+    const csp = await policy();
+    for (const directive of [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "connect-src 'self'",
+    ]) {
+      expect(csp).toContain(directive);
+    }
+  });
+});
+
+// GH #48. The headers were applied only after `await next()` returned, so the
+// coverage depended on a thrown handler error unwinding back through this
+// middleware — which is a detail of the router, not of this app. The three
+// answers a request can end on (handler return, thrown DomainError, thrown
+// anything else) must carry the same headers, or a caller can tell which one it
+// hit from the response envelope alone.
+describe("security headers on error responses (GH #48)", () => {
+  function expectSecurityHeaders(res: Response) {
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(res.headers.get("strict-transport-security")).toContain("max-age=");
+  }
+
+  it("sets them on a DomainError answered by onError", async () => {
+    const router = new Hono().get("/boom", () => {
+      throw new DomainError("not_in_trash", 409, "errors.not_in_trash");
+    });
+
+    const res = await createApp({ mailRouter: router }).request("/api/mail/boom");
+
+    expect(res.status).toBe(409);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe("not_in_trash");
+    expectSecurityHeaders(res);
+  });
+
+  it("sets them on the 500 an unhandled error is turned into", async () => {
+    const router = new Hono().get("/boom", () => {
+      throw new Error("something nobody mapped");
+    });
+
+    // The unhandled branch of app.onError writes an `error` line; swallow it so
+    // the deliberate failure does not look like a broken run.
+    const { res } = await captureLogs(() =>
+      createApp({ mailRouter: router }).request("/api/mail/boom"),
+    );
+
+    expect(res.status).toBe(500);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe("internal");
+    expectSecurityHeaders(res);
+  });
+
+  it("sets them on the notFound envelope", async () => {
+    expectSecurityHeaders(await createApp().request("/api/nope"));
+  });
+
+  it("leaves a route's own security header alone rather than clobbering it", async () => {
+    // The attachment proxy answers with `content-security-policy: sandbox`;
+    // these are defaults, not an override.
+    const router = new Hono().get("/blob", (c) => {
+      c.header("content-security-policy", "sandbox");
+      return c.body("bytes", 200);
+    });
+
+    const res = await createApp({ mailRouter: router }).request("/api/mail/blob");
+
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 });
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { bootstrapLoginSchema } from "@webmail/shared";
+import { bootstrapLoginSchema, type AuthErrorCode } from "@webmail/shared";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
@@ -81,6 +81,38 @@ function errorFields(error: unknown): { errorClass: string; errorCode?: string }
   if (error instanceof DomainError) return { errorClass: error.name, errorCode: error.code };
   if (error instanceof Error) return { errorClass: error.name };
   return { errorClass: typeof error };
+}
+
+/**
+ * The login-screen redirect for a failed callback (GH #232).
+ *
+ * Typed against AUTH_ERROR_CODES in @webmail/shared rather than taking a bare
+ * string, so a new failure cause cannot be redirected with a code the login
+ * screen has no message for — the whole failure this issue is about. Adding one
+ * means adding it to the shared list, which is what the web-side coverage walk
+ * (features/auth/auth-errors.test.tsx) reads.
+ */
+function authErrorRedirect(c: { redirect: (url: string) => Response }, code: AuthErrorCode) {
+  return c.redirect(`/?auth_error=${code}`);
+}
+
+/**
+ * Which login-screen code a failed callback deserves.
+ *
+ * Only the unverified-address refusal is named. It is the one cause the person
+ * in front of the browser can actually act on — their IdP asserts the address
+ * but has not verified it, and no amount of retrying will change that — so
+ * answering "sign-in could not be completed" leaves them looping on a login
+ * that cannot succeed (GH #46). Everything else stays generic on purpose: an
+ * IdP outage, a wrong client secret, a skewed clock or a Postgres failure are
+ * operator problems, and naming them to an unauthenticated caller would only
+ * hand out a map of this deployment's internals. They are already distinguished
+ * where it helps — the `stage` in the log line and the audit row (GH #237).
+ */
+function callbackErrorCode(error: unknown): AuthErrorCode {
+  return error instanceof DomainError && error.code === "oidc_email_unverified"
+    ? "oidc_email_unverified"
+    : "oidc";
 }
 
 // Rate limit for the break-glass bootstrap login, keyed by client IP.
@@ -297,7 +329,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
   router.get("/callback", async (c) => {
     const { ssoConfig, masterKey, appUrl, users, audit } = deps;
     if (!ssoConfig || !masterKey || !appUrl || !users || !audit) {
-      return c.redirect("/?auth_error=oidc");
+      return authErrorRedirect(c, "oidc");
     }
     const sealed = getCookie(c, OIDC_STATE_COOKIE);
     const stored = sealed ? await openState(masterKey, sealed) : null;
@@ -305,7 +337,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     const code = c.req.query("code");
     deleteCookie(c, OIDC_STATE_COOKIE, { path: "/" });
     if (!stored || !state || !code || stored.state !== state) {
-      return c.redirect("/?auth_error=state");
+      return authErrorRedirect(c, "state");
     }
     // Advanced before each step so the catch below can name the one that broke
     // (GH #237). A mutable marker rather than a try/catch per call: it keeps the
@@ -314,7 +346,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     let stage: CallbackStage = "sso_config";
     try {
       const sso = await ssoConfig.get();
-      if (!sso) return c.redirect("/?auth_error=oidc");
+      if (!sso) return authErrorRedirect(c, "oidc");
       stage = "discovery";
       const endpoints = await oidc.discover(sso.issuer);
       stage = "token_exchange";
@@ -337,7 +369,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       let user = await users.findByEmail(email);
       if (user && !user.active) {
         await audit.record({ actor: email, action: "login.denied_archived" });
-        return c.redirect("/?auth_error=account_archived");
+        return authErrorRedirect(c, "account_archived");
       }
       if (!user) {
         // JIT provisioning: first SSO login creates the app-side row.
@@ -383,7 +415,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         // turn a diagnosable OIDC failure into a bare 500 from app.onError.
         log("error", "oidc callback audit write failed", errorFields(auditError));
       }
-      return c.redirect("/?auth_error=oidc");
+      return authErrorRedirect(c, callbackErrorCode(error));
     }
   });
 

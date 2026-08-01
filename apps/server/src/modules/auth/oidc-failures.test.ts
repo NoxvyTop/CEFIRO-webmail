@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AUTH_ERROR_CODES } from "@webmail/shared";
 import { createApp } from "../../app";
 import { DomainError } from "../../core/errors";
 import { importMasterKey } from "../credentials/crypto";
@@ -303,5 +304,74 @@ describe("oidc callback failure logging (GH #237)", () => {
     expect(res.headers.get("location")).toBe("/?auth_error=oidc");
     expect(failureLine(lines)).toMatchObject({ stage: "user_lookup" });
     expect(lines.some((line) => line.msg === "oidc callback audit write failed")).toBe(true);
+  });
+});
+
+// GH #46 and #232. A failed callback answers with a redirect, so the only thing
+// the login screen has to go on is this one query parameter — and every code
+// emitted here must be in AUTH_ERROR_CODES (@webmail/shared), which is what the
+// web-side walk in features/auth/auth-errors.test.tsx reads.
+describe("the auth_error the callback redirects with", () => {
+  it("names an unverified IdP address rather than the generic failure (GH #46)", async () => {
+    // The one cause the person in front of the browser can act on: their
+    // provider asserts the address but has not verified it, so retrying the
+    // generic "sign-in could not be completed" can never succeed.
+    const app = makeApp({
+      oidc: {
+        createVerifier: () => () =>
+          Promise.reject(
+            new DomainError("oidc_email_unverified", 403, "errors.oidc_email_unverified"),
+          ),
+      },
+    });
+
+    let res!: Response;
+    await captureLogs(async () => {
+      res = await callback(app);
+    });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?auth_error=oidc_email_unverified");
+  });
+
+  it("keeps every other cause generic, so an outage names nothing about this deployment", async () => {
+    const app = makeApp({
+      oidc: {
+        createVerifier: () => () =>
+          Promise.reject(new DomainError("oidc_email_missing", 502, "errors.oidc_email_missing")),
+      },
+    });
+
+    let res!: Response;
+    await captureLogs(async () => {
+      res = await callback(app);
+    });
+
+    expect(res.headers.get("location")).toBe("/?auth_error=oidc");
+  });
+
+  it("only ever emits a code the login screen knows (GH #232)", async () => {
+    // The archived-account redirect is the one that was missing a message.
+    const archivedApp = makeApp({ users: { findByEmail: async () => ({ ...user, active: false }) } });
+    const brokenApp = makeApp({
+      oidc: { exchangeCode: () => Promise.reject(new TypeError("fetch failed")) },
+    });
+
+    let responses!: Response[];
+    await captureLogs(async () => {
+      responses = [
+        await archivedApp.request("/api/auth/callback?code=abc"),
+        await callback(archivedApp),
+        await callback(brokenApp),
+      ];
+    });
+
+    const codes = responses.map(
+      (res) => new URL(res.headers.get("location")!, APP_URL).searchParams.get("auth_error"),
+    );
+    expect(codes).toEqual(["state", "account_archived", "oidc"]);
+    for (const code of codes) {
+      expect(AUTH_ERROR_CODES).toContain(code);
+    }
   });
 });

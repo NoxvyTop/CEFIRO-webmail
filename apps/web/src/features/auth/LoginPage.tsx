@@ -4,11 +4,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authModeSchema, type AuthMode } from "@webmail/shared";
 import { bootstrapLogin } from "./useAuth";
+import { errorMessageKey } from "../../app/errorMessages";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { MoonIcon, SunIcon } from "../../app/ui/icons";
 import { useTheme } from "../../app/ui/useTheme";
 
-const KNOWN_ERRORS = new Set(["state", "unknown_user", "oidc"]);
 const SSO_LOGIN_URL = "/api/auth/login";
 // Purely a visual beat before the real redirect (spec: "~1.4s") — the actual
 // navigation still happens via window.location, just delayed so the
@@ -95,8 +95,8 @@ export function LoginPage() {
         <h1 className="mb-1.5 text-[19px] font-bold tracking-[0.32em] text-ink">CÉFIRO</h1>
         <p className="mb-8 text-[13.5px] text-muted">{t("auth.subtitle")}</p>
       </div>
-      {error && KNOWN_ERRORS.has(error) && (
-        <p role="alert" className="mb-4 text-sm text-danger">{t(`auth.errors.${error}`)}</p>
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">{t(errorMessageKey("auth", error))}</p>
       )}
       <div className="flex w-full max-w-[400px] flex-col rounded-2xl border border-line bg-panel p-7 shadow-card">
         {mode?.bootstrapMode !== true && (

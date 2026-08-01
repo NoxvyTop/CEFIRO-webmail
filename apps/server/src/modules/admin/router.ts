@@ -172,18 +172,23 @@ export function createAdminRouter(deps: AdminDeps) {
       return errorResponse(c, "not_found", 404);
     }
     const isDemotion = target.role === "admin" && parsed.data.role !== "admin";
-    if (isDemotion) {
-      if (c.get("user").userId === id) {
-        return errorResponse(c, "self_demotion", 409);
-      }
-      if (target.active && (await deps.users.countActiveAdmins()) <= 1) {
-        return errorResponse(c, "last_admin", 409);
-      }
+    // Self-demotion is about who is asking, not about how many admins exist, so
+    // it stays out here: no concurrent request can change the answer.
+    if (isDemotion && c.get("user").userId === id) {
+      return errorResponse(c, "self_demotion", 409);
     }
-    const updated = await deps.users.setRole(id, parsed.data.role);
-    if (!updated) {
+    // The last-admin half, in contrast, is a count — and a count read outside
+    // the write's transaction is worth nothing under concurrency (GH #45). The
+    // repo re-reads the target under the same lock, so the `target` above is
+    // only used for the two checks that are safe to make from a stale read.
+    const result = await deps.users.setRoleGuarded(id, parsed.data.role);
+    if (result.outcome === "last_admin") {
+      return errorResponse(c, "last_admin", 409);
+    }
+    if (result.outcome === "not_found") {
       return errorResponse(c, "not_found", 404);
     }
+    const updated = result.user;
     await deps.audit.record({
       actor: c.get("user").email,
       action: "user.role_change",
@@ -225,17 +230,20 @@ export function createAdminRouter(deps: AdminDeps) {
       if (!target) {
         return errorResponse(c, "not_found", 404);
       }
+      // Who is asking — safe to answer from a read outside the write, unlike
+      // the last-admin count, which the repo now takes under lock (GH #45).
       if (c.get("user").userId === id) {
         return errorResponse(c, "self_archive", 409);
       }
-      if (target.role === "admin" && target.active && (await deps.users.countActiveAdmins()) <= 1) {
-        return errorResponse(c, "last_admin", 409);
-      }
     }
-    const updated = await deps.users.setActive(id, parsed.data.active);
-    if (!updated) {
+    const result = await deps.users.setActiveGuarded(id, parsed.data.active);
+    if (result.outcome === "last_admin") {
+      return errorResponse(c, "last_admin", 409);
+    }
+    if (result.outcome === "not_found") {
       return errorResponse(c, "not_found", 404);
     }
+    const updated = result.user;
     if (parsed.data.active) {
       await deps.audit.record({
         actor: c.get("user").email,

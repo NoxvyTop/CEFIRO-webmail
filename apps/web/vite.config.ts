@@ -1,10 +1,48 @@
 /// <reference types="vitest/config" />
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+// A <script> with no src, i.e. one whose body is inline in the HTML.
+const INLINE_SCRIPT = /<script(?![^>]*\bsrc=)[^>]*>/i;
+
+/**
+ * Fails the production build if Vite emits an inline <script> (GH #47).
+ *
+ * The server ships `script-src 'self'` with no nonce and no hash (see
+ * DEFAULT_CSP in apps/server/src/app.ts), so an inline bootstrap script would be
+ * refused by the browser — and refused the way CSP refuses things: silently, at
+ * runtime, on the production build only, on a blank page with a console message
+ * nobody is watching. Nothing about the current output emits one, which is
+ * exactly why this is worth pinning: it is a property of Vite's HTML emission,
+ * not of any code in this repo, so it can change under us on a version bump.
+ *
+ * Checked here rather than in a test because the artefact only exists after a
+ * build, and this is the one place that is guaranteed to run for every build
+ * that could be deployed.
+ */
+function assertNoInlineScripts(): Plugin {
+  return {
+    name: "cefiro:assert-no-inline-scripts",
+    enforce: "post",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (!fileName.endsWith(".html") || output.type !== "asset") continue;
+        if (!INLINE_SCRIPT.test(String(output.source))) continue;
+        this.error(
+          `${fileName} contains an inline <script>, which the deployed ` +
+            "Content-Security-Policy (script-src 'self', no nonce/hash) blocks. " +
+            "Move the code into the bundle, or add a nonce/hash to DEFAULT_CSP " +
+            "in apps/server/src/app.ts — see GH #47.",
+        );
+      }
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), assertNoInlineScripts()],
   server: {
     proxy: { "/api": "http://localhost:8080" },
     watch: process.env.CHOKIDAR_USEPOLLING

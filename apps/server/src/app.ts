@@ -84,26 +84,61 @@ export type CreateAppOptions = {
   contactsRouter?: Hono<any>;
 };
 
-// Default Content-Security-Policy for the self-hosted SPA. There are no
-// inline scripts: the theme init runs in the bundle before React mounts
-// (themeInit.ts, first import of main.tsx), so `script-src 'self'` needs no
-// allowlist. Email bodies render in a sandboxed srcdoc iframe and opted-in
-// remote images need `img-src ... https:`.
+// Default Content-Security-Policy for the self-hosted SPA.
+//
+// GH #47 verified this against the REAL `vite build` output rather than against
+// the dev server, by serving `apps/web/dist` behind these exact headers and
+// loading it in a browser. What that measured, directive by directive, is
+// recorded below — the point being that "this is what the bundle needs" used to
+// be an assumption, and a CSP that is wrong in the tightening direction fails
+// silently, at runtime, in production only.
 const DEFAULT_CSP = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
   "frame-ancestors 'none'",
   "form-action 'self'",
+  // No nonce and no hash because the built HTML has no inline script at all:
+  // the theme init runs inside the bundle before React mounts (themeInit.ts,
+  // first import of main.tsx). Confirmed against dist/index.html, and now
+  // enforced at build time — apps/web/vite.config.ts fails the build if Vite
+  // ever emits one, rather than letting the browser discover it.
+  //
+  // This also covers the pdf.js web worker: `worker-src` falls back to
+  // `script-src`, and Vite emits the worker as a same-origin asset
+  // (assets/pdf.worker.min-*.mjs), so it constructs under 'self' with no extra
+  // directive. pdf.js additionally probes for `eval` (FeatureTest
+  // .isEvalSupported) and falls back to its own interpreter when refused, which
+  // is why there is deliberately no 'unsafe-eval' here — the one CSP report the
+  // production console shows is that probe being turned down, as intended.
   "script-src 'self'",
+  // 'unsafe-inline' is load-bearing and cannot be dropped: a `srcdoc` iframe
+  // inherits THIS policy, and every rendered email body carries an inline
+  // <style> block of its own (the paper background, ink colour and font in
+  // reader/EmailBody.tsx) plus whatever inline styles the message itself uses —
+  // HTML email is inline styling almost by definition. Measured under
+  // `style-src 'self'`: the email iframe's <style> and every style="" attribute
+  // inside it stop applying, so mail renders unstyled.
+  //
+  // Note this is NOT needed for React's own `style={{…}}`, which assigns
+  // through the CSSOM rather than writing the attribute as a string and is
+  // therefore outside CSP's reach — verified: the logo animations still applied
+  // with 'unsafe-inline' removed. The email body is the whole reason.
   "style-src 'self' 'unsafe-inline'",
+  // `data:` for inline images (avatars, the seal), `blob:` for the attachment
+  // preview object URLs, `https:` for the remote images a reader has opted into
+  // per message (reader/sanitize.ts strips them otherwise).
   "img-src 'self' data: blob: https:",
   // The in-app attachment viewer fetches a preview blob and frames it via a
   // same-origin `blob:` object URL (image/pdf only). Without `blob:` here,
   // frame-src falls back to default-src 'self' and the browser blocks the
-  // object-URL iframe ("this content is blocked"). Safe: object URLs are
-  // created only from server-verified previewable types, never text/html.
+  // object-URL iframe ("this content is blocked") — reproduced under a
+  // tightened policy, which reported exactly that violation. Safe: object URLs
+  // are created only from server-verified previewable types, never text/html.
   "frame-src 'self' blob:",
+  // The app's own fonts are same-origin assets, so 'self' alone covers the
+  // bundle. `data:` is for message content: an email's @font-face can carry the
+  // face inline, and a data: URL is inert bytes rather than a fetch to anywhere.
   "font-src 'self' data:",
   "connect-src 'self'",
 ].join("; ");
@@ -142,16 +177,28 @@ export function createApp(options: CreateAppOptions = {}) {
     const startedAt = Date.now();
     c.set("traceId", traceId);
     c.header("x-trace-id", traceId);
-    // GH #219: every log line written while this request runs — including the
-    // ones deep in core/deadline.ts, the JMAP routes, the sieve sync and the AI
-    // adapter — carries this traceId, without threading a logger through every
-    // signature. See core/logger.ts.
-    await withLogContext({ traceId }, () => next());
-    // Apply global security headers as defaults only: route-specific headers
-    // (e.g. the attachment proxy's `content-security-policy: sandbox`) are set
-    // during the handler and must not be clobbered here.
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-      if (!c.res.headers.has(name)) c.res.headers.set(name, value);
+    try {
+      // GH #219: every log line written while this request runs — including the
+      // ones deep in core/deadline.ts, the JMAP routes, the sieve sync and the
+      // AI adapter — carries this traceId, without threading a logger through
+      // every signature. See core/logger.ts.
+      await withLogContext({ traceId }, () => next());
+    } finally {
+      // Apply global security headers as defaults only: route-specific headers
+      // (e.g. the attachment proxy's `content-security-policy: sandbox`) are set
+      // during the handler and must not be clobbered here.
+      //
+      // In a `finally` (GH #48) so an unwinding request cannot skip them. Hono's
+      // compose() happens to catch a thrown handler error at the dispatch level
+      // BELOW this middleware and answer it through app.onError, so today the
+      // straight-line version would still run — but that is an internal of the
+      // router, not a guarantee this app makes. A response that leaves without
+      // CSP/HSTS/nosniff because a handler threw is precisely the case where the
+      // headers are least affordable to lose, so the guarantee is made here and
+      // pinned by the "thrown error" tests in app.test.ts.
+      for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+        if (!c.res.headers.has(name)) c.res.headers.set(name, value);
+      }
     }
     // The status is known only here, and every response passes through —
     // handler returns, hand-built error envelopes, notFound and onError alike.

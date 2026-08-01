@@ -56,6 +56,15 @@ type ProfileRow = {
   avatar_data_url: string | null;
 };
 
+/**
+ * Result of a write that must never leave the instance without an active admin
+ * (GH #45). `last_admin` means the guard refused; the row was not touched.
+ */
+export type GuardedUpdate =
+  | { outcome: "updated"; user: UserRecord }
+  | { outcome: "not_found" }
+  | { outcome: "last_admin" };
+
 export function createUsersRepo(sql: Db) {
   return {
     async findByEmail(email: string): Promise<UserRecord | null> {
@@ -170,6 +179,87 @@ export function createUsersRepo(sql: Db) {
         select count(*)::text as count from users where role = 'admin' and active = true
       `;
       return Number(rows[0]!.count);
+    },
+    // GH #45: the two writes that can remove the last active admin, each done
+    // as ONE transaction that locks the active-admin set before it counts it.
+    //
+    // The guard used to be `countActiveAdmins()` in the route followed by a
+    // separate `setRole`/`setActive`, which is a textbook TOCTOU: two requests
+    // demoting or archiving two DIFFERENT admins both read count = 2, both pass,
+    // and the instance ends with zero admins and nobody able to let anyone back
+    // in. The count is only meaningful if nothing can change it between reading
+    // it and acting on it, which is what the transaction below buys.
+    //
+    // `for update` on `role = 'admin' and active = true` rather than a
+    // conditional `update ... where (select count(*) …) > 1`: under READ
+    // COMMITTED that subquery would be evaluated from each statement's own
+    // snapshot, so both concurrent statements would still see 2. Locking the
+    // rows makes the second transaction WAIT for the first to commit, and
+    // Postgres then re-evaluates the search condition against the newly
+    // committed row version — so the admin the first request just demoted drops
+    // out of this result set and the second request sees the 1 that is now true.
+    //
+    // The set is locked in a deterministic order (`order by id`) so two of these
+    // running at once can never take the same rows in opposite orders and
+    // deadlock. A concurrent transaction that ADDS an admin is not serialized
+    // against (it inserts a row this lock cannot see), which is harmless: more
+    // admins can only make the guard refuse something it could have allowed,
+    // never allow something it should have refused.
+    async setRoleGuarded(id: string, role: UserRole): Promise<GuardedUpdate> {
+      return sql.begin(async (tx) => {
+        const admins = await tx<{ id: string }[]>`
+          select id from users
+          where role = 'admin' and active = true
+          order by id
+          for update
+        `;
+        const rows = await tx<UserRow[]>`
+          select id, email, display_name, role, locale, active
+          from users where id = ${id} for update
+        `;
+        const target = rows[0];
+        if (!target) return { outcome: "not_found" };
+        const isDemotion = target.role === "admin" && role !== "admin";
+        if (isDemotion && target.active && admins.length <= 1) {
+          return { outcome: "last_admin" };
+        }
+        const updated = await tx<UserRow[]>`
+          update users set role = ${role} where id = ${id}
+          returning id, email, display_name, role, locale, active
+        `;
+        return updated[0]
+          ? { outcome: "updated", user: toRecord(updated[0]) }
+          : { outcome: "not_found" };
+      });
+    },
+    // The archive half of the same guard — see setRoleGuarded above for why the
+    // lock is what makes the count mean anything. Reactivating (active = true)
+    // can only ever add an admin, so it takes the same path without the refusal.
+    async setActiveGuarded(id: string, active: boolean): Promise<GuardedUpdate> {
+      return sql.begin(async (tx) => {
+        const admins = await tx<{ id: string }[]>`
+          select id from users
+          where role = 'admin' and active = true
+          order by id
+          for update
+        `;
+        const rows = await tx<UserRow[]>`
+          select id, email, display_name, role, locale, active
+          from users where id = ${id} for update
+        `;
+        const target = rows[0];
+        if (!target) return { outcome: "not_found" };
+        if (!active && target.role === "admin" && target.active && admins.length <= 1) {
+          return { outcome: "last_admin" };
+        }
+        const updated = await tx<UserRow[]>`
+          update users set active = ${active} where id = ${id}
+          returning id, email, display_name, role, locale, active
+        `;
+        return updated[0]
+          ? { outcome: "updated", user: toRecord(updated[0]) }
+          : { outcome: "not_found" };
+      });
     },
     async setDisplayName(id: string, displayName: string): Promise<void> {
       await sql`update users set display_name = ${displayName} where id = ${id}`;

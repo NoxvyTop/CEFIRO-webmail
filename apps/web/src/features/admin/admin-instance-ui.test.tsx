@@ -91,6 +91,6 @@ describe("AdminPage instance settings panel (GH #86)", () => {
     const toggle = await screen.findByLabelText(i18n.t("admin.settings.footer.label"));
     fireEvent.click(toggle);
 
-    expect(await screen.findByText(i18n.t("admin.errors.action"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });
 });
