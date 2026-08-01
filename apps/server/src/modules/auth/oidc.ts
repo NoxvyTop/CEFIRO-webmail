@@ -15,6 +15,42 @@ function base64Url(bytes: Uint8Array): string {
     .replaceAll("=", "");
 }
 
+export function oidcUnavailable(): DomainError {
+  return new DomainError("oidc_unavailable", 502, "errors.oidc_unavailable");
+}
+
+/**
+ * Wraps `fetchFn` so a transport failure reaching the identity provider —
+ * connection refused, reset, DNS error, TLS failure — surfaces as 502
+ * `oidc_unavailable` rather than propagating raw.
+ *
+ * The twin of withStalwartTransportErrors (infra/stalwart/jmap.ts), for the same
+ * defect on the other dependency (GH #236, after #187 and #211 fixed it for
+ * Stalwart). Both files only ever mapped `!res.ok` to a 502, and a transport
+ * failure never produces a response to inspect: fetch REJECTS, withDeadlineFetch
+ * rethrows anything that is not its own deadline (core/deadline.ts), and the
+ * `TypeError` sailed past every mapping into app.onError. An IdP that is simply
+ * down came back as 500 `internal` — this server blaming itself for a third
+ * party — and was logged as "unhandled error", which is the bucket the real
+ * bugs are supposed to be alone in.
+ *
+ * A DomainError already in flight passes through untouched: the 504
+ * `upstream_timeout` that withDeadlineFetch raises (GH #165) is a correct
+ * dependency error with its own status, and "the provider accepted the
+ * connection then went silent" must not be flattened into "could not reach the
+ * provider".
+ */
+export function withOidcTransportErrors(fetchFn: typeof fetch): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      return await fetchFn(input, init);
+    } catch (err) {
+      if (err instanceof DomainError) throw err;
+      throw oidcUnavailable();
+    }
+  }) as typeof fetch;
+}
+
 export async function discover(
   issuer: string,
   fetchFn: typeof fetch = fetch,
@@ -22,7 +58,12 @@ export async function discover(
   timeoutMs: number = DEFAULT_OIDC_TIMEOUT_MS,
 ): Promise<OidcEndpoints> {
   const wellKnown = `${issuer.replace(/\/$/, "")}/.well-known/openid-configuration`;
-  const res = await withDeadlineFetch(fetchFn, "oidc", timeoutMs)(wellKnown);
+  // Deadline first, transport mapping outermost: the deadline's DomainError has
+  // to reach the wrapper as a DomainError so it passes through as 504 instead of
+  // being relabelled `oidc_unavailable`.
+  const res = await withOidcTransportErrors(withDeadlineFetch(fetchFn, "oidc", timeoutMs))(
+    wellKnown,
+  );
   if (!res.ok) {
     throw new DomainError("oidc_discovery_failed", 502, "errors.oidc_discovery_failed");
   }
@@ -77,10 +118,14 @@ export async function exchangeCode(input: {
   /** Outbound deadline — see core/deadline.ts (GH #165). */
   timeoutMs?: number;
 }): Promise<{ idToken: string }> {
-  const fetchFn = withDeadlineFetch(
-    input.fetchFn ?? fetch,
-    "oidc",
-    input.timeoutMs ?? DEFAULT_OIDC_TIMEOUT_MS,
+  // Same layering as discover above: an unreachable token endpoint is 502
+  // `oidc_unavailable`, a silent one stays 504 `upstream_timeout`.
+  const fetchFn = withOidcTransportErrors(
+    withDeadlineFetch(
+      input.fetchFn ?? fetch,
+      "oidc",
+      input.timeoutMs ?? DEFAULT_OIDC_TIMEOUT_MS,
+    ),
   );
   const res = await fetchFn(input.tokenEndpoint, {
     method: "POST",

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config";
+import { loadConfig, MIN_BOOTSTRAP_PASSWORD_LENGTH } from "./config";
+
+/** A break-glass credential of the shape GH #235 asks the operator to set. */
+const BOOTSTRAP_PASSWORD = "A".repeat(MIN_BOOTSTRAP_PASSWORD_LENGTH);
 
 const validEnv = {
   DATABASE_URL: "postgres://u:p@localhost:5434/db",
@@ -33,15 +36,19 @@ describe("loadConfig", () => {
       ...validEnv,
       PORT: "9000",
       BOOTSTRAP_MODE: "true",
+      BOOTSTRAP_PASSWORD,
       SESSION_TTL_HOURS: "2",
     });
     expect(config.port).toBe(9000);
     expect(config.bootstrapMode).toBe(true);
+    expect(config.bootstrapPassword).toBe(BOOTSTRAP_PASSWORD);
     expect(config.sessionTtlHours).toBe(2);
   });
 
   it("accepts BOOTSTRAP_MODE=1 as true", () => {
-    expect(loadConfig({ ...validEnv, BOOTSTRAP_MODE: "1" }).bootstrapMode).toBe(true);
+    expect(
+      loadConfig({ ...validEnv, BOOTSTRAP_MODE: "1", BOOTSTRAP_PASSWORD }).bootstrapMode,
+    ).toBe(true);
   });
 
   it("rejects a missing MASTER_KEY", () => {
@@ -461,6 +468,65 @@ describe("loadConfig", () => {
         "/app/apps/web/dist",
       );
       expect(loadConfig({ ...validEnv, STATIC_DIR: "" }).staticDir).toBe("../web/dist");
+    });
+  });
+
+  // GH #259: the same defect one variable later. METRICS_TOKEN was read
+  // straight from process.env inside createApp, so it never passed through
+  // here — and a misspelled name produced a 404 indistinguishable from
+  // "metrics deliberately off", which is how monitoring disappears unnoticed.
+  describe("METRICS_TOKEN", () => {
+    it("is absent by default, which is what leaves /metrics unregistered", () => {
+      expect(loadConfig(validEnv).metricsToken).toBeUndefined();
+    });
+
+    it("reads METRICS_TOKEN", () => {
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "scrape-token" }).metricsToken).toBe(
+        "scrape-token",
+      );
+    });
+
+    it("treats an empty or whitespace-only token as absent, never as a secret", () => {
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "" }).metricsToken).toBeUndefined();
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "   " }).metricsToken).toBeUndefined();
+    });
+
+    it("trims a token that picked up whitespace from a compose file", () => {
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "  tok  " }).metricsToken).toBe("tok");
+    });
+  });
+
+  // GH #235: the break-glass credential is the operator's to set now — the
+  // process used to mint one and print it to the log stream in plaintext.
+  describe("BOOTSTRAP_PASSWORD (GH #235)", () => {
+    it("refuses to boot with BOOTSTRAP_MODE=true and no credential", () => {
+      expect(() => loadConfig({ ...validEnv, BOOTSTRAP_MODE: "true" })).toThrow(
+        /BOOTSTRAP_PASSWORD/,
+      );
+    });
+
+    it("refuses a credential shorter than the secret it replaces", () => {
+      expect(() =>
+        loadConfig({
+          ...validEnv,
+          BOOTSTRAP_MODE: "true",
+          BOOTSTRAP_PASSWORD: "A".repeat(MIN_BOOTSTRAP_PASSWORD_LENGTH - 1),
+        }),
+      ).toThrow(/BOOTSTRAP_PASSWORD/);
+    });
+
+    it("accepts exactly the minimum length", () => {
+      expect(
+        loadConfig({ ...validEnv, BOOTSTRAP_MODE: "true", BOOTSTRAP_PASSWORD }).bootstrapPassword,
+      ).toBe(BOOTSTRAP_PASSWORD);
+    });
+
+    it("does not require one — or reject a leftover one — with the mode off", () => {
+      expect(loadConfig(validEnv).bootstrapPassword).toBeUndefined();
+      expect(
+        loadConfig({ ...validEnv, BOOTSTRAP_MODE: "false", BOOTSTRAP_PASSWORD: "short" })
+          .bootstrapMode,
+      ).toBe(false);
     });
   });
 });

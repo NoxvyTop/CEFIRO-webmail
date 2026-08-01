@@ -1,16 +1,20 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createRateLimiter } from "../../core/rate-limit";
 import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
-import { createUsersRepo } from "../../infra/repos/users";
-import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
-import { createSsoConfigRepo } from "../../infra/repos/sso-config";
-import { createAuditRepo } from "../../infra/repos/audit";
+import { createUsersRepo, type UsersRepo } from "../../infra/repos/users";
+import {
+  createMailCredentialsRepo,
+  type MailCredentialsRepo,
+} from "../../infra/repos/mail-credentials";
+import { createSsoConfigRepo, type SsoConfigRepo } from "../../infra/repos/sso-config";
+import { createAuditRepo, type AuditRepo } from "../../infra/repos/audit";
 import { importMasterKey } from "../credentials/crypto";
 import { createApp } from "../../app";
 import { createBootstrap } from "./bootstrap";
+import type { SetupCompletion } from "./completion";
 import { createSetupRouter } from "./router";
 
 const sql = createDb(testDatabaseUrl());
@@ -18,12 +22,25 @@ let masterKey: CryptoKey;
 let bootstrap: ReturnType<typeof createBootstrap>;
 let app: ReturnType<typeof createApp>;
 
+// Operator-set break-glass credential (GH #235): the process no longer mints
+// one, so a bootstrap that is meant to be enabled has to be handed a secret.
+// It doubles as the setup token, exactly as in a real deployment.
+const BOOTSTRAP_PASSWORD = "test-bootstrap-secret-0123456789";
+
+// GH #234. Every test below exercises a setup that has NOT finished, which the
+// completion latch has to be told explicitly: the suite shares one database
+// across every test file, so whether an active admin and an SSO row happen to
+// exist by the time this file runs depends on file order, not on anything
+// asserted here. The latch's own behaviour is covered in the describe at the
+// bottom, against the real createSetupCompletion.
+const MID_SETUP: SetupCompletion = { isComplete: async () => false };
+
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
   masterKey = await importMasterKey(
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
-  bootstrap = createBootstrap(true);
+  bootstrap = createBootstrap(true, BOOTSTRAP_PASSWORD);
   app = createApp({
     setupRouter: createSetupRouter({
       bootstrap,
@@ -31,6 +48,7 @@ beforeAll(async () => {
       mailCredentials: createMailCredentialsRepo(sql, masterKey),
       ssoConfig: createSsoConfigRepo(sql, masterKey),
       audit: createAuditRepo(sql),
+      completion: MID_SETUP,
     }),
   });
 });
@@ -39,6 +57,8 @@ afterAll(() => sql.end());
 describe("setup api", () => {
   it("is invisible when bootstrap mode is off", async () => {
     const off = createApp({
+      // No `completion` here on purpose: a router built the way index.ts builds
+      // it, deriving the latch from its own repositories.
       setupRouter: createSetupRouter({
         bootstrap: createBootstrap(false),
         users: createUsersRepo(sql),
@@ -129,6 +149,7 @@ describe("setup api hardening", () => {
         ssoConfig: createSsoConfigRepo(sql, masterKey),
         audit: createAuditRepo(sql),
         rateLimiter: createRateLimiter({ limit, windowMs: 60_000 }),
+        completion: MID_SETUP,
       }),
     });
   }
@@ -199,5 +220,117 @@ describe("setup api hardening", () => {
       body: "{ not json",
     });
     expect(res.status).toBe(400);
+  });
+});
+
+// GH #234. The env flag used to be the only gate, so a `BOOTSTRAP_MODE=true`
+// left on in production kept an unauthenticated privilege-escalation path open
+// forever. These build the router the way index.ts does — no injected
+// completion — so the real createSetupCompletion runs against repositories
+// whose state the test states outright, instead of whatever the shared database
+// happens to hold when this file runs.
+describe("setup completion latch (GH #234)", () => {
+  function latchApp(state: { activeAdmins: number; ssoConfigured: boolean }) {
+    const users = {
+      countActiveAdmins: async () => state.activeAdmins,
+      count: async () => state.activeAdmins,
+    } as unknown as UsersRepo;
+    const ssoConfig = {
+      exists: async () => state.ssoConfigured,
+    } as unknown as SsoConfigRepo;
+    const audit = { record: vi.fn(async () => {}) };
+    const app = createApp({
+      setupRouter: createSetupRouter({
+        bootstrap,
+        users,
+        mailCredentials: {} as unknown as MailCredentialsRepo,
+        ssoConfig,
+        audit: audit as unknown as AuditRepo,
+      }),
+    });
+    return { app, audit, state };
+  }
+
+  /** A request carrying the real, valid setup token. */
+  function withToken(app: ReturnType<typeof createApp>, path: string, init: RequestInit = {}) {
+    return app.request(path, {
+      ...init,
+      headers: { "x-setup-token": bootstrap.password!, "content-type": "application/json" },
+    });
+  }
+
+  it("refuses a completed instance even though BOOTSTRAP_MODE is still on", async () => {
+    // The whole point: `bootstrap.enabled` is true here, and the caller holds
+    // the real token. It is the second gate that shuts the door — on the two
+    // routes that hand out the instance (repoint the IdP, mint an admin) as
+    // much as on the harmless one.
+    const { app } = latchApp({ activeAdmins: 1, ssoConfigured: true });
+    expect(bootstrap.enabled).toBe(true);
+
+    expect((await withToken(app, "/api/setup/status")).status).toBe(404);
+
+    const sso = await withToken(app, "/api/setup/sso", {
+      method: "PUT",
+      body: JSON.stringify({
+        issuer: "https://attacker.test",
+        clientId: "theirs",
+        clientSecret: "theirs",
+        scopes: "openid email",
+      }),
+    });
+    expect(sso.status).toBe(404);
+
+    const user = await withToken(app, "/api/setup/users", {
+      method: "POST",
+      body: JSON.stringify({
+        email: "intruder@noxvytop.com",
+        displayName: "Intruder",
+        role: "admin",
+        mailPassword: "mailbox-pass-123",
+      }),
+    });
+    expect(user.status).toBe(404);
+  });
+
+  it("stays open while setup is unfinished: an admin but no SSO yet", async () => {
+    const { app } = latchApp({ activeAdmins: 1, ssoConfigured: false });
+    expect((await withToken(app, "/api/setup/status")).status).toBe(200);
+  });
+
+  it("stays open with SSO configured but no active admin to sign in as", async () => {
+    // The instance an operator is recovering: SSO exists, every admin is
+    // archived. Closing here would leave nobody able to reach the console.
+    const { app } = latchApp({ activeAdmins: 0, ssoConfigured: true });
+    expect((await withToken(app, "/api/setup/status")).status).toBe(200);
+  });
+
+  it("closes the moment the second condition lands, mid-session", async () => {
+    const { app, state } = latchApp({ activeAdmins: 0, ssoConfigured: true });
+    expect((await withToken(app, "/api/setup/status")).status).toBe(200);
+
+    state.activeAdmins = 1;
+
+    expect((await withToken(app, "/api/setup/status")).status).toBe(404);
+  });
+
+  it("is one-way: deleting the SSO row under a running server does not reopen it", async () => {
+    const { app, state } = latchApp({ activeAdmins: 1, ssoConfigured: true });
+    expect((await withToken(app, "/api/setup/status")).status).toBe(404);
+
+    state.ssoConfigured = false;
+    state.activeAdmins = 0;
+
+    expect((await withToken(app, "/api/setup/status")).status).toBe(404);
+  });
+
+  it("refuses ahead of the token check, so a closed router writes no audit rows", async () => {
+    const { app, audit } = latchApp({ activeAdmins: 1, ssoConfigured: true });
+    const res = await app.request("/api/setup/status", {
+      headers: { "x-setup-token": "wrong", "x-forwarded-for": "203.0.113.99" },
+    });
+    // Same answer as a router that was never enabled: no 401 to tell a probe
+    // that a setup API exists here, and no `setup.auth_failed` row to flood.
+    expect(res.status).toBe(404);
+    expect(audit.record).not.toHaveBeenCalled();
   });
 });

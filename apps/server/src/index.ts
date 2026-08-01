@@ -5,7 +5,8 @@ import { loadConfig, type AppConfig } from "./core/config";
 import { log } from "./core/logger";
 import { registerServer } from "./core/idle-timeout";
 import { createShutdown, installProcessHandlers } from "./core/shutdown";
-import { createDb } from "./infra/db/client";
+import { createDb, DATABASE_UNAVAILABLE_CODE } from "./infra/db/client";
+import { DomainError } from "./core/errors";
 import { checkDb } from "./infra/db/health";
 import { checkStalwart } from "./infra/stalwart/health";
 import { migrate } from "./infra/db/migrate";
@@ -62,7 +63,70 @@ const db = createDb(config.databaseUrl, {
   idleTimeoutS: config.dbIdleTimeoutS,
   statementTimeoutMs: config.dbStatementTimeoutMs,
 });
-await migrate(db, fileURLToPath(new URL("../migrations", import.meta.url)));
+
+// Boot steps that talk to Postgres fail like the config load and the keyring do
+// (GH #257): one JSON line naming the cause, exit 1. They used to be bare
+// top-level awaits, so a wrong DATABASE_URL or a database that had not finished
+// starting killed the process with a raw stack trace matching none of the causes
+// docs/OPERATIONS.md lists — and the container restarted straight into the same
+// trace, which is a crash loop with no diagnosis in it.
+//
+// A container almost always starts before its database, so a CONNECTION failure
+// is retried with a bounded exponential backoff (1+2+4+8+16 = 31s of waiting)
+// before giving up: enough to outlast a Postgres still opening its listener,
+// short enough that a genuinely wrong DATABASE_URL still surfaces within the
+// deploy window rather than hanging. Anything else — a migration that throws, a
+// role without permission — is not transient and fails on the FIRST attempt:
+// retrying it only delays the log line the operator needs.
+const DB_BOOT_ATTEMPTS = 6;
+const DB_BOOT_BACKOFF_MS = 1_000;
+const DB_BOOT_BACKOFF_CAP_MS = 16_000;
+const DB_UNAVAILABLE_MSG = "database unavailable at startup";
+
+function isDbUnavailable(error: unknown): boolean {
+  // createDb wraps transport failures as a 503 DomainError (infra/db/client.ts);
+  // the raw socket error only reaches here if something bypasses that wrapper.
+  if (error instanceof DomainError) return error.code === DATABASE_UNAVAILABLE_CODE;
+  return false;
+}
+
+async function bootDbStep<T>(step: string, run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      const unavailable = isDbUnavailable(error);
+      if (!unavailable || attempt >= DB_BOOT_ATTEMPTS) {
+        log("error", unavailable ? DB_UNAVAILABLE_MSG : `${step} failed`, {
+          step,
+          attempts: attempt,
+          error: String(error),
+          ...(unavailable
+            ? {
+                hint:
+                  "check DATABASE_URL, that Postgres is up and reachable from this " +
+                  "container, and that its role and database exist",
+              }
+            : {}),
+        });
+        process.exit(1);
+      }
+      const retryInMs = Math.min(DB_BOOT_BACKOFF_MS * 2 ** (attempt - 1), DB_BOOT_BACKOFF_CAP_MS);
+      log("warn", "database not reachable yet, retrying", {
+        step,
+        attempt,
+        of: DB_BOOT_ATTEMPTS,
+        retryInMs,
+        error: String(error),
+      });
+      await Bun.sleep(retryInMs);
+    }
+  }
+}
+
+await bootDbStep("database migration", () =>
+  migrate(db, fileURLToPath(new URL("../migrations", import.meta.url))),
+);
 
 // The keyring encrypts with MASTER_KEY at MASTER_KEY_VERSION and keeps the
 // retired keys listed in MASTER_KEY_PREVIOUS so rows written before a rotation
@@ -84,7 +148,9 @@ try {
 // A keyring that cannot decrypt what is already stored must fail here, at
 // boot, instead of failing per user at runtime the first time each one
 // reaches for their mail.
-const uncoveredKeyVersions = await findUncoveredKeyVersions(db, keyring);
+const uncoveredKeyVersions = await bootDbStep("key version scan", () =>
+  findUncoveredKeyVersions(db, keyring),
+);
 if (uncoveredKeyVersions.length > 0) {
   log("error", "master key ring cannot decrypt stored rows", {
     uncovered: uncoveredKeyVersions,
@@ -106,7 +172,7 @@ const filterRules = createFilterRulesRepo(db);
 const sieveSyncState = createSieveSyncStateRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
-const bootstrap = createBootstrap(config.bootstrapMode);
+const bootstrap = createBootstrap(config.bootstrapMode, config.bootstrapPassword);
 const jmap = config.stalwartUrl
   ? createJmapClient({
       baseUrl: config.stalwartUrl,
@@ -163,11 +229,16 @@ const oidcClient: OidcClient = {
     createIdTokenVerifier({ issuer, clientId, keySource: remoteKeySource(jwksUri) }),
 };
 
+// The warning stays — an instance running with the break-glass door open is
+// worth a line in every startup — but the credential does NOT (GH #235). It
+// used to be logged here in plaintext at `warn`, which put a working admin
+// password into `docker logs`, into whatever aggregator collects them, and into
+// the retention window of both, valid for the whole life of the process and
+// readable by everyone with log access. The operator sets `BOOTSTRAP_PASSWORD`
+// now (modules/setup/bootstrap.ts), so they already have it and this process
+// has nothing to deliver.
 if (bootstrap.enabled) {
-  log("warn", "bootstrap mode active", {
-    user: "bootstrap-admin",
-    password: bootstrap.password,
-  });
+  log("warn", "bootstrap mode active", { user: "bootstrap-admin" });
 }
 
 // Health checks wired into /api/health (GH #197). Stalwart is probed only when
@@ -184,6 +255,8 @@ if (config.stalwartUrl) {
 const app = createApp({
   checks,
   maxBodyBytes: config.maxBodyBytes,
+  // From the validated schema, not a second read of the environment (GH #259).
+  metricsToken: config.metricsToken,
   instanceSettings,
   authRouter: createAuthRouter({
     sessions,

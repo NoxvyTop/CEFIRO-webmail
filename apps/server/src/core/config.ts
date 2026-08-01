@@ -39,6 +39,15 @@ const WEAK_MASTER_KEY_ENVS = new Set(["development", "test"]);
 // (the "buffer a 100 MB body" vector this closes) without breaking real bodies.
 export const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
+// Shortest break-glass credential `BOOTSTRAP_MODE=true` will boot with (GH
+// #235). It is the length of the secret this server used to generate for the
+// operator — 18 random bytes rendered base64url — so the move from "the process
+// mints it and prints it to the log" to "the operator sets it" cannot quietly
+// become a downgrade in strength. It guards the bootstrap login AND the setup
+// API, both reachable unauthenticated, so a memorable password is not an
+// option; the runbook says to generate one.
+export const MIN_BOOTSTRAP_PASSWORD_LENGTH = 24;
+
 // A deadline of 0 or a fraction of a millisecond would abort every outbound
 // call before it started, so those are configuration errors, not tuning.
 const timeoutMsSchema = z.coerce.number().int().positive();
@@ -68,6 +77,12 @@ const configSchema = z.object({
   // development so local/test runs over http keep working unchanged.
   nodeEnv: z.string().min(1).default("development"),
   bootstrapMode: z.boolean(),
+  // The break-glass credential, supplied by the operator (GH #235). Optional
+  // here and required by the superRefine below only when `bootstrapMode` is on,
+  // because it is meaningless otherwise: with the flag off there is no
+  // bootstrap login and no setup API for it to unlock. See
+  // modules/setup/bootstrap.ts for why the process no longer mints its own.
+  bootstrapPassword: z.string().optional(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
   stalwartUrl: z.string().url().optional(),
   // Some reverse-proxied Stalwart deployments advertise an internal or
@@ -120,6 +135,16 @@ const configSchema = z.object({
   // the environment at the call site before, which meant an empty STATIC_DIR
   // was accepted and served nothing.
   staticDir: z.string().min(1).default(DEFAULT_STATIC_DIR),
+  // Bearer token that unlocks /metrics (GH #208), validated here rather than
+  // read from the environment inside createApp (GH #259) — the same defect
+  // GH #218 closed for four other variables. Optional, and deliberately so:
+  // with no token the endpoint is not registered at all. But the read had to
+  // move here, because a MISSPELLED variable name produced exactly the same
+  // 404 as "metrics are deliberately off", so monitoring could vanish with
+  // nothing anywhere saying it had. Now the value a deployment configures
+  // travels through the one schema the rest of the contract goes through, and
+  // `min(1)` refuses an empty string instead of unlocking an endpoint with it.
+  metricsToken: z.string().min(1).optional(),
 }).superRefine((config, ctx) => {
   // GH #223: MASTER_KEY was only ever checked for LENGTH, so the key shipped in
   // docker-compose.dev.yml (`dev-master-key-dev-master-key-01`, base64) passed
@@ -148,6 +173,26 @@ const configSchema = z.object({
           `MASTER_KEY is unusable with NODE_ENV=${config.nodeEnv}: ${weakness}. ` +
           "Generate one with `bun apps/server/scripts/generate-master-key.ts`; " +
           "never copy the key from docker-compose.dev.yml or any example.",
+      });
+    }
+  }
+  // GH #235: `BOOTSTRAP_MODE=true` opens an unauthenticated login and the whole
+  // setup API on one shared secret. That secret is now the operator's to set,
+  // so a bootstrap boot without a usable one must not start — the alternative,
+  // starting with the door open and no key, is the worst of both. Refusing at
+  // boot is the same contract every other required variable here has: a
+  // half-configured deployment fails while someone is watching it.
+  if (config.bootstrapMode) {
+    const password = config.bootstrapPassword ?? "";
+    if (password.length < MIN_BOOTSTRAP_PASSWORD_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["bootstrapPassword"],
+        message:
+          "BOOTSTRAP_MODE=true requires BOOTSTRAP_PASSWORD, at least " +
+          `${MIN_BOOTSTRAP_PASSWORD_LENGTH} characters long. Generate one ` +
+          "(`openssl rand -base64 24`), keep it in the same secret store as " +
+          "MASTER_KEY, and remove it when you set BOOTSTRAP_MODE back to false.",
       });
     }
   }
@@ -209,6 +254,10 @@ export function loadConfig(
     appUrl: env.APP_URL,
     nodeEnv: env.NODE_ENV || undefined,
     bootstrapMode: env.BOOTSTRAP_MODE === "true" || env.BOOTSTRAP_MODE === "1",
+    // Not trimmed: leading/trailing whitespace is a legitimate part of a
+    // generated secret, and silently rewriting the credential an operator
+    // configured would make it fail to verify with nothing to look at.
+    bootstrapPassword: env.BOOTSTRAP_PASSWORD || undefined,
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
     stalwartUrl: env.STALWART_URL || undefined,
     jmapForceBase: env.JMAP_FORCE_BASE === "true" || env.JMAP_FORCE_BASE === "1",
@@ -228,6 +277,10 @@ export function loadConfig(
     shutdownGraceMs: env.SHUTDOWN_GRACE_MS || undefined,
     shutdownDbTimeoutMs: env.SHUTDOWN_DB_TIMEOUT_MS || undefined,
     staticDir: env.STATIC_DIR || undefined,
+    // Trimmed before validation: an operator who writes `METRICS_TOKEN=` (or a
+    // stray space) in a compose file has not configured a token, and must not
+    // get the endpoint unlocked by whitespace.
+    metricsToken: env.METRICS_TOKEN?.trim() || undefined,
   });
   return { ...parsed, isProduction: parsed.nodeEnv === "production" };
 }

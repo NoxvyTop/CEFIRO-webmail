@@ -12,6 +12,10 @@ import { createBootstrap, type Bootstrap } from "../setup/bootstrap";
 
 const sql = createDb(testDatabaseUrl());
 
+// Operator-set break-glass credential (GH #235): the process no longer mints
+// one, so a bootstrap that is meant to be enabled has to be handed a secret.
+const BOOTSTRAP_PASSWORD = "test-bootstrap-secret-0123456789";
+
 function cookieValue(res: Response, name: string): string | null {
   for (const line of res.headers.getSetCookie()) {
     if (line.startsWith(`${name}=`)) return line.split(";")[0]!.slice(name.length + 1);
@@ -39,7 +43,7 @@ afterAll(() => sql.end());
 
 describe("bootstrap login", () => {
   it("logs in the bootstrap admin and issues an admin session", async () => {
-    const boot = createBootstrap(true);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
     const app = makeApp(boot);
     const res = await app.request("/api/auth/bootstrap", {
       method: "POST",
@@ -55,7 +59,7 @@ describe("bootstrap login", () => {
   });
 
   it("rejects a wrong credential", async () => {
-    const boot = createBootstrap(true);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
     const res = await makeApp(boot).request("/api/auth/bootstrap", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -74,8 +78,21 @@ describe("bootstrap login", () => {
     expect(res.status).toBe(404);
   });
 
+  // GH #235: the credential is the operator's to set now, and a bootstrap flag
+  // with nothing behind it must fail SAFE — no door rather than a door with an
+  // unknown key. core/config.ts refuses to boot in this state; this pins what
+  // the module itself does if it is ever reached anyway.
+  it("stays shut when bootstrap mode is on but no credential was configured", async () => {
+    const res = await makeApp(createBootstrap(true, undefined)).request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "x", password: "" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
   it("400 on invalid body", async () => {
-    const boot = createBootstrap(true);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
     const res = await makeApp(boot).request("/api/auth/bootstrap", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -85,7 +102,7 @@ describe("bootstrap login", () => {
   });
 
   it("reuses the reserved admin row on repeat login", async () => {
-    const boot = createBootstrap(true);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
     const app = makeApp(boot);
     await app.request("/api/auth/bootstrap", {
       method: "POST",

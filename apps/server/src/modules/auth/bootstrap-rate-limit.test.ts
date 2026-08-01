@@ -12,6 +12,10 @@ import type { SessionStore } from "./sessions";
 // calls — the whole point of GH #183 is that a rate-limited request must write
 // ZERO audit rows.
 
+// Operator-set break-glass credential (GH #235): the process no longer mints
+// one, so a bootstrap that is meant to be enabled has to be handed a secret.
+const BOOTSTRAP_PASSWORD = "test-bootstrap-secret-0123456789";
+
 function fakeAudit() {
   return { record: vi.fn(async (_entry: AuditEntry) => {}) };
 }
@@ -75,7 +79,7 @@ function post(app: ReturnType<typeof makeApp>, password: string, ip?: string) {
 describe("bootstrap login rate limiting", () => {
   it("returns 429 with Retry-After once an IP exceeds the limit", async () => {
     const audit = fakeAudit();
-    const app = makeApp({ boot: createBootstrap(true), audit, limit: 3 });
+    const app = makeApp({ boot: createBootstrap(true, BOOTSTRAP_PASSWORD), audit, limit: 3 });
 
     for (let i = 0; i < 3; i++) {
       const res = await post(app, "wrong", "10.0.0.1");
@@ -91,7 +95,7 @@ describe("bootstrap login rate limiting", () => {
 
   it("writes NO audit row for a 429'd request", async () => {
     const audit = fakeAudit();
-    const app = makeApp({ boot: createBootstrap(true), audit, limit: 3 });
+    const app = makeApp({ boot: createBootstrap(true, BOOTSTRAP_PASSWORD), audit, limit: 3 });
 
     for (let i = 0; i < 3; i++) await post(app, "wrong", "10.0.0.2");
     // The three allowed failures each recorded exactly one login_failed row.
@@ -108,7 +112,7 @@ describe("bootstrap login rate limiting", () => {
 
   it("does not block a different IP", async () => {
     const audit = fakeAudit();
-    const app = makeApp({ boot: createBootstrap(true), audit, limit: 3 });
+    const app = makeApp({ boot: createBootstrap(true, BOOTSTRAP_PASSWORD), audit, limit: 3 });
 
     for (let i = 0; i < 4; i++) await post(app, "wrong", "10.0.0.3");
     // A fresh IP still has its own budget: it fails auth (401), it is not 429'd.
@@ -118,7 +122,7 @@ describe("bootstrap login rate limiting", () => {
 
   it("still lets a correct password through within the limit", async () => {
     const audit = fakeAudit();
-    const boot = createBootstrap(true);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
     const app = makeApp({ boot, audit, limit: 3 });
 
     const res = await post(app, boot.password ?? "", "10.0.0.4");

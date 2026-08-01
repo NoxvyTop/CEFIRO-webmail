@@ -6,6 +6,8 @@ import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UsersRepo } from "../../infra/repos/users";
 import type { Bootstrap } from "../setup/bootstrap";
 import { errorResponse } from "../../core/error-response";
+import { DomainError } from "../../core/errors";
+import { log } from "../../core/logger";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import { evictMailSession } from "../mail/context";
 import { SESSION_COOKIE, requireSession, type AuthVariables } from "./middleware";
@@ -38,7 +40,47 @@ export type OidcClient = {
   }): (idToken: string) => Promise<{ email: string }>;
 };
 
+// TEMP local demo tweak (do NOT commit; revert after review): point the emergency
+// login at the seeded mailbox account so it lands on real mail + the admin console.
 const BOOTSTRAP_ADMIN_EMAIL = "bootstrap-admin@webmail.local";
+
+/**
+ * The steps of the OIDC callback, in order (GH #237).
+ *
+ * Every one of them could fail, and every failure landed on the same
+ * `?auth_error=oidc` redirect and the same `login.failed` audit row with actor
+ * `"system"` — an IdP that is down, a clock out of skew, a wrong client secret,
+ * a JWKS that would not load and a Postgres error inside `users.create` were
+ * one indistinguishable outcome. A login incident in production had literally
+ * nothing to read. This is what makes them tell each other apart.
+ */
+type CallbackStage =
+  | "sso_config"
+  | "discovery"
+  | "token_exchange"
+  | "id_token"
+  | "user_lookup"
+  | "user_provision"
+  | "session";
+
+/**
+ * What is safe to publish about a caught error: its class, plus the code when
+ * it is one of ours.
+ *
+ * Deliberately NOT the message. The class alone already separates the causes
+ * that matter — `JWTExpired` (clock skew) from `JWSSignatureVerificationFailed`
+ * (wrong key) from `JWKSNoMatchingKey` from `DomainError`+`oidc_unavailable`
+ * (provider unreachable) from `PostgresError` — while a message is
+ * attacker-influenced text of unknown provenance travelling into the log
+ * stream, and the one thing this flow handles is an id_token. Nothing here can
+ * carry a token, a client secret or a password, which is the property that has
+ * to hold no matter what upstream library throws next.
+ */
+function errorFields(error: unknown): { errorClass: string; errorCode?: string } {
+  if (error instanceof DomainError) return { errorClass: error.name, errorCode: error.code };
+  if (error instanceof Error) return { errorClass: error.name };
+  return { errorClass: typeof error };
+}
 
 // Rate limit for the break-glass bootstrap login, keyed by client IP.
 //
@@ -208,7 +250,12 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         return errorResponse(c, "invalid_body", 400);
       }
       body = parsed.data;
-    } catch {
+    } catch (error) {
+      // GH #237: the class of the parse failure, at `debug` because an
+      // unreadable body is a client mistake and not something an operator
+      // should be paged about — but it is no longer thrown away, so raising
+      // LOG_LEVEL is enough to see it when a client claims it is sending JSON.
+      log("debug", "bootstrap login body unreadable", errorFields(error));
       return errorResponse(c, "invalid_body", 400);
     }
     const ok = await bootstrap.verify(body.password);
@@ -253,10 +300,17 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     if (!stored || !state || !code || stored.state !== state) {
       return c.redirect("/?auth_error=state");
     }
+    // Advanced before each step so the catch below can name the one that broke
+    // (GH #237). A mutable marker rather than a try/catch per call: it keeps the
+    // happy path readable as the straight line it is, and every failure still
+    // leaves the flow at exactly one place.
+    let stage: CallbackStage = "sso_config";
     try {
       const sso = await ssoConfig.get();
       if (!sso) return c.redirect("/?auth_error=oidc");
+      stage = "discovery";
       const endpoints = await oidc.discover(sso.issuer);
+      stage = "token_exchange";
       const { idToken } = await oidc.exchangeCode({
         tokenEndpoint: endpoints.tokenEndpoint,
         clientId: sso.clientId,
@@ -265,12 +319,14 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         redirectUri: `${appUrl}/api/auth/callback`,
         verifier: stored.verifier,
       });
+      stage = "id_token";
       const verify = oidc.createVerifier({
         jwksUri: endpoints.jwksUri,
         issuer: sso.issuer,
         clientId: sso.clientId,
       });
       const { email } = await verify(idToken);
+      stage = "user_lookup";
       let user = await users.findByEmail(email);
       if (user && !user.active) {
         await audit.record({ actor: email, action: "login.denied_archived" });
@@ -278,10 +334,12 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       }
       if (!user) {
         // JIT provisioning: first SSO login creates the app-side row.
+        stage = "user_provision";
         const displayName = email.split("@")[0] ?? email;
         user = await users.create({ email, displayName });
         await audit.record({ actor: email, action: "user.jit_created" });
       }
+      stage = "session";
       const ttl = deps.sessionTtlHours ?? 12;
       const { token } = await deps.sessions.create(user.id, ttl);
       setCookie(c, SESSION_COOKIE, token, {
@@ -297,8 +355,27 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         ip: c.req.header("x-forwarded-for"),
       });
       return c.redirect("/");
-    } catch {
-      await audit.record({ actor: "system", action: "login.failed" });
+    } catch (error) {
+      const failure = errorFields(error);
+      // Written BEFORE the audit row on purpose: when the failure IS Postgres,
+      // the row cannot be written and this line is the only trace the incident
+      // leaves. It carries the ambient traceId from app.ts (GH #219), so the
+      // `x-trace-id` the browser was handed on the failed redirect leads
+      // straight to the stage that broke. `warn`, not `error`: an IdP outage or
+      // a skewed clock is a real failure but not this server malfunctioning.
+      log("warn", "oidc callback failed", { stage, ...failure });
+      try {
+        await audit.record({
+          actor: "system",
+          action: "login.failed",
+          detail: { stage, ...failure },
+        });
+      } catch (auditError) {
+        // A failed audit write must not become the response: the user is owed
+        // the login-failed redirect either way, and letting this throw would
+        // turn a diagnosable OIDC failure into a bare 500 from app.onError.
+        log("error", "oidc callback audit write failed", errorFields(auditError));
+      }
       return c.redirect("/?auth_error=oidc");
     }
   });
