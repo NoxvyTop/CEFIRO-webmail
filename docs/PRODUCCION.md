@@ -84,9 +84,15 @@ fallback.
 
 ## Conexión Céfiro↔Stalwart (#188)
 
-Resuelta y documentada: la conexión es una sola (JMAP sobre `STALWART_URL`; el
-navegador nunca toca Stalwart), con la topología de contenedores en la misma red.
-Ver [ARCHITECTURE.md](ARCHITECTURE.md).
+Resuelta e implementada (#33/#34/#35): la conexión es una sola (JMAP sobre
+`JMAP_URL`; el navegador nunca toca el proveedor), el modo explícito
+`JMAP_URL_MODE=rewrite|trust` sustituye al viejo booleano `JMAP_FORCE_BASE` con
+`rewrite` por defecto, la confianza TLS para una CA interna se resuelve con
+`NODE_EXTRA_CA_CERTS` (sin perilla propia y **sin ningún modo `insecure`**), y
+el arranque deja una sonda `jmap provider probe` en el log sin fallar duro.
+Las dos topologías con su env exacto y la matriz A×B están en
+[OPERATIONS.md](OPERATIONS.md#topologías-de-conexión-al-proveedor-jmap-188);
+la arquitectura, en [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Fuera de alcance de esta hoja de ruta
 

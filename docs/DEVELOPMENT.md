@@ -78,9 +78,19 @@ Sigue funcionando: `docker compose -f docker-compose.dev.yml up -d postgres`,
 luego `bun --watch src/index.ts` en `apps/server` (con `DATABASE_URL` del
 `.env`) y `bunx vite` en `apps/web`.
 
-## Correo (Stalwart)
+## Correo (proveedor JMAP)
 
-La API de correo usa la variable `STALWART_URL` (URL interna del servidor
-JMAP). Sin ella, los endpoints de correo responden 503
-`mail_not_configured` — útil en desarrollo sin un Stalwart accesible. Los
-tests no necesitan Stalwart: usan un cliente JMAP simulado.
+La API de correo usa la variable `JMAP_URL` (URL del servidor JMAP; Stalwart en
+nuestros despliegues). Sin ella, los endpoints de correo responden 503
+`mail_not_configured` — útil en desarrollo sin un proveedor accesible. Los
+tests no necesitan uno: usan un cliente JMAP simulado.
+
+Dos perillas más, ambas con un valor por defecto que sirve para el caso normal
+(detalle y matriz de topologías en [OPERATIONS.md](OPERATIONS.md)):
+
+- `JMAP_URL_MODE` (`rewrite` por defecto) — reescribe el origen de las URLs que
+  el proveedor anuncia en su sesión al de `JMAP_URL`. `trust` las usa tal cual.
+- `JMAP_AUTH_MODE` (`basic` por defecto) — `bearer` para proveedores con token.
+
+`STALWART_URL` y `STALWART_TIMEOUT_MS` se siguen leyendo con un aviso en el
+arranque; `JMAP_FORCE_BASE` se retiró y se ignora (#33/#34).

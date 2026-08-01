@@ -313,8 +313,8 @@ jobs:
           # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set
           # during the original setup wizard run — see
           # e2e/stalwart/README.md). That host doesn't resolve here, so a
-          # client following the advertised apiUrl verbatim (as
-          # apps/server/src/infra/stalwart/jmap.ts does) cannot reach it.
+          # client following the advertised apiUrl verbatim cannot reach it
+          # (which is what apps/server does under JMAP_URL_MODE=trust).
           # STALWART_PUBLIC_URL overrides the advertised base URL
           # (crates/store/src/registry/local.rs); it must point at this
           # service's own name and container-native port — the only address

@@ -1,6 +1,6 @@
 import type { FilterRule, VacationSettings } from "@webmail/shared";
 import { DomainError } from "../../core/errors";
-import type { JmapAuth, JmapClient, JmapSession } from "../../infra/stalwart/jmap";
+import type { JmapAuth, JmapClient, JmapSession } from "../../infra/jmap/client";
 import { generateSieveScript } from "./generator";
 
 export const SIEVE_CAPABILITY = "urn:ietf:params:jmap:sieve";

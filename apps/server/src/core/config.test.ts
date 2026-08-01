@@ -145,29 +145,100 @@ describe("loadConfig", () => {
     });
   });
 
-  it("parses optional STALWART_URL and treats empty as undefined", () => {
-    expect(loadConfig(validEnv).stalwartUrl).toBeUndefined();
-    expect(loadConfig({ ...validEnv, STALWART_URL: "" }).stalwartUrl).toBeUndefined();
-    expect(
-      loadConfig({ ...validEnv, STALWART_URL: "https://mail.noxvytop.com" }).stalwartUrl,
-    ).toBe("https://mail.noxvytop.com");
+  it("parses optional JMAP_URL and treats empty as undefined", () => {
+    expect(loadConfig(validEnv).jmapUrl).toBeUndefined();
+    expect(loadConfig({ ...validEnv, JMAP_URL: "" }).jmapUrl).toBeUndefined();
+    expect(loadConfig({ ...validEnv, JMAP_URL: "https://mail.noxvytop.com" }).jmapUrl).toBe(
+      "https://mail.noxvytop.com",
+    );
   });
 
-  describe("JMAP_FORCE_BASE (off by default)", () => {
-    it("defaults jmapForceBase to false when JMAP_FORCE_BASE is absent", () => {
-      expect(loadConfig(validEnv).jmapForceBase).toBe(false);
+  // GH #33. The old names keep working, loudly: an upgrade must not silently
+  // boot with no mail backend just because a variable was renamed.
+  describe("renamed variables (GH #33)", () => {
+    it("still reads STALWART_URL, and says so", () => {
+      const config = loadConfig({ ...validEnv, STALWART_URL: "https://mail.noxvytop.com" });
+      expect(config.jmapUrl).toBe("https://mail.noxvytop.com");
+      expect(config.deprecations).toEqual([
+        expect.objectContaining({ variable: "STALWART_URL" }),
+      ]);
+      expect(config.deprecations[0]?.message).toContain("JMAP_URL");
     });
 
-    it("parses JMAP_FORCE_BASE=true the same way BOOTSTRAP_MODE is parsed", () => {
-      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "true" }).jmapForceBase).toBe(true);
+    it("still reads STALWART_TIMEOUT_MS, and says so", () => {
+      const config = loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "2500" });
+      expect(config.jmapTimeoutMs).toBe(2500);
+      expect(config.deprecations).toEqual([
+        expect.objectContaining({ variable: "STALWART_TIMEOUT_MS" }),
+      ]);
     });
 
-    it("parses JMAP_FORCE_BASE=1 as true", () => {
-      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "1" }).jmapForceBase).toBe(true);
+    it("prefers the new name when both are set, and says the old one is ignored", () => {
+      const config = loadConfig({
+        ...validEnv,
+        STALWART_URL: "https://old.noxvytop.com",
+        JMAP_URL: "https://mail.noxvytop.com",
+      });
+      expect(config.jmapUrl).toBe("https://mail.noxvytop.com");
+      expect(config.deprecations[0]?.message).toContain("ignored");
     });
 
-    it("treats any other JMAP_FORCE_BASE value as false", () => {
-      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "yes" }).jmapForceBase).toBe(false);
+    it("reports nothing when only the new names are used", () => {
+      expect(loadConfig({ ...validEnv, JMAP_URL: "https://mail.noxvytop.com" }).deprecations)
+        .toEqual([]);
+    });
+  });
+
+  // GH #34 / design GH #188. `rewrite` replaces the JMAP_FORCE_BASE boolean AND
+  // flips its default, so the removed variable has to be announced, not mapped.
+  describe("JMAP_URL_MODE (rewrite by default)", () => {
+    it("defaults to rewrite when JMAP_URL_MODE is absent", () => {
+      expect(loadConfig(validEnv).jmapUrlMode).toBe("rewrite");
+    });
+
+    it("accepts trust", () => {
+      expect(loadConfig({ ...validEnv, JMAP_URL_MODE: "trust" }).jmapUrlMode).toBe("trust");
+    });
+
+    it("normalises case and surrounding whitespace", () => {
+      expect(loadConfig({ ...validEnv, JMAP_URL_MODE: " Trust " }).jmapUrlMode).toBe("trust");
+    });
+
+    it("refuses to boot on an unknown mode instead of silently choosing one", () => {
+      expect(() => loadConfig({ ...validEnv, JMAP_URL_MODE: "auto" })).toThrow();
+    });
+
+    it("ignores JMAP_FORCE_BASE and reports its removal", () => {
+      const config = loadConfig({ ...validEnv, JMAP_FORCE_BASE: "false" });
+      expect(config.jmapUrlMode).toBe("rewrite");
+      expect(config.deprecations).toEqual([
+        expect.objectContaining({ variable: "JMAP_FORCE_BASE" }),
+      ]);
+      expect(config.deprecations[0]?.message).toContain("JMAP_URL_MODE");
+    });
+
+    it("says nothing about JMAP_FORCE_BASE when it is not set", () => {
+      expect(loadConfig(validEnv).deprecations).toEqual([]);
+    });
+  });
+
+  // GH #35. Off-by-default in the only sense that matters: `basic` is what
+  // every existing deployment already does.
+  describe("JMAP_AUTH_MODE (basic by default)", () => {
+    it("defaults to basic when JMAP_AUTH_MODE is absent", () => {
+      expect(loadConfig(validEnv).jmapAuthMode).toBe("basic");
+    });
+
+    it("accepts bearer", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTH_MODE: "bearer" }).jmapAuthMode).toBe("bearer");
+    });
+
+    it("normalises case and surrounding whitespace", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTH_MODE: " Bearer " }).jmapAuthMode).toBe("bearer");
+    });
+
+    it("refuses an unknown auth mode", () => {
+      expect(() => loadConfig({ ...validEnv, JMAP_AUTH_MODE: "oauth" })).toThrow();
     });
   });
 
@@ -240,30 +311,30 @@ describe("loadConfig", () => {
   describe("outbound deadlines (GH #165)", () => {
     it("defaults every upstream deadline so no deployment has to set one", () => {
       const config = loadConfig(validEnv);
-      expect(config.stalwartTimeoutMs).toBe(10_000);
+      expect(config.jmapTimeoutMs).toBe(10_000);
       expect(config.aiTimeoutMs).toBe(60_000);
       expect(config.oidcTimeoutMs).toBe(10_000);
     });
 
-    it("gives the AI provider a looser deadline than Stalwart by default", () => {
+    it("gives the AI provider a looser deadline than the mail provider by default", () => {
       const config = loadConfig(validEnv);
-      expect(config.aiTimeoutMs).toBeGreaterThan(config.stalwartTimeoutMs);
+      expect(config.aiTimeoutMs).toBeGreaterThan(config.jmapTimeoutMs);
     });
 
-    it("reads STALWART_TIMEOUT_MS, AI_TIMEOUT_MS and OIDC_TIMEOUT_MS overrides", () => {
+    it("reads JMAP_TIMEOUT_MS, AI_TIMEOUT_MS and OIDC_TIMEOUT_MS overrides", () => {
       const config = loadConfig({
         ...validEnv,
-        STALWART_TIMEOUT_MS: "2500",
+        JMAP_TIMEOUT_MS: "2500",
         AI_TIMEOUT_MS: "120000",
         OIDC_TIMEOUT_MS: "7000",
       });
-      expect(config.stalwartTimeoutMs).toBe(2500);
+      expect(config.jmapTimeoutMs).toBe(2500);
       expect(config.aiTimeoutMs).toBe(120_000);
       expect(config.oidcTimeoutMs).toBe(7000);
     });
 
     it("treats an empty deadline variable as absent", () => {
-      expect(loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "" }).stalwartTimeoutMs).toBe(10_000);
+      expect(loadConfig({ ...validEnv, JMAP_TIMEOUT_MS: "" }).jmapTimeoutMs).toBe(10_000);
     });
 
     it("rejects a non-numeric deadline", () => {
@@ -271,7 +342,7 @@ describe("loadConfig", () => {
     });
 
     it("rejects a zero or negative deadline, which would abort every call", () => {
-      expect(() => loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, JMAP_TIMEOUT_MS: "0" })).toThrow();
       expect(() => loadConfig({ ...validEnv, OIDC_TIMEOUT_MS: "-1" })).toThrow();
     });
 

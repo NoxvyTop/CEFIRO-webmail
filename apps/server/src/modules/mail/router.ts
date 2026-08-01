@@ -18,7 +18,7 @@ import {
   type ThreadDetail,
 } from "@webmail/shared";
 import { requireSession } from "../auth/middleware";
-import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
+import { DEFAULT_JMAP_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { errorResponse } from "../../core/error-response";
 import { clearIdleTimeout } from "../../core/idle-timeout";
 import { currentLogContext, log, withLogContext } from "../../core/logger";
@@ -28,12 +28,14 @@ import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthVerdict } from "./sender-auth";
 import { guardStream, mailStreams } from "./streams";
 import {
-  withStalwartTransportErrors,
+  jmapAuthHeader,
+  withJmapTransportErrors,
   type JmapAuth,
+  type JmapAuthMode,
   type JmapClient,
   type JmapMethodCall,
   type JmapSession,
-} from "../../infra/stalwart/jmap";
+} from "../../infra/jmap/client";
 
 type JmapMailbox = {
   id: string;
@@ -230,10 +232,6 @@ function toEmailDetail(email: JmapEmailDetail): EmailDetail {
   };
 }
 
-function basicAuthHeader(auth: { email: string; password: string }): string {
-  return `Basic ${btoa(`${auth.email}:${auth.password}`)}`;
-}
-
 // Content-types that are safe to render inline in the browser: no active script
 // execution vectors (e.g. no text/html, image/svg+xml, xml, octet-stream).
 const SAFE_INLINE_CONTENT_TYPES = new Set([
@@ -406,20 +404,25 @@ async function trashSupersededDraft(input: {
 export function createMailRouter(deps: MailDeps) {
   const router = new Hono<{ Variables: MailVariables }>();
   const baseFetch = deps.fetchFn ?? fetch;
-  // GH #211: these three routes talk to Stalwart directly instead of through
-  // the JMAP client, so the client's "a rejecting fetch means the dependency is
-  // down" mapping did not reach them — a Stalwart that refuses the connection
-  // answered 500 "internal" on the event stream and on attachments while every
-  // other route already answered 502 stalwart_unavailable. Same wrapper, same
-  // verdict, for every call this server makes to Stalwart.
-  const uploadFetch = withStalwartTransportErrors(baseFetch);
+  // GH #211: these three routes talk to the JMAP provider directly instead of
+  // through the JMAP client, so the client's "a rejecting fetch means the
+  // dependency is down" mapping did not reach them — a provider that refuses
+  // the connection answered 500 "internal" on the event stream and on
+  // attachments while every other route already answered 502
+  // stalwart_unavailable. Same wrapper, same verdict, everywhere.
+  const uploadFetch = withJmapTransportErrors(baseFetch);
   // GH #165: they also need their own deadline. It only covers
   // time-to-response-headers, which is what lets the event stream stay open
-  // for as long as the client wants while still failing fast on a Stalwart
+  // for as long as the client wants while still failing fast on a provider
   // that accepts the connection and never answers.
-  const fetchFn = withStalwartTransportErrors(
-    withDeadlineFetch(baseFetch, "stalwart", deps.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS),
+  const fetchFn = withJmapTransportErrors(
+    withDeadlineFetch(baseFetch, "stalwart", deps.timeoutMs ?? DEFAULT_JMAP_TIMEOUT_MS),
   );
+  // GH #35: the same credential presentation the JMAP client uses, so a
+  // `bearer` provider is not half-configured — API through the client speaking
+  // Bearer while attachments and the event stream still send Basic.
+  const authMode: JmapAuthMode = deps.authMode ?? "basic";
+  const authHeader = (auth: JmapAuth) => jmapAuthHeader(auth, authMode);
 
   router.use("*", requireSession(deps.sessions));
 
@@ -565,7 +568,7 @@ export function createMailRouter(deps: MailDeps) {
     try {
       upstream = await fetchFn(upstreamUrl, {
         headers: {
-          authorization: basicAuthHeader(c.get("jmapAuth")),
+          authorization: authHeader(c.get("jmapAuth")),
           accept: "text/event-stream",
         },
         // The stream's own signal, not the request's: it is aborted by a client
@@ -661,7 +664,7 @@ export function createMailRouter(deps: MailDeps) {
     const upstream = await uploadFetch(uploadUrl, {
       method: "POST",
       headers: {
-        authorization: basicAuthHeader(c.get("jmapAuth")),
+        authorization: authHeader(c.get("jmapAuth")),
         "content-type": contentType,
       },
       body: c.req.raw.body,
@@ -705,7 +708,7 @@ export function createMailRouter(deps: MailDeps) {
     const range = c.req.header("range");
     const upstream = await fetchFn(downloadUrl, {
       headers: {
-        authorization: basicAuthHeader(c.get("jmapAuth")),
+        authorization: authHeader(c.get("jmapAuth")),
         ...(range ? { range } : {}),
       },
       signal: c.req.raw.signal,

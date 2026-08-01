@@ -1,8 +1,48 @@
-import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
+import { DEFAULT_JMAP_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { DomainError } from "../../core/errors";
 import { log } from "../../core/logger";
 
 export type JmapAuth = { email: string; password: string };
+
+/**
+ * What this server does with the URLs the JMAP provider advertises in its
+ * session — `apiUrl`, `uploadUrl`, `downloadUrl`, `eventSourceUrl` (GH #34,
+ * design GH #188).
+ *
+ * - `rewrite` (default): replace the ORIGIN of each advertised URL with the
+ *   origin of the configured `JMAP_URL`, keeping path, query and the
+ *   `{accountId}`-style JMAP placeholders intact. Correct in every deployment
+ *   where the provider sits behind a proxy or answers on a name this process
+ *   does not use to reach it, which is nearly all of them.
+ * - `trust`: use the advertised URLs verbatim. For the rare split-host
+ *   provider whose blobs/downloads genuinely live on another reachable origin.
+ *
+ * `rewrite` is the default deliberately (GH #188): trusting the advertisement
+ * was the old default and was the single largest source of "discovery works,
+ * every subsequent call 502s" misconfigurations. No `auto` mode exists — a
+ * probe-and-guess third mode was considered and rejected as magic.
+ */
+export type JmapUrlMode = "rewrite" | "trust";
+
+/**
+ * How the mailbox credential is presented to the JMAP provider (GH #35).
+ *
+ * - `basic` (default): HTTP Basic with `email:password`, what Stalwart and
+ *   most self-hosted providers expect.
+ * - `bearer`: `Authorization: Bearer <credential>`, what token/OAuth providers
+ *   (Fastmail and friends) expect. The stored, encrypted mailbox credential IS
+ *   the token; nothing else about the two-password model changes — the webmail
+ *   session password and the mailbox credential stay separate.
+ */
+export type JmapAuthMode = "basic" | "bearer";
+
+/** The advertised URL fields of a JMAP session that carry an origin. */
+export type JmapSessionUrls = {
+  apiUrl: string;
+  eventSourceUrl: string;
+  uploadUrl: string;
+  downloadUrl: string;
+};
 export type JmapSession = {
   apiUrl: string;
   accountId: string;
@@ -92,11 +132,30 @@ function withoutDegradableProperties(calls: JmapMethodCall[]): {
   return { calls: reduced, stripped };
 }
 
-function basicAuth(auth: JmapAuth): string {
+/**
+ * The `Authorization` header value for one mailbox credential (GH #35).
+ *
+ * Exported because the JMAP client is not the only caller: the SSE stream and
+ * the blob upload/download routes talk to the provider over raw fetch
+ * (modules/mail/router.ts) and must present the credential the same way, or
+ * `bearer` would work for the API and silently 401 for attachments.
+ */
+export function jmapAuthHeader(auth: JmapAuth, mode: JmapAuthMode = "basic"): string {
+  if (mode === "bearer") return `Bearer ${auth.password}`;
   return `Basic ${btoa(`${auth.email}:${auth.password}`)}`;
 }
 
-export function stalwartUnavailable(): DomainError {
+/**
+ * The 502 for "the mail provider is not answering, or answered with garbage".
+ *
+ * The CODE deliberately keeps its original `stalwart_unavailable` spelling
+ * while the function around it moved to role-based naming (GH #33): the string
+ * is a wire contract — the SPA maps it in apps/web/src/app/errorMessages.ts,
+ * `errors.stalwart_unavailable` is an i18n key, and docs/OPERATIONS.md tells
+ * operators to grep for it. Renaming names in code is free; renaming a
+ * published error code is a breaking API change for no portability gain.
+ */
+export function jmapUnavailable(): DomainError {
   return new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
 }
 
@@ -104,7 +163,7 @@ function toDomainError(status: number): DomainError {
   if (status === 401) {
     return new DomainError("mail_auth_failed", 502, "errors.mail_auth_failed");
   }
-  return stalwartUnavailable();
+  return jmapUnavailable();
 }
 
 /**
@@ -118,58 +177,93 @@ function toDomainError(status: number): DomainError {
  * burying the real ones (GH #187).
  *
  * Exported because the mapping must not live only inside the JMAP client: the
- * event stream and the blob upload/download routes talk to Stalwart over raw
- * fetch and were still answering 500 for a Stalwart that is simply down
- * (GH #211). One wrapper, one behaviour, wherever this server calls Stalwart.
+ * event stream and the blob upload/download routes talk to the provider over
+ * raw fetch and were still answering 500 for a provider that is simply down
+ * (GH #211). One wrapper, one behaviour, wherever this server calls JMAP.
  *
  * A DomainError already in flight — notably the upstream_timeout (504) that
  * withDeadlineFetch raises (GH #165) — is a correct dependency error with its
  * own status, so it passes through untouched.
  */
-export function withStalwartTransportErrors(fetchFn: typeof fetch): typeof fetch {
+export function withJmapTransportErrors(fetchFn: typeof fetch): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
       return await fetchFn(input, init);
     } catch (err) {
       if (err instanceof DomainError) throw err;
-      throw stalwartUnavailable();
+      throw jmapUnavailable();
     }
   }) as typeof fetch;
 }
 
-// Some reverse-proxied Stalwart deployments advertise an internal/unreachable
-// origin in the session's apiUrl/uploadUrl/downloadUrl/eventSourceUrl (the
-// server's own configured hostname, not the one the client actually reached).
-// Rewriting to the connection's origin keeps these servers reachable without
-// touching the raw string via the URL API, which percent-encodes the `{...}`
-// JMAP placeholders (e.g. `{accountId}`) found in path segments.
+// Rewriting to the connection's origin keeps a provider that advertises an
+// unreachable one usable, without touching the raw string via the URL API,
+// which percent-encodes the `{...}` JMAP placeholders (e.g. `{accountId}`)
+// found in path segments.
 function rewriteToConnectionOrigin(url: string, connectionOrigin: string): string {
   return url.replace(/^https?:\/\/[^/]+/i, connectionOrigin);
+}
+
+/**
+ * Applies `mode` to the four advertised session URLs (GH #34 / GH #188).
+ *
+ * Pure and exported so the boot probe (infra/jmap/probe.ts) reports the URLs
+ * this process will ACTUALLY use, not the ones the provider claimed — an
+ * operator reading the startup log needs the resolved pair to see a topology
+ * mistake, which was the whole point of the probe.
+ *
+ * An empty string stays empty: an absent advertisement is not an origin to
+ * rewrite, and every consumer already treats "" as "this provider offers no
+ * upload/download/event endpoint".
+ */
+export function resolveSessionUrls(
+  advertised: JmapSessionUrls,
+  baseUrl: string,
+  mode: JmapUrlMode,
+): JmapSessionUrls {
+  if (mode === "trust") return { ...advertised };
+  const origin = new URL(baseUrl).origin;
+  const rewrite = (url: string) => (url === "" ? "" : rewriteToConnectionOrigin(url, origin));
+  return {
+    apiUrl: rewrite(advertised.apiUrl),
+    eventSourceUrl: rewrite(advertised.eventSourceUrl),
+    uploadUrl: rewrite(advertised.uploadUrl),
+    downloadUrl: rewrite(advertised.downloadUrl),
+  };
 }
 
 export function createJmapClient(input: {
   baseUrl: string;
   fetchFn?: typeof fetch;
-  forceBase?: boolean;
+  /** What to do with the URLs the provider advertises — defaults to `rewrite`. */
+  urlMode?: JmapUrlMode;
+  /** How to present the mailbox credential — defaults to `basic`. */
+  authMode?: JmapAuthMode;
   /** Outbound deadline per JMAP call — see core/deadline.ts (GH #165). */
   timeoutMs?: number;
 }) {
-  // Every call below goes through the wrapped fetch, so a Stalwart that accepts
+  // Every call below goes through the wrapped fetch, so a provider that accepts
   // the connection and never answers surfaces as `upstream_timeout` instead of
   // hanging the request forever.
+  //
+  // The dependency label stays "stalwart": it is the key of the `/metrics`
+  // series (`cefiro_dependency_up`, `cefiro_outbound_requests_total`) and of
+  // the `/api/health` check, i.e. something operators' dashboards and alerts
+  // are already keyed on. GH #33 renames names in code, not published labels.
   const deadlineFetch = withDeadlineFetch(
     input.fetchFn ?? fetch,
     "stalwart",
-    input.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS,
+    input.timeoutMs ?? DEFAULT_JMAP_TIMEOUT_MS,
   );
 
-  // A Stalwart that is down makes fetch reject instead of answering, which
+  // A provider that is down makes fetch reject instead of answering, which
   // would surface as a 500 "internal" without this (GH #187) — see
-  // withStalwartTransportErrors above.
-  const fetchFn = withStalwartTransportErrors(deadlineFetch);
+  // withJmapTransportErrors above.
+  const fetchFn = withJmapTransportErrors(deadlineFetch);
 
   const baseUrl = input.baseUrl.replace(/\/$/, "");
-  const forceBase = input.forceBase ?? false;
+  const urlMode: JmapUrlMode = input.urlMode ?? "rewrite";
+  const authMode: JmapAuthMode = input.authMode ?? "basic";
 
   // Remembered once a provider has refused a degradable property (GH #144), so
   // the double round-trip below is paid once per process rather than on every
@@ -188,7 +282,7 @@ export function createJmapClient(input: {
     const res = await fetchFn(session.apiUrl, {
       method: "POST",
       headers: {
-        authorization: basicAuth(auth),
+        authorization: jmapAuthHeader(auth, authMode),
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -209,7 +303,7 @@ export function createJmapClient(input: {
   return {
     async getSession(auth: JmapAuth): Promise<JmapSession> {
       const res = await fetchFn(`${baseUrl}/.well-known/jmap`, {
-        headers: { authorization: basicAuth(auth), accept: "application/json" },
+        headers: { authorization: jmapAuthHeader(auth, authMode), accept: "application/json" },
       });
       if (!res.ok) throw toDomainError(res.status);
       const body = (await res.json()) as {
@@ -222,28 +316,20 @@ export function createJmapClient(input: {
       };
       const accountId = body.primaryAccounts?.["urn:ietf:params:jmap:mail"];
       if (!body.apiUrl || !accountId) {
-        throw stalwartUnavailable();
+        throw jmapUnavailable();
       }
       const capabilities = Object.keys(body.capabilities ?? {});
-      if (!forceBase) {
-        return {
+      const urls = resolveSessionUrls(
+        {
           apiUrl: body.apiUrl,
-          accountId,
           eventSourceUrl: body.eventSourceUrl ?? "",
           uploadUrl: body.uploadUrl ?? "",
           downloadUrl: body.downloadUrl ?? "",
-          capabilities,
-        };
-      }
-      const connectionOrigin = new URL(baseUrl).origin;
-      return {
-        apiUrl: rewriteToConnectionOrigin(body.apiUrl, connectionOrigin),
-        accountId,
-        eventSourceUrl: rewriteToConnectionOrigin(body.eventSourceUrl ?? "", connectionOrigin),
-        uploadUrl: rewriteToConnectionOrigin(body.uploadUrl ?? "", connectionOrigin),
-        downloadUrl: rewriteToConnectionOrigin(body.downloadUrl ?? "", connectionOrigin),
-        capabilities,
-      };
+        },
+        baseUrl,
+        urlMode,
+      );
+      return { ...urls, accountId, capabilities };
     },
 
     /**
@@ -303,13 +389,13 @@ export function createJmapClient(input: {
       );
       const res = await fetchFn(url, {
         method: "POST",
-        headers: { authorization: basicAuth(auth), "content-type": contentType },
+        headers: { authorization: jmapAuthHeader(auth, authMode), "content-type": contentType },
         body: content,
       });
       if (!res.ok) throw toDomainError(res.status);
       const body = (await res.json()) as { blobId?: string };
       if (!body.blobId) {
-        throw stalwartUnavailable();
+        throw jmapUnavailable();
       }
       return body.blobId;
     },

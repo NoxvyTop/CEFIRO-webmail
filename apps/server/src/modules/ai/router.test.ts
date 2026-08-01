@@ -11,7 +11,7 @@ import { createApp } from "../../app";
 import { capThreadMessages, createAiRouter, stripQuotedTrail } from "./router";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import type { AiClient } from "../../core/ai";
-import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
+import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";
 
 const sql = createDb(testDatabaseUrl());
 

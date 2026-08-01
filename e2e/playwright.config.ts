@@ -89,19 +89,24 @@ const appServerEnv = {
   // first, and needs a connectable admin URL to do so, which this is.
   [BASE_DATABASE_URL_ENV]: BASE_DATABASE_URL,
   MASTER_KEY,
-  // Only pass STALWART_URL through when E2E_STALWART_URL is actually
+  // Only pass JMAP_URL through when E2E_STALWART_URL is actually
   // set (no default here, mirroring global-setup.ts's raw env read).
   // Enables the mail router (apps/server/src/index.ts only creates the
-  // JMAP client when config.stalwartUrl is set), so a default here
+  // JMAP client when config.jmapUrl is set), so a default here
   // would make the router non-null even for non-mail runs where no
   // Stalwart fixture is running. Bring up the Stalwart fixture
   // separately before running mail specs:
   //   export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
   //   docker compose -f docker-compose.e2e.yml up -d --build
   //
+  // The HARNESS-side variable keeps the name E2E_STALWART_URL: it names the
+  // fixture container this suite starts (e2e/stalwart/, the `stalwart` service
+  // in CI), which really is Stalwart. The SERVER-side one is the role-based
+  // JMAP_URL of GH #33.
+  //
   // Explicitly EMPTY rather than simply omitted when there is no fixture, so
   // "no mail backend" is stated rather than inferred: core/config.ts reads
-  // `env.STALWART_URL || undefined`, so "" is exactly that.
+  // `env.JMAP_URL || undefined`, so "" is exactly that.
   //
   // This line was once the ONLY thing standing between the harness and a
   // developer's own STALWART_URL, because `bun` auto-loads the repo-root .env
@@ -111,7 +116,7 @@ const appServerEnv = {
   // that would never go ready. That whole class is closed at the source now:
   // every `bun` here runs with --env-file (see app-env.ts, GH #231), so no
   // variable this file does not set can reach a server under test.
-  STALWART_URL: process.env.E2E_STALWART_URL ?? "",
+  JMAP_URL: process.env.E2E_STALWART_URL ?? "",
 };
 
 // GH #151 (quoting) and GH #231 (the env-file pin) — see app-env.ts. Every

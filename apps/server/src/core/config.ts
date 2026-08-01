@@ -2,8 +2,8 @@ import { z } from "zod";
 import { DEFAULT_TRUSTED_PROXY_HOPS } from "./client-ip";
 import {
   DEFAULT_AI_TIMEOUT_MS,
+  DEFAULT_JMAP_TIMEOUT_MS,
   DEFAULT_OIDC_TIMEOUT_MS,
-  DEFAULT_STALWART_TIMEOUT_MS,
 } from "./deadline";
 import {
   DEFAULT_DB_TIMEOUT_MS as DEFAULT_SHUTDOWN_DB_TIMEOUT_MS,
@@ -85,16 +85,25 @@ const configSchema = z.object({
   // modules/setup/bootstrap.ts for why the process no longer mints its own.
   bootstrapPassword: z.string().optional(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
-  stalwartUrl: z.string().url().optional(),
-  // Some reverse-proxied Stalwart deployments advertise an internal or
-  // security-restricted origin in the JMAP session (apiUrl/uploadUrl/etc.)
-  // that differs from the reachable base URL. Off by default: existing
-  // Stalwart setups that advertise a correct, reachable origin see no change.
-  jmapForceBase: z.boolean().default(false),
+  // Base URL of the JMAP provider — Stalwart in our own deployments, but the
+  // protocol is RFC 8620 and so is this client, so the name is the ROLE (GH
+  // #33). `STALWART_URL` is still accepted; see RENAMED_ENV_VARS.
+  jmapUrl: z.string().url().optional(),
+  // What to do with the URLs the provider advertises in its JMAP session
+  // (apiUrl/uploadUrl/downloadUrl/eventSourceUrl) — GH #34, design GH #188.
+  // `rewrite` is the default: nearly every deployment reaches the provider by
+  // a different path than the one it advertises, and trusting the
+  // advertisement was the single largest source of "discovery works, every
+  // call after it 502s". See infra/jmap/client.ts for the full contract.
+  jmapUrlMode: z.enum(["rewrite", "trust"]).default("rewrite"),
+  // How the mailbox credential is presented to the provider (GH #35). Stalwart
+  // and most self-hosted providers want Basic; token/OAuth providers want
+  // Bearer, and until this existed they simply could not be talked to.
+  jmapAuthMode: z.enum(["basic", "bearer"]).default("basic"),
   // Outbound deadlines (GH #165). One per upstream rather than one shared
   // number: see core/deadline.ts for why each default is what it is. Every one
   // has a default, so no deployment has to set anything.
-  stalwartTimeoutMs: timeoutMsSchema.default(DEFAULT_STALWART_TIMEOUT_MS),
+  jmapTimeoutMs: timeoutMsSchema.default(DEFAULT_JMAP_TIMEOUT_MS),
   aiTimeoutMs: timeoutMsSchema.default(DEFAULT_AI_TIMEOUT_MS),
   oidcTimeoutMs: timeoutMsSchema.default(DEFAULT_OIDC_TIMEOUT_MS),
   // Postgres pool + timeouts (GH #191). Every DB dependency inherits the same
@@ -233,9 +242,103 @@ const configSchema = z.object({
   }
 });
 
+/**
+ * One "your configuration still uses the old name" line, collected while
+ * parsing and logged once by index.ts.
+ *
+ * Returned rather than logged from here on purpose: `loadConfig` is a pure
+ * function the whole test suite calls, and a schema parser that writes to the
+ * log stream as a side effect would make every one of those calls noisy while
+ * making the notices themselves untestable.
+ */
+export type ConfigDeprecation = { variable: string; message: string };
+
 // `isProduction` is derived once here rather than re-deriving `nodeEnv ===
 // "production"` at each call site, so the production signal has a single source.
-export type AppConfig = z.infer<typeof configSchema> & { isProduction: boolean };
+export type AppConfig = z.infer<typeof configSchema> & {
+  isProduction: boolean;
+  deprecations: ConfigDeprecation[];
+};
+
+/**
+ * The GH #33 renames, old name → new name.
+ *
+ * Compatibility decision: the old names KEEP WORKING, with a warning, rather
+ * than being cut. A deployment upgrades this image by pulling a tag; if the
+ * rename were total, that pull would boot a server with no mail backend
+ * configured (`JMAP_URL` unset is a legal, silent state — the mail routes just
+ * answer 503 `mail_not_configured`) and no configuration error to look at. A
+ * breaking change that fails LOUDLY would be defensible; one that degrades
+ * quietly is not, and this one degrades quietly. The alias is the cheap half of
+ * the deal; the loud half is the warning below, which names the exact new
+ * variable, in every boot, until the operator renames it.
+ *
+ * `JMAP_FORCE_BASE` is deliberately NOT here: see REMOVED_ENV_VARS.
+ */
+const RENAMED_ENV_VARS: ReadonlyArray<{ from: string; to: string }> = [
+  { from: "STALWART_URL", to: "JMAP_URL" },
+  { from: "STALWART_TIMEOUT_MS", to: "JMAP_TIMEOUT_MS" },
+];
+
+/**
+ * Removed outright, with the replacement spelled out (GH #34, design GH #188).
+ *
+ * `JMAP_FORCE_BASE` gets no alias because it CANNOT have an honest one: it was
+ * a boolean whose off state was the default, and its replacement is a mode
+ * whose default is the opposite behaviour. Silently mapping `false` to `trust`
+ * would preserve a default this design deliberately reversed; silently mapping
+ * it to `rewrite` would ignore an operator who wrote the word `false`. So it is
+ * ignored and announced, which is the only reading that cannot be wrong twice.
+ */
+const REMOVED_ENV_VARS: ReadonlyArray<{ variable: string; message: string }> = [
+  {
+    variable: "JMAP_FORCE_BASE",
+    message:
+      "JMAP_FORCE_BASE has been removed and is IGNORED. Its replacement is " +
+      "JMAP_URL_MODE: `rewrite` (the new default — what JMAP_FORCE_BASE=true " +
+      "used to do) or `trust` (what JMAP_FORCE_BASE=false used to do). If this " +
+      "deployment relied on the advertised URLs being used verbatim, set " +
+      "JMAP_URL_MODE=trust; otherwise delete the variable.",
+  },
+];
+
+/**
+ * Reads a renamed variable, preferring the new name, and records a deprecation
+ * whenever the old one is present at all.
+ */
+function readRenamed(
+  env: Record<string, string | undefined>,
+  from: string,
+  to: string,
+  deprecations: ConfigDeprecation[],
+): string | undefined {
+  const current = env[to] || undefined;
+  const legacy = env[from] || undefined;
+  if (legacy === undefined) return current;
+  if (current !== undefined) {
+    deprecations.push({
+      variable: from,
+      message: `${from} is deprecated AND ${to} is set; ${from} is ignored. Remove ${from}.`,
+    });
+    return current;
+  }
+  deprecations.push({
+    variable: from,
+    message: `${from} is deprecated: rename it to ${to}. It is still read today and will stop being read in a future release.`,
+  });
+  return legacy;
+}
+
+/** Every deprecation/removal notice this environment earns. */
+function collectDeprecations(
+  env: Record<string, string | undefined>,
+): ConfigDeprecation[] {
+  const deprecations: ConfigDeprecation[] = [];
+  for (const removed of REMOVED_ENV_VARS) {
+    if (env[removed.variable]) deprecations.push(removed);
+  }
+  return deprecations;
+}
 
 /**
  * `MASTER_KEY_PREVIOUS` lists retired master keys as `version:base64key`,
@@ -262,6 +365,10 @@ function parsePreviousMasterKeys(
 export function loadConfig(
   env: Record<string, string | undefined>,
 ): AppConfig {
+  const deprecations = collectDeprecations(env);
+  const renamed = new Map(
+    RENAMED_ENV_VARS.map(({ from, to }) => [to, readRenamed(env, from, to, deprecations)]),
+  );
   const parsed = configSchema.parse({
     port: env.PORT ?? undefined,
     databaseUrl: env.DATABASE_URL,
@@ -276,9 +383,14 @@ export function loadConfig(
     // configured would make it fail to verify with nothing to look at.
     bootstrapPassword: env.BOOTSTRAP_PASSWORD || undefined,
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
-    stalwartUrl: env.STALWART_URL || undefined,
-    jmapForceBase: env.JMAP_FORCE_BASE === "true" || env.JMAP_FORCE_BASE === "1",
-    stalwartTimeoutMs: env.STALWART_TIMEOUT_MS || undefined,
+    jmapUrl: renamed.get("JMAP_URL"),
+    // Lower-cased before the enum so `JMAP_URL_MODE=Rewrite` is the mode the
+    // operator plainly meant. An unknown word is NOT normalised away: it fails
+    // the enum and refuses the boot, because "I set a mode and got the other
+    // one" is exactly the class of silent misconfiguration this replaces.
+    jmapUrlMode: env.JMAP_URL_MODE?.trim().toLowerCase() || undefined,
+    jmapAuthMode: env.JMAP_AUTH_MODE?.trim().toLowerCase() || undefined,
+    jmapTimeoutMs: renamed.get("JMAP_TIMEOUT_MS"),
     aiTimeoutMs: env.AI_TIMEOUT_MS || undefined,
     oidcTimeoutMs: env.OIDC_TIMEOUT_MS || undefined,
     dbPoolMax: env.DB_POOL_MAX || undefined,
@@ -300,5 +412,5 @@ export function loadConfig(
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
     trustedProxyHops: env.TRUSTED_PROXY_HOPS || undefined,
   });
-  return { ...parsed, isProduction: parsed.nodeEnv === "production" };
+  return { ...parsed, isProduction: parsed.nodeEnv === "production", deprecations };
 }

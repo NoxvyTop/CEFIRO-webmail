@@ -1,6 +1,6 @@
 import { log } from "../../core/logger";
 import type { ContactsRepo, HarvestedContact } from "../../infra/repos/contacts";
-import type { JmapAuth, JmapClient, JmapSession } from "../../infra/stalwart/jmap";
+import type { JmapAuth, JmapClient, JmapSession } from "../../infra/jmap/client";
 
 // How many of the most recent messages to inspect when mail arrives (GH #180).
 // The harvest triggers on the JMAP Email state advancing, which says mail

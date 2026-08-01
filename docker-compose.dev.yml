@@ -31,9 +31,10 @@ services:
       # In production it is a generated secret from the secret store, and the
       # server refuses to boot with BOOTSTRAP_MODE=true without one.
       BOOTSTRAP_PASSWORD: dev-bootstrap-password-not-a-secret
-      # Explicitly unconfigured in local dev; developers with a reachable
-      # Stalwart instance can point this at it.
-      STALWART_URL: ""
+      # Explicitly unconfigured in local dev; developers with a reachable JMAP
+      # provider (Stalwart or otherwise) can point this at it. Renamed from
+      # STALWART_URL by GH #33 — the old name is still read, with a warning.
+      JMAP_URL: ""
     ports:
       - "5173:5173"
       - "8090:8080"

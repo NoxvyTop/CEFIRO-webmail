@@ -14,7 +14,7 @@ import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createSieveRouter } from "./router";
 import { DomainError } from "../../core/errors";
-import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
+import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/jmap/client";
 
 const sql = createDb(testDatabaseUrl());
 

@@ -24,7 +24,7 @@ export function oidcUnavailable(): DomainError {
  * connection refused, reset, DNS error, TLS failure — surfaces as 502
  * `oidc_unavailable` rather than propagating raw.
  *
- * The twin of withStalwartTransportErrors (infra/stalwart/jmap.ts), for the same
+ * The twin of withJmapTransportErrors (infra/jmap/client.ts), for the same
  * defect on the other dependency (GH #236, after #187 and #211 fixed it for
  * Stalwart). Both files only ever mapped `!res.ok` to a 502, and a transport
  * failure never produces a response to inspect: fetch REJECTS, withDeadlineFetch

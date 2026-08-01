@@ -90,14 +90,89 @@ al desplegar, no a mitad de la jornada.
 | `SHUTDOWN_GRACE_MS` | `15000` | Plazo para que terminen las peticiones en vuelo al recibir SIGTERM. |
 | `SHUTDOWN_DB_TIMEOUT_MS` | `5000` | Plazo para cerrar el pool de Postgres. |
 
-**Correo (Stalwart).** Sin `STALWART_URL` los endpoints de correo responden
-`503 mail_not_configured` y el chequeo de Stalwart no se ejecuta.
+**Correo (proveedor JMAP).** Sin `JMAP_URL` los endpoints de correo responden
+`503 mail_not_configured` y el chequeo del proveedor no se ejecuta. Los nombres
+son por rol, no por producto (#33): Céfiro es un cliente JMAP (RFC 8620) y
+Stalwart es el proveedor que usamos, no una dependencia dura.
 
 | Variable | Por defecto | Qué hace |
 |---|---|---|
-| `STALWART_URL` | — | URL interna del servidor JMAP. |
-| `STALWART_TIMEOUT_MS` | `10000` | Plazo de las llamadas salientes a Stalwart. |
-| `JMAP_FORCE_BASE` | `false` | Ignora el origen que anuncia la sesión JMAP y usa `STALWART_URL`. Necesario cuando Stalwart está tras un proxy y anuncia una URL interna inalcanzable. |
+| `JMAP_URL` | — | URL del proveedor JMAP por el **camino más directo** (red interna, nombre de servicio, link privado). Nunca el borde TLS público: ver [Topologías](#topologías-de-conexión-al-proveedor-jmap-188). |
+| `JMAP_URL_MODE` | `rewrite` | Qué hacer con las URLs que el proveedor anuncia en su sesión (`apiUrl`/`uploadUrl`/`downloadUrl`/`eventSourceUrl`). `rewrite` reescribe **solo el origen** al de `JMAP_URL` y conserva ruta, query y los marcadores `{accountId}`/`{blobId}`. `trust` las usa tal cual. No hay `auto`. |
+| `JMAP_AUTH_MODE` | `basic` | Cómo se presenta la credencial de buzón: `basic` (HTTP Basic `email:contraseña`, Stalwart y casi todo servidor autoalojado) o `bearer` (`Authorization: Bearer <credencial>`, proveedores con token/OAuth). |
+| `JMAP_TIMEOUT_MS` | `10000` | Plazo de las llamadas salientes al proveedor. |
+| `NODE_EXTRA_CA_CERTS` | — | **No es una perilla de Céfiro**: la respetan Bun y Node. Ruta a un bundle PEM para confiar en un proveedor con certificado privado o CA interna. No existe ningún modo `insecure`. |
+
+**Nombres retirados (#33/#34).** Los viejos siguen funcionando salvo uno, y el
+servidor avisa en cada arranque (`deprecated configuration`) hasta que se
+renombren:
+
+| Nombre viejo | Estado | Equivalencia |
+|---|---|---|
+| `STALWART_URL` | Se sigue leyendo, con aviso | `JMAP_URL` |
+| `STALWART_TIMEOUT_MS` | Se sigue leyendo, con aviso | `JMAP_TIMEOUT_MS` |
+| `JMAP_FORCE_BASE` | **Retirado — se ignora**, con aviso | `=true` → `JMAP_URL_MODE=rewrite` (el nuevo valor por defecto); `=false` → `JMAP_URL_MODE=trust` |
+
+`JMAP_FORCE_BASE` no tiene alias a propósito: era un booleano cuyo valor por
+defecto (`false`, "confía en lo anunciado") es el **contrario** del modo por
+defecto de ahora. Mapearlo en silencio, hacia cualquiera de los dos lados,
+conservaría o descartaría una decisión del operador sin decírselo. Si este
+despliegue dependía de que se usaran las URLs anunciadas tal cual, poner
+`JMAP_URL_MODE=trust`; si no, borrar la variable.
+
+### Topologías de conexión al proveedor JMAP (#188)
+
+La conexión Céfiro↔proveedor es **una sola**: JMAP sobre `JMAP_URL`. El
+navegador nunca habla con el proveedor — Céfiro proxea adjuntos, subidas y el
+SSE del lado servidor — así que las URLs que el proveedor anuncia las consume
+**solo este servidor**.
+
+De ahí la regla: **llegar por el camino más directo y reescribir a ese origen,
+nunca a través del borde TLS público**. Evita el *hairpin* (salir a la nube y
+volver para hablar con tu propio origen) y evita que un CDN corte el SSE, que es
+de larga duración por diseño.
+
+Matriz A×B — topología de red × confianza TLS:
+
+| Topología | `JMAP_URL` | `JMAP_URL_MODE` | Confianza TLS |
+|---|---|---|---|
+| Contenedores en la misma red (edge-core) | `http://stalwart:8080` | `rewrite` | ninguna (http interno) |
+| Dedicados, link privado, CA interna | `https://stalwart.interno:8080` | `rewrite` | `NODE_EXTRA_CA_CERTS=/ruta/ca.pem` |
+| Dedicados, proveedor con cert público (Let's Encrypt, Cloudflare…) al origen | `https://mail.org.com` | `rewrite` | CAs del sistema (nada que configurar) |
+| Dedicados vía túnel (Cloudflare Tunnel u otro) | hostname del túnel | `rewrite` | CAs del sistema |
+| Proveedor de host partido (blobs en otro origen alcanzable) | el de la API | `trust` | según el proveedor |
+
+Ejemplo A — contenedores en la misma red:
+
+```env
+JMAP_URL=http://stalwart:8080
+JMAP_URL_MODE=rewrite
+JMAP_AUTH_MODE=basic
+```
+
+Ejemplo B — servidores dedicados con CA interna:
+
+```env
+JMAP_URL=https://stalwart.interno:8080
+JMAP_URL_MODE=rewrite
+JMAP_AUTH_MODE=basic
+NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-interna.pem
+```
+
+**Sonda de arranque.** Al arrancar, el servidor hace un `GET
+{JMAP_URL}/.well-known/jmap` sin credenciales y deja una línea
+`jmap provider probe` con `outcome`, `status`, `urlMode`, `authMode` y —si el
+proveedor devolvió una sesión— la `apiUrl` anunciada junto a la ya resuelta. Un
+`401` cuenta como **alcanzable**: prueba que la dirección, el DNS, el puerto y
+la cadena TLS están bien, que es justo lo que rompe un error de topología.
+
+No falla el arranque a propósito: el proveedor puede levantar después. Qué mirar:
+
+| `outcome` | Significa | Qué revisar |
+|---|---|---|
+| `reachable` | Contestó (2xx o 401) | Nada. Si además hay `advertisedApiUrl` ≠ `resolvedApiUrl`, `rewrite` está haciendo su trabajo. |
+| `not-serving` | Contestó 5xx | El proveedor está arriba pero no sirve JMAP. |
+| `unreachable` | Conexión rechazada, DNS, cert no confiable o plazo agotado | `JMAP_URL`, red/firewall, y `NODE_EXTRA_CA_CERTS` si es un cert privado. |
 
 **Base de datos.** El cliente acota la conexión para que una query lenta no
 cuelgue el servicio.
@@ -482,7 +557,7 @@ no texto para el operador. El `code` es lo que se busca.
 | `oidc_discovery_failed`, `oidc_exchange_failed`, `oidc_email_missing` | 502 | El proveedor OIDC falló o devolvió un token sin correo. Mirar Authentik. |
 | `ai_provider_error` | 502 | El proveedor de IA falló. |
 | `database_unavailable` | 503 | Postgres caído o inalcanzable. **No es un bug de la app.** |
-| `mail_not_configured` | 503 | Falta `STALWART_URL`. |
+| `mail_not_configured` | 503 | Falta `JMAP_URL`. |
 | `mail_credentials_missing` | 503 | El usuario no tiene credencial de buzón dada de alta. |
 | `sso_not_configured` | 503 | No hay proveedor OIDC configurado en el portal de administración. |
 | `upstream_timeout` | 504 | Un servicio externo aceptó la conexión y no respondió dentro del plazo. Es lento, no caído — la distinción importa. |

@@ -13,7 +13,7 @@ import { createApp } from "../../app";
 import { createMailRouter } from "./router";
 import { evictMailSession } from "./context";
 import { DEFAULT_MAX_STREAMS_PER_USER } from "./streams";
-import type { JmapClient } from "../../infra/stalwart/jmap";
+import type { JmapClient } from "../../infra/jmap/client";
 
 const sql = createDb(testDatabaseUrl());
 

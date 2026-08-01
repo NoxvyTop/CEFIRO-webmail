@@ -4,7 +4,12 @@ import type { ContactsRepo } from "../../infra/repos/contacts";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SignaturesRepo } from "../../infra/repos/signatures";
 import type { UserPreferencesRepo } from "../../infra/repos/user-preferences";
-import type { JmapAuth, JmapClient, JmapSession } from "../../infra/stalwart/jmap";
+import type {
+  JmapAuth,
+  JmapAuthMode,
+  JmapClient,
+  JmapSession,
+} from "../../infra/jmap/client";
 import type { SessionStore } from "../auth/sessions";
 import type { AuthVariables } from "../auth/middleware";
 import { mailStreams } from "./streams";
@@ -18,10 +23,16 @@ export type MailDeps = {
   fetchFn?: typeof fetch;
   /**
    * Outbound deadline for the routes that bypass the JMAP client and talk to
-   * Stalwart over raw fetch (event stream, blob upload/download). Defaults to
-   * DEFAULT_STALWART_TIMEOUT_MS — see core/deadline.ts (GH #165).
+   * the provider over raw fetch (event stream, blob upload/download). Defaults
+   * to DEFAULT_JMAP_TIMEOUT_MS — see core/deadline.ts (GH #165).
    */
   timeoutMs?: number;
+  /**
+   * How those same raw-fetch routes present the mailbox credential (GH #35).
+   * Defaults to `basic`, which is what every deployment did before the knob
+   * existed, so nothing that omits it changes behaviour.
+   */
+  authMode?: JmapAuthMode;
   // Optional (GH #124): when wired, sender addresses are harvested into the
   // user's contacts. As of GH #180 this happens once per delivery, off the JMAP
   // event subscription that feeds GET /events, not on every GET /messages read —

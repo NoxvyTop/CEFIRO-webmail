@@ -7,11 +7,11 @@ import { recordOutbound } from "./metrics";
 // latency profiles an order of magnitude apart: a ceiling loose enough for an
 // AI generation is no ceiling at all for a mailbox listing.
 //
-// Stalwart (JMAP): a mailbox listing or an Email/get is a sub-second call to a
-// service that is normally on the same host or LAN. 10s leaves two orders of
-// magnitude of headroom and still fails well inside the patience of whatever
-// reverse proxy sits in front of us.
-export const DEFAULT_STALWART_TIMEOUT_MS = 10_000;
+// JMAP (Stalwart, or any other RFC 8620 provider): a mailbox listing or an
+// Email/get is a sub-second call to a service that is normally on the same host
+// or LAN. 10s leaves two orders of magnitude of headroom and still fails well
+// inside the patience of whatever reverse proxy sits in front of us.
+export const DEFAULT_JMAP_TIMEOUT_MS = 10_000;
 // AI providers: a thread summary is a real generation of up to 1024 tokens,
 // frequently against a self-hosted or rate-limited endpoint. Tens of seconds
 // is normal there, not broken, so a JMAP-sized ceiling would turn healthy
@@ -43,7 +43,7 @@ export function upstreamTimeoutError(upstream: string, timeoutMs: number): Domai
 /**
  * Times one outbound attempt and reports it to `/metrics` (GH #240).
  *
- * Every call this process makes to Stalwart, the identity provider and the AI
+ * Every call this process makes to the JMAP provider, the identity provider and the AI
  * provider already passes through one of the two wrappers below, and both
  * already carry the dependency's name in order to write the timeout log line —
  * so this is the one place where "latency and error rate per dependency" can be

@@ -16,7 +16,7 @@ import {
 
 // Minimal shape of the SDK's `messages` resource we depend on — lets tests
 // inject a fake instead of hitting the network, same DI pattern as
-// createJmapClient's injectable `fetchFn` (infra/stalwart/jmap.ts).
+// createJmapClient's injectable `fetchFn` (infra/jmap/client.ts).
 export type AnthropicMessagesApi = {
   create(
     params: {

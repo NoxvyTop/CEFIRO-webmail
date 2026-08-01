@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_STALWART_TIMEOUT_MS } from "../../core/deadline";
-import { createJmapClient, type JmapMethodCall, type JmapSession } from "./jmap";
+import { DEFAULT_JMAP_TIMEOUT_MS } from "../../core/deadline";
+import {
+  createJmapClient,
+  jmapAuthHeader,
+  resolveSessionUrls,
+  type JmapMethodCall,
+  type JmapSession,
+} from "./client";
 
 const auth = { email: "u@noxvytop.com", password: "mailbox-pw" };
 const sessionBody = {
@@ -45,30 +51,133 @@ describe("jmap client", () => {
     primaryAccounts: { "urn:ietf:params:jmap:mail": "acc-1" },
   };
 
-  it("trusts the server-advertised origin verbatim when forceBase is off (default)", async () => {
-    const client = createJmapClient({
-      baseUrl: "https://mail.test",
-      fetchFn: fetchReturning(advertisedElsewhere),
+  // GH #34 / design GH #188. `rewrite` is the DEFAULT: the old default trusted
+  // the advertisement, which is what made "discovery works, every call after it
+  // 502s" the most common misconfiguration of this dependency.
+  describe("advertised session URLs (JMAP_URL_MODE)", () => {
+    it("rewrites advertised URLs to the connection origin by default, keeping path and query", async () => {
+      const fetchFn = fetchReturning(advertisedElsewhere);
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+      const session = await client.getSession(auth);
+      expect(session.apiUrl).toBe("https://mail.test/jmap/");
+      expect(session.uploadUrl).toBe("https://mail.test/jmap/upload/{accountId}/");
+      expect(session.downloadUrl).toBe(
+        "https://mail.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
+      );
+      expect(session.eventSourceUrl).toBe(
+        "https://mail.test/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+      );
     });
-    const session = await client.getSession(auth);
-    expect(session.apiUrl).toBe("https://internal.mail.test:8080/jmap/");
-    expect(session.uploadUrl).toBe(
-      "https://internal.mail.test:8080/jmap/upload/{accountId}/",
-    );
+
+    it("rewrites onto a base URL that carries a path and a trailing slash", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://proxy.test:9443/mail/",
+        fetchFn: fetchReturning(advertisedElsewhere),
+      });
+      const session = await client.getSession(auth);
+      expect(session.apiUrl).toBe("https://proxy.test:9443/jmap/");
+    });
+
+    it("trusts the server-advertised origin verbatim in trust mode", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning(advertisedElsewhere),
+        urlMode: "trust",
+      });
+      const session = await client.getSession(auth);
+      expect(session.apiUrl).toBe("https://internal.mail.test:8080/jmap/");
+      expect(session.uploadUrl).toBe(
+        "https://internal.mail.test:8080/jmap/upload/{accountId}/",
+      );
+    });
+
+    it("leaves an unadvertised URL empty rather than inventing an origin for it", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning({
+          apiUrl: "https://internal.mail.test:8080/jmap/",
+          primaryAccounts: { "urn:ietf:params:jmap:mail": "acc-1" },
+        }),
+      });
+      const session = await client.getSession(auth);
+      expect(session.uploadUrl).toBe("");
+      expect(session.downloadUrl).toBe("");
+      expect(session.eventSourceUrl).toBe("");
+    });
+
+    it("uploads to the rewritten uploadUrl with {accountId} still templated", async () => {
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(advertisedElsewhere)))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ blobId: "blob-1" })),
+        ) as unknown as typeof fetch;
+      const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+      const session = await client.getSession(auth);
+      await client.uploadBlob(auth, session, "hi", "text/plain");
+      const [url] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[1]!;
+      expect(String(url)).toBe("https://mail.test/jmap/upload/acc-1/");
+    });
+
+    it("resolveSessionUrls is pure and mode-driven", () => {
+      const advertised = {
+        apiUrl: "http://internal:8080/jmap/",
+        eventSourceUrl: "",
+        uploadUrl: "http://internal:8080/upload/{accountId}/",
+        downloadUrl: "http://internal:8080/download/{blobId}",
+      };
+      expect(resolveSessionUrls(advertised, "https://mail.test", "trust")).toEqual(advertised);
+      expect(resolveSessionUrls(advertised, "https://mail.test", "rewrite")).toEqual({
+        apiUrl: "https://mail.test/jmap/",
+        eventSourceUrl: "",
+        uploadUrl: "https://mail.test/upload/{accountId}/",
+        downloadUrl: "https://mail.test/download/{blobId}",
+      });
+    });
   });
 
-  it("rewrites advertised URLs to the connection origin when forceBase is on, keeping path and query", async () => {
-    const fetchFn = fetchReturning(advertisedElsewhere);
-    const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn, forceBase: true });
-    const session = await client.getSession(auth);
-    expect(session.apiUrl).toBe("https://mail.test/jmap/");
-    expect(session.uploadUrl).toBe("https://mail.test/jmap/upload/{accountId}/");
-    expect(session.downloadUrl).toBe(
-      "https://mail.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
-    );
-    expect(session.eventSourceUrl).toBe(
-      "https://mail.test/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
-    );
+  // GH #35. `basic` must stay byte-for-byte what it always was; `bearer` is the
+  // only thing that lets a token/OAuth provider be talked to at all.
+  describe("auth mode (JMAP_AUTH_MODE)", () => {
+    it("builds a Basic header by default and a Bearer header on request", () => {
+      expect(jmapAuthHeader(auth)).toBe(`Basic ${btoa("u@noxvytop.com:mailbox-pw")}`);
+      expect(jmapAuthHeader(auth, "basic")).toBe(`Basic ${btoa("u@noxvytop.com:mailbox-pw")}`);
+      expect(jmapAuthHeader(auth, "bearer")).toBe("Bearer mailbox-pw");
+    });
+
+    it("sends Bearer on session discovery, method calls and uploads", async () => {
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(sessionBody)))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ methodResponses: [] })))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ blobId: "blob-1" })),
+        ) as unknown as typeof fetch;
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn,
+        authMode: "bearer",
+      });
+      const session = await client.getSession(auth);
+      await client.request(auth, session, [["Mailbox/get", {}, "0"]]);
+      await client.uploadBlob(auth, session, "hi", "text/plain");
+      const calls = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      for (const [, init] of calls) {
+        expect((init.headers as Record<string, string>).authorization).toBe("Bearer mailbox-pw");
+      }
+      expect(calls).toHaveLength(3);
+    });
+
+    it("still maps 401 to mail_auth_failed in bearer mode", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning({}, 401),
+        authMode: "bearer",
+      });
+      await expect(client.getSession(auth)).rejects.toMatchObject({
+        code: "mail_auth_failed",
+      });
+    });
   });
 
   it("maps 401 to mail_auth_failed", async () => {
@@ -152,7 +261,7 @@ describe("jmap client", () => {
         code: "upstream_timeout",
         httpStatus: 504,
       });
-      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(DEFAULT_JMAP_TIMEOUT_MS);
       await assertion;
     });
 
@@ -162,7 +271,7 @@ describe("jmap client", () => {
 
       const pending = client.request(auth, session, [["Mailbox/get", {}, "0"]]);
       const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
-      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(DEFAULT_JMAP_TIMEOUT_MS);
       await assertion;
     });
 
@@ -172,7 +281,7 @@ describe("jmap client", () => {
 
       const pending = client.uploadBlob(auth, session, "script", "application/sieve");
       const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
-      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(DEFAULT_JMAP_TIMEOUT_MS);
       await assertion;
     });
 
@@ -206,7 +315,7 @@ describe("jmap client", () => {
 
       expect(result.accountId).toBe("acc-1");
       // Well past the deadline: a settled call must never be timed out later.
-      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS * 10);
+      await vi.advanceTimersByTimeAsync(DEFAULT_JMAP_TIMEOUT_MS * 10);
       expect(result.apiUrl).toBe("https://mail.test/jmap/");
     });
   });
@@ -442,7 +551,7 @@ describe("jmap client", () => {
         code: "upstream_timeout",
         httpStatus: 504,
       });
-      await vi.advanceTimersByTimeAsync(DEFAULT_STALWART_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(DEFAULT_JMAP_TIMEOUT_MS);
       await assertion;
       vi.useRealTimers();
     });

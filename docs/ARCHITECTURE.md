@@ -46,6 +46,15 @@
    contiene lógica propia donde aporta valor: provisioning, preferencias e
    integración con Odoo.
 
+   El adaptador (`infra/jmap/`) habla **JMAP (RFC 8620/8621) a secas**, no
+   Stalwart (#33): el proveedor se configura por rol con `JMAP_URL`, las URLs
+   que anuncia en su sesión se resuelven según `JMAP_URL_MODE`
+   (`rewrite` por defecto, `trust` para host partido — #34) y la credencial se
+   presenta según `JMAP_AUTH_MODE` (`basic` o `bearer` para proveedores con
+   token — #35). Como el navegador nunca consume esas URLs anunciadas, el BFF
+   puede reescribirlas al camino directo sin que nada más se entere. Ver la
+   matriz de topologías en [OPERATIONS.md](OPERATIONS.md).
+
 3. **PostgreSQL guarda solo datos propios de la aplicación**:
    firmas, preferencias de usuario, configuración del administrador y mapeos
    con Odoo. Los correos, carpetas y etiquetas viven en Stalwart — nunca se
@@ -293,7 +302,7 @@ apps/server/src/
 │   ├── settings/       # firmas, preferencias
 │   └── setup/          # modo bootstrap
 ├── core/               # tipos de dominio, errores, puertos
-└── infra/              # adaptadores: Postgres, cliente Stalwart, cliente Authentik
+└── infra/              # adaptadores: Postgres, cliente JMAP (infra/jmap/), cliente Authentik
 ```
 
 ### Modelo de datos propio

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FilterRule } from "@webmail/shared";
-import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/stalwart/jmap";
+import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/jmap/client";
 import { MANAGED_SCRIPT_NAME, SIEVE_CAPABILITY, supportsSieve, syncSieveScript } from "./sync";
 
 const auth = { email: "u@noxvytop.com", password: "pw" };

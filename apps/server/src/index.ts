@@ -8,7 +8,8 @@ import { createShutdown, installProcessHandlers } from "./core/shutdown";
 import { createDb, DATABASE_UNAVAILABLE_CODE } from "./infra/db/client";
 import { DomainError } from "./core/errors";
 import { checkDb } from "./infra/db/health";
-import { checkStalwart } from "./infra/stalwart/health";
+import { checkJmap } from "./infra/jmap/health";
+import { probeJmap } from "./infra/jmap/probe";
 import { migrate } from "./infra/db/migrate";
 import { createAuditRepo } from "./infra/repos/audit";
 import { createInstanceSettingsRepo } from "./infra/repos/instance-settings";
@@ -36,7 +37,7 @@ import {
   remoteKeySource,
 } from "./modules/auth/oidc";
 import { createSessionStore } from "./modules/auth/sessions";
-import { createJmapClient } from "./infra/stalwart/jmap";
+import { createJmapClient } from "./infra/jmap/client";
 import { createMailRouter } from "./modules/mail/router";
 import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
@@ -55,6 +56,13 @@ try {
 } catch (error) {
   log("error", "invalid configuration", { error: String(error) });
   process.exit(1);
+}
+
+// Config variables this release renamed or removed (GH #33/#34). Warned about
+// on EVERY boot, one line each, naming the replacement: an alias that is
+// accepted in silence is an alias nobody ever migrates off.
+for (const deprecation of config.deprecations) {
+  log("warn", "deprecated configuration", deprecation);
 }
 
 const db = createDb(config.databaseUrl, {
@@ -173,15 +181,35 @@ const sieveSyncState = createSieveSyncStateRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode, config.bootstrapPassword);
-const jmap = config.stalwartUrl
+const jmap = config.jmapUrl
   ? createJmapClient({
-      baseUrl: config.stalwartUrl,
-      forceBase: config.jmapForceBase,
-      timeoutMs: config.stalwartTimeoutMs,
+      baseUrl: config.jmapUrl,
+      urlMode: config.jmapUrlMode,
+      authMode: config.jmapAuthMode,
+      timeoutMs: config.jmapTimeoutMs,
     })
   : null;
 
-log("info", "mail proxy", { configured: jmap !== null });
+log("info", "mail proxy", {
+  configured: jmap !== null,
+  urlMode: config.jmapUrlMode,
+  authMode: config.jmapAuthMode,
+});
+
+// Boot-time reachability probe (GH #188). Deliberately NOT awaited: the mail
+// provider and this process usually start together, so blocking the listener on
+// a dependency that may still be coming up would turn a normal ordering race
+// into a slow boot — and the probe is diagnostic, not a precondition. It never
+// throws; it logs what it found, including the URL this process will really
+// call once JMAP_URL_MODE has been applied.
+if (config.jmapUrl) {
+  void probeJmap({
+    url: config.jmapUrl,
+    urlMode: config.jmapUrlMode,
+    authMode: config.jmapAuthMode,
+    timeoutMs: config.jmapTimeoutMs,
+  });
+}
 
 // Software-level default-safe gate: AI features are inert unless explicitly
 // enabled AND an API key is configured. See docs/ARCHITECTURE.md ("IA —
@@ -241,19 +269,23 @@ if (bootstrap.enabled) {
   log("warn", "bootstrap mode active", { user: "bootstrap-admin" });
 }
 
-// Health checks wired into /api/health (GH #197). Stalwart is probed only when
-// a URL is configured — an unconfigured mail backend would otherwise report the
-// instance degraded forever. The SSO/OIDC provider is deliberately NOT probed
-// here: discovery is an outbound call to the IdP, and hitting it on every
-// health poll would reintroduce the amplification vector #194 just closed.
+// Health checks wired into /api/health (GH #197). The mail provider is probed
+// only when a URL is configured — an unconfigured mail backend would otherwise
+// report the instance degraded forever. The SSO/OIDC provider is deliberately
+// NOT probed here: discovery is an outbound call to the IdP, and hitting it on
+// every health poll would reintroduce the amplification vector #194 just closed.
+//
+// The check keeps the key `stalwart` in the published /api/health body and in
+// `cefiro_dependency_up{dependency="stalwart"}` — operators' dashboards and
+// alerts are keyed on it, and GH #33 renames names in code, not wire labels.
 const checks: Record<string, HealthCheck> = { postgres: () => checkDb(db) };
-if (config.stalwartUrl) {
-  const stalwartUrl = config.stalwartUrl;
+if (config.jmapUrl) {
+  const jmapUrl = config.jmapUrl;
   // The probe's budget travels WITH the request (GH #242): overrunning it now
   // cancels the fetch instead of leaving it running behind an answer that has
   // already been sent. See core/health.ts.
   checks.stalwart = (signal) =>
-    checkStalwart({ url: stalwartUrl, timeoutMs: config.stalwartTimeoutMs, signal });
+    checkJmap({ url: jmapUrl, timeoutMs: config.jmapTimeoutMs, signal });
 }
 
 const app = createApp({
@@ -292,7 +324,11 @@ const app = createApp({
     userPreferences,
     jmap,
     contacts,
-    timeoutMs: config.stalwartTimeoutMs,
+    timeoutMs: config.jmapTimeoutMs,
+    // The raw-fetch routes (SSE, blob up/download) must present the mailbox
+    // credential the same way the JMAP client does, or `bearer` would work for
+    // the API and 401 on every attachment (GH #35).
+    authMode: config.jmapAuthMode,
   }),
   sieveRouter: createSieveRouter({
     sessions,
