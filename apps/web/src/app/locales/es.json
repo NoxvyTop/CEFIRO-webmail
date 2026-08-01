@@ -447,6 +447,19 @@
       "pending": "Tus reglas están guardadas, pero todavía no se aplican: el servidor de correo aún no las ha aceptado.",
       "failed": "El último intento de aplicar tus reglas en el servidor de correo falló. Están guardadas, pero aún no filtran nada.",
       "invalid": "Tus reglas están guardadas, pero el servidor de correo rechazó el script generado; esto no se va a arreglar solo. Contacta con tu administrador."
+    },
+    "advanced": {
+      "title": "Avanzado: editar el script Sieve",
+      "intro": "Este es el script Sieve que generan tus reglas. Puedes tomar el control y escribirlo a mano para lo que el constructor de reglas no cubre.",
+      "active": "Este script escrito a mano es el que está ejecutando tu servidor de correo.",
+      "label": "Script Sieve",
+      "takeoverWarning": "Si lo guardas, pasa a ser lo que ejecuta tu servidor de correo: tus reglas y tus respuestas automáticas siguen guardadas, pero dejan de aplicarse hasta que vuelvas a ellas.",
+      "save": "Guardar y usar este script",
+      "saved": "Script guardado y aplicado",
+      "useRules": "Volver a mis reglas",
+      "keptOnReturn": "Al volver se conserva tu script: deja de aplicarse y lo encontrarás aquí sin cambios.",
+      "rejected": "Tu servidor de correo rechazó este script, así que no se guardó nada. Corrígelo y vuelve a intentarlo.",
+      "notice": "Estás usando un script Sieve escrito a mano y es el que se ejecuta. Estas reglas están guardadas, pero no se aplican hasta que vuelvas a ellas desde el editor avanzado."
     }
   },
   "vacation": {
@@ -459,7 +472,8 @@
     "intervalDays": "Días entre respuestas al mismo remitente",
     "save": "Guardar",
     "saved": "Guardado",
-    "unavailable": "Tu servidor de correo no admite respuestas automáticas."
+    "unavailable": "Tu servidor de correo no admite respuestas automáticas.",
+    "advancedNotice": "Estás usando un script Sieve escrito a mano y es el que se ejecuta. Las respuestas automáticas que configures aquí se guardan, pero no se envían hasta que vuelvas a tus reglas desde el editor avanzado de Filtros."
   },
   "contacts": {
     "title": "Contactos",

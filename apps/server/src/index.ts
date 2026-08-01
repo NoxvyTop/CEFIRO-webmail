@@ -19,6 +19,7 @@ import { createSsoConfigRepo } from "./infra/repos/sso-config";
 import { createUserPreferencesRepo } from "./infra/repos/user-preferences";
 import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
+import { createSieveRawScriptRepo } from "./infra/repos/sieve-raw-script";
 import { createSieveSyncStateRepo } from "./infra/repos/sieve-sync-state";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { createContactsRepo } from "./infra/repos/contacts";
@@ -178,6 +179,7 @@ const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
 const filterRules = createFilterRulesRepo(db);
 const sieveSyncState = createSieveSyncStateRepo(db);
+const sieveRawScript = createSieveRawScriptRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode, config.bootstrapPassword);
@@ -336,6 +338,7 @@ const app = createApp({
     filterRules,
     vacationSettings,
     sieveSyncState,
+    sieveRawScript,
     jmap,
   }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),

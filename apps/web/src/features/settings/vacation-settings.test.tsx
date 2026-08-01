@@ -6,15 +6,27 @@ import i18n from "../../app/i18n";
 import type { VacationSettings as VacationSettingsData } from "@webmail/shared";
 import { VacationSettings } from "./VacationSettings";
 
-const { fetchVacationSettings, updateVacationSettings, fetchSieveCapability } = vi.hoisted(() => ({
+const {
+  fetchVacationSettings,
+  updateVacationSettings,
+  fetchSieveCapability,
+  fetchSieveRawScript,
+} = vi.hoisted(() => ({
   fetchVacationSettings: vi.fn(),
   updateVacationSettings: vi.fn(),
   fetchSieveCapability: vi.fn(),
+  fetchSieveRawScript: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, fetchVacationSettings, updateVacationSettings, fetchSieveCapability };
+  return {
+    ...actual,
+    fetchVacationSettings,
+    updateVacationSettings,
+    fetchSieveCapability,
+    fetchSieveRawScript,
+  };
 });
 
 const settings: VacationSettingsData = {
@@ -42,6 +54,9 @@ describe("VacationSettings", () => {
     // The Stalwart case, assumed by every test that does not say otherwise:
     // the mail server can run the Sieve `vacation` action (GH #36).
     fetchSieveCapability.mockResolvedValue({ supported: true });
+    // And the rule builder still owns the script (GH #23), so what this form
+    // saves is also what runs.
+    fetchSieveRawScript.mockResolvedValue({ mode: "rules", script: "", updatedAt: null });
   });
 
   afterEach(() => {
@@ -134,5 +149,39 @@ describe("VacationSettings without Sieve (GH #36)", () => {
 
     expect(await screen.findByLabelText(i18n.t("vacation.message"))).toBeInTheDocument();
     expect(screen.queryByTestId("settings-unavailable")).not.toBeInTheDocument();
+  });
+});
+
+// GH #23: an automatic reply is part of the same Sieve script the advanced
+// editor takes over. While a hand-written script owns the account, this form
+// still saves — and what it saves is not what runs.
+describe("VacationSettings while a hand-written script runs (GH #23)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchSieveCapability.mockResolvedValue({ supported: true });
+  });
+
+  it("says the reply is saved but not being sent", async () => {
+    fetchSieveRawScript.mockResolvedValue({
+      mode: "raw",
+      script: "stop;\n",
+      updatedAt: "2026-07-01T10:00:00.000Z",
+    });
+    renderVacation();
+
+    expect(await screen.findByTestId("sieve-advanced-notice")).toHaveTextContent(
+      i18n.t("vacation.advancedNotice"),
+    );
+    // The form is left alone: it is where the user prepares the reply that
+    // comes back the moment they hand the script over to their rules again.
+    expect(screen.getByLabelText(i18n.t("vacation.message"))).toBeInTheDocument();
+  });
+
+  it("says nothing while the rule builder still owns the script", async () => {
+    fetchSieveRawScript.mockResolvedValue({ mode: "rules", script: "", updatedAt: null });
+    renderVacation();
+
+    await screen.findByLabelText(i18n.t("vacation.message"));
+    expect(screen.queryByTestId("sieve-advanced-notice")).not.toBeInTheDocument();
   });
 });

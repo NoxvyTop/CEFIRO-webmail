@@ -447,6 +447,19 @@
       "pending": "Your rules are saved, but they are not being applied yet: the mail server has not accepted them.",
       "failed": "The last attempt to apply your rules to the mail server failed. They are saved, but they are not filtering anything yet.",
       "invalid": "Your rules are saved, but the mail server rejected the generated script — this will not fix itself. Contact your administrator."
+    },
+    "advanced": {
+      "title": "Advanced: edit the Sieve script",
+      "intro": "This is the Sieve script your rules produce. You can take it over and write it by hand for anything the rule builder does not cover.",
+      "active": "This hand-written script is what your mail server is running.",
+      "label": "Sieve script",
+      "takeoverWarning": "If you save this, it becomes what your mail server runs: your rules and automatic replies stay saved, but stop being applied until you go back to them.",
+      "save": "Save and use this script",
+      "saved": "Script saved and applied",
+      "useRules": "Go back to my rules",
+      "keptOnReturn": "Going back keeps your script: it stops being applied, and you will find it here unchanged.",
+      "rejected": "Your mail server refused this script, so nothing was saved. Fix it and try again.",
+      "notice": "You are using a hand-written Sieve script, and that is what runs. These rules are saved, but they are not being applied until you go back to them from the advanced editor."
     }
   },
   "vacation": {
@@ -459,7 +472,8 @@
     "intervalDays": "Days between replies to the same sender",
     "save": "Save",
     "saved": "Saved",
-    "unavailable": "Your mail server does not support automatic replies."
+    "unavailable": "Your mail server does not support automatic replies.",
+    "advancedNotice": "You are using a hand-written Sieve script, and that is what runs. Automatic replies set here are saved, but they are not being sent until you go back to your rules from the advanced editor in Filters."
   },
   "contacts": {
     "title": "Contacts",

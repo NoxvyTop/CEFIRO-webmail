@@ -4,6 +4,8 @@ import {
   filterRuleSchema,
   profileViewSchema,
   sieveCapabilitySchema,
+  sieveGeneratedScriptSchema,
+  sieveRawScriptSchema,
   sieveSyncStateSchema,
   updateProfileSchema,
   vacationSettingsInputSchema,
@@ -12,6 +14,8 @@ import {
   type FilterRuleInput,
   type ProfileView,
   type SieveCapability,
+  type SieveGeneratedScript,
+  type SieveRawScript,
   type SieveSyncState,
   type UpdateProfileInput,
   type VacationSettings,
@@ -95,6 +99,57 @@ export async function fetchFilterSyncState(): Promise<SieveSyncState> {
   const res = await fetch("/api/mail/filters/sync-state");
   if (!res.ok) return parseError(res);
   return sieveSyncStateSchema.parse(await res.json());
+}
+
+/**
+ * The advanced-mode state (GH #23): which author owns the Sieve script this
+ * account runs, and the script the user wrote by hand.
+ *
+ * Read by the Filters and Vacation panels on load, not only by the editor —
+ * while a hand-written script owns the account, everything those two panels
+ * show is stored but NOT being applied, and that has to be said out loud.
+ */
+export async function fetchSieveRawScript(): Promise<SieveRawScript> {
+  const res = await fetch("/api/mail/filters/raw");
+  if (!res.ok) return parseError(res);
+  return sieveRawScriptSchema.parse(await res.json());
+}
+
+/**
+ * The script the rule builder produces right now — what the advanced editor is
+ * seeded with, so taking the script over never means retyping the rules.
+ *
+ * A separate request from the state above because the server pays a JMAP
+ * session and a Mailbox/get to produce it, and only a user who actually opens
+ * the editor should cost that.
+ */
+export async function fetchGeneratedSieveScript(): Promise<SieveGeneratedScript> {
+  const res = await fetch("/api/mail/filters/raw/generated");
+  if (!res.ok) return parseError(res);
+  return sieveGeneratedScriptSchema.parse(await res.json());
+}
+
+/**
+ * Saves a hand-written script and makes it the one that runs. Saving IS the
+ * handover — see the server route for why there is no separate activation step.
+ *
+ * Rejected by the mail server's own parser: 422 `sieve_invalid`, and nothing is
+ * stored.
+ */
+export async function saveSieveRawScript(script: string): Promise<SieveRawScript> {
+  const res = await fetch("/api/mail/filters/raw", jsonRequest("PUT", { script }));
+  if (!res.ok) return parseError(res);
+  return sieveRawScriptSchema.parse(await res.json());
+}
+
+/**
+ * Gives the script back to the rule builder. The hand-written script is kept,
+ * deactivated — the way back must not be the thing that destroys it.
+ */
+export async function switchToRuleBuilder(): Promise<SieveRawScript> {
+  const res = await fetch("/api/mail/filters/raw/rules", { method: "POST" });
+  if (!res.ok) return parseError(res);
+  return sieveRawScriptSchema.parse(await res.json());
 }
 
 export async function syncFilters(): Promise<{ status: string }> {

@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { FilterRule } from "@webmail/shared";
 import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/jmap/client";
-import { MANAGED_SCRIPT_NAME, SIEVE_CAPABILITY, supportsSieve, syncSieveScript } from "./sync";
+import {
+  DEFAULT_TRASH_FOLDER,
+  MANAGED_SCRIPT_NAME,
+  SIEVE_CAPABILITY,
+  resolveTrashFolder,
+  supportsSieve,
+  syncSieveScript,
+  uploadAndValidateScript,
+} from "./sync";
 
 const auth = { email: "u@noxvytop.com", password: "pw" };
 const session: JmapSession = {
@@ -28,6 +36,7 @@ function fakeJmap(options: {
   existingScripts?: { id: string; name: string }[];
   validateError?: unknown;
   setResponse?: Record<string, unknown>;
+  mailboxes?: { name: string; role?: string | null }[];
 }) {
   const calls: Recorded[] = [];
   const uploads: string[] = [];
@@ -44,7 +53,9 @@ function fakeJmap(options: {
       const [method, args] = methodCalls[0]!;
       calls.push({ method, args, extraUsing });
       if (method === "Mailbox/get") {
-        return [["Mailbox/get", { list: [{ name: "Papelera", role: "trash" }] }, "0"]];
+        return [
+          ["Mailbox/get", { list: options.mailboxes ?? [{ name: "Papelera", role: "trash" }] }, "0"],
+        ];
       }
       if (method === "SieveScript/get") {
         return [["SieveScript/get", { list: options.existingScripts ?? [] }, "0"]];
@@ -125,6 +136,77 @@ describe("syncSieveScript", () => {
     await expect(
       syncSieveScript({ jmap: client, auth, session, rules: [sampleRule], vacation: null }),
     ).rejects.toMatchObject({ code: "sieve_sync_failed" });
+  });
+});
+
+// GH #23: in advanced mode a hand-written script owns the account, and the
+// generator is not consulted at all.
+describe("syncSieveScript in advanced mode", () => {
+  const handWritten = 'require ["reject"];\nreject "closed";\n';
+
+  it("pushes the hand-written script verbatim, generating nothing", async () => {
+    const { client, calls, uploads } = fakeJmap({});
+    await syncSieveScript({
+      jmap: client,
+      auth,
+      session,
+      rules: [sampleRule],
+      vacation: null,
+      raw: { mode: "raw", script: handWritten, updatedAt: "2026-07-01T10:00:00.000Z" },
+    });
+
+    expect(uploads).toEqual([handWritten]);
+    // No Mailbox/get: nothing needs the trash folder's name, so raw mode costs
+    // one JMAP round-trip LESS than the generated path rather than one more.
+    expect(calls.map((c) => c.method)).toEqual([
+      "SieveScript/get",
+      "SieveScript/validate",
+      "SieveScript/set",
+    ]);
+  });
+
+  it("regenerates from the rules again once ownership is handed back", async () => {
+    const { client, uploads } = fakeJmap({});
+    await syncSieveScript({
+      jmap: client,
+      auth,
+      session,
+      rules: [sampleRule],
+      vacation: null,
+      raw: { mode: "rules", script: handWritten, updatedAt: "2026-07-01T10:00:00.000Z" },
+    });
+
+    // The stored script is still there and is simply not the active one.
+    expect(uploads[0]).toContain("# rule: trash spam");
+    expect(uploads[0]).not.toContain("reject");
+  });
+});
+
+describe("uploadAndValidateScript", () => {
+  it("returns the blob id the provider accepted", async () => {
+    const { client, calls } = fakeJmap({});
+    const blobId = await uploadAndValidateScript({ jmap: client, auth, session, script: "stop;\n" });
+    expect(blobId).toBe("blob1");
+    expect(calls.map((c) => c.method)).toEqual(["SieveScript/validate"]);
+  });
+
+  it("throws sieve_invalid when the provider's parser refuses it", async () => {
+    const { client } = fakeJmap({ validateError: { type: "invalidScript" } });
+    await expect(
+      uploadAndValidateScript({ jmap: client, auth, session, script: "if header {" }),
+    ).rejects.toMatchObject({ code: "sieve_invalid" });
+  });
+});
+
+describe("resolveTrashFolder", () => {
+  it("uses the provider's own name for the trash mailbox", async () => {
+    const { client } = fakeJmap({});
+    expect(await resolveTrashFolder({ jmap: client, auth, session })).toBe("Papelera");
+  });
+
+  it("falls back to the default when the provider lists no trash mailbox", async () => {
+    const { client } = fakeJmap({ mailboxes: [{ name: "Inbox", role: "inbox" }] });
+    expect(await resolveTrashFolder({ jmap: client, auth, session })).toBe(DEFAULT_TRASH_FOLDER);
   });
 });
 

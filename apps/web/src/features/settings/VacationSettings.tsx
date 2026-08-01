@@ -8,6 +8,7 @@ import type {
 import { fetchSieveCapability, fetchVacationSettings, updateVacationSettings } from "./api";
 import { settingsErrorKey } from "./errors";
 import { SettingsUnavailable } from "./PanelStates";
+import { AdvancedModeNotice } from "./SieveAdvanced";
 
 const VACATION_QUERY_KEY = ["mail", "vacation"] as const;
 // Shared verbatim with FilterSettings (GH #36): both features are the same
@@ -90,6 +91,13 @@ export function VacationSettings() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      {/* GH #23: an automatic reply is part of the same Sieve script the
+          advanced editor takes over, so while a hand-written script owns the
+          account this form saves and does not apply. Without this, the panel
+          would answer a save with "Saved" for a reply that never goes out —
+          the quietest failure this feature could produce. */}
+      <AdvancedModeNotice messageKey="vacation.advancedNotice" />
+
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"

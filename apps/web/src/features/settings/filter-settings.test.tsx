@@ -16,10 +16,12 @@ const {
   reorderFilterRules,
   syncFilters,
   fetchSieveCapability,
+  fetchSieveRawScript,
 } = vi.hoisted(() => ({
   fetchFilterRules: vi.fn(),
   fetchFilterSyncState: vi.fn(),
   fetchSieveCapability: vi.fn(),
+  fetchSieveRawScript: vi.fn(),
   createFilterRule: vi.fn(),
   updateFilterRule: vi.fn(),
   deleteFilterRule: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock("./api", async (importOriginal) => {
     reorderFilterRules,
     syncFilters,
     fetchSieveCapability,
+    fetchSieveRawScript,
   };
 });
 
@@ -94,6 +97,9 @@ describe("FilterSettings", () => {
     // The Stalwart case, and the one every test below assumes unless it says
     // otherwise: the mail server can run Sieve (GH #36).
     fetchSieveCapability.mockResolvedValue({ supported: true });
+    // And the rule builder still owns the script (GH #23) — the mode every
+    // account starts in, and the one the tests below assume unless they say so.
+    fetchSieveRawScript.mockResolvedValue({ mode: "rules", script: "", updatedAt: null });
   });
 
   it("lists rules in order with their state toggles", async () => {
@@ -364,6 +370,56 @@ describe("FilterSettings", () => {
       // No flash of "unavailable" on the way to a server that supports it.
       expect(await screen.findByText("invoices")).toBeInTheDocument();
       expect(screen.queryByTestId("settings-unavailable")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #23: the rules stay listed, enabled and editable while a hand-written
+  // script owns the account — so nothing in this list says they are not being
+  // applied. The banner is the only thing that does.
+  describe("advanced mode is on (GH #23)", () => {
+    it("says the listed rules are not being applied", async () => {
+      fetchSieveRawScript.mockResolvedValue({
+        mode: "raw",
+        script: "stop;\n",
+        updatedAt: "2026-07-01T10:00:00.000Z",
+      });
+      renderFilters([ruleA]);
+
+      expect(await screen.findByTestId("sieve-advanced-notice")).toHaveTextContent(
+        i18n.t("filters.advanced.notice"),
+      );
+      // Still listed and still editable: they are what comes back when the
+      // script is handed over again, so withdrawing the editor would be worse.
+      expect(screen.getByText("invoices")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: i18n.t("filters.newRule") })).toBeInTheDocument();
+    });
+
+    it("says nothing while the rule builder still owns the script", async () => {
+      renderFilters([ruleA]);
+
+      await screen.findByText("invoices");
+      expect(screen.queryByTestId("sieve-advanced-notice")).not.toBeInTheDocument();
+    });
+
+    it("stays quiet when the advanced state itself cannot be read", async () => {
+      fetchSieveRawScript.mockRejectedValue(new MailApiError(500, "internal"));
+      renderFilters([ruleA]);
+
+      await screen.findByText("invoices");
+      expect(screen.queryByTestId("sieve-advanced-notice")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("is not offered at all on a mail server without Sieve", async () => {
+      // GH #36: the editor lives inside the panel the capability gate replaces,
+      // so a provider that cannot run Sieve is never offered one to write.
+      fetchSieveCapability.mockResolvedValue({ supported: false });
+      renderFilters();
+
+      await screen.findByTestId("settings-unavailable");
+      expect(
+        screen.queryByRole("button", { name: i18n.t("filters.advanced.title") }),
+      ).not.toBeInTheDocument();
     });
   });
 

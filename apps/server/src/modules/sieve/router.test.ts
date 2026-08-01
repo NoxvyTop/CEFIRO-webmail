@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
-import { sieveSyncStateSchema } from "@webmail/shared";
+import { sieveRawScriptSchema, sieveSyncStateSchema } from "@webmail/shared";
 import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
@@ -8,6 +8,7 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createFilterRulesRepo } from "../../infra/repos/filter-rules";
 import { createVacationSettingsRepo } from "../../infra/repos/vacation-settings";
+import { createSieveRawScriptRepo } from "../../infra/repos/sieve-raw-script";
 import { createSieveSyncStateRepo } from "../../infra/repos/sieve-sync-state";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
@@ -23,11 +24,13 @@ let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
 let filterRules: ReturnType<typeof createFilterRulesRepo>;
 let vacationSettings: ReturnType<typeof createVacationSettingsRepo>;
 let sieveSyncState: ReturnType<typeof createSieveSyncStateRepo>;
+let sieveRawScript: ReturnType<typeof createSieveRawScriptRepo>;
 let token: string;
 let token2: string;
 let token3: string;
 let token4: string;
 let token5: string;
+let token6: string;
 let userId: string;
 let user3Id: string;
 let user4Id: string;
@@ -50,6 +53,7 @@ beforeAll(async () => {
   filterRules = createFilterRulesRepo(sql);
   vacationSettings = createVacationSettingsRepo(sql);
   sieveSyncState = createSieveSyncStateRepo(sql);
+  sieveRawScript = createSieveRawScriptRepo(sql);
   sessions = createSessionStore(sql);
 
   const user1 = await users.create({
@@ -91,6 +95,16 @@ beforeAll(async () => {
     displayName: "Sieve Router User 5",
   });
   token5 = (await sessions.create(user5.id, 1)).token;
+
+  // GH #23 works on its own user: the advanced-mode tests below change which
+  // script an account pushes, and the sync-state suite above counts attempts
+  // per user — sharing one would make each suite's setup the other's noise.
+  const user6 = await users.create({
+    email: `sieve-r6-${crypto.randomUUID()}@noxvytop.com`,
+    displayName: "Sieve Router User 6",
+  });
+  token6 = (await sessions.create(user6.id, 1)).token;
+  await mailCredentials.set(user6.id, "mailbox-pw");
 });
 afterAll(() => sql.end());
 
@@ -102,6 +116,7 @@ function makeApp(jmap: JmapClient | null, reconcileCooldownMs?: number) {
       filterRules,
       vacationSettings,
       sieveSyncState,
+      sieveRawScript,
       jmap,
       reconcileCooldownMs,
     }),
@@ -561,5 +576,193 @@ describe("sieve capability (GH #36)", () => {
     // Distinct from sieve_sync_failed on purpose: that one is worth retrying
     // and this one never will be.
     expect(state.lastError).toBe("sieve_unsupported");
+  });
+});
+
+// GH #23: the advanced mode. The rule builder and a hand-written script both
+// want to own the same server-side script, so the tests that matter most here
+// are the ones about the handover — that taking over actually takes over, that
+// a rule edit afterwards does not quietly regenerate over it, and that going
+// back does not destroy what the user wrote.
+describe("sieve advanced mode (GH #23)", () => {
+  const NO_RECONCILE_MS = 600_000;
+  const HAND_WRITTEN = 'require ["fileinto"];\nif header :contains "list-id" "ops" {\n  fileinto "Ops";\n}\n';
+
+  function readRaw(app: ReturnType<typeof makeApp>, cookie = token6) {
+    return app.request("/api/mail/filters/raw", { headers: { cookie: `session=${cookie}` } });
+  }
+
+  async function rawState(app: ReturnType<typeof makeApp>, cookie = token6) {
+    return sieveRawScriptSchema.parse(await (await readRaw(app, cookie)).json());
+  }
+
+  it("requires a session", async () => {
+    const res = await makeApp(null).request("/api/mail/filters/raw");
+    expect(res.status).toBe(401);
+  });
+
+  it("reports rule-builder mode for an account that never opened the editor", async () => {
+    expect(await rawState(makeApp(null), token5)).toEqual({
+      mode: "rules",
+      script: "",
+      updatedAt: null,
+    });
+  });
+
+  it("seeds the editor with the script the rules actually produce", async () => {
+    const app = makeApp(stubJmap().client, NO_RECONCILE_MS);
+    expect((await post(app, "/api/mail/filters", { ...ruleBody, name: "seed", actions: [{ type: "delete" }] }, token6)).status).toBe(200);
+
+    const res = await app.request("/api/mail/filters/raw/generated", {
+      headers: { cookie: `session=${token6}` },
+    });
+    const { script } = (await res.json()) as { script: string };
+    expect(script).toContain("# rule: seed");
+    // The provider's own trash folder name, not the default: a preview that
+    // said "Trash" would hand the user a script that files somewhere else.
+    expect(script).toContain('fileinto "Papelera";');
+  });
+
+  it("falls back to the default trash folder when the provider cannot be asked", async () => {
+    const res = await makeApp(brokenJmap()).request("/api/mail/filters/raw/generated", {
+      headers: { cookie: `session=${token6}` },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { script: string }).script).toContain('fileinto "Trash";');
+  });
+
+  it("pushes a hand-written script verbatim once it is saved", async () => {
+    const { client, uploads } = stubJmap();
+    const res = await put(makeApp(client, NO_RECONCILE_MS), "/api/mail/filters/raw", { script: HAND_WRITTEN }, token6);
+
+    expect(res.status).toBe(200);
+    expect(sieveRawScriptSchema.parse(await res.json()).mode).toBe("raw");
+    // Two uploads: the pre-save validation, then the push. Both are the user's
+    // bytes, untouched — nothing here rewrites the script.
+    expect(uploads).toEqual([HAND_WRITTEN, HAND_WRITTEN]);
+  });
+
+  it("keeps pushing the hand-written script when a rule is edited afterwards", async () => {
+    // The whole point of the ownership model: the rule builder still works and
+    // still stores, but it no longer decides what runs.
+    const { client, uploads } = stubJmap();
+    const app = makeApp(client, NO_RECONCILE_MS);
+    expect((await post(app, "/api/mail/filters", { ...ruleBody, name: "ignored while raw" }, token6)).status).toBe(200);
+
+    expect(uploads).toEqual([HAND_WRITTEN]);
+    expect(uploads[0]).not.toContain("# rule: ignored while raw");
+  });
+
+  it("keeps pushing it on the reconcile a sync-state read performs", async () => {
+    // GH #221 re-pushes an unapplied script when the settings page is opened.
+    // Left unaware of the mode, that read is exactly where a hand-written
+    // script would be silently replaced by a regenerated one.
+    const app = makeApp(brokenJmap(), NO_RECONCILE_MS);
+    await post(app, "/api/mail/filters/sync", {}, token6);
+
+    const { client, uploads } = stubJmap();
+    await makeApp(client, 0).request("/api/mail/filters/sync-state", {
+      headers: { cookie: `session=${token6}` },
+    });
+
+    expect(uploads).toEqual([HAND_WRITTEN]);
+  });
+
+  it("refuses a script the provider will not parse, and stores nothing", async () => {
+    const rejectingJmap = {
+      ...stubJmap().client,
+      async request(_auth: unknown, _session: unknown, calls: JmapMethodCall[]) {
+        const [method] = calls[0]!;
+        if (method === "SieveScript/validate") {
+          return [["SieveScript/validate", { error: { type: "invalidScript" } }, "0"]];
+        }
+        return [[method, { list: [] }, "0"]];
+      },
+    } as unknown as JmapClient;
+
+    const app = makeApp(rejectingJmap, NO_RECONCILE_MS);
+    const res = await put(app, "/api/mail/filters/raw", { script: "if header {" }, token6);
+
+    // 422, not 502: the mail server is fine, the submitted script is not.
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe("sieve_invalid");
+    // Nothing stored — a typo must not become the account's state, least of
+    // all one that parks it on the non-retryable sieve_invalid of GH #221.
+    expect((await rawState(makeApp(null))).script).toBe(HAND_WRITTEN);
+  });
+
+  it("rejects a blank script rather than treating it as 'filter nothing'", async () => {
+    const res = await put(makeApp(null), "/api/mail/filters/raw", { script: "  \n " }, token6);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+
+  it("stores the script even when the provider cannot validate or receive it", async () => {
+    const app = makeApp(brokenJmap(), NO_RECONCILE_MS);
+    const res = await put(app, "/api/mail/filters/raw", { script: "# offline edit\nstop;\n" }, token6);
+
+    // Same contract as a rule save: the local write survives an outage, and the
+    // sync state is what says it is not being applied yet.
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("sieve_sync_failed");
+    expect((await rawState(makeApp(null))).script).toBe("# offline edit\nstop;\n");
+  });
+
+  it("never sends a Sieve request to a provider without the extension", async () => {
+    const methods: string[] = [];
+    const sieveLess = {
+      async getSession(): Promise<JmapSession> {
+        return {
+          apiUrl: "http://other/jmap/api",
+          accountId: "acc1",
+          eventSourceUrl: "",
+          uploadUrl: "http://other/upload/{accountId}/",
+          downloadUrl: "",
+          capabilities: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+        };
+      },
+      async request(_auth: unknown, _session: unknown, calls: JmapMethodCall[]) {
+        methods.push(calls[0]![0]);
+        return [[calls[0]![0], { list: [] }, "0"]];
+      },
+      async uploadBlob() {
+        methods.push("uploadBlob");
+        return "blob1";
+      },
+    } as unknown as JmapClient;
+
+    const res = await put(makeApp(sieveLess, NO_RECONCILE_MS), "/api/mail/filters/raw", { script: "stop;\n" }, token6);
+
+    // GH #36: not even the pre-save validation is attempted — the provider
+    // cannot answer it, and asking would only produce a misleading rejection.
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("sieve_unsupported");
+    expect(methods).toEqual([]);
+  });
+
+  it("hands the script back to the rule builder without destroying it", async () => {
+    const { client, uploads } = stubJmap();
+    const app = makeApp(client, NO_RECONCILE_MS);
+    // Put a known script back in place after the offline edit above.
+    await put(app, "/api/mail/filters/raw", { script: HAND_WRITTEN }, token6);
+    uploads.length = 0;
+
+    const res = await post(app, "/api/mail/filters/raw/rules", {}, token6);
+    expect(res.status).toBe(200);
+
+    const state = sieveRawScriptSchema.parse(await res.json());
+    expect(state.mode).toBe("rules");
+    // Deactivated, not deleted: this is the guarantee the whole feature rests
+    // on, and the reason the way back is safe to offer.
+    expect(state.script).toBe(HAND_WRITTEN);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toContain("# rule: seed");
+  });
+
+  it("restores exactly what was written when advanced mode is used again", async () => {
+    expect(await rawState(makeApp(null))).toMatchObject({
+      mode: "rules",
+      script: HAND_WRITTEN,
+    });
   });
 });

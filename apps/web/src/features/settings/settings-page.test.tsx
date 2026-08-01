@@ -24,18 +24,33 @@ vi.mock("../composer/api", async (importOriginal) => {
   return { ...actual, fetchSignatures };
 });
 
-const { fetchFilterRules, fetchFilterSyncState, fetchVacationSettings, fetchProfile } = vi.hoisted(
-  () => ({
-    fetchFilterRules: vi.fn(),
-    fetchFilterSyncState: vi.fn(),
-    fetchVacationSettings: vi.fn(),
-    fetchProfile: vi.fn(),
-  }),
-);
+const {
+  fetchFilterRules,
+  fetchFilterSyncState,
+  fetchVacationSettings,
+  fetchProfile,
+  fetchSieveRawScript,
+} = vi.hoisted(() => ({
+  fetchFilterRules: vi.fn(),
+  fetchFilterSyncState: vi.fn(),
+  fetchVacationSettings: vi.fn(),
+  fetchProfile: vi.fn(),
+  // GH #23: read by the Filters and Vacation panels on load. Stubbed here for
+  // the same reason every other fetcher is — so switching sections in this
+  // page-level test does not reach for a real endpoint.
+  fetchSieveRawScript: vi.fn(),
+}));
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, fetchFilterRules, fetchFilterSyncState, fetchVacationSettings, fetchProfile };
+  return {
+    ...actual,
+    fetchFilterRules,
+    fetchFilterSyncState,
+    fetchVacationSettings,
+    fetchProfile,
+    fetchSieveRawScript,
+  };
 });
 
 const { fetchMailboxes } = vi.hoisted(() => ({ fetchMailboxes: vi.fn() }));
@@ -112,6 +127,9 @@ function renderPage() {
   fetchProfile.mockResolvedValue(profile);
   fetchMailboxes.mockResolvedValue([]);
   fetchContacts.mockResolvedValue([]);
+  // GH #23: the rule builder still owns the Sieve script — the baseline where
+  // what these panels show is also what runs.
+  fetchSieveRawScript.mockResolvedValue({ mode: "rules", script: "", updatedAt: null });
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation(async (input: RequestInfo | URL) => {

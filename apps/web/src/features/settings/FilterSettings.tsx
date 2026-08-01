@@ -16,6 +16,7 @@ import {
 import { settingsErrorKey } from "./errors";
 import { FilterRuleForm } from "./FilterRuleForm";
 import { SettingsLoadError, SettingsLoading, SettingsUnavailable } from "./PanelStates";
+import { AdvancedModeNotice, SieveAdvancedEditor } from "./SieveAdvanced";
 import { ChevronDownIcon, ChevronUpIcon } from "../../app/ui/icons";
 
 const FILTERS_QUERY_KEY = ["mail", "filters"] as const;
@@ -261,6 +262,14 @@ export function FilterSettings() {
         </div>
       )}
 
+      {/* GH #23: while a hand-written script owns the account, everything below
+          is stored and editable and NOT being applied. The list gives no sign
+          of that on its own — a rule still reads as enabled — so this is the
+          only thing standing between the user and a filter they believe is
+          running. The rules stay editable on purpose: they are what comes back
+          when the script is handed over again. */}
+      <AdvancedModeNotice messageKey="filters.advanced.notice" />
+
       {rules.length === 0 && (
         <p className="text-sm text-muted">{t("filters.empty")}</p>
       )}
@@ -360,6 +369,12 @@ export function FilterSettings() {
           onCancel={resetForm}
         />
       )}
+
+      {/* Below the builder, and only reachable by opening it: the raw editor is
+          for the rules the builder does not cover, not the way in. It sits
+          inside this panel so GH #36's capability gate above covers it too — a
+          mail server that cannot run Sieve is never offered an editor for it. */}
+      <SieveAdvancedEditor />
     </div>
   );
 }
