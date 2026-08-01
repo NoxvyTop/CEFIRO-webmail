@@ -62,7 +62,10 @@ bun apps/server/scripts/generate-master-key.ts
 ```
 
 `BOOTSTRAP_MODE=true` solo para el primer arranque o recuperación; en
-producción debe ser `false`.
+producción debe ser `false`. Con el modo activo hace falta además
+`BOOTSTRAP_PASSWORD` (mínimo 24 caracteres, `openssl rand -base64 24`): es la
+credencial de emergencia, la fija quien despliega y el servidor no la registra
+en el log.
 
 ## Imagen de producción
 

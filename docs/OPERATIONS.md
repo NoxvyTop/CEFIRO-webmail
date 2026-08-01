@@ -12,6 +12,7 @@ produce la imagen y documenta cómo operarla; aquel define dónde corre.
 |---|---|
 | Poner el servicio en marcha por primera vez | [Despliegue](#despliegue) → [Checklist de primer arranque](#checklist-de-primer-arranque) |
 | Subir una versión nueva | [Desplegar una versión](#desplegar-una-versión) |
+| Pasar `preproduc` a producción y cortar un `vX.Y.Z` | [Promoción y versionado](#promoción-y-versionado) |
 | Volver atrás porque algo se rompió | [Revertir (rollback)](#revertir-rollback) |
 | Un usuario reporta un error con un identificador | [Diagnóstico](#diagnóstico-triage) → [Correlacionar por `traceId`](#correlacionar-por-traceid) |
 | Saber por qué el contenedor sale de rotación | [Qué significa `/api/health` degradado](#qué-significa-apihealth-degradado) |
@@ -41,6 +42,29 @@ CI publica en GHCR, en cada push, una etiqueta móvil **más** una inmutable:
 etiqueta móvil, no existe "la versión anterior" a la que volver — revertir sería
 adivinar qué había ahí antes.
 
+### Qué garantiza la imagen publicada
+
+Cuatro compuertas, todas antes de publicar (#244, #260):
+
+| Compuerta | Qué asegura |
+|---|---|
+| **Base fijada por digest** | El `Dockerfile` referencia `oven/bun` por `sha256:`, no por la etiqueta móvil `1.3`. El mismo commit reconstruye la misma imagen; sin esto, `:sha-<commit>` prometía una inmutabilidad que su capa base no tenía. Se refresca a mano, con el comando que hay escrito en el propio `Dockerfile`. |
+| **Escaneo de vulnerabilidades** | Trivy sobre la imagen construida. **Bloquea la publicación** ante severidad `HIGH`/`CRITICAL` con parche disponible; lo no parcheable se imprime pero no bloquea, porque una compuerta que hay que saltarse para poder desplegar deja de ser una compuerta. Las excepciones vivas están en [`.trivyignore.yaml`](../.trivyignore.yaml), **cada una con su razón y su fecha de caducidad**: cuando caduca, el hallazgo vuelve a bloquear y hay que volver a mirarlo. Si el pipeline se para ahí, el propio fichero explica los tres pasos. |
+| **Prueba de humo** | CI arranca la imagen recién construida contra un Postgres real y no publica hasta que el contenedor se declara sano por su propio `HEALTHCHECK`, `/api/health` responde `status: ok`, la SPA se sirve y los scripts de la dbSOS están dentro y son ejecutables. Antes de esto, la e2e corría la app desde el código fuente: verde no significaba que el artefacto arrancara. |
+| **SBOM y procedencia** | Cada publicación adjunta inventario de paquetes y atestación de procedencia (commit, workflow y run que la produjeron). Se consultan sin descargar la imagen: |
+
+```sh
+docker buildx imagetools inspect ghcr.io/noxvytop/cefiro-webmail:vX.Y.Z --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/noxvytop/cefiro-webmail:vX.Y.Z --format '{{ json .Provenance }}'
+```
+
+**Lo que todavía NO hay: firma de la imagen.** Está pendiente a propósito, no por
+olvido: firmar (cosign con la identidad OIDC del workflow) solo aporta algo si
+alguien **verifica** la firma antes de arrancar el contenedor, y ese paso vive en
+`docker-cefiro`, no aquí. Firmar sin verificar es ceremonia. Cuando se aborde,
+son las dos mitades a la vez: `cosign sign` en la publicación y `cosign verify`
+como puerta del despliegue.
+
 ### Variables de entorno
 
 **Obligatorias.** Sin una de estas el proceso registra `invalid configuration` y
@@ -60,6 +84,7 @@ al desplegar, no a mitad de la jornada.
 | `PORT` | `8080` | Puerto de escucha. Si se cambia, hay que ajustar también el `HEALTHCHECK` del Dockerfile. |
 | `NODE_ENV` | `development` | `production` sirve la SPA estática y **fuerza cookies `Secure`** aunque `APP_URL` sea `http://`. En producción va siempre a `production`. |
 | `BOOTSTRAP_MODE` | `false` | Modo de primer arranque/recuperación. Ver el checklist. **En operación normal, `false`.** |
+| `BOOTSTRAP_PASSWORD` | — | Credencial de emergencia. **Obligatoria si `BOOTSTRAP_MODE=true`** (el proceso no arranca sin ella) e ignorada si no. Mínimo 24 caracteres; se genera con `openssl rand -base64 24`. Es contraseña del login de emergencia **y** token de `/setup`: va en el mismo gestor de secretos que `MASTER_KEY` y se retira al volver a `false`. |
 | `SESSION_TTL_HOURS` | `12` | Vida de la sesión. |
 | `STATIC_DIR` | `/app/apps/web/dist` | Ya viene fijado en la imagen. |
 | `SHUTDOWN_GRACE_MS` | `15000` | Plazo para que terminen las peticiones en vuelo al recibir SIGTERM. |
@@ -96,7 +121,7 @@ cuelgue el servicio.
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | `LOG_LEVEL` | `info` | `debug`\|`info`\|`warn`\|`error`. Un valor no reconocido cae al de por defecto en vez de silenciar el servidor. |
-| `METRICS_TOKEN` | — | Token portador que abre `/metrics`. **Sin él el endpoint no existe** (responde 404). Ver [Métricas y alertas](#métricas-y-alertas). |
+| `METRICS_TOKEN` | — | Token portador que abre `/metrics`. **Sin él el endpoint no existe** (responde 404). Un nombre de variable mal escrito da exactamente el mismo 404, así que el monitoreo puede desaparecer sin avisar: por eso existe la alerta `CefiroSinMetricasDeApp`. Ver [Métricas y alertas](#métricas-y-alertas). |
 
 **Resto de plazos y límites.**
 
@@ -142,10 +167,25 @@ administración.
    con `configured: true` si hay Stalwart.
 
 Si el arranque falla, el proceso sale con código 1 y **dice por qué** en una
-línea JSON: `invalid configuration` (falta o sobra una variable),
-`invalid master key ring` (`MASTER_KEY` malformada) o `master key ring cannot
-decrypt stored rows` (falta una clave retirada en `MASTER_KEY_PREVIOUS`; el log
-lista las versiones que faltan).
+línea JSON:
+
+| `msg` | Qué pasó |
+|---|---|
+| `invalid configuration` | Falta o sobra una variable de entorno. |
+| `database unavailable at startup` | No se pudo conectar a Postgres. El campo `hint` dice qué mirar y `step` en cuál de los dos pasos de base de datos ocurrió. |
+| `database migration failed` / `key version scan failed` | Se llegó a Postgres, pero la migración o el barrido de versiones de clave falló. No es transitorio: mirar `error`. |
+| `invalid master key ring` | `MASTER_KEY` malformada. |
+| `master key ring cannot decrypt stored rows` | Falta una clave retirada en `MASTER_KEY_PREVIOUS`; el log lista las versiones que faltan. |
+
+**El contenedor casi siempre arranca antes que su base de datos**, así que un
+fallo de *conexión* no se da por perdido a la primera: son 6 intentos con espera
+creciente entre ellos (1, 2, 4, 8 y 16 s, o sea 31 s de espera, más lo que tarde
+en fallar cada intento — hasta `DB_CONNECT_TIMEOUT_S` cada uno). Cada reintento
+deja una línea `database not reachable yet, retrying` con el número de intento y
+cuánto va a esperar. Si la base no aparece en ese plazo, sale con
+`database unavailable at startup`. Cualquier otro fallo —una migración que
+revienta, un rol sin permisos— **no se reintenta**: no se arregla solo, y
+reintentarlo únicamente retrasa la línea de log que hace falta.
 
 ### Checklist de primer arranque
 
@@ -154,24 +194,106 @@ lista las versiones que faltan).
    `bun apps/server/scripts/generate-master-key.ts`. **Si se pierde, las
    credenciales de correo de todos los usuarios son irrecuperables.**
 3. Configurar `DATABASE_URL`, `MASTER_KEY`, `APP_URL`, `NODE_ENV=production`.
-4. Arrancar con `BOOTSTRAP_MODE=true`. El arranque imprime una credencial
-   temporal:
+4. Generar la credencial de emergencia y guardarla en el gestor de secretos
+   junto a `MASTER_KEY`:
+   ```sh
+   openssl rand -base64 24
+   ```
+   Arrancar con `BOOTSTRAP_MODE=true` y esa cadena en `BOOTSTRAP_PASSWORD`.
+   **La contraseña no se busca en el log: la fija quien despliega.** El
+   arranque solo avisa de que el modo está activo:
    ```sh
    docker compose logs cefiro-webmail | grep "bootstrap mode active"
    ```
-   El usuario es `bootstrap-admin` y la contraseña va en esa misma línea.
+   El usuario del login de emergencia es `bootstrap-admin`; la contraseña es la
+   que se acaba de generar. Sin `BOOTSTRAP_PASSWORD` (o con menos de 24
+   caracteres) el proceso registra `invalid configuration` y sale con código 1.
 5. Entrar en `<APP_URL>/setup` con esa credencial y configurar: el
    administrador real, el proveedor OIDC (Authentik) y las credenciales de
    buzón iniciales.
-6. **Poner `BOOTSTRAP_MODE=false` y reiniciar.** Mientras esté activo, el log
-   escribe una contraseña de administración en claro en cada arranque.
+6. **Poner `BOOTSTRAP_MODE=false`, retirar `BOOTSTRAP_PASSWORD` y reiniciar.**
+   Mientras esté activo hay un login de administración accesible sin SSO.
+   `/api/setup` además **se cierra solo** en cuanto el setup está terminado —
+   hay un administrador activo y SSO configurado — aunque la variable se quede
+   puesta; a partir de ahí lo que queda abierto es el login de emergencia, y
+   eso es lo que retira el paso 6.
 7. Comprobar que el login SSO funciona de punta a punta con un usuario real.
 8. Configurar `METRICS_TOKEN` y enganchar el scrape
    ([Métricas y alertas](#métricas-y-alertas)).
 9. Programar la dbSOS diaria y **verificar que la primera copia se escribe**
-   ([dbSOS](#dbsos--copia-de-emergencia-de-la-base-de-datos)).
+   ([dbSOS](#dbsos--copia-de-emergencia-de-la-base-de-datos)). Los scripts salen
+   de la propia imagen: ver [Cómo conseguir los scripts](#cómo-conseguir-los-scripts).
 10. Dar de alta la alerta de "sin copia en 24 h". Un backup que nadie vigila no
     es DR.
+
+## Promoción y versionado
+
+CI ya sabe producir las etiquetas; lo que faltaba escrito es **quién aprieta el
+botón y con qué criterio**. El paso de `preproduc` a `main` es el momento de
+mayor riesgo del ciclo, así que es el que menos puede depender de la memoria de
+nadie.
+
+### Las dos ramas
+
+| Rama | Qué es | Qué publica |
+|---|---|---|
+| `preproduc` | Rama de integración. **Todos los PR van aquí.** Es lo que corre en preproducción. | `:staging` + `:sha-<commit>` |
+| `main` | Rama por defecto. **Es lo que corre en producción.** Solo entra por promoción desde `preproduc`. | `:latest` + `:sha-<commit>` |
+
+### Criterios de entrada
+
+Promueve el responsable de la release (quien mantiene el repositorio), y no
+antes de que **todo** esto sea cierto:
+
+1. CI en verde sobre el commit exacto de `preproduc` que se va a promover —
+   incluida la prueba de humo que arranca la imagen publicada
+   ([Desplegar una versión](#desplegar-una-versión)).
+2. `:staging` lleva desplegado en preproducción el tiempo suficiente para
+   haberse usado de verdad: login SSO con un usuario real, enviar y recibir un
+   correo, `/api/health` en `200`.
+3. Ningún issue abierto de severidad alta de la ola que se promueve.
+4. La dbSOS tiene una copia verificada reciente
+   (`cefiro_dbsos_last_success_timestamp_seconds` fresco). Si la ola trae una
+   migración **destructiva**, además una copia a mano justo antes — ver
+   [Revertir](#revertir-rollback), porque el esquema no se revierte solo.
+
+### Cómo se promueve y cómo se corta la versión
+
+1. PR de `preproduc` a `main`, **con merge commit** (no squash): así cada commit
+   conserva el `:sha-<commit>` con el que ya se probó en preproducción, y el
+   rollback puede apuntar a cualquiera de ellos.
+2. Esperar a que CI publique desde `main`: `:latest` + `:sha-<commit>`.
+3. Cortar la versión sobre ese commit exacto de `main`:
+   ```sh
+   git checkout main && git pull
+   git tag -a v1.2.0 -m "v1.2.0"
+   git push origin v1.2.0
+   ```
+   El push del tag dispara el pipeline otra vez y publica `:v1.2.0` (+ `:latest`
+   y `:sha-<commit>`). Semver: **MAJOR** si hay migración destructiva o cambio
+   incompatible de configuración, **MINOR** si hay funcionalidad nueva,
+   **PATCH** si solo hay correcciones.
+4. Desplegar en producción **pinneando `:vX.Y.Z`**, nunca `:latest`, y seguir la
+   comprobación de [Desplegar una versión](#desplegar-una-versión).
+
+### Qué se comprueba después
+
+Lo mismo que tras un rollback, y por la misma razón — que el proceso que corre
+es el que se cree: `/api/health` en `200`, `server started` sin `unhandled
+error` en el log, un login real, un correo de prueba, y en `/metrics`
+`cefiro_process_start_time_seconds` cambiado con la tasa de 5xx en su línea base.
+
+### Efecto lateral: los issues no se cierran al mergear en `preproduc`
+
+`Closes #N` en un PR **solo cierra el issue cuando el commit llega a la rama por
+defecto**, y aquí la rama por defecto es `main`. Como los PR van a `preproduc`,
+los issues de una ola siguen abiertos hasta que se promueve — aunque el trabajo
+lleve semanas hecho y desplegado en preproducción.
+
+No es un fallo, es la consecuencia de tener rama de integración: **la promoción
+es lo que los cierra, en bloque**. Conviene no cerrarlos a mano mientras tanto,
+porque entonces se pierde el enlace automático entre el issue y el commit que lo
+resolvió, que es lo que permite reconstruir después qué entró en cada versión.
 
 ## Revertir (rollback)
 
@@ -231,11 +353,14 @@ evento. Los mensajes que más se buscan:
 | `error response` | El sobre de error que se le devolvió al cliente: `code`, `status`. |
 | `domain error` / `unhandled error` | Error de dominio (esperado) y error no controlado (500, hay que mirarlo). |
 | `server started` | Arranque correcto. |
-| `bootstrap mode active` | **`BOOTSTRAP_MODE` sigue en `true`.** |
+| `bootstrap mode active` | **`BOOTSTRAP_MODE` sigue en `true`.** Solo avisa; la credencial nunca se registra. |
+| `oidc callback failed` | Un login SSO se rompió. `stage` dice en qué paso (`discovery`, `token_exchange`, `id_token`, `user_lookup`, `user_provision`, `session`) y `errorClass`/`errorCode` de qué clase de error se trata. |
 
 `LOG_LEVEL=debug` sube el detalle sin redesplegar la imagen. Ninguna credencial
-aparece jamás en los logs, y el registro de acceso guarda el patrón de ruta
-precisamente para no dejar un historial de lectura por usuario.
+aparece jamás en los logs —tampoco la de emergencia, que el servidor ya no
+genera ni escribe (#235), ni ningún `id_token`: de un fallo de login se publica
+la **clase** del error, nunca su mensaje— y el registro de acceso guarda el
+patrón de ruta precisamente para no dejar un historial de lectura por usuario.
 
 ### Correlacionar por `traceId`
 
@@ -339,6 +464,15 @@ El renderizado **reutiliza la sonda cacheada de `/api/health`** y no hace
 ninguna llamada saliente propia: un scrape no puede convertirse en carga contra
 Stalwart.
 
+**El 404 es ambiguo a propósito, y por eso hay que alertar sobre la ausencia.**
+"Sin token" y "token mal escrito" se ven igual desde fuera —esa es justamente la
+propiedad que protege a una instancia sin métricas—, así que un `METRICS_TOKEN`
+con una letra de más apaga el monitoreo en silencio. El servidor valida ahora la
+variable con el mismo esquema que el resto de la configuración (#259), lo que
+descarta el caso de un valor vacío o con espacios, pero **ningún esquema puede
+ver una variable cuyo nombre nunca se escribió**: eso lo caza la alerta
+`CefiroSinMetricasDeApp` de más abajo, y no hay otra forma.
+
 | Métrica | Tipo | Para qué |
 |---|---|---|
 | `cefiro_http_requests_total{method,route,status}` | contador | Tráfico y tasa de error por ruta. `route` es el patrón, y todo lo no ruteado cae en `<unmatched>` (un escáner no puede inflar la cardinalidad). |
@@ -428,6 +562,23 @@ groups:
         for: 5m
         labels: { severity: warning }
 
+      # El mismo fallo silencioso, un piso más arriba (#259): si las métricas de
+      # la APLICACIÓN desaparecen, todas las alertas de abajo dejan de poder
+      # dispararse y el panel se queda en blanco, que es indistinguible de "no
+      # pasa nada". Caza las tres formas de perderlas: METRICS_TOKEN mal escrito
+      # o borrado (el endpoint deja de existir y responde 404), el scrape
+      # apuntando a un destino que ya no está, y el proceso caído del todo.
+      - alert: CefiroSinMetricasDeApp
+        expr: absent(cefiro_process_start_time_seconds)
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "cefiro-webmail no está exponiendo métricas"
+          description: >-
+            Comprobar que METRICS_TOKEN sigue configurado (sin él /metrics
+            responde 404, igual que si estuviera mal escrito), que el scrape
+            apunta al destino correcto y que el contenedor está en pie.
+
       - alert: CefiroDependenciaCaida
         expr: cefiro_dependency_up == 0
         for: 5m
@@ -485,7 +636,8 @@ fi
    última carta, no la primera.
 6. **Cerrar.** Comprobar que las alertas vuelven a verde, que
    `cefiro_dbsos_last_success_timestamp_seconds` sigue fresco y que
-   `BOOTSTRAP_MODE` quedó en `false` si se activó para recuperar el acceso.
+   `BOOTSTRAP_MODE` quedó en `false` —y `BOOTSTRAP_PASSWORD` retirada— si se
+   activó para recuperar el acceso.
 
 Casos frecuentes:
 
@@ -494,9 +646,10 @@ Casos frecuentes:
 | Todo `503 database_unavailable` | Postgres caído, sin conexiones libres o queries por encima de `DB_STATEMENT_TIMEOUT_MS` | Mirar Postgres; subir `DB_POOL_MAX` solo con evidencia de agotamiento del pool |
 | Correo `502 stalwart_unavailable` y health `degraded` | Stalwart caído o el proxy delante de él | Mirar Stalwart; la app se recupera sola cuando vuelva |
 | `504 upstream_timeout` intermitente | Dependencia lenta, no caída | Latencia de la dependencia; los plazos (`*_TIMEOUT_MS`) son un techo, no una cura |
-| Nadie puede entrar, `oidc_*` en el log | Authentik caído o mal configurado | Si la configuración OIDC quedó rota, arrancar con `BOOTSTRAP_MODE=true`, corregir en `/setup` y **volver a `false`** |
+| Nadie puede entrar, `oidc_*` en el log | Authentik caído o mal configurado | Mirar `oidc callback failed`: `stage` dice qué paso rompió. Si la configuración OIDC quedó rota, arrancar con `BOOTSTRAP_MODE=true` + `BOOTSTRAP_PASSWORD`, entrar por el **login de emergencia**, corregir en el portal de administración y **volver a `false`**. `/setup` ya no sirve para esto: se cerró al terminar el setup ([#234](#checklist-de-primer-arranque)) |
 | Un usuario concreto ve `503 mail_credentials_missing` | Le falta la credencial de buzón | Darla de alta desde el portal de administración |
-| El contenedor reinicia en bucle | Fallo de arranque | El log dice cuál: `invalid configuration`, `invalid master key ring`, `master key ring cannot decrypt stored rows` |
+| El contenedor reinicia en bucle | Fallo de arranque | El log dice cuál: `invalid configuration`, `database unavailable at startup`, `database migration failed`, `invalid master key ring`, `master key ring cannot decrypt stored rows`. Ver [Desplegar una versión](#desplegar-una-versión) |
+| Arranca ~30 s tarde y antes se ven `database not reachable yet, retrying` | Postgres tardó en levantar | Normal si termina en `server started`. Si se repite en cada despliegue, ordenar el arranque (`depends_on: condition: service_healthy`) |
 
 ## dbSOS — copia de emergencia de la base de datos
 
@@ -509,6 +662,33 @@ lenta; la dbSOS no la sustituye, la complementa.)
 
 Scripts: [`scripts/db-backup.sh`](../scripts/db-backup.sh) y
 [`scripts/db-restore.sh`](../scripts/db-restore.sh).
+
+### Cómo conseguir los scripts
+
+**Viajan dentro de la imagen, en `/app/scripts/`.** El despliegue vive en otro
+repositorio y este es privado, así que la imagen es el canal por el que un
+operador los obtiene — y obtenerlos así garantiza la versión exacta que
+corresponde a la imagen desplegada.
+
+Con el contenedor ya corriendo:
+
+```sh
+docker cp cefiro-webmail:/app/scripts/db-backup.sh  /opt/cefiro/dbsos/
+docker cp cefiro-webmail:/app/scripts/db-restore.sh /opt/cefiro/dbsos/
+```
+
+O desde una etiqueta cualquiera, sin arrancar nada:
+
+```sh
+id=$(docker create ghcr.io/noxvytop/cefiro-webmail:sha-<commit>)
+docker cp "$id:/app/scripts/." /opt/cefiro/dbsos/
+docker rm "$id"
+```
+
+**No se ejecutan dentro del contenedor de la aplicación.** Esa imagen no trae
+`pg_dump` ni `openssl`, y no debe traerlos: es el contenedor expuesto a la web, y
+darle el cliente de Postgres para un trabajo que corre en otro sitio solo amplía
+su superficie. Se copian fuera y se ejecutan desde el runner de abajo.
 
 ### Requisitos del runner
 
@@ -537,7 +717,22 @@ DATABASE_URL="postgres://USER:PASS@HOST:5432/DB" \
 DBSOS_KEY_FILE=/run/secrets/dbsos.key \
 DBSOS_DIR=/var/backups/cefiro \
 DBSOS_RETENTION_DAYS=7 \
-  scripts/db-backup.sh
+  /opt/cefiro/dbsos/db-backup.sh
+```
+
+Si el runner es un contenedor (lo habitual, porque la máquina no suele tener
+`pg_dump`):
+
+```sh
+docker run --rm --network <red-de-cefiro> \
+  -v /opt/cefiro/dbsos:/dbsos:ro \
+  -v /var/backups/cefiro:/var/backups/cefiro \
+  -v /run/secrets/dbsos.key:/run/secrets/dbsos.key:ro \
+  -e DATABASE_URL="postgres://USER:PASS@postgres:5432/DB" \
+  -e DBSOS_KEY_FILE=/run/secrets/dbsos.key \
+  -e DBSOS_DIR=/var/backups/cefiro \
+  -e DBSOS_RETENTION_DAYS=7 \
+  <imagen-con-pg_dump-y-openssl> /dbsos/db-backup.sh
 ```
 
 Programarlo una vez al día (cron/systemd timer del despliegue). Produce
@@ -561,7 +756,7 @@ resetea su schema, no la base):
 DATABASE_URL="postgres://USER:PASS@HOST:5432/DB" \
 DBSOS_KEY_FILE=/run/secrets/dbsos.key \
 DBSOS_DIR=/var/backups/cefiro \
-  scripts/db-restore.sh latest      # o una ruta concreta al .dump.enc
+  /opt/cefiro/dbsos/db-restore.sh latest   # o una ruta concreta al .dump.enc
 ```
 
 Pide confirmación (teclear `restore`); en automatización, `DBSOS_YES=1`. Es
@@ -588,8 +783,9 @@ desechable**, jamás sobre la base de producción. Patrón verificado:
 ```sh
 # fuente sana → backup → restaurar en una BD nueva y vacía → comparar conteos
 createdb cefiro_sos_test
-DATABASE_URL=".../origen"  DBSOS_KEY_FILE=... scripts/db-backup.sh
-DATABASE_URL=".../cefiro_sos_test" DBSOS_KEY_FILE=... DBSOS_YES=1 scripts/db-restore.sh latest
+DATABASE_URL=".../origen"  DBSOS_KEY_FILE=... /opt/cefiro/dbsos/db-backup.sh
+DATABASE_URL=".../cefiro_sos_test" DBSOS_KEY_FILE=... DBSOS_YES=1 \
+  /opt/cefiro/dbsos/db-restore.sh latest
 # select count(*) en ambas debe coincidir; dropdb cefiro_sos_test
 ```
 

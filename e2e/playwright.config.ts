@@ -162,7 +162,16 @@ export default defineConfig({
           url: `${BASE_URL}/api/health`,
           timeout: 120_000,
           reuseExistingServer: !process.env.CI,
-          env: { ...appServerEnv, APP_URL: BASE_URL, PORT: String(PORT), BOOTSTRAP_MODE: "true" },
+          env: {
+            ...appServerEnv,
+            APP_URL: BASE_URL,
+            PORT: String(PORT),
+            BOOTSTRAP_MODE: "true",
+            // Required alongside BOOTSTRAP_MODE=true since GH #235 — the
+            // server no longer mints its own break-glass credential. No spec
+            // signs in with it; it is here so this server boots.
+            BOOTSTRAP_PASSWORD: "e2e-bootstrap-password-0123456789",
+          },
         },
         {
           command: bun("serve.ts"),

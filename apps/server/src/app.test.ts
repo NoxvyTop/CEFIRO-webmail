@@ -262,7 +262,6 @@ describe("metrics endpoint (GH #208)", () => {
     // The route is not registered, so it answers exactly like any other unknown
     // path — an instance that never enabled metrics must not confirm the
     // endpoint is there, not even by answering 401.
-    vi.stubEnv("METRICS_TOKEN", "");
     const app = createApp();
     const res = await app.request("/metrics");
     const unknown = await app.request("/definitely-not-a-route");
@@ -275,13 +274,16 @@ describe("metrics endpoint (GH #208)", () => {
   });
 
   it("treats an empty configured token as unset rather than as a valid secret", async () => {
-    vi.stubEnv("METRICS_TOKEN", "   ");
-    expect((await createApp().request("/metrics")).status).toBe(404);
+    expect((await createApp({ metricsToken: "   " }).request("/metrics")).status).toBe(404);
   });
 
-  it("reads the token from the environment when the caller passes none", async () => {
+  it("never reads the token from the environment behind the caller's back (GH #259)", async () => {
+    // The token arrives through core/config.ts now. Reading process.env here as
+    // a fallback meant a misspelled variable name produced a 404 that looked
+    // exactly like "metrics deliberately off", so monitoring could disappear
+    // with nothing to distinguish the two.
     vi.stubEnv("METRICS_TOKEN", TOKEN);
-    expect((await scrape(createApp())).status).toBe(200);
+    expect((await scrape(createApp())).status).toBe(404);
   });
 
   it("refuses a scrape with no credentials or the wrong token", async () => {

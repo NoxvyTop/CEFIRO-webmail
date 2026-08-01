@@ -53,11 +53,13 @@ export type CreateAppOptions = {
   /** Injectable so tests drive a small limit; see core/rate-limit.ts. */
   healthRateLimiter?: RateLimiter;
   /**
-   * Bearer token that unlocks /metrics (GH #208). Defaults to `METRICS_TOKEN`
-   * from the environment; without one the endpoint does not exist. Read here
-   * rather than through core/config.ts for the same reason LOG_LEVEL is
-   * (core/logger.ts): it is an operator dial with a safe default, not part of
-   * the contract a deployment has to satisfy to boot.
+   * Bearer token that unlocks /metrics (GH #208); without one the endpoint does
+   * not exist. Comes from `config.metricsToken` — i.e. from `METRICS_TOKEN`
+   * through the validated schema (GH #259). It used to fall back to reading
+   * `process.env.METRICS_TOKEN` here, which meant a misspelled variable name
+   * silently produced the same 404 as "metrics off on purpose"; the endpoint is
+   * a monitoring contract, so its input belongs in core/config.ts with the rest
+   * of them rather than beside LOG_LEVEL's ad-hoc read.
    */
   metricsToken?: string;
   /** Injectable so tests drive a small limit; see core/rate-limit.ts. */
@@ -123,8 +125,9 @@ export function createApp(options: CreateAppOptions = {}) {
   const metrics = createMetrics();
   // An empty value counts as unset: an operator who declares METRICS_TOKEN= in
   // a compose file has not configured a token, and must not get an endpoint
-  // unlocked by the empty string.
-  const metricsToken = (options.metricsToken ?? process.env.METRICS_TOKEN)?.trim() || undefined;
+  // unlocked by the empty string. core/config.ts already refuses one; this
+  // keeps the guarantee for callers that build an app without it (the tests).
+  const metricsToken = options.metricsToken?.trim() || undefined;
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {

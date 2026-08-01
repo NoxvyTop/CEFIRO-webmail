@@ -26,6 +26,11 @@ services:
       APP_URL: http://localhost:5173
       MASTER_KEY: ZGV2LW1hc3Rlci1rZXktZGV2LW1hc3Rlci1rZXktMDE=
       BOOTSTRAP_MODE: "true"
+      # Break-glass credential (#235). Readable here for the same reason the
+      # dev MASTER_KEY above is: this compose file is local development only.
+      # In production it is a generated secret from the secret store, and the
+      # server refuses to boot with BOOTSTRAP_MODE=true without one.
+      BOOTSTRAP_PASSWORD: dev-bootstrap-password-not-a-secret
       # Explicitly unconfigured in local dev; developers with a reachable
       # Stalwart instance can point this at it.
       STALWART_URL: ""
