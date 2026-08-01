@@ -12,10 +12,18 @@ import { migrate } from "../apps/server/src/infra/db/migrate";
 import { createUsersRepo } from "../apps/server/src/infra/repos/users";
 import { createSessionStore } from "../apps/server/src/modules/auth/sessions";
 import { createMailCredentialsRepo } from "../apps/server/src/infra/repos/mail-credentials";
+import { createSsoConfigRepo } from "../apps/server/src/infra/repos/sso-config";
 import { importMasterKey } from "../apps/server/src/modules/credentials/crypto";
 import { seedInbox, seedJunk } from "./smtp-seed";
 import { SEED_EMAILS, SPAM_SEED_EMAILS } from "./fixtures/mail";
 import { ensureArchiveMailbox } from "./jmap-admin";
+import {
+  IDP_ISSUER_ENV,
+  OIDC_ARCHIVED_EMAIL,
+  TEST_IDP_CLIENT_ID,
+  TEST_IDP_CLIENT_SECRET,
+  TEST_IDP_SCOPES,
+} from "./oidc-idp";
 import {
   TEST_DATABASE_URL_ENV,
   createTestDatabase,
@@ -112,6 +120,34 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await sql`update users set role = 'admin' where id = ${user.id}`;
     const { token } = await createSessionStore(sql).create(user.id, 24);
 
+    const masterKey = await importMasterKey(MASTER_KEY_B64);
+
+    // GH #217. The SSO server (playwright.config.ts) reads its identity provider
+    // out of the database like a real deployment does — an encrypted sso_config
+    // row — rather than from the environment, so tests/oidc-login.spec.ts drives
+    // exactly the code path production uses. The issuer is whatever
+    // playwright.config.ts bound the test provider to; absent it (an externally
+    // supplied E2E_BASE_URL that opted out of the suite's own servers), nothing
+    // is seeded and the OIDC spec has no provider to talk to.
+    const idpIssuer = process.env[IDP_ISSUER_ENV];
+    if (idpIssuer) {
+      await createSsoConfigRepo(sql, masterKey).set({
+        issuer: idpIssuer,
+        clientId: TEST_IDP_CLIENT_ID,
+        clientSecret: TEST_IDP_CLIENT_SECRET,
+        scopes: TEST_IDP_SCOPES,
+      });
+      // A user the provider will authenticate but the app must refuse, covering
+      // the callback's archived-account branch. Deactivated through the repo
+      // rather than inserted inactive because `create` has no such option — the
+      // application never creates a user that way either.
+      const archived = await users.create({
+        email: OIDC_ARCHIVED_EMAIL,
+        displayName: "Cuenta archivada",
+      });
+      await users.setActive(archived.id, false);
+    }
+
     if (stalwartUrl) {
       // The Docker healthcheck only proves the Stalwart binary is running,
       // not that its JMAP HTTP listener has finished binding — so a single
@@ -144,8 +180,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         );
       }
 
-      const key = await importMasterKey(MASTER_KEY_B64);
-      await createMailCredentialsRepo(sql, key).set(user.id, STALWART_ACCOUNT_PASSWORD);
+      await createMailCredentialsRepo(sql, masterKey).set(user.id, STALWART_ACCOUNT_PASSWORD);
 
       await seedInbox(STALWART_SMTP_HOST, STALWART_SMTP_PORT, SEED_EMAILS);
 
