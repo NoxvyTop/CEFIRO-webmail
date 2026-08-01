@@ -98,6 +98,11 @@ function DiscardConfirmDialog({
   return (
     <div
       role="alertdialog"
+      // GH #253: the trap is real (useFocusTrap above cycles Tab inside this
+      // dialog), but without aria-modal a screen reader's own virtual cursor
+      // still walks the page behind it — the announced content and the
+      // reachable content disagreed.
+      aria-modal="true"
       aria-label={t("composer.discardConfirm.title")}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
       onClick={onKeepEditing}
@@ -331,6 +336,9 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     <div
       ref={composerRootRef}
       role="dialog"
+      // GH #253: see DiscardConfirmDialog above — the focus trap was here from
+      // #158, the matching promise to assistive tech was not.
+      aria-modal="true"
       aria-label={t("composer.newMessage")}
       tabIndex={-1}
       className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6 outline-none"
@@ -505,12 +513,23 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2.5 px-5 py-4">
+        {/* GH #249: Enviar + "Redactar con IA" + Descartar want ~370px, and a
+            375px phone leaves ~287px here once the overlay padding and the
+            panel's own px-5 are taken out — so without flex-wrap the row
+            overflowed and Descartar was unreachable. Same treatment #214 gave
+            the dialog rows (see DiscardConfirmDialog above): wrap rather than
+            scroll, since every control has to stay reachable, and shrink-0 on
+            each control so wrapping happens between buttons instead of
+            squeezing their labels. */}
+        <div
+          data-testid="composer-actions"
+          className="flex shrink-0 flex-wrap items-center gap-2.5 px-5 py-4"
+        >
           <Button
             variant="primary"
             onClick={handleSend}
             disabled={state.sending}
-            className="flex h-[38px] items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
+            className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
           >
             {state.sending ? t("composer.sending") : t("composer.send")}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -523,33 +542,40 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               type="button"
               onClick={() => void draftWithAi()}
               disabled={state.aiDrafting}
-              className="flex h-[38px] items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent-text transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+              className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent-text transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
             >
               {state.aiDrafting ? t("composer.draftingWithAi") : t("composer.draftWithAi")}
             </button>
           )}
-          <span className="flex-1" />
-          {/* GH #178: subtle autosave status. Hidden while idle so an untouched
-              composer shows nothing; aria-live so a screen reader hears the
-              transition to "saved" without it stealing focus. */}
-          {state.autosaveStatus !== "idle" && (
-            <span
-              data-testid="autosave-indicator"
-              aria-live="polite"
-              className={`text-xs ${state.autosaveStatus === "error" ? "text-warn" : "text-muted"}`}
+          {/* GH #249: `ml-auto` on the trailing group replaces the old
+              `<span className="flex-1" />` spacer. A zero-basis growing spacer
+              cannot survive wrapping — it stays behind on the first line and
+              leaves Descartar stranded on the left of the second — whereas the
+              auto margin pushes this group to the right edge of whichever line
+              it lands on. */}
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            {/* GH #178: subtle autosave status. Hidden while idle so an untouched
+                composer shows nothing; aria-live so a screen reader hears the
+                transition to "saved" without it stealing focus. */}
+            {state.autosaveStatus !== "idle" && (
+              <span
+                data-testid="autosave-indicator"
+                aria-live="polite"
+                className={`text-xs ${state.autosaveStatus === "error" ? "text-warn" : "text-muted"}`}
+              >
+                {state.autosaveStatus === "saving" && t("composer.autosave.saving")}
+                {state.autosaveStatus === "saved" && t("composer.autosave.saved")}
+                {state.autosaveStatus === "error" && t("composer.autosave.error")}
+              </span>
+            )}
+            <Button
+              variant="secondary"
+              onClick={requestClose}
+              className="shrink-0 rounded-lg px-3 py-2 text-[13px] font-semibold"
             >
-              {state.autosaveStatus === "saving" && t("composer.autosave.saving")}
-              {state.autosaveStatus === "saved" && t("composer.autosave.saved")}
-              {state.autosaveStatus === "error" && t("composer.autosave.error")}
-            </span>
-          )}
-          <Button
-            variant="secondary"
-            onClick={requestClose}
-            className="rounded-lg px-3 py-2 text-[13px] font-semibold"
-          >
-            {t("composer.cancel")}
-          </Button>
+              {t("composer.cancel")}
+            </Button>
+          </div>
         </div>
       </div>
       {discardConfirmOpen && (

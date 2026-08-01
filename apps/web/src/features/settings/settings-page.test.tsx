@@ -12,6 +12,8 @@ import type {
   VacationSettings as VacationSettingsData,
 } from "@webmail/shared";
 import { SettingsPage } from "./SettingsPage";
+import { MailApiError } from "../mailbox/api";
+import { expectNoAxeViolations } from "../../test/axe";
 
 const { fetchSignatures } = vi.hoisted(() => ({
   fetchSignatures: vi.fn(),
@@ -22,15 +24,18 @@ vi.mock("../composer/api", async (importOriginal) => {
   return { ...actual, fetchSignatures };
 });
 
-const { fetchFilterRules, fetchVacationSettings, fetchProfile } = vi.hoisted(() => ({
-  fetchFilterRules: vi.fn(),
-  fetchVacationSettings: vi.fn(),
-  fetchProfile: vi.fn(),
-}));
+const { fetchFilterRules, fetchFilterSyncState, fetchVacationSettings, fetchProfile } = vi.hoisted(
+  () => ({
+    fetchFilterRules: vi.fn(),
+    fetchFilterSyncState: vi.fn(),
+    fetchVacationSettings: vi.fn(),
+    fetchProfile: vi.fn(),
+  }),
+);
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, fetchFilterRules, fetchVacationSettings, fetchProfile };
+  return { ...actual, fetchFilterRules, fetchFilterSyncState, fetchVacationSettings, fetchProfile };
 });
 
 const { fetchMailboxes } = vi.hoisted(() => ({ fetchMailboxes: vi.fn() }));
@@ -95,6 +100,14 @@ afterEach(() => {
 function renderPage() {
   fetchSignatures.mockResolvedValue([signature]);
   fetchFilterRules.mockResolvedValue([filterRule]);
+  // GH #254: the filters panel now reads the Sieve sync state on load; a
+  // synced state is the "nothing to warn about" baseline for these tests.
+  fetchFilterSyncState.mockResolvedValue({
+    status: "synced",
+    attempts: 0,
+    lastError: null,
+    updatedAt: "2026-07-01T10:00:00.000Z",
+  });
   fetchVacationSettings.mockResolvedValue(vacation);
   fetchProfile.mockResolvedValue(profile);
   fetchMailboxes.mockResolvedValue([]);
@@ -255,5 +268,38 @@ describe("SettingsPage nav at a narrow viewport (GH #226)", () => {
     expect(
       await screen.findByRole("heading", { name: i18n.t("contacts.title") }),
     ).toBeInTheDocument();
+  });
+});
+
+// GH #252: the settings console has five independently-rendered sections, and
+// #250's new loading/failed states added two more things to get wrong in each.
+// Walking every section with the real axe engine costs one test and covers
+// what nobody remembered to assert by hand.
+describe("settings screen accessibility (GH #252)", () => {
+  it.each([
+    ["settings.nav.profile", "settings.profile"],
+    ["settings.nav.signatures", "settings.signatures"],
+    ["settings.nav.filters", "filters.title"],
+    ["settings.nav.vacation", "vacation.title"],
+    ["settings.nav.contacts", "contacts.title"],
+  ])("passes an axe run over the %s section", async (navKey, headingKey) => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("settings.nav.label") });
+    fireEvent.click(within(nav).getByRole("button", { name: i18n.t(navKey) }));
+    await screen.findByRole("heading", { name: i18n.t(headingKey) });
+
+    await expectNoAxeViolations(document.body);
+  });
+
+  it("passes an axe run over a section whose load failed (GH #250)", async () => {
+    renderPage();
+    fetchFilterRules.mockRejectedValue(new MailApiError(503, "database_unavailable"));
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("settings.nav.label") });
+    fireEvent.click(within(nav).getByRole("button", { name: i18n.t("settings.nav.filters") }));
+
+    await screen.findByRole("alert");
+    await expectNoAxeViolations(document.body);
   });
 });

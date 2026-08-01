@@ -3,12 +3,14 @@ import {
   filterRuleInputSchema,
   filterRuleSchema,
   profileViewSchema,
+  sieveSyncStateSchema,
   updateProfileSchema,
   vacationSettingsInputSchema,
   vacationSettingsSchema,
   type FilterRule,
   type FilterRuleInput,
   type ProfileView,
+  type SieveSyncState,
   type UpdateProfileInput,
   type VacationSettings,
   type VacationSettingsInput,
@@ -62,6 +64,20 @@ export async function deleteFilterRule(id: string): Promise<void> {
 export async function reorderFilterRules(ids: string[]): Promise<void> {
   const res = await fetch("/api/mail/filters/order", jsonRequest("PUT", { ids }));
   if (!res.ok) return parseError(res);
+}
+
+/**
+ * Whether the filters this API lists are the ones Stalwart is actually running
+ * (GH #221 on the server, GH #254 in the UI).
+ *
+ * Reading it is not free of side effects by design: the server uses the read as
+ * its reconciliation point and retries an unapplied push, once per cooldown —
+ * so opening the settings page is what repairs an outage that has since ended.
+ */
+export async function fetchFilterSyncState(): Promise<SieveSyncState> {
+  const res = await fetch("/api/mail/filters/sync-state");
+  if (!res.ok) return parseError(res);
+  return sieveSyncStateSchema.parse(await res.json());
 }
 
 export async function syncFilters(): Promise<{ status: string }> {

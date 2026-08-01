@@ -75,6 +75,10 @@ function DeletePermanentlyConfirmDialog({
   return (
     <div
       role="alertdialog"
+      // GH #253: this one guards an irreversible destroy, which makes the gap
+      // between "Tab is trapped" and "the screen reader can still read and
+      // activate the page behind it" the worst place to have it.
+      aria-modal="true"
       aria-label={t("mail.deletePermanentlyConfirm.title")}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
       onClick={onCancel}
@@ -872,11 +876,22 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                         </p>
                       )}
                     </div>
-                    <div data-testid="thread-footer-actions" className="mt-[26px] flex gap-2.5">
+                    {/* GH #249: Responder / Responder a todos / Reenviar want
+                        ~400px, and a 375px phone leaves ~335px for the reader
+                        column — so without flex-wrap the row overflowed and
+                        Reenviar was pushed off screen. #214 gave the reader's
+                        top action bar and the dialog rows this same treatment
+                        and left this one behind. shrink-0 on each button so the
+                        row wraps between buttons rather than crushing their
+                        labels. */}
+                    <div
+                      data-testid="thread-footer-actions"
+                      className="mt-[26px] flex flex-wrap gap-2.5"
+                    >
                       <button
                         type="button"
                         onClick={() => openCompose(`reply:${lastEmail.id}`)}
-                        className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                        className="flex h-[38px] shrink-0 items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                       >
                         <ReplyIcon size={14} />
                         {t("composer.reply")}
@@ -885,7 +900,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                         <button
                           type="button"
                           onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-                          className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                          className="flex h-[38px] shrink-0 items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                         >
                           {t("composer.replyAll")}
                         </button>
@@ -893,7 +908,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                       <button
                         type="button"
                         onClick={() => openCompose(`forward:${lastEmail.id}`)}
-                        className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                        className="flex h-[38px] shrink-0 items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                       >
                         {t("composer.forward")}
                       </button>

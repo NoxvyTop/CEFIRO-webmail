@@ -121,6 +121,52 @@ describe("ContactsSettings", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
   });
 
+  // GH #250: distinct from the mutation-error alerts above. A failed LOAD used
+  // to render nothing at all, so "we could not reach your address book" and
+  // "you have no contacts" looked identical — except the empty state at least
+  // said something, which made the blank panel the worse of the two.
+  describe("failed load (GH #250)", () => {
+    function renderFailing() {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <ContactsSettings />
+        </QueryClientProvider>,
+      );
+    }
+
+    it("says the load failed instead of showing the empty state or nothing", async () => {
+      fetchContacts.mockRejectedValue(new MailApiError(503, "database_unavailable"));
+      renderFailing();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      expect(screen.queryByText(i18n.t("contacts.empty"))).not.toBeInTheDocument();
+      // The add form belongs to a panel that knows what it holds; a failed load
+      // does not, so it must not invite the user to type into it either.
+      expect(screen.queryByLabelText(i18n.t("contacts.email"))).not.toBeInTheDocument();
+    });
+
+    it("recovers through the retry button without a page reload", async () => {
+      fetchContacts.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      renderFailing();
+
+      await screen.findByRole("alert");
+      fetchContacts.mockResolvedValue([ana]);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+      expect(await screen.findByText("Ana Lopez")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows the loading state, not the empty state, before the first response", async () => {
+      fetchContacts.mockReturnValue(new Promise(() => {}));
+      renderFailing();
+
+      expect(await screen.findByTestId("settings-loading")).toBeInTheDocument();
+      expect(screen.queryByText(i18n.t("contacts.empty"))).not.toBeInTheDocument();
+    });
+  });
+
   // GH #163: provenance was stored but never shown, so an address the harvest
   // added on its own was indistinguishable from one the user vetted by hand.
   describe("harvested provenance (#163)", () => {

@@ -132,12 +132,16 @@ export function Sidebar({
         >
           {Icon && <Icon size={17} />}
           <span className="flex-1">{folderName(mailbox, t)}</span>
+          {/* GH #253: same defect as MessageList's conversation counter — a
+              plain <span> has the `generic` role, which supports no accessible
+              name, so this `aria-label` never reached anyone and the badge was
+              read out as a bare "5" glued to the folder name. The digit is
+              hidden from assistive tech and the counted sentence rendered
+              beside it. */}
           {showUnreadBadge && (
-            <span
-              aria-label={t("mail.unread", { count: mailbox.unreadEmails })}
-              className="text-xs font-bold text-accent-text"
-            >
-              {mailbox.unreadEmails}
+            <span className="text-xs font-bold text-accent-text">
+              <span aria-hidden="true">{mailbox.unreadEmails}</span>
+              <span className="sr-only">{t("mail.unread", { count: mailbox.unreadEmails })}</span>
             </span>
           )}
         </button>

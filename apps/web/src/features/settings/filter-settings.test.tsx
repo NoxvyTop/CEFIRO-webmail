@@ -1,14 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
-import type { FilterRule, Mailbox } from "@webmail/shared";
+import type { FilterRule, Mailbox, SieveSyncState } from "@webmail/shared";
 import { MailApiError } from "../mailbox/api";
 import { FilterSettings } from "./FilterSettings";
 
 const {
   fetchFilterRules,
+  fetchFilterSyncState,
   createFilterRule,
   updateFilterRule,
   deleteFilterRule,
@@ -16,6 +17,7 @@ const {
   syncFilters,
 } = vi.hoisted(() => ({
   fetchFilterRules: vi.fn(),
+  fetchFilterSyncState: vi.fn(),
   createFilterRule: vi.fn(),
   updateFilterRule: vi.fn(),
   deleteFilterRule: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock("./api", async (importOriginal) => {
   return {
     ...actual,
     fetchFilterRules,
+    fetchFilterSyncState,
     createFilterRule,
     updateFilterRule,
     deleteFilterRule,
@@ -59,8 +62,20 @@ const ruleA: FilterRule = {
 
 const ruleB: FilterRule = { ...ruleA, id: "b", position: 1, name: "newsletters" };
 
-function renderFilters(rules: FilterRule[] = [ruleA, ruleB]) {
+const SYNCED: SieveSyncState = {
+  status: "synced",
+  attempts: 0,
+  lastError: null,
+  updatedAt: "2026-07-01T10:00:00.000Z",
+};
+
+function syncState(overrides: Partial<SieveSyncState> = {}): SieveSyncState {
+  return { ...SYNCED, ...overrides };
+}
+
+function renderFilters(rules: FilterRule[] = [ruleA, ruleB], sync: SieveSyncState = SYNCED) {
   fetchFilterRules.mockResolvedValue(rules);
+  fetchFilterSyncState.mockResolvedValue(sync);
   fetchMailboxes.mockResolvedValue(mailboxes);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -179,6 +194,135 @@ describe("FilterSettings", () => {
     expect(banner).toHaveTextContent(i18n.t("settings.errors.sieve_sync_failed"));
     expect(screen.queryByLabelText(i18n.t("filters.name"))).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("filters.newRule") })).toBeInTheDocument();
+  });
+
+  // GH #250: the empty state was gated on `isLoading` alone, so a rules list
+  // that could not be fetched rendered as "no rules yet" — the UI telling the
+  // user their filters are gone when it simply has no idea.
+  describe("failed load (GH #250)", () => {
+    function renderFailing() {
+      fetchMailboxes.mockResolvedValue(mailboxes);
+      fetchFilterSyncState.mockResolvedValue(SYNCED);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <FilterSettings />
+        </QueryClientProvider>,
+      );
+    }
+
+    it("never claims there are no rules when the load failed", async () => {
+      fetchFilterRules.mockRejectedValue(new MailApiError(503, "database_unavailable"));
+      renderFailing();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      expect(screen.queryByText(i18n.t("filters.empty"))).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: i18n.t("filters.newRule") })).not.toBeInTheDocument();
+    });
+
+    it("recovers through the retry button without a page reload", async () => {
+      fetchFilterRules.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      renderFailing();
+
+      await screen.findByRole("alert");
+      fetchFilterRules.mockResolvedValue([ruleA]);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+      expect(await screen.findByText("invoices")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows the loading state, not the empty state, before the first response", async () => {
+      fetchFilterRules.mockReturnValue(new Promise(() => {}));
+      renderFailing();
+
+      expect(await screen.findByTestId("settings-loading")).toBeInTheDocument();
+      expect(screen.queryByText(i18n.t("filters.empty"))).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #254: #221 recorded on the server whether Stalwart is actually running
+  // the rules this page lists, and nothing here read it. A push that failed
+  // before the page was reloaded left the rules looking active, because the
+  // only warning was tied to the mutation that failed in that same session.
+  describe("sieve sync state (GH #254)", () => {
+    it("says nothing when the server reports the rules are synced", async () => {
+      renderFilters([ruleA], syncState({ status: "synced" }));
+
+      await screen.findByText("invoices");
+      expect(screen.queryByTestId("sieve-sync-warning")).not.toBeInTheDocument();
+    });
+
+    it("warns that a pending rule is saved but not applied, and offers a retry", async () => {
+      renderFilters([ruleA], syncState({ status: "pending", lastError: null }));
+
+      const warning = await screen.findByTestId("sieve-sync-warning");
+      expect(warning).toHaveTextContent(i18n.t("filters.sync.pending"));
+      // The rule is still listed as enabled, so the banner is the only thing
+      // telling the user it is not filtering anything.
+      expect(screen.getByRole("button", { name: i18n.t("filters.enabled") })).toBeInTheDocument();
+      expect(
+        within(warning).getByRole("button", { name: i18n.t("filters.reapply") }),
+      ).toBeInTheDocument();
+    });
+
+    it("warns on a retryable failure and offers a retry", async () => {
+      renderFilters([ruleA], syncState({ status: "failed", lastError: "stalwart_unavailable" }));
+
+      const warning = await screen.findByTestId("sieve-sync-warning");
+      expect(warning).toHaveTextContent(i18n.t("filters.sync.failed"));
+      expect(
+        within(warning).getByRole("button", { name: i18n.t("filters.reapply") }),
+      ).toBeInTheDocument();
+    });
+
+    it("says a sieve_invalid failure will not fix itself, and offers no retry", async () => {
+      renderFilters([ruleA], syncState({ status: "failed", lastError: "sieve_invalid" }));
+
+      const warning = await screen.findByTestId("sieve-sync-warning");
+      expect(warning).toHaveTextContent(i18n.t("filters.sync.invalid"));
+      // Retrying pushes the same rejected script again — a button that cannot
+      // work is worse than no button.
+      expect(
+        within(warning).queryByRole("button", { name: i18n.t("filters.reapply") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("offers the retry on a state read at load time, with no error in this session", async () => {
+      syncFilters.mockResolvedValueOnce({ status: "ok" });
+      renderFilters([ruleA], syncState({ status: "failed", lastError: "stalwart_unavailable" }));
+
+      const warning = await screen.findByTestId("sieve-sync-warning");
+      // Nothing failed in this session — the old UI showed no retry at all here.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      fetchFilterSyncState.mockResolvedValue(SYNCED);
+      fireEvent.click(within(warning).getByRole("button", { name: i18n.t("filters.reapply") }));
+
+      await waitFor(() => expect(syncFilters).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText(i18n.t("filters.reapplied"))).toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.queryByTestId("sieve-sync-warning")).not.toBeInTheDocument(),
+      );
+    });
+
+    it("stays quiet when the sync state itself cannot be read", async () => {
+      fetchFilterRules.mockResolvedValue([ruleA]);
+      fetchMailboxes.mockResolvedValue(mailboxes);
+      fetchFilterSyncState.mockRejectedValue(new MailApiError(500, "internal"));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <FilterSettings />
+        </QueryClientProvider>,
+      );
+
+      await screen.findByText("invoices");
+      // An unreadable advisory is not evidence of a problem; inventing a
+      // warning out of it would be its own lie.
+      expect(screen.queryByTestId("sieve-sync-warning")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
   });
 
   it("keeps the form open on a non-sieve error", async () => {

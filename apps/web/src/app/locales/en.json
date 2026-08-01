@@ -377,6 +377,7 @@
     "saved": "Saved",
     "delete": "Delete",
     "edit": "Edit",
+    "retry": "Try again",
     "errors": {
       "invalid_body": "The data is not valid",
       "invalid_order": "The rule order is out of date — reload and try again",
@@ -426,7 +427,12 @@
     "moveDown": "Move down",
     "reapply": "Reapply filters",
     "reapplied": "Filters applied",
-    "empty": "No rules yet"
+    "empty": "No rules yet",
+    "sync": {
+      "pending": "Your rules are saved, but they are not being applied yet: the mail server has not accepted them.",
+      "failed": "The last attempt to apply your rules to the mail server failed. They are saved, but they are not filtering anything yet.",
+      "invalid": "Your rules are saved, but the mail server rejected the generated script — this will not fix itself. Contact your administrator."
+    }
   },
   "vacation": {
     "title": "Automatic replies",

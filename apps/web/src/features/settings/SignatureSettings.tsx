@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { Signature, SignatureInput } from "@webmail/shared";
 import { createSignature, deleteSignature, fetchSignatures, updateSignature } from "../composer/api";
 import { RichTextEditor } from "../composer/RichTextEditor";
+import { SettingsLoadError, SettingsLoading } from "./PanelStates";
 
 const SIGNATURES_QUERY_KEY = ["mail", "signatures"] as const;
 
@@ -127,8 +128,21 @@ export function SignatureSettings() {
     }
   }
 
+  // GH #250: loading, failed and empty are three different things. Empty is
+  // the open blank editor below (#132's edit-first view), so only the first
+  // two are handled here — the previous `if (!data) return null` collapsed a
+  // failed load into a blank panel with nothing to retry.
+  if (signaturesQuery.isError) {
+    return (
+      <SettingsLoadError
+        error={signaturesQuery.error}
+        onRetry={() => void signaturesQuery.refetch()}
+      />
+    );
+  }
+
   if (!signaturesQuery.data) {
-    return null;
+    return <SettingsLoading />;
   }
 
   const showForm = !isListView || formOpen;

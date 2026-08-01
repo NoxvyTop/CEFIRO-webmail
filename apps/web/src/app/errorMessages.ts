@@ -5,15 +5,15 @@ import i18n from "./i18n";
  * for a server error code. Each one MUST define `<namespace>.errors.generic`,
  * which is what an unmapped code resolves to.
  */
-export type ErrorNamespace = "mail" | "composer";
+export type ErrorNamespace = "mail" | "composer" | "settings";
 
 /**
  * Every `code` the server can put in an ApiError envelope
  * (packages/shared/src/api/envelope.ts) on a route this app calls — the mail,
- * reader, and composer endpoints, plus the codes their shared infrastructure
- * and the global error handler can raise on any of them (`internal`,
- * `not_found`, `unauthorized`, `payload_too_large`, `upstream_timeout`,
- * `database_unavailable`).
+ * reader, composer and settings endpoints (filters/sieve, vacation, profile,
+ * contacts), plus the codes their shared infrastructure and the global error
+ * handler can raise on any of them (`internal`, `not_found`, `unauthorized`,
+ * `payload_too_large`, `upstream_timeout`, `database_unavailable`).
  *
  * This is the wire contract, not an allowlist: nothing here gates what gets
  * shown — errorMessageKey below resolves any code at all. It exists so the
@@ -29,12 +29,18 @@ export const SERVER_ERROR_CODES = [
   "ai_disabled",
   "ai_provider_error",
   "ai_rate_limited",
+  // GH #255: the settings routes' own codes. They travel the same envelope as
+  // the rest, so the coverage walk below has to see them or a settings code
+  // could reach the user with nothing behind it — the exact failure #215 fixed
+  // for `mail` and `composer`.
+  "contact_exists",
   "database_unavailable",
   "destroy_failed",
   "generic",
   "internal",
   "invalid_body",
   "invalid_identity",
+  "invalid_order",
   "invalid_query",
   "jmap_error",
   "mail_auth_failed",
@@ -47,6 +53,8 @@ export const SERVER_ERROR_CODES = [
   "payload_too_large",
   "save_draft_failed",
   "send_failed",
+  "sieve_invalid",
+  "sieve_sync_failed",
   "stalwart_unavailable",
   "unauthorized",
   "update_failed",

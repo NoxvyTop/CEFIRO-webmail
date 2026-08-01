@@ -39,6 +39,10 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
           size: options.estimateSize(index),
         })),
       getTotalSize: () => options.count * options.estimateSize(0),
+      // GH #251: MessageList now scrolls the selected row into view. Every row
+      // is already "visible" in this double, so the call has nothing to do —
+      // but it must exist, or the selection effect throws.
+      scrollToIndex: () => {},
     }),
   };
 });

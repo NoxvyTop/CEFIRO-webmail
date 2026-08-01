@@ -7,6 +7,7 @@ import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
 import { ThreadView } from "./ThreadView";
+import { expectNoAxeViolations } from "../../test/axe";
 
 const REMOTE_IMAGE_URL = "https://tracker.evil/pixel.png";
 
@@ -1847,6 +1848,10 @@ describe("ThreadView", () => {
 
       const dialog = await screen.findByRole("alertdialog");
       expect(within(dialog).getByText(/Re: Quarterly report/)).toBeInTheDocument();
+      // GH #253: the focus trap (#158) kept Tab inside, but without aria-modal
+      // a screen reader's virtual cursor still roamed the page behind an
+      // irreversible destroy confirmation.
+      expect(dialog).toHaveAttribute("aria-modal", "true");
 
       expect(
         fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
@@ -2181,6 +2186,90 @@ describe("ThreadView action bar at a narrow viewport (GH #214)", () => {
   });
 });
 
+// GH #249: the sibling row #214 did not touch. The reply row at the foot of
+// the last message is Responder / Responder a todos / Reenviar — in Spanish
+// ~400px of buttons inside the ~335px the reader column has on a 375px phone —
+// and it had no flex-wrap, no shrink-0 and no scrollable axis, so Reenviar was
+// simply pushed off the edge with no way back.
+describe("ThreadView footer reply row at a narrow viewport (GH #249)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+  const originalInnerWidth = window.innerWidth;
+
+  function stubReplyAllThread() {
+    // to + cc beyond the sender, so the worst case (all three buttons) renders.
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [{ name: "Bob", email: "bob@example.com" }];
+    state.emails[1]!.cc = [{ name: "Dave", email: "dave@example.com" }];
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: NARROW_VIEWPORT_WIDTH,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: originalInnerWidth,
+      configurable: true,
+      writable: true,
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("wraps the row instead of letting it run off the edge", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    expect(footer.className).toContain("flex-wrap");
+  });
+
+  it("wraps between buttons rather than squeezing their labels", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    const buttons = within(footer).getAllByRole("button");
+    expect(buttons).toHaveLength(3);
+    for (const button of buttons) {
+      expect(button.className).toContain("shrink-0");
+    }
+  });
+
+  it("keeps every action of the worst-case (reply-all) row reachable", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    for (const name of [
+      i18n.t("composer.reply"),
+      i18n.t("composer.replyAll"),
+      i18n.t("composer.forward"),
+    ]) {
+      expect(within(footer).getByRole("button", { name })).toBeVisible();
+    }
+  });
+
+  it("still fires the action the overflow used to swallow", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    fireEvent.click(within(footer).getByRole("button", { name: i18n.t("composer.forward") }));
+
+    expect(await screen.findByTestId("compose-param")).toHaveTextContent("forward:e2");
+  });
+});
+
 // GH #227: the mutation path used to invalidate the whole ["mail"] namespace
 // on every archive/delete/star, sweeping identities, preferences, signatures
 // and every already-loaded page of the infinite listing. These pin the exact
@@ -2297,5 +2386,33 @@ describe("ThreadView cache invalidation (GH #227)", () => {
         ["mail", "messages"],
       ]),
     );
+  });
+});
+
+// GH #252: the reader, checked by the real engine. It is the screen with the
+// most ARIA surface per pixel — an expandable message stack, a sanitized HTML
+// body, a label popover, an action bar and a destructive confirmation.
+describe("ThreadView accessibility (GH #252)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("passes an axe run over the open thread", async () => {
+    stubFetch();
+    renderThread("t1", "arch1", "inbox1", "trash1");
+
+    await screen.findByTestId("thread-footer-actions");
+    await expectNoAxeViolations(document.body);
+  });
+
+  it("passes an axe run with the destructive confirmation open", async () => {
+    vi.stubGlobal("fetch", stubTrashedThread());
+    renderThread("t1", "arch1", null, "trash1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+
+    await screen.findByRole("alertdialog");
+    await expectNoAxeViolations(document.body);
   });
 });

@@ -377,6 +377,7 @@
     "saved": "Guardado",
     "delete": "Eliminar",
     "edit": "Editar",
+    "retry": "Reintentar",
     "errors": {
       "invalid_body": "Los datos no son válidos",
       "invalid_order": "El orden de las reglas está desactualizado; recarga e inténtalo de nuevo",
@@ -426,7 +427,12 @@
     "moveDown": "Bajar",
     "reapply": "Reaplicar filtros",
     "reapplied": "Filtros aplicados",
-    "empty": "Aún no hay reglas"
+    "empty": "Aún no hay reglas",
+    "sync": {
+      "pending": "Tus reglas están guardadas, pero todavía no se aplican: el servidor de correo aún no las ha aceptado.",
+      "failed": "El último intento de aplicar tus reglas en el servidor de correo falló. Están guardadas, pero aún no filtran nada.",
+      "invalid": "Tus reglas están guardadas, pero el servidor de correo rechazó el script generado; esto no se va a arreglar solo. Contacta con tu administrador."
+    }
   },
   "vacation": {
     "title": "Respuestas automáticas",

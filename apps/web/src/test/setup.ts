@@ -50,6 +50,15 @@ class PatchedRequest extends NativeRequest {
 }
 globalThis.Request = PatchedRequest as unknown as typeof Request;
 
+// jsdom implements no layout, so it ships no Element.prototype.scrollIntoView
+// at all — the property is simply absent, and calling it throws rather than
+// no-opping. MessageList keeps the selected conversation in view with it
+// (GH #251) on the non-virtualized path, so give jsdom the no-op it would have
+// had if it did layout. Tests that care about the call spy on it themselves.
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 afterEach(() => {
   cleanup();
 });

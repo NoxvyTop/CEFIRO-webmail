@@ -7,8 +7,12 @@ import {
 } from "./errorMessages";
 import { MailApiError } from "../features/mailbox/api";
 import { mailErrorKey } from "../features/mailbox/queryErrors";
+import { settingsErrorKey } from "../features/settings/errors";
 
-const NAMESPACES: ErrorNamespace[] = ["mail", "composer"];
+// GH #255: `settings` was the last namespace still resolving codes through a
+// hand-maintained allowlist of its own, so it was also the last one this walk
+// did not cover.
+const NAMESPACES: ErrorNamespace[] = ["mail", "composer", "settings"];
 const LANGUAGES = ["es", "en"];
 
 afterAll(async () => {
@@ -43,11 +47,13 @@ describe("errorMessageKey", () => {
   it("keeps a code that has its own message", () => {
     expect(errorMessageKey("mail", "mail_not_configured")).toBe("mail.errors.mail_not_configured");
     expect(errorMessageKey("composer", "send_failed")).toBe("composer.errors.send_failed");
+    expect(errorMessageKey("settings", "sieve_invalid")).toBe("settings.errors.sieve_invalid");
   });
 
   it("falls back to the namespace's generic message for an unmapped code", () => {
     expect(errorMessageKey("mail", "jmap_error")).toBe("mail.errors.generic");
     expect(errorMessageKey("composer", "stalwart_unavailable")).toBe("composer.errors.generic");
+    expect(errorMessageKey("settings", "jmap_error")).toBe("settings.errors.generic");
   });
 
   it("falls back to generic for a missing or empty code", () => {
@@ -71,6 +77,30 @@ describe("mailErrorKey reaches the messages that already existed", () => {
     "mail_credentials_missing",
   ])("maps %s to its own message instead of the generic one", (code) => {
     expect(mailErrorKey(new MailApiError(500, code))).toBe(`mail.errors.${code}`);
+  });
+});
+
+// GH #255: the settings half of the same story. The old KNOWN_CODES allowlist
+// happened to agree with the bundle at the moment it was written; what the
+// bundle now guarantees is that it cannot fall behind it again.
+describe("settingsErrorKey resolves through the bundle, not an allowlist", () => {
+  it.each([
+    "invalid_body",
+    "invalid_order",
+    "not_found",
+    "sieve_invalid",
+    "sieve_sync_failed",
+    "contact_exists",
+  ])("maps %s to its own message", (code) => {
+    expect(settingsErrorKey(new MailApiError(500, code))).toBe(`settings.errors.${code}`);
+  });
+
+  it("falls back to the settings generic message for a code with no message", () => {
+    expect(settingsErrorKey(new MailApiError(500, "jmap_error"))).toBe("settings.errors.generic");
+  });
+
+  it("falls back to generic for an error that is not a MailApiError", () => {
+    expect(settingsErrorKey(new Error("boom"))).toBe("settings.errors.generic");
   });
 });
 

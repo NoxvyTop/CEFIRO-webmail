@@ -5,6 +5,7 @@ import type { Contact } from "@webmail/shared";
 import { createContact, deleteContact, fetchContacts, promoteContact } from "../contacts/api";
 import { HarvestedBadge } from "../contacts/HarvestedBadge";
 import { settingsErrorKey } from "./errors";
+import { SettingsLoadError, SettingsLoading } from "./PanelStates";
 
 const CONTACTS_QUERY_KEY = ["mail", "contacts"] as const;
 
@@ -67,8 +68,18 @@ export function ContactsSettings() {
     onError: (error) => setErrorKey(settingsErrorKey(error)),
   });
 
+  // GH #250: a failed load used to render nothing at all, which is
+  // indistinguishable from "still loading" and from "you have no contacts".
+  // The three states are now told apart, and the failed one can be retried
+  // without reloading the page.
+  if (contactsQuery.isError) {
+    return (
+      <SettingsLoadError error={contactsQuery.error} onRetry={() => void contactsQuery.refetch()} />
+    );
+  }
+
   if (!contactsQuery.data) {
-    return null;
+    return <SettingsLoading />;
   }
 
   const contacts = contactsQuery.data;

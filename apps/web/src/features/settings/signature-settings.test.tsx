@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { Signature } from "@webmail/shared";
+import { MailApiError } from "../mailbox/api";
 import { SignatureSettings } from "./SignatureSettings";
 
 const { fetchSignatures, createSignature, updateSignature, deleteSignature } = vi.hoisted(() => ({
@@ -214,6 +215,57 @@ describe("SignatureSettings", () => {
       await waitFor(() =>
         expect(updateSignature).toHaveBeenCalledWith("sig2", expect.objectContaining({ isDefault: true })),
       );
+    });
+  });
+
+  // GH #250: the panel used to `return null` whenever the query had no data,
+  // which rendered a failed load as an empty white panel — the same thing a
+  // user sees while it is still loading, and nothing to act on either way.
+  describe("failed load (GH #250)", () => {
+    it("says the load failed instead of rendering a blank panel", async () => {
+      fetchSignatures.mockRejectedValue(new MailApiError(503, "database_unavailable"));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SignatureSettings />
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      // The blank editor is the EMPTY state, so it must not be what a failure
+      // shows — that is exactly the confusion this issue is about.
+      expect(screen.queryByLabelText(i18n.t("settings.name"))).not.toBeInTheDocument();
+    });
+
+    it("recovers through the retry button without a page reload", async () => {
+      fetchSignatures.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SignatureSettings />
+        </QueryClientProvider>,
+      );
+
+      await screen.findByRole("alert");
+      fetchSignatures.mockResolvedValue([signature]);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+      expect(await screen.findByLabelText(i18n.t("settings.name"))).toHaveValue("Default");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows the loading state, not the empty editor, before the first response", async () => {
+      fetchSignatures.mockReturnValue(new Promise(() => {}));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SignatureSettings />
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByTestId("settings-loading")).toBeInTheDocument();
+      expect(screen.queryByLabelText(i18n.t("settings.name"))).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
   });
 

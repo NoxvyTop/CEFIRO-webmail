@@ -1,5 +1,5 @@
 import {
-  useEffect, useMemo, useRef,
+  useEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode,
 } from "react";
 import {
@@ -140,6 +140,15 @@ export function MessageList({
   // the user arrows through them; keep a live handle to each rendered option
   // keyed by its threadId (the same key React uses for the row).
   const optionRefs = useRef(new Map<string, HTMLDivElement>());
+  // GH #251: the option keyboard navigation wants focused, held until the
+  // virtualizer has actually rendered it. Arrowing past the bottom of the
+  // virtual window used to call `optionRefs.get(id)?.focus()` on an id that has
+  // no rendered element (nothing exists more than `overscan` rows out), so the
+  // optional chain quietly did nothing and focus fell all the way back to
+  // <body> — the list lost the keyboard entirely, mid-navigation. Recording the
+  // intent instead of firing and forgetting lets the effect below claim focus
+  // on whichever commit finally mounts that row.
+  const [pendingFocusThreadId, setPendingFocusThreadId] = useState<string | null>(null);
 
   const queryKey = useMemo(
     () =>
@@ -176,10 +185,19 @@ export function MessageList({
   // order at a time — the selected conversation, or the first row when nothing
   // is selected yet — so Tab reaches the list as a single stop and Arrow keys
   // move between options from there. Every other option is tabIndex=-1.
-  const rovingThreadId =
+  //
+  // GH #251: this is only the PREFERRED holder. Resolving it against the rows
+  // actually rendered happens below, once the virtual window is known — a
+  // selected conversation scrolled out of that window has no element to carry
+  // tabIndex=0, and the listbox was then unreachable by Tab at all.
+  const preferredRovingThreadId =
     conversations.find((conversation) => conversation.threadId === selectedThreadId)?.threadId ??
     conversations[0]?.threadId ??
     null;
+
+  const selectedIndex = conversations.findIndex(
+    (conversation) => conversation.threadId === selectedThreadId,
+  );
 
   const total = messagesQuery.data?.pages[0]?.total ?? 0;
 
@@ -278,6 +296,19 @@ export function MessageList({
     starMutation.mutate({ email, starred: !email.keywords.$flagged });
   }
 
+  // True while DOM focus sits on one of this list's options. j/k are global
+  // shortcuts that work from anywhere on the page, so they must only carry
+  // focus along when the list already had it — otherwise pressing j while
+  // reading a message would yank focus out of the reader (GH #251).
+  function focusIsOnAnOption(): boolean {
+    const active = document.activeElement;
+    if (!active) return false;
+    for (const option of optionRefs.current.values()) {
+      if (option === active) return true;
+    }
+    return false;
+  }
+
   // Keyboard handling scoped to a focused option (not the global window
   // listener that owns j/k/s/e): Enter/Space open the conversation, and the
   // arrow keys move the roving selection to the adjacent option and carry DOM
@@ -294,7 +325,10 @@ export function MessageList({
     const target = conversations[event.key === "ArrowDown" ? currentIndex + 1 : currentIndex - 1];
     if (!target) return;
     handleSelect(target);
-    optionRefs.current.get(target.threadId)?.focus();
+    // Deferred rather than focused here (GH #251): one step past the virtual
+    // window there is no element to focus yet, and the row only mounts once the
+    // scroll effect below has moved the window onto it.
+    setPendingFocusThreadId(target.threadId);
   }
 
   useEffect(() => {
@@ -308,7 +342,15 @@ export function MessageList({
         // thread instead of landing on its next loaded message.
         const currentIndex = conversations.findIndex((conversation) => conversation.threadId === selectedThreadId);
         const nextConversation = currentIndex === -1 ? conversations[0] : conversations[currentIndex + 1];
-        if (nextConversation) handleSelect(nextConversation);
+        if (!nextConversation) return;
+        // GH #251: j/k used to move the selection and nothing else. Scrolling is
+        // handled by the selection effect below, but focus is not: the row the
+        // user was standing on is about to be unmounted by the virtualizer as
+        // the window moves, and an unmounted focused element drops focus to
+        // <body>. Carry it to the new selection instead.
+        const carryFocus = focusIsOnAnOption();
+        handleSelect(nextConversation);
+        if (carryFocus) setPendingFocusThreadId(nextConversation.threadId);
         return;
       }
 
@@ -317,7 +359,10 @@ export function MessageList({
         const currentIndex = conversations.findIndex((conversation) => conversation.threadId === selectedThreadId);
         if (currentIndex <= 0) return;
         const previousConversation = conversations[currentIndex - 1];
-        if (previousConversation) handleSelect(previousConversation);
+        if (!previousConversation) return;
+        const carryFocus = focusIsOnAnOption();
+        handleSelect(previousConversation);
+        if (carryFocus) setPendingFocusThreadId(previousConversation.threadId);
         return;
       }
 
@@ -354,6 +399,63 @@ export function MessageList({
   });
 
   const virtualItems = virtualized ? rowVirtualizer.getVirtualItems() : [];
+
+  // The threadIds that have a rendered element right now, in render order.
+  // Everything outside this set exists in `conversations` but not in the DOM.
+  const renderedThreadIds = virtualized
+    ? virtualItems
+        .map((item) => conversations[item.index]?.threadId)
+        .filter((threadId): threadId is string => threadId !== undefined)
+    : conversations.map((conversation) => conversation.threadId);
+
+  // GH #251: the roving tabindex has to land on a row that exists. When the
+  // preferred holder (the selection) is outside the virtual window, the first
+  // rendered row takes the tab stop so the listbox stays reachable; the scroll
+  // effect below then brings the selection back into the window, and the tab
+  // stop returns to it.
+  const rovingThreadId =
+    preferredRovingThreadId !== null && renderedThreadIds.includes(preferredRovingThreadId)
+      ? preferredRovingThreadId
+      : (renderedThreadIds[0] ?? null);
+
+  // GH #251: the one place that keeps the selected conversation visible,
+  // whatever moved it — j/k, the arrow keys, a click, or the parent selecting a
+  // thread from the URL. Before this there was no scrolling of any kind, so
+  // j/k walked the selection straight out of the viewport and left the user
+  // pressing a key with nothing visibly happening.
+  //
+  // `align: "auto"` only scrolls when the row is not already fully visible, so
+  // an ordinary click on a visible row does not jolt the list.
+  useEffect(() => {
+    if (selectedIndex < 0) return;
+    if (virtualized) {
+      rowVirtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+      return;
+    }
+    const threadId = conversations[selectedIndex]?.threadId;
+    if (threadId) optionRefs.current.get(threadId)?.scrollIntoView({ block: "nearest" });
+    // rowVirtualizer is a stable instance; listing it would only add churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndex, virtualized]);
+
+  // Claims the focus a keyboard move asked for, on whichever commit finally
+  // renders that row (GH #251). Runs after every commit on purpose: the row may
+  // only appear once the scroll effect above has moved the virtual window, which
+  // is a later commit than the keypress that requested the focus.
+  useEffect(() => {
+    if (pendingFocusThreadId === null) return;
+    const option = optionRefs.current.get(pendingFocusThreadId);
+    if (option) {
+      option.focus();
+      setPendingFocusThreadId(null);
+      return;
+    }
+    // The row left the list altogether (a refetch dropped it, or the query key
+    // changed): stop waiting, or a much later render could steal focus.
+    if (!conversations.some((conversation) => conversation.threadId === pendingFocusThreadId)) {
+      setPendingFocusThreadId(null);
+    }
+  });
 
   useEffect(() => {
     if (!virtualized) return;
@@ -418,8 +520,15 @@ export function MessageList({
       // (the option is what carries the semantics). It exists so callers that
       // need "this row's star button" — which is no longer inside the option —
       // have one stable handle for the whole row.
+      // GH #253: `role="presentation"` is what makes the comment above true.
+      // Left as a plain <div> it was a `generic` node in the accessibility
+      // tree, so the option was a grandchild of the listbox rather than one of
+      // its owned children — a listbox owns options, not containers. Marked
+      // presentational, the wrapper disappears from the tree and the option is
+      // owned directly.
       <div
         key={conversation.threadId}
+        role="presentation"
         data-testid="conversation-row"
         className={rowClassName(selected)}
       >
@@ -445,12 +554,18 @@ export function MessageList({
               <span className={`min-w-0 flex-1 truncate text-[14px] ${unread ? "font-bold" : "font-medium"}`}>
                 {fromLabel}
               </span>
+              {/* GH #253: `aria-label` on a plain <span> is ignored — the role
+                  is `generic`, which does not support a name — so the label was
+                  dropped and the counter was announced as a bare "3" with no
+                  hint that it counts messages. The visible digit is hidden from
+                  assistive tech and the full sentence rendered beside it
+                  instead, which is the same information for both audiences. */}
               {conversation.count > 1 && (
-                <span
-                  aria-label={t("mail.conversationCount", { count: conversation.count })}
-                  className="shrink-0 text-xs font-semibold text-muted"
-                >
-                  {conversation.count}
+                <span className="shrink-0 text-xs font-semibold text-muted">
+                  <span aria-hidden="true">{conversation.count}</span>
+                  <span className="sr-only">
+                    {t("mail.conversationCount", { count: conversation.count })}
+                  </span>
                 </span>
               )}
               <span className="shrink-0 text-xs text-muted">{dateLabel}</span>
@@ -505,13 +620,21 @@ export function MessageList({
   } else if (virtualized) {
     content = (
       <div ref={parentRef} role="listbox" aria-label={listboxLabel} className="min-h-0 flex-1 overflow-y-auto">
-        <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+        <div
+          role="presentation"
+          style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}
+        >
           {virtualItems.map((virtualRow) => {
             const conversation = conversations[virtualRow.index];
             if (!conversation) return null;
             return (
               <div
                 key={virtualRow.key}
+                // Pure layout: the absolute positioning box the virtualizer
+                // needs. Presentational for the same reason as the row wrapper
+                // (GH #253) — otherwise the virtualized listbox has TWO generic
+                // levels between it and its options.
+                role="presentation"
                 style={{
                   position: "absolute",
                   top: 0,

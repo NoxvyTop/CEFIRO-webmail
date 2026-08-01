@@ -8,6 +8,7 @@ import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
 import { labelBackground, labelColor } from "../../app/ui/labels";
 import { MessageList } from "./MessageList";
+import { axeViolations, expectNoAxeViolations } from "../../test/axe";
 
 // @tanstack/react-virtual measures the scroll container via
 // getBoundingClientRect, which jsdom always reports as zero-sized — the
@@ -31,6 +32,11 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
           size: options.estimateSize(index),
         })),
       getTotalSize: () => options.count * options.estimateSize(0),
+      // GH #251: the selection effect calls this on every selection change.
+      // This double renders the whole list, so there is never anything out of
+      // view to scroll to — the windowed behaviour is exercised in
+      // message-list-virtual-keyboard.test.tsx instead.
+      scrollToIndex: () => {},
     }),
   };
 });
@@ -586,11 +592,15 @@ describe("MessageList", () => {
       // thread-group (2 loaded messages) + t2 (1 message) = 2 conversation rows.
       expect(options).toHaveLength(2);
 
-      const counter = screen.getByLabelText(i18n.t("mail.conversationCount", { count: 2 }));
-      expect(counter).toHaveTextContent("2");
+      // GH #253: the counter used to carry an aria-label on a plain <span>,
+      // which no assistive tech reads — it is now a visible digit plus its own
+      // screen-reader sentence, so the counted text is what to look for.
+      const counter = screen.getByText(i18n.t("mail.conversationCount", { count: 2 }));
+      expect(counter).toBeInTheDocument();
+      expect(counter.parentElement).toHaveTextContent("2");
 
       // The singleton thread must not render a counter at all.
-      expect(screen.queryAllByLabelText(/./).filter((el) => el.textContent === "2")).toHaveLength(1);
+      expect(screen.queryAllByText(i18n.t("mail.conversationCount", { count: 1 }))).toHaveLength(0);
     });
 
     it("shows the latest message's subject and sender as the conversation's representative, regardless of load order", async () => {
@@ -845,6 +855,44 @@ describe("MessageList accessibility (GH #225)", () => {
     });
   });
 
+  // GH #253: #225's comment already called the row wrapper "presentational",
+  // but nothing in the markup said so. Left as a bare <div> it is `generic` in
+  // the accessibility tree, so the listbox owned a container rather than an
+  // option — and the virtualized branch stacked TWO of those between them.
+  describe("the listbox owns its options directly (GH #253)", () => {
+    it("marks every wrapper between the plain listbox and its options presentational", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      renderList(vi.fn(), { virtualized: false });
+
+      await screen.findByText("Hello there");
+      const listbox = screen.getByRole("listbox");
+      for (const option of screen.getAllByRole("option")) {
+        let node = option.parentElement;
+        while (node && node !== listbox) {
+          expect(node).toHaveAttribute("role", "presentation");
+          node = node.parentElement;
+        }
+      }
+    });
+
+    it("marks the virtualized branch's extra positioning wrappers presentational too", async () => {
+      stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+      renderList(vi.fn(), { virtualized: true });
+
+      await screen.findByText("Hello there");
+      const listbox = screen.getByRole("listbox");
+      const options = screen.getAllByRole("option");
+      expect(options.length).toBeGreaterThan(0);
+      for (const option of options) {
+        let node = option.parentElement;
+        while (node && node !== listbox) {
+          expect(node).toHaveAttribute("role", "presentation");
+          node = node.parentElement;
+        }
+      }
+    });
+  });
+
   it("keeps exactly one option in the tab order (roving tabindex, GH #200)", async () => {
     stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
     renderList(vi.fn(), { virtualized: false });
@@ -854,6 +902,55 @@ describe("MessageList accessibility (GH #225)", () => {
       .getAllByRole("option")
       .filter((option) => option.getAttribute("tabindex") === "0");
     expect(tabbable).toHaveLength(1);
+  });
+
+  // GH #252: the same screen, checked by the real engine rather than by the
+  // hand-written rules above. The assertions above stay: they pin the specific
+  // invariants #200/#225/#253 fixed, in language that says WHY. This catches
+  // everything nobody thought to write down.
+  //
+  // `aria-required-children` is the one rule excluded here, and it is excluded
+  // knowingly (GH #253). A listbox may own only options, and #225 deliberately
+  // moved the per-row star OUT of the option because an option's children are
+  // presentational — a <button> inside one is announced by nothing. Both
+  // placements break a rule; the current one at least leaves the star operable.
+  // The real fix is role="grid"/row/gridcell, which is what a list of rows with
+  // per-row controls actually is — a change to the public role contract that
+  // six E2E specs and this file's own queries are written against, so it is a
+  // deliberate follow-up rather than a side effect of this pass. Every other
+  // axe rule is enforced.
+  const LISTBOX_ROW_CONTROL_DEBT = ["aria-required-children"];
+
+  it("passes an axe run over the rendered list", async () => {
+    stubFetch({ total: 3, position: 0, emails: [emailUnread, emailRead, emailLabeled] });
+    renderList(vi.fn(), { title: "Recibidos", virtualized: false });
+
+    await screen.findByText("Hello there");
+    await expectNoAxeViolations(document.body, LISTBOX_ROW_CONTROL_DEBT);
+  });
+
+  it("passes an axe run over the virtualized list too", async () => {
+    stubFetch({ total: 3, position: 0, emails: [emailUnread, emailRead, emailLabeled] });
+    renderList(vi.fn(), { title: "Recibidos", virtualized: true });
+
+    await screen.findByText("Hello there");
+    await expectNoAxeViolations(document.body, LISTBOX_ROW_CONTROL_DEBT);
+  });
+
+  // Pins the exclusion above to its ONE known cause, so the day the grid
+  // conversion lands (or anything else adds a second disallowed child) this
+  // fails and the exclusion has to be revisited rather than quietly widened.
+  it("has exactly one known aria-required-children offender: the row's star button", async () => {
+    stubFetch({ total: 2, position: 0, emails: [emailUnread, emailRead] });
+    renderList(vi.fn(), { title: "Recibidos", virtualized: false });
+
+    await screen.findByText("Hello there");
+    const violations = await axeViolations(document.body);
+
+    expect(violations.map((violation) => violation.id)).toEqual(["aria-required-children"]);
+    for (const node of violations[0]?.nodes ?? []) {
+      expect(node.failureSummary).toContain("button[aria-label]");
+    }
   });
 });
 
