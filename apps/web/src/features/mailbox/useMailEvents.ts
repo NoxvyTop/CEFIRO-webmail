@@ -1,7 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { AUTH_ME_URL, AUTH_QUERY_KEY } from "../auth/useAuth";
+import { AUTH_QUERY_KEY } from "../auth/useAuth";
+
+// The same endpoint the EventSource opens. The probe below re-asks it with
+// fetch() precisely because fetch exposes the HTTP status that EventSource hides.
+const MAIL_EVENTS_URL = "/api/mail/events";
 
 // GH #243: the retry used to be a flat 15 s with no jitter at all. A server
 // restart drops every open stream at the same instant, so every client came
@@ -26,12 +30,11 @@ const RETRY_MAX_DELAY_MS = 60_000;
 // CLOSED once the server DID answer and the answer was unusable (any non-200,
 // a 401 among them).
 //
-// CLOSED therefore means "the server refused the handshake", which is not the
-// same as "the session is gone": a 502/503 from a server still coming back up
-// lands there too, and abandoning the stream on one of those would break
-// precisely the restart this backoff exists for. So CLOSED is only the trigger
-// to ASK — one cheap /api/auth/me settles it, and only an explicit 401 stops
-// the stream for good.
+// CLOSED therefore means "the server refused the handshake", but that covers
+// three outcomes we must treat differently: the session is gone (401), this
+// tab is over the per-user stream cap (429 too_many_streams, GH #241/#274), or
+// the server is merely having a bad minute (502/503 while Stalwart restarts).
+// So CLOSED is only the trigger to ASK — see classifyRefusedHandshake below.
 //
 // Written as the literal 2 rather than EventSource.CLOSED on purpose: that
 // constant is read off whichever EventSource is in scope, so a stand-in without
@@ -50,17 +53,43 @@ export function retryDelayMs(attempt: number, random: number = Math.random()): n
 }
 
 /**
- * Whether the stream failed because the session is gone rather than because the
- * server is having a bad minute. A probe that cannot be made at all (offline,
- * server still down) says nothing about the session, so it answers "no" and
- * lets the ordinary backoff carry on.
+ * Why a refused handshake was refused, recovered by re-asking the SAME endpoint
+ * with fetch() — which exposes the status EventSource hides (GH #274).
+ *
+ * The /events route (apps/server/src/modules/mail/router.ts) registers-or-
+ * refuses the per-user stream slot BEFORE it opens the upstream Stalwart
+ * connection, so the two statuses we act on come back immediately and cheaply:
+ *
+ *   - 401  → requireMail rejected it: the session is gone. Stop and re-auth.
+ *   - 429  → too_many_streams: this user already holds the 8-stream cap, so
+ *            THIS tab cannot go live. Returned without taking a slot, so the
+ *            probe adds no load and cannot become a storm. Stop and tell the
+ *            user; another tab is holding the stream.
+ *   - else → transient (502/503 while the server restarts, or a probe that
+ *            could not be made at all — offline). Keep the ordinary backoff:
+ *            abandoning the stream on one of those would break precisely the
+ *            restart the backoff exists for.
+ *
+ * A genuine 200 (a slot freed up between the failure and the probe) is the one
+ * case that would consume a slot; the request is aborted the moment its headers
+ * arrive so the server's disconnect handler releases it again before the
+ * reconnect fires, and it is classified "transient" so the reconnect happens.
  */
-async function sessionExpired(): Promise<boolean> {
+type HandshakeVerdict = "sessionExpired" | "streamLimited" | "transient";
+
+async function classifyRefusedHandshake(): Promise<HandshakeVerdict> {
   try {
-    const res = await fetch(AUTH_ME_URL);
-    return res.status === 401;
+    const controller = new AbortController();
+    const res = await fetch(MAIL_EVENTS_URL, {
+      headers: { accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    controller.abort();
+    if (res.status === 401) return "sessionExpired";
+    if (res.status === 429) return "streamLimited";
+    return "transient";
   } catch {
-    return false;
+    return "transient";
   }
 }
 
@@ -120,14 +149,25 @@ export function invalidationKeysForStateChange(raw: string): string[][] {
   return keys.length > 0 ? keys : ALL_MAIL_DATA_KEYS;
 }
 
-export function useMailEvents(enabled: boolean): void {
+/** What the hook reports back to its one consumer (MailPage). */
+export interface MailEventsStatus {
+  // GH #274: true once the stream was refused with 429 too_many_streams and the
+  // hook gave up retrying — the tab is live-update-limited until it is reloaded.
+  liveUpdatesLimited: boolean;
+}
+
+export function useMailEvents(enabled: boolean): MailEventsStatus {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
+  const [liveUpdatesLimited, setLiveUpdatesLimited] = useState(false);
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return undefined;
+    // A fresh effect run (re-enabled) starts from a clean slate; the flag only
+    // latches back on if this run's stream is refused for the cap again.
+    setLiveUpdatesLimited(false);
 
     let source: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -176,17 +216,27 @@ export function useMailEvents(enabled: boolean): void {
         scheduleRetry();
         return;
       }
-      void sessionExpired().then((expired) => {
+      void classifyRefusedHandshake().then((verdict) => {
         if (cancelled || stopped) return;
-        if (!expired) {
+        if (verdict === "transient") {
           scheduleRetry();
           return;
         }
+        // Both terminal verdicts stop the loop: nothing this tab does on its
+        // own can recover, so retrying would be the silent forever-loop #274
+        // is about.
         stopped = true;
-        // Re-read the session so RequireAuth takes the user to the login
-        // screen, rather than leaving them in front of a mailbox that has
-        // quietly stopped updating.
-        queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+        if (verdict === "sessionExpired") {
+          // Re-read the session so RequireAuth takes the user to the login
+          // screen, rather than leaving them in front of a mailbox that has
+          // quietly stopped updating.
+          queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+          return;
+        }
+        // streamLimited: the session is fine and the server is up — another
+        // tab simply holds this user's last stream slot. Surface it instead of
+        // retrying in silence; reloading once a slot frees up goes live again.
+        setLiveUpdatesLimited(true);
       });
     }
 
@@ -214,4 +264,6 @@ export function useMailEvents(enabled: boolean): void {
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [enabled, queryClient]);
+
+  return { liveUpdatesLimited };
 }

@@ -973,3 +973,71 @@ describe("MessageList row handle (GH #225)", () => {
     }
   });
 });
+
+// GH #272: `isLoading` used to gate only the empty state, so switching folders
+// left the list area blank until the first page arrived — indistinguishable
+// from an empty folder. A skeleton now stands in for the pending first page.
+describe("MessageList loading state (GH #272)", () => {
+  it("shows a skeleton while the first page is still loading, not the empty state", async () => {
+    // A fetch that never resolves keeps the infinite query in its pending state.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    renderList();
+
+    expect(await screen.findByTestId("message-list-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("mail.empty"))).not.toBeInTheDocument();
+  });
+
+  it("replaces the skeleton with the empty state once an empty page arrives", async () => {
+    stubFetch({ total: 0, position: 0, emails: [] });
+    renderList();
+
+    expect(await screen.findByText(i18n.t("mail.empty"))).toBeInTheDocument();
+    expect(screen.queryByTestId("message-list-skeleton")).not.toBeInTheDocument();
+  });
+});
+
+// GH #268: a search (`?q=`) turns the folder view into a search view. Before
+// this the header still said the folder name and counted "N correos", so a
+// short or empty result set read as "your inbox emptied".
+describe("MessageList search header (GH #268)", () => {
+  it("names the view as a search, shows the term, counts results, and clears back to the folder", async () => {
+    stubFetch({ total: 1, position: 0, emails: [emailUnread] });
+    const onClearSearch = vi.fn();
+    renderList(vi.fn(), { title: "Recibidos", query: "factura", onClearSearch });
+
+    await screen.findByText("Hello there");
+    // The heading says it is a search, not the folder name.
+    expect(screen.getByText(i18n.t("mail.searchResults"))).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Recibidos" })).not.toBeInTheDocument();
+    // The term is visible (in the clearable chip).
+    expect(screen.getByText("factura")).toBeInTheDocument();
+    // The count reads as results, never as the folder total.
+    expect(screen.getByText(i18n.t("mail.searchResultCount", { count: 1 }))).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("mail.messageCount", { count: 1 }))).not.toBeInTheDocument();
+    // A visible way out, wired to onClearSearch.
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.clearSearch") }));
+    expect(onClearSearch).toHaveBeenCalled();
+  });
+
+  it("still counts results (not the folder total) when a search returns nothing", async () => {
+    stubFetch({ total: 0, position: 0, emails: [] });
+    renderList(vi.fn(), { title: "Recibidos", query: "nada", onClearSearch: vi.fn() });
+
+    expect(await screen.findByText(i18n.t("mail.empty"))).toBeInTheDocument();
+    // The header still frames it as a search with zero results — so an empty
+    // result cannot be misread as "the folder has 0 messages".
+    expect(screen.getByText(i18n.t("mail.searchResults"))).toBeInTheDocument();
+    expect(screen.getByText("nada")).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("mail.searchResultCount", { count: 0 }))).toBeInTheDocument();
+  });
+
+  it("keeps the ordinary folder header and count when there is no query", async () => {
+    stubFetch({ total: 3, position: 0, emails: [emailUnread] });
+    renderList(vi.fn(), { title: "Recibidos" });
+
+    await screen.findByText("Hello there");
+    expect(screen.getByText("Recibidos")).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("mail.messageCount", { count: 3 }))).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("mail.searchResults"))).not.toBeInTheDocument();
+  });
+});

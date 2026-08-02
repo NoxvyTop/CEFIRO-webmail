@@ -31,6 +31,9 @@ interface MessageListProps {
   onLabels?: (labels: string[]) => void;
   activeLabel?: string;
   onClearLabel?: () => void;
+  // GH #268: clears the active `q` search and returns to the folder. Present
+  // only while a search is showing (the header renders the clear affordance).
+  onClearSearch?: () => void;
   archiveMailboxId: string | null;
   onArchived?: (email: EmailSummary) => void;
   // Same userPreferences-sourced list the Sidebar uses, so custom label chips
@@ -65,6 +68,40 @@ const ROW_LABEL_EXTRA_HEIGHT = 26;
 
 function rowHasLabelChip(keywords: Record<string, boolean>): boolean {
   return userLabels(keywords).length > 0;
+}
+
+// GH #272: stable keys for the skeleton rows so the placeholder does not use
+// array indexes as React keys (Biome's noArrayIndexKey) — the count is fixed,
+// so a small fixed list is both lint-clean and enough to fill the pane.
+const SKELETON_ROW_KEYS = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+
+// GH #272: shown while the FIRST page of a folder/label/search is still
+// loading. Before this, `isLoading` only gated the empty state, so switching
+// folders left the list area blank until the page arrived — indistinguishable
+// from an empty folder. A skeleton that mirrors the row layout says "loading"
+// the way #250 gave the settings panels their own loading state.
+function MessageListSkeleton() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      data-testid="message-list-skeleton"
+      className="min-h-0 flex-1 overflow-y-auto"
+    >
+      <span className="sr-only">{t("mail.loading")}</span>
+      {SKELETON_ROW_KEYS.map((key) => (
+        <div key={key} className="flex items-start gap-3 border-b border-line py-[13px] pl-[17px] pr-4">
+          <div className="h-[38px] w-[38px] shrink-0 animate-pulse rounded-full bg-soft" />
+          <div className="min-w-0 flex-1 space-y-2 py-1">
+            <div className="h-3 w-1/3 animate-pulse rounded bg-soft" />
+            <div className="h-3 w-2/3 animate-pulse rounded bg-soft" />
+            <div className="h-3 w-1/2 animate-pulse rounded bg-soft" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // GH #89: one row per conversation (thread) instead of one row per email,
@@ -128,7 +165,7 @@ function groupIntoConversations(emails: EmailSummary[]): ConversationRow[] {
 export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
-  onLabels, activeLabel, onClearLabel, archiveMailboxId, onArchived, customLabels = [],
+  onLabels, activeLabel, onClearLabel, onClearSearch, archiveMailboxId, onArchived, customLabels = [],
 }: MessageListProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -607,6 +644,11 @@ export function MessageList({
   // label covers the callers that render the list without a header.
   const listboxLabel = title ?? t("mail.messageListLabel");
 
+  // GH #268: a query turns the folder view into a search view — the header
+  // must say so (and stop showing the count as the folder total) so an empty
+  // result set doesn't read as "your inbox emptied".
+  const isSearch = Boolean(query);
+
   let content: ReactNode;
 
   if (messagesQuery.isError) {
@@ -615,7 +657,11 @@ export function MessageList({
         {t(mailErrorKey(messagesQuery.error))}
       </p>
     );
-  } else if (!messagesQuery.isLoading && emails.length === 0) {
+  } else if (messagesQuery.isLoading) {
+    // GH #272: the first page is still in flight (a fresh folder/label/search).
+    // The skeleton stands in for it instead of the blank pane this used to show.
+    content = <MessageListSkeleton />;
+  } else if (emails.length === 0) {
     content = <p className="p-4 text-sm text-muted">{t("mail.empty")}</p>;
   } else if (virtualized) {
     content = (
@@ -662,31 +708,56 @@ export function MessageList({
 
   return (
     <div className="flex h-full flex-col">
-      {title && (
+      {(title || isSearch) && (
         <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-[18px]">
           <div className="flex min-w-0 items-center gap-2.5">
-            <h2 className="truncate text-[15px] font-[650]">{title}</h2>
-            {activeLabel && (
-              <span
-                className="flex h-6 shrink-0 items-center gap-1.5 rounded-full px-[9px] text-xs font-semibold"
-                style={{
-                  color: labelColor(activeLabel, customLabels),
-                  background: labelBackground(activeLabel, customLabels),
-                }}
-              >
-                {labelDisplayName(activeLabel, customLabels)}
+            {/* GH #268: while searching, the heading names the search rather
+                than the folder, and the term rides in a chip whose X returns to
+                the folder — mirroring the activeLabel chip's clear affordance. */}
+            <h2 className="shrink-0 truncate text-[15px] font-[650]">
+              {isSearch ? t("mail.searchResults") : title}
+            </h2>
+            {isSearch ? (
+              <span className="flex h-6 min-w-0 items-center gap-1.5 rounded-full bg-soft px-[9px] text-xs font-semibold text-ink">
+                <span className="truncate">{query}</span>
                 <button
                   type="button"
-                  aria-label={t("mail.clearLabel")}
-                  onClick={onClearLabel}
-                  className="flex h-3.5 w-3.5 items-center justify-center opacity-70"
+                  aria-label={t("mail.clearSearch")}
+                  onClick={onClearSearch}
+                  className="flex h-3.5 w-3.5 shrink-0 items-center justify-center opacity-70"
                 >
                   <CloseIcon size={10} />
                 </button>
               </span>
+            ) : (
+              activeLabel && (
+                <span
+                  className="flex h-6 shrink-0 items-center gap-1.5 rounded-full px-[9px] text-xs font-semibold"
+                  style={{
+                    color: labelColor(activeLabel, customLabels),
+                    background: labelBackground(activeLabel, customLabels),
+                  }}
+                >
+                  {labelDisplayName(activeLabel, customLabels)}
+                  <button
+                    type="button"
+                    aria-label={t("mail.clearLabel")}
+                    onClick={onClearLabel}
+                    className="flex h-3.5 w-3.5 items-center justify-center opacity-70"
+                  >
+                    <CloseIcon size={10} />
+                  </button>
+                </span>
+              )
             )}
           </div>
-          <span className="shrink-0 text-xs text-muted">{t("mail.messageCount", { count: total })}</span>
+          {/* GH #268: search counts its results, not the folder total, so
+              "1 resultado" can't be misread as "your inbox has 1 message". */}
+          <span className="shrink-0 text-xs text-muted">
+            {isSearch
+              ? t("mail.searchResultCount", { count: total })
+              : t("mail.messageCount", { count: total })}
+          </span>
         </div>
       )}
       {content}
