@@ -136,6 +136,26 @@ describe("AdminPage console shell", () => {
     ).toBeInTheDocument();
   });
 
+  // GH #272: the Overview metrics are derived from the users query's `stats`, so
+  // a failed load left every card reading `0` — the console asserting an empty,
+  // fully-inactive tenant when it simply could not read one. It now shows the
+  // load-error language with a retry, and no zeroed cards standing in for it.
+  it("shows a retry instead of misleading zeros when the overview cannot load", async () => {
+    fetchAdminUsers.mockRejectedValueOnce(new Error("boom"));
+    fetchAdminSso.mockResolvedValue(configuredSso);
+    fetchAdminInstance.mockResolvedValue({ sentWithFooter: false });
+    renderPage();
+
+    expect(await screen.findByText(i18n.t("admin.errors.load"))).toBeInTheDocument();
+    // No metric card is rendered to show a fabricated 0.
+    expect(screen.queryByText(i18n.t("admin.metrics.active"))).not.toBeInTheDocument();
+
+    fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.retry") }));
+
+    expect(await screen.findByText("3")).toBeInTheDocument();
+  });
+
   it("switches to Usuarios and shows the existing users table", async () => {
     fetchAdminUsers.mockResolvedValue(usersPage(threeUsers));
     fetchAdminSso.mockResolvedValue(configuredSso);

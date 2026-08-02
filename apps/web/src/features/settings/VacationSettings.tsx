@@ -7,7 +7,7 @@ import type {
 } from "@webmail/shared";
 import { fetchSieveCapability, fetchVacationSettings, updateVacationSettings } from "./api";
 import { settingsErrorKey } from "./errors";
-import { SettingsUnavailable } from "./PanelStates";
+import { SettingsLoadError, SettingsLoading, SettingsUnavailable } from "./PanelStates";
 import { AdvancedModeNotice } from "./SieveAdvanced";
 
 const VACATION_QUERY_KEY = ["mail", "vacation"] as const;
@@ -65,8 +65,17 @@ export function VacationSettings() {
     return <SettingsUnavailable messageKey="vacation.unavailable" />;
   }
 
+  // GH #272: propagate #250's loading/error language here. A failed load used to
+  // `return null` — a blank panel that says neither "loading" nor "we could not
+  // read this", and offers no way to try again.
+  if (vacationQuery.isError) {
+    return (
+      <SettingsLoadError error={vacationQuery.error} onRetry={() => void vacationQuery.refetch()} />
+    );
+  }
+
   if (!form) {
-    return null;
+    return <SettingsLoading />;
   }
 
   function update(patch: Partial<VacationSettingsInput>) {

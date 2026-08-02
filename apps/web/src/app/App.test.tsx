@@ -6,6 +6,7 @@ import { RouterProvider } from "react-router/dom";
 import "./i18n";
 import i18n from "./i18n";
 import { routes } from "./routes";
+import { expectNoShellAxeViolations } from "../test/axe";
 
 const user = {
   userId: "u1",
@@ -105,5 +106,20 @@ describe("App accessibility shell", () => {
 
     const main = screen.getByRole("main");
     expect(main).toHaveAttribute("id", "main-content");
+  });
+
+  it("passes an axe run over the mounted shell with the landmark/region rules enabled", async () => {
+    const { container } = renderApp();
+
+    // Awaiting the skip link both confirms the shell chrome has mounted and lets
+    // the auth/health queries settle so the header renders its full content
+    // before axe reads it. This is the ONE run where the page-level landmark
+    // rules apply — bypass (skip link), landmark-one-main (the single <main>)
+    // and region (all content within a landmark) are exactly the #200 structure
+    // the feature-component helper disables because those screens are not full
+    // pages. jsdom still can't do color-contrast; theme-contrast.spec.ts covers
+    // that in a real browser.
+    await screen.findByRole("link", { name: i18n.t("app.skipToContent") });
+    await expectNoShellAxeViolations(container);
   });
 });

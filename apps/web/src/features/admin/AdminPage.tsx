@@ -55,12 +55,28 @@ type SsoForm = { issuer: string; clientId: string; clientSecret: string; scopes:
 
 const EMPTY_SSO_FORM: SsoForm = { issuer: "", clientId: "", clientSecret: "", scopes: "" };
 
+// GH #282: mirrors the server's `setupSsoSchema` issuer rule (`z.string().url()`)
+// so the commonest mistake — an empty or non-URL issuer — is caught at the field
+// it belongs to, with a hint that names it, instead of a doomed request whose
+// only answer is a generic `invalid_body`.
+function isIssuerUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function AdminPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
 
   const [newUser, setNewUser] = useState(EMPTY_NEW_USER);
   const [ssoForm, setSsoForm] = useState(EMPTY_SSO_FORM);
+  // GH #282: a per-field hint for the SSO issuer, kept apart from the mutation's
+  // server error so the two never fight over the same line.
+  const [ssoIssuerError, setSsoIssuerError] = useState(false);
   const [userSearch, setUserSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
   const [userPage, setUserPage] = useState(0);
@@ -124,6 +140,14 @@ export function AdminPage() {
 
   function handleSsoSubmit(event: FormEvent) {
     event.preventDefault();
+    // Clear the previous attempt's server error so a fresh field-level failure
+    // is not shown alongside a stale "could not save".
+    ssoMutation.reset();
+    if (!isIssuerUrl(ssoForm.issuer.trim())) {
+      setSsoIssuerError(true);
+      return;
+    }
+    setSsoIssuerError(false);
     ssoMutation.mutate(ssoForm);
   }
 
@@ -189,7 +213,27 @@ export function AdminPage() {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col gap-6">
-          {section === "resumen" && (
+          {section === "resumen" && usersQuery.isError && (
+            // GH #272: the metrics are derived from the users query's `stats`, so
+            // a failed load left every card reading `0` — the console asserting
+            // an empty, fully-inactive tenant when it simply could not read one.
+            // Replaced with #250's load-error language and a retry.
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/40 bg-soft p-2 text-sm text-danger"
+            >
+              <span>{t("admin.errors.load")}</span>
+              <button
+                type="button"
+                onClick={() => void usersQuery.refetch()}
+                className="rounded-md border border-danger/40 px-2 py-1 text-xs hover:bg-hover"
+              >
+                {t("admin.retry")}
+              </button>
+            </div>
+          )}
+
+          {section === "resumen" && !usersQuery.isError && (
             <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
               <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3">
                 <div className={metricStatClass}>
@@ -420,9 +464,20 @@ export function AdminPage() {
                   {t("admin.sso.fields.issuer")}
                   <input
                     value={ssoForm.issuer}
-                    onChange={(event) => setSsoForm({ ...ssoForm, issuer: event.target.value })}
+                    onChange={(event) => {
+                      setSsoForm({ ...ssoForm, issuer: event.target.value });
+                      // Clear the hint as the admin fixes the field.
+                      if (ssoIssuerError) setSsoIssuerError(false);
+                    }}
+                    aria-invalid={ssoIssuerError || undefined}
+                    aria-describedby={ssoIssuerError ? "sso-issuer-error" : undefined}
                     className={inputClass}
                   />
+                  {ssoIssuerError && (
+                    <span id="sso-issuer-error" role="alert" className="text-xs text-warn">
+                      {t("admin.sso.errors.issuerInvalid")}
+                    </span>
+                  )}
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   {t("admin.sso.fields.clientId")}
@@ -454,9 +509,15 @@ export function AdminPage() {
                 </button>
               </form>
               {ssoMutation.isSuccess && <p className="text-sm text-accent-text">{t("admin.sso.saved")}</p>}
+              {/* GH #282: resolve through the shared per-code map instead of a
+                  single fixed "could not save", so e.g. an `invalid_body` from
+                  the server reads as a data problem the admin can act on. The
+                  form (clientSecret included) is left intact on failure — only a
+                  successful save clears it — so a fix does not mean re-typing the
+                  secret. */}
               {ssoMutation.isError && (
                 <p role="alert" className="text-sm text-danger">
-                  {t("admin.sso.error")}
+                  {t(adminErrorKey(ssoMutation.error))}
                 </p>
               )}
             </section>

@@ -99,15 +99,33 @@ export function SieveAdvancedEditor() {
   const [draft, setDraft] = useState<string | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // GH #267: which of the two distinct scripts to show in the stored-but-inactive
+  // case — the user's own saved hand-written script ("stored", the default and
+  // the one a save would re-activate) or, read-only, the one the rules generate
+  // and that is actually running right now ("generated"). Irrelevant in the
+  // clean and active cases, where there is only one script to show.
+  const [view, setView] = useState<"stored" | "generated">("stored");
 
   const rawQuery = useQuery({ queryKey: SIEVE_RAW_QUERY_KEY, queryFn: fetchSieveRawScript });
-  // Only fetched when there is nothing stored to seed from: a user who already
-  // has a script wants THAT script back, not a regenerated one over it.
-  const needsSeed = rawQuery.data?.script === "";
+  const state = rawQuery.data;
+  // A hand-written script was saved at some point (whether or not it runs now).
+  const hasStored = !!state && state.script !== "";
+  // GH #267: mode is `rules`, so what runs is the generated script — but a
+  // hand-written one is stored and dormant. The header used to claim the
+  // textarea was "the script your rules produce" while showing this dormant one,
+  // so the user read their own old script as the output of their live rules.
+  const isInactiveStored = !!state && state.mode === "rules" && hasStored;
+  // Only seeded from the generated script when there is nothing stored to seed
+  // from: a user who already has a script wants THAT script back, not a
+  // regenerated one over it.
+  const needsSeed = state?.script === "";
+  const showGenerated = isInactiveStored && view === "generated";
   const generatedQuery = useQuery({
     queryKey: GENERATED_SCRIPT_QUERY_KEY,
     queryFn: fetchGeneratedSieveScript,
-    enabled: open && needsSeed,
+    // The clean case needs it as the seed; the inactive case fetches it only
+    // when the user asks to see it — the generated preview is a JMAP round-trip.
+    enabled: open && (needsSeed || showGenerated),
   });
 
   function beginMutation() {
@@ -141,16 +159,24 @@ export function SieveAdvancedEditor() {
     onSettled: () => invalidateFilters(),
   });
 
-  const state = rawQuery.data;
-  const seed = state ? state.script || generatedQuery.data?.script || "" : "";
-  const script = draft ?? seed;
+  // The editable, saveable script: the active hand-written one, the generated
+  // seed in the clean case, or the dormant stored one waiting to be re-activated.
+  const editableSeed = state ? state.script || generatedQuery.data?.script || "" : "";
+  const script = draft ?? editableSeed;
+  // What the textarea shows: the read-only generated preview when the user is
+  // looking at it, otherwise the editable script. A draft typed on the stored
+  // side survives a peek at the generated one — it is kept, not overwritten.
+  const displayed = showGenerated ? (generatedQuery.data?.script ?? "") : script;
   const pending = saveMutation.isPending || ruleBuilderMutation.isPending;
 
   function body() {
     if (rawQuery.isError) {
       return <SettingsLoadError error={rawQuery.error} onRetry={() => void rawQuery.refetch()} />;
     }
-    if (generatedQuery.isError) {
+    // Only fatal when the generated script IS the seed (the clean case). In the
+    // inactive-stored case it is a secondary preview, so a failure there is
+    // handled inline below without tearing down the editor and the stored script.
+    if (generatedQuery.isError && needsSeed) {
       return (
         <SettingsLoadError
           error={generatedQuery.error}
@@ -162,31 +188,89 @@ export function SieveAdvancedEditor() {
       return <SettingsLoading />;
     }
 
+    const saveKey = isInactiveStored ? "filters.advanced.saveReactivate" : "filters.advanced.save";
+
     return (
       <>
-        <p className="text-sm text-muted">
-          {t(state.mode === "raw" ? "filters.advanced.active" : "filters.advanced.intro")}
-        </p>
+        {/* GH #267: in the clean case this is the script the rules produce; once
+            a hand-written script runs it is that script. The stored-but-inactive
+            case gets its own honest notice below instead of either claim. */}
+        {!isInactiveStored && (
+          <p className="text-sm text-muted">
+            {t(state.mode === "raw" ? "filters.advanced.active" : "filters.advanced.intro")}
+          </p>
+        )}
 
-        <label htmlFor="sieve-raw-script" className="flex flex-col gap-1 text-sm">
-          {t("filters.advanced.label")}
-          <textarea
-            id="sieve-raw-script"
-            value={script}
-            rows={14}
-            spellCheck={false}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              setSaved(false);
-              setErrorKey(null);
-            }}
-            className="rounded-input border border-line bg-soft px-3 py-2 font-mono text-xs text-ink field-focus"
+        {isInactiveStored && (
+          <>
+            <p className="text-sm text-warn">{t("filters.advanced.storedInactive")}</p>
+            {/* The two scripts, told apart: the saved hand-written one and the
+                one the rules generate — presented as one thing before. */}
+            <div
+              role="group"
+              aria-label={t("filters.advanced.viewLabel")}
+              className="flex flex-wrap gap-2"
+            >
+              <button
+                type="button"
+                aria-pressed={view === "stored"}
+                onClick={() => setView("stored")}
+                className={`rounded-[9px] border px-3 py-1 text-sm transition ${
+                  view === "stored"
+                    ? "border-accent bg-sel text-accent-text"
+                    : "border-line-strong hover:border-accent hover:bg-hover"
+                }`}
+              >
+                {t("filters.advanced.viewStored")}
+              </button>
+              <button
+                type="button"
+                aria-pressed={view === "generated"}
+                onClick={() => setView("generated")}
+                className={`rounded-[9px] border px-3 py-1 text-sm transition ${
+                  view === "generated"
+                    ? "border-accent bg-sel text-accent-text"
+                    : "border-line-strong hover:border-accent hover:bg-hover"
+                }`}
+              >
+                {t("filters.advanced.viewGenerated")}
+              </button>
+            </div>
+          </>
+        )}
+
+        {showGenerated && generatedQuery.isError ? (
+          <SettingsLoadError
+            error={generatedQuery.error}
+            onRetry={() => void generatedQuery.refetch()}
           />
-        </label>
+        ) : showGenerated && !generatedQuery.data ? (
+          <SettingsLoading />
+        ) : (
+          <label htmlFor="sieve-raw-script" className="flex flex-col gap-1 text-sm">
+            {t(showGenerated ? "filters.advanced.generatedLabel" : "filters.advanced.label")}
+            <textarea
+              id="sieve-raw-script"
+              value={displayed}
+              rows={14}
+              spellCheck={false}
+              // The generated preview is read-only: it is here to be seen, not
+              // edited — and never as the thing a save would activate.
+              readOnly={showGenerated}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setSaved(false);
+                setErrorKey(null);
+              }}
+              className="rounded-input border border-line bg-soft px-3 py-2 font-mono text-xs text-ink field-focus"
+            />
+          </label>
+        )}
 
         {/* Shown BEFORE the first save, not after it: the button below is the
-            handover, and a consequence explained afterwards is not a choice. */}
-        {state.mode === "rules" && (
+            handover, and a consequence explained afterwards is not a choice.
+            Never over the read-only generated preview, which saves nothing. */}
+        {state.mode === "rules" && !showGenerated && (
           <p className="text-sm text-warn">{t("filters.advanced.takeoverWarning")}</p>
         )}
 
@@ -200,14 +284,18 @@ export function SieveAdvancedEditor() {
         )}
 
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => saveMutation.mutate(script)}
-            className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
-          >
-            {t("filters.advanced.save")}
-          </button>
+          {/* No save on the generated preview: there is nothing there to take
+              over that the rules are not already running. */}
+          {!showGenerated && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => saveMutation.mutate(script)}
+              className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            >
+              {t(saveKey)}
+            </button>
+          )}
           {state.mode === "raw" && (
             <button
               type="button"
