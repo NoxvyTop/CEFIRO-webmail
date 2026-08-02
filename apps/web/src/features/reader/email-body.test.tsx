@@ -88,10 +88,51 @@ describe("isEffectivelyPlainText", () => {
   });
 });
 
+// GH #270: the exact sandbox string the email body iframe must carry —
+// popups may escape the sandbox (so a sanitized target="_blank" link opens),
+// but scripts and same-origin access never (untrusted email HTML must never
+// run code or reach the app's origin/session).
+const EXPECTED_SANDBOX = "allow-popups allow-popups-to-escape-sandbox";
+
 describe("EmailBody", () => {
-  it("keeps the sandbox attribute empty (no allow-scripts/allow-same-origin)", () => {
+  it("locks the sandbox to popup-escape only — never grants allow-scripts or allow-same-origin", () => {
     render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
-    expect(getIframe().getAttribute("sandbox")).toBe("");
+    const sandbox = getIframe().getAttribute("sandbox") ?? "";
+    expect(sandbox).toBe(EXPECTED_SANDBOX);
+    // The two vectors this iframe exists to keep out of untrusted email HTML.
+    expect(sandbox).not.toContain("allow-scripts");
+    expect(sandbox).not.toContain("allow-same-origin");
+  });
+
+  // GH #270: a bare sandbox="" iframe BLOCKS the target="_blank" every
+  // sanitized <a> carries, so no link in an HTML email opened at all. The
+  // sandbox now grants allow-popups + allow-popups-to-escape-sandbox so the
+  // link opens in a normal new tab OUTSIDE the sandbox — proven here by the
+  // conjunction that was broken: the link keeps its target="_blank" AND the
+  // sandbox permits the popup to escape, WITHOUT ever gaining scripts or
+  // same-origin.
+  it("lets a real link in an HTML email open (target=_blank + popup-escape sandbox) without loosening isolation", () => {
+    render(
+      <EmailBody
+        bodyHtml={'<p style="margin:0">Visit <a href="https://example.test/pricing">our site</a></p>'}
+        bodyText={null}
+      />,
+    );
+    const iframe = getIframe();
+    const sandbox = iframe.getAttribute("sandbox") ?? "";
+    const srcDoc = iframe.getAttribute("srcdoc") ?? "";
+
+    // The link survives sanitize with target="_blank" (see sanitize.ts) ...
+    expect(srcDoc).toContain("https://example.test/pricing");
+    expect(srcDoc).toContain('target="_blank"');
+    // ... and the sandbox lets that _blank navigation open a new, unsandboxed
+    // tab — the missing piece that made every link dead before GH #270.
+    expect(sandbox).toContain("allow-popups");
+    expect(sandbox).toContain("allow-popups-to-escape-sandbox");
+    // Regression lock: opening links must never have come at the cost of
+    // scripts or same-origin.
+    expect(sandbox).not.toContain("allow-scripts");
+    expect(sandbox).not.toContain("allow-same-origin");
   });
 
   it("no longer boxes the body in a white, bordered, fixed-height frame", () => {
@@ -219,7 +260,7 @@ describe("EmailBody", () => {
           bodyText="Formatted"
         />,
       );
-      expect(getIframe().getAttribute("sandbox")).toBe("");
+      expect(getIframe().getAttribute("sandbox")).toBe(EXPECTED_SANDBOX);
     });
 
     it("falls back to the trivial html's own text content in the <pre> when bodyHtml is trivial but there is no bodyText at all", () => {
@@ -695,6 +736,67 @@ describe("EmailBody", () => {
       render(<EmailBody bodyHtml={null} bodyText={longText} />);
 
       expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+    });
+
+    // GH #276: clipping is decided by rendered HEIGHT, not text length. A body
+    // that is short on text but tall because it is built from images (a
+    // signature or a receipt) used to slip under the old text-only threshold,
+    // fall to the fallback height, and hide its lower half behind the invisible
+    // overlay scrollbar. It must now clip with the same visible reveal control.
+    describe("clips by rendered height, not text length (GH #276)", () => {
+      const TINY_IMG = '<img src="data:image/png;base64,AAAA">';
+
+      it("clips a short-text but image-heavy (tall) body and shows the reveal control", () => {
+        const tallImageBody = `<p style="margin:0">Regards,</p>${TINY_IMG.repeat(5)}`;
+        render(<EmailBody bodyHtml={tallImageBody} bodyText={null} />);
+
+        const button = screen.getByRole("button", { name: i18n.t("mail.showFullMessage") });
+        expect(button).toBeInTheDocument();
+        const iframe = getIframe();
+        expect(iframe.style.height).toBe(CLIPPED_HEIGHT);
+        expect(iframe.getAttribute("scrolling")).toBe("no");
+      });
+
+      it("does not clip a short body with only a single inline image (no false-positive control)", () => {
+        render(<EmailBody bodyHtml={`<p style="margin:0">Hi there</p>${TINY_IMG}`} bodyText={null} />);
+
+        expect(
+          screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") }),
+        ).not.toBeInTheDocument();
+      });
+
+      it("clips when the REAL measured rendered height exceeds the threshold, and expands to the full height", () => {
+        // Short text, so the pre-mount estimate alone would not clip — the
+        // clip here is driven purely by the measured pixel height.
+        render(<EmailBody bodyHtml={HTML_BODY} bodyText={null} />);
+        const iframe = getIframe();
+        stubContentDocument(iframe, 900);
+        fireEvent.load(iframe);
+
+        const button = screen.getByRole("button", { name: i18n.t("mail.showFullMessage") });
+        expect(button).toBeInTheDocument();
+        expect(iframe.style.height).toBe(CLIPPED_HEIGHT);
+
+        fireEvent.click(button);
+        // One-way reveal: control gone, and the iframe grows to the real
+        // measured height rather than staying clipped.
+        expect(screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") })).not.toBeInTheDocument();
+        expect(iframe.style.height).toBe("900px");
+      });
+
+      it("does not clip when the measured rendered height is modest, even with a lot of text", () => {
+        // Measured height wins over the text estimate: a body whose text would
+        // estimate as tall but which actually renders short is not clipped.
+        render(<EmailBody bodyHtml={longHtmlBody()} bodyText={null} />);
+        const iframe = getIframe();
+        stubContentDocument(iframe, 300);
+        fireEvent.load(iframe);
+
+        expect(
+          screen.queryByRole("button", { name: i18n.t("mail.showFullMessage") }),
+        ).not.toBeInTheDocument();
+        expect(iframe.style.height).toBe("300px");
+      });
     });
 
     // Interaction with the existing quoted-trail collapse (GH #91): two
