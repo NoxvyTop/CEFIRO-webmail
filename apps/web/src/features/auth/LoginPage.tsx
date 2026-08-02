@@ -43,8 +43,11 @@ export function LoginPage() {
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [bootstrapError, setBootstrapError] = useState<"invalid" | "rate_limited" | null>(null);
+  const [bootstrapError, setBootstrapError] = useState<
+    "invalid" | "rate_limited" | "network" | null
+  >(null);
   const [fieldErrors, setFieldErrors] = useState<BootstrapFieldErrors>({});
+  const [bootstrapPending, setBootstrapPending] = useState(false);
   const [ssoConnecting, setSsoConnecting] = useState(false);
 
   function validateBootstrapFields(): boolean {
@@ -57,15 +60,22 @@ export function LoginPage() {
 
   async function handleBootstrapSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (bootstrapPending) return;
     if (!validateBootstrapFields()) return;
+    setBootstrapPending(true);
     const result = await bootstrapLogin(email, password);
     if (result === "ok") {
       setBootstrapError(null);
       await queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+      // Leave the button disabled through the navigation — re-enabling it only
+      // on failure keeps a second POST from firing during the redirect.
       navigate("/");
-    } else {
-      setBootstrapError(result === "rate_limited" ? "rate_limited" : "invalid");
+      return;
     }
+    setBootstrapPending(false);
+    setBootstrapError(
+      result === "rate_limited" ? "rate_limited" : result === "network_error" ? "network" : "invalid",
+    );
   }
 
   function handleSsoClick(event: React.MouseEvent<HTMLAnchorElement>) {
@@ -186,16 +196,19 @@ export function LoginPage() {
               </div>
               <button
                 type="submit"
-                className="mt-0.5 h-11 rounded-[11px] bg-accent text-[14.5px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+                disabled={bootstrapPending}
+                className="mt-0.5 h-11 rounded-[11px] bg-accent text-[14.5px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {t("auth.bootstrap.submit")}
+                {bootstrapPending ? t("auth.bootstrap.submitting") : t("auth.bootstrap.submit")}
               </button>
               {bootstrapError && (
                 <p role="alert" className="text-[12.5px] text-danger">
                   {t(
                     bootstrapError === "rate_limited"
                       ? "auth.bootstrap.errors.too_many_requests"
-                      : "auth.bootstrap.error",
+                      : bootstrapError === "network"
+                        ? "auth.bootstrap.errors.network_error"
+                        : "auth.bootstrap.error",
                   )}
                 </p>
               )}

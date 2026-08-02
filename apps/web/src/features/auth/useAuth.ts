@@ -29,18 +29,28 @@ export function useAuth() {
 
 // "rate_limited" is distinct from "error" so the emergency form can tell an
 // operator that the break-glass login is throttled (429, see GH #183) rather
-// than that the credential was wrong.
-export type BootstrapLoginResult = "ok" | "rate_limited" | "error";
+// than that the credential was wrong. "network_error" is distinct again so a
+// dropped connection does not read as a rejected credential (GH #273): the
+// request never reached the server, so nothing was judged wrong about it.
+export type BootstrapLoginResult = "ok" | "rate_limited" | "network_error" | "error";
 
 export async function bootstrapLogin(
   email: string,
   password: string,
 ): Promise<BootstrapLoginResult> {
-  const res = await fetch("/api/auth/bootstrap", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
+  let res: Response;
+  try {
+    res = await fetch("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch {
+    // fetch rejects only when the request never completed — offline, DNS,
+    // connection reset. Left uncaught this was an unhandled promise rejection
+    // with zero feedback on the emergency form (GH #273).
+    return "network_error";
+  }
   if (res.ok) return "ok";
   if (res.status === 429) return "rate_limited";
   return "error";

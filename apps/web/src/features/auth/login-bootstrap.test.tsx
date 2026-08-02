@@ -266,6 +266,89 @@ describe("login screen bootstrap form", () => {
     ).not.toBeInTheDocument();
   });
 
+  // GH #273: fetch rejects (offline, DNS, reset) — the request never reaches
+  // the server. This used to be an unhandled promise rejection with no feedback.
+  it("shows a network error when the emergency login cannot reach the server", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/bootstrap")) {
+        throw new TypeError("Failed to fetch");
+      }
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    fireEvent.change(await screen.findByLabelText("Usuario"), {
+      target: { value: "bootstrap-admin" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(
+      await screen.findByText(i18n.t("auth.bootstrap.errors.network_error")),
+    ).toBeInTheDocument();
+    // A dropped connection must not read as a wrong credential.
+    expect(screen.queryByText(i18n.t("auth.bootstrap.error"))).not.toBeInTheDocument();
+    // The button returns to its normal state so the operator can retry.
+    expect(screen.getByRole("button", { name: "Entrar" })).toBeEnabled();
+  });
+
+  // GH #273: a double-click used to send two POSTs. The button disables while
+  // the request is in flight and the handler ignores a resubmit.
+  it("disables the submit while the request is in flight and ignores a double submit", async () => {
+    let resolveBootstrap: (response: Response) => void = () => {};
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/bootstrap")) {
+        return new Promise<Response>((resolve) => {
+          resolveBootstrap = resolve;
+        });
+      }
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    const emailInput = await screen.findByLabelText("Usuario");
+    const form = emailInput.closest("form")!;
+    fireEvent.change(emailInput, { target: { value: "bootstrap-admin" } });
+    fireEvent.change(screen.getByLabelText("Contraseña"), { target: { value: "s3cret" } });
+    fireEvent.submit(form);
+
+    // The button swaps to its pending label and disables.
+    const pendingButton = await screen.findByRole("button", {
+      name: i18n.t("auth.bootstrap.submitting"),
+    });
+    expect(pendingButton).toBeDisabled();
+
+    // A second submit while pending must not fire a second POST.
+    fireEvent.submit(form);
+    const bootstrapCalls = fetchMock.mock.calls.filter(([u]) =>
+      String(u).includes("/api/auth/bootstrap"),
+    );
+    expect(bootstrapCalls).toHaveLength(1);
+
+    resolveBootstrap(new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 }));
+
+    // On failure the button re-enables for a retry.
+    expect(await screen.findByRole("button", { name: "Entrar" })).toBeEnabled();
+  });
+
   it("announces empty-field errors as alerts and wires them to their inputs for screen readers", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
