@@ -9,6 +9,7 @@ import { createDb, DATABASE_UNAVAILABLE_CODE } from "./infra/db/client";
 import { DomainError } from "./core/errors";
 import { checkDb } from "./infra/db/health";
 import { checkJmap } from "./infra/jmap/health";
+import { createOidcReadinessCheck } from "./infra/auth/oidc-health";
 import { probeJmap } from "./infra/jmap/probe";
 import { migrate } from "./infra/db/migrate";
 import { createAuditRepo } from "./infra/repos/audit";
@@ -273,9 +274,7 @@ if (bootstrap.enabled) {
 
 // Health checks wired into /api/health (GH #197). The mail provider is probed
 // only when a URL is configured — an unconfigured mail backend would otherwise
-// report the instance degraded forever. The SSO/OIDC provider is deliberately
-// NOT probed here: discovery is an outbound call to the IdP, and hitting it on
-// every health poll would reintroduce the amplification vector #194 just closed.
+// report the instance degraded forever.
 //
 // The check keeps the key `stalwart` in the published /api/health body and in
 // `cefiro_dependency_up{dependency="stalwart"}` — operators' dashboards and
@@ -289,6 +288,18 @@ if (config.jmapUrl) {
   checks.stalwart = (signal) =>
     checkJmap({ url: jmapUrl, timeoutMs: config.jmapTimeoutMs, signal });
 }
+// The SSO/OIDC provider (GH #281). Regular users log in ONLY through SSO
+// (modules/auth/router.ts), so an SSO-configured instance whose IdP is
+// unreachable cannot serve logins — readiness must reflect that and let the LB
+// drain it, which /api/health used to hide by reporting `ok`. Probed with a
+// dedicated long healthy-cache (infra/auth/oidc-health.ts) so it cannot
+// reintroduce the #194 amplification the earlier "do not probe OIDC" note
+// guarded against: the IdP sees at most one discovery per cache window however
+// often /api/health is polled. When no SSO is configured (read fresh each
+// probe) the check is a no-op that reports healthy. The AI provider is
+// intentionally NOT a readiness dependency — it is opt-in and non-critical, so
+// draining an instance over it would be a false negative.
+checks.oidc = createOidcReadinessCheck({ ssoConfig, timeoutMs: config.oidcTimeoutMs });
 
 const app = createApp({
   checks,

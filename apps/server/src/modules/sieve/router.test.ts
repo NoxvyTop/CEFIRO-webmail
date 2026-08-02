@@ -31,6 +31,7 @@ let token3: string;
 let token4: string;
 let token5: string;
 let token6: string;
+let token7: string;
 let userId: string;
 let user3Id: string;
 let user4Id: string;
@@ -105,6 +106,15 @@ beforeAll(async () => {
   });
   token6 = (await sessions.create(user6.id, 1)).token;
   await mailCredentials.set(user6.id, "mailbox-pw");
+
+  // GH #266 works on its own user so its full create→delete→synced cycle never
+  // collides with the attempt counters the sync-state suite asserts on.
+  const user7 = await users.create({
+    email: `sieve-r7-${crypto.randomUUID()}@noxvytop.com`,
+    displayName: "Sieve Router User 7",
+  });
+  token7 = (await sessions.create(user7.id, 1)).token;
+  await mailCredentials.set(user7.id, "mailbox-pw");
 });
 afterAll(() => sql.end());
 
@@ -169,6 +179,82 @@ function brokenJmap(): JmapClient {
       throw new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
     },
   } as unknown as JmapClient;
+}
+
+/**
+ * A JMAP fake that models Stalwart's script store and its active-script flag,
+ * so the create→delete→resync cycle GH #266 is about is exercised end to end.
+ * It enforces RFC 9661: the active script cannot be destroyed in the same
+ * `/set` (a `sieveIsActive` SetError), which is what parked the demo on
+ * `failed` before the fix.
+ */
+function statefulJmap(): { client: JmapClient; uploads: string[] } {
+  const uploads: string[] = [];
+  const session: JmapSession = {
+    apiUrl: "http://stalwart/jmap/api",
+    accountId: "acc1",
+    eventSourceUrl: "",
+    uploadUrl: "http://stalwart/upload/{accountId}/",
+    downloadUrl: "",
+  };
+  let scripts: { id: string; name: string }[] = [];
+  let activeId: string | null = null;
+  let seq = 0;
+  const client = {
+    async getSession() {
+      return session;
+    },
+    async request(_auth: unknown, _session: unknown, calls: JmapMethodCall[]) {
+      const [method, args] = calls[0]!;
+      if (method === "Mailbox/get") {
+        return [["Mailbox/get", { list: [{ name: "Papelera", role: "trash" }] }, "0"]];
+      }
+      if (method === "SieveScript/get") {
+        return [["SieveScript/get", { list: scripts.map((s) => ({ id: s.id, name: s.name })) }, "0"]];
+      }
+      if (method === "SieveScript/validate") {
+        return [["SieveScript/validate", { error: null }, "0"]];
+      }
+      if (method === "SieveScript/set") {
+        const a = args as {
+          create?: Record<string, { name: string }>;
+          destroy?: string[];
+          onSuccessActivateScript?: string | null;
+          onSuccessDeactivateScript?: boolean;
+        };
+        // Refuse a destroy of the active script, exactly like a real server.
+        for (const id of a.destroy ?? []) {
+          if (id === activeId) {
+            return [["SieveScript/set", { notDestroyed: { [id]: { type: "sieveIsActive" } } }, "0"]];
+          }
+        }
+        const created: Record<string, { id: string }> = {};
+        for (const [cid, spec] of Object.entries(a.create ?? {})) {
+          seq += 1;
+          const id = `srv-${seq}`;
+          scripts.push({ id, name: spec.name });
+          created[cid] = { id };
+        }
+        for (const id of a.destroy ?? []) {
+          scripts = scripts.filter((s) => s.id !== id);
+        }
+        // Deactivate first, then activate (RFC 9661 ordering).
+        if (a.onSuccessDeactivateScript === true) activeId = null;
+        if (typeof a.onSuccessActivateScript === "string") {
+          activeId = a.onSuccessActivateScript.startsWith("#")
+            ? (created[a.onSuccessActivateScript.slice(1)]?.id ?? activeId)
+            : a.onSuccessActivateScript;
+        }
+        return [["SieveScript/set", { created }, "0"]];
+      }
+      return [[method, {}, "0"]];
+    },
+    async uploadBlob(_auth: unknown, _session: unknown, content: string) {
+      uploads.push(content);
+      return "blob1";
+    },
+  } as unknown as JmapClient;
+  return { client, uploads };
 }
 
 async function post(app: ReturnType<typeof makeApp>, path: string, body: unknown, cookie = token) {
@@ -438,6 +524,32 @@ describe("sieve sync state (GH #221)", () => {
     const state = sieveSyncStateSchema.parse(await (await readState(app)).json());
     expect(state.status).toBe("failed");
     expect(state.lastError).toBe("sieve_invalid");
+  });
+
+  it("returns to synced after the last rule is deleted (GH #266)", async () => {
+    // The demo bug: deleting your last rule pushed an empty script, whose
+    // destroy of the active managed script Stalwart refused — parking the
+    // account on `failed` forever. Against a provider that enforces that rule,
+    // the create→synced→delete→synced cycle must now settle back to synced.
+    const { client } = statefulJmap();
+    const app = makeApp(client, NO_RECONCILE_MS);
+
+    const created = await post(app, "/api/mail/filters", { ...ruleBody, name: "only rule" }, token7);
+    expect(created.status).toBe(200);
+    const rule = (await created.json()) as { id: string };
+    expect(sieveSyncStateSchema.parse(await (await readState(app, token7)).json()).status).toBe(
+      "synced",
+    );
+
+    const removed = await app.request(`/api/mail/filters/${rule.id}`, {
+      method: "DELETE",
+      headers: { cookie: `session=${token7}` },
+    });
+    expect(removed.status).toBe(200);
+
+    const state = sieveSyncStateSchema.parse(await (await readState(app, token7)).json());
+    expect(state.status).toBe("synced");
+    expect(state.lastError).toBeNull();
   });
 });
 

@@ -91,6 +91,19 @@ export function isConnectionError(err: unknown): boolean {
   return typeof code === "string" && CONNECTION_ERROR_CODES.has(code);
 }
 
+// Postgres SQLSTATE for a unique-constraint violation. This is a server-side
+// QUERY error, not a transport one, so mapDbError leaves it untouched (it is
+// deliberately absent from CONNECTION_ERROR_CODES) and the caller decides what
+// it means: a check-then-insert that loses the race to a concurrent duplicate
+// surfaces as this, and admin user creation maps it to 409 `user_exists`
+// instead of the 500 `internal` a raw 23505 would become (GH #277).
+export const UNIQUE_VIOLATION_CODE = "23505";
+
+export function isUniqueViolation(err: unknown): boolean {
+  if (err == null || typeof err !== "object") return false;
+  return (err as { code?: unknown }).code === UNIQUE_VIOLATION_CODE;
+}
+
 /**
  * Maps a Postgres connection/transport failure to a dependency DomainError, so
  * app.onError logs it as `warn/domain error` and returns 503 rather than the

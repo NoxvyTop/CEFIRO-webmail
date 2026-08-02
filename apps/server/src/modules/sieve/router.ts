@@ -85,7 +85,17 @@ async function trySync(
       return "invalid";
     }
     const code = error instanceof DomainError ? error.code : "unexpected";
-    log("warn", "sieve sync failed", { userId: user.userId, code });
+    // The error CLASS alongside the code (GH #266): a `DomainError`+`code`
+    // separates our own mapped failures, while a raw class name
+    // (`TypeError`, `PostgresError`, a jose error) names an unexpected one — the
+    // SetError `type` behind a ManageSieve rejection is logged one layer down in
+    // sync.ts's assertSetSucceeded. Together they turn the old opaque
+    // `sieve_sync_failed` into something diagnosable without a live repro.
+    log("warn", "sieve sync failed", {
+      userId: user.userId,
+      code,
+      errorClass: error instanceof Error ? error.name : typeof error,
+    });
     return "failed";
   }
 }

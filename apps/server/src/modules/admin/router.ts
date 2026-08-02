@@ -14,6 +14,7 @@ import {
 } from "@webmail/shared";
 import { avatarImageResponse } from "../../core/avatar";
 import { errorResponse } from "../../core/error-response";
+import { isUniqueViolation } from "../../infra/db/client";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { InstanceSettingsRepo } from "../../infra/repos/instance-settings";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
@@ -147,7 +148,22 @@ export function createAdminRouter(deps: AdminDeps) {
     if (await deps.users.findByEmail(email)) {
       return errorResponse(c, "user_exists", 409);
     }
-    const user = await deps.users.create({ email, displayName, role, locale });
+    // The findByEmail pre-check is a courtesy, not the guarantee: two requests
+    // creating the same email concurrently both read "not found" and both reach
+    // the insert, where the unique index on users.email (0001_initial.sql) lets
+    // exactly one win. The loser used to escape as a raw 23505 → 500 `internal`
+    // (this server blaming itself for a client's duplicate); catching it here
+    // gives the loser the same 409 `user_exists` the pre-check returns — the
+    // TOCTOU #45 closed for the last-admin guard, closed here too (GH #277).
+    let user: UserRecord;
+    try {
+      user = await deps.users.create({ email, displayName, role, locale });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        return errorResponse(c, "user_exists", 409);
+      }
+      throw error;
+    }
     if (mailPassword) {
       await deps.mailCredentials.set(user.id, mailPassword);
     }

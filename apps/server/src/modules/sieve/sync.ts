@@ -34,9 +34,21 @@ export function supportsSieve(session: JmapSession): boolean {
 }
 
 function assertSetSucceeded(result: Record<string, unknown>): void {
-  for (const key of ["notCreated", "notUpdated", "notDestroyed"]) {
-    const failures = result[key];
-    if (failures && Object.keys(failures as Record<string, unknown>).length > 0) {
+  for (const key of ["notCreated", "notUpdated", "notDestroyed"] as const) {
+    const failures = result[key] as Record<string, unknown> | undefined;
+    if (failures && Object.keys(failures).length > 0) {
+      // The provider's SetError `type` is the only thing that says WHY the push
+      // was refused — a destroy aimed at the ACTIVE script comes back
+      // `sieveIsActive` (RFC 9661), an over-quota push `overQuota`, and so on.
+      // Logged here because the ApiError envelope downstream carries only our
+      // own generic `sieve_sync_failed` code: without this line an operator saw
+      // THAT a sync failed and never WHAT failed (GH #266).
+      const first = Object.values(failures)[0];
+      const setErrorType =
+        first !== null && typeof first === "object" && "type" in first
+          ? String((first as { type: unknown }).type)
+          : "unknown";
+      log("warn", "sieve sync rejected by provider", { bucket: key, setErrorType });
       throw new DomainError("sieve_sync_failed", 502, "errors.sieve_sync_failed");
     }
   }
@@ -149,16 +161,28 @@ export async function syncSieveScript(input: {
 
   if (script === "") {
     if (existing) {
+      // RFC 9661: the ACTIVE Sieve script may not be destroyed in the same
+      // `/set` — `onSuccessActivateScript`/`onSuccessDeactivateScript` are
+      // applied AFTER the create/update/destroy, so a destroy of the active
+      // script is refused with a `sieveIsActive` SetError no matter what
+      // activation argument rides along. The managed script is ALWAYS the active
+      // one (every create/update below activates it), so it has to be
+      // deactivated in a SEPARATE call first. The previous single call
+      // `{ destroy: [id], onSuccessActivateScript: null }` deactivated nothing
+      // (a null activation target is ignored, not a deactivation), so deleting
+      // the last rule parked the account on `sieve_sync_failed` forever, and
+      // every reconcile retried the same rejected destroy (GH #266).
+      const deactivateResponses = await jmap.request(
+        auth,
+        session,
+        [["SieveScript/set", { accountId, onSuccessDeactivateScript: true }, "0"]],
+        [SIEVE_CAPABILITY],
+      );
+      assertSetSucceeded(deactivateResponses[0]?.[1] ?? {});
       const destroyResponses = await jmap.request(
         auth,
         session,
-        [
-          [
-            "SieveScript/set",
-            { accountId, destroy: [existing.id], onSuccessActivateScript: null },
-            "0",
-          ],
-        ],
+        [["SieveScript/set", { accountId, destroy: [existing.id] }, "0"]],
         [SIEVE_CAPABILITY],
       );
       assertSetSucceeded(destroyResponses[0]?.[1] ?? {});
