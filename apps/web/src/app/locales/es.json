@@ -276,6 +276,7 @@
     "quotedReadOnly": "Se muestra como texto plano. El formato original se conserva en el mensaje que se envía.",
     "title": "Redactar",
     "newMessage": "Nuevo mensaje",
+    "editDraft": "Editar borrador",
     "from": "De",
     "to": "Para",
     "cc": "Cc",

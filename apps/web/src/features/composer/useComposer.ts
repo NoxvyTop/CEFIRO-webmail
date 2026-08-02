@@ -273,6 +273,13 @@ export function useComposer(
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef(false);
 
+  // GH #278: a handle on the autosave that is currently running (or just ran),
+  // so send() can await it before it decides which draft copy to trash. Without
+  // it, send() would read currentDraftIdRef while an autosave is mid-flight and
+  // about to advance it (persistDraft, below) — trashing the id the autosave is
+  // superseding and leaving the fresh copy it creates orphaned in Drafts.
+  const autosavePromiseRef = useRef<Promise<void> | null>(null);
+
   // Fingerprint of the last successfully persisted payload. Seeded from the
   // initial draft so reopening an existing draft doesn't autosave an unchanged
   // copy on open, and advanced on every save so identical content is never
@@ -317,6 +324,11 @@ export function useComposer(
   }
 
   async function autosave(): Promise<void> {
+    // GH #278: once the session is finalizing (a send in progress/done, or an
+    // explicit discard), never create another draft copy — send() is about to
+    // trash the one that already exists, and a save racing in behind it would
+    // leave a fresh, un-trashed copy in Drafts.
+    if (finalizedRef.current) return;
     if (isAutosavableEmpty()) return;
     const { draft, attachments } = stateRef.current;
     if (serializeDraftPayload(draft, attachments) === lastSavedPayloadRef.current) return;
@@ -362,7 +374,11 @@ export function useComposer(
     ) {
       return;
     }
-    const timer = setTimeout(() => void autosave(), AUTOSAVE_DEBOUNCE_MS);
+    // GH #278: keep a handle on the run this timer kicks off so send() can await
+    // it before choosing which draft copy to trash.
+    const timer = setTimeout(() => {
+      autosavePromiseRef.current = autosave();
+    }, AUTOSAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the persisted compose fields; autosave/helpers read the latest via stateRef
   }, [
@@ -470,6 +486,27 @@ export function useComposer(
     dispatch({ type: "sendStart" });
     try {
       await sendEmail(input);
+      // The message left as mail, not a draft: block the unmount flush so the
+      // onClose that follows a successful send can't recreate it as a draft.
+      // GH #278: setting this before the trash below also stops any autosave
+      // still to fire (the debounce timer, or a coalesced follow-up) from
+      // creating a new draft copy behind the trash — autosave() now bails on
+      // finalizedRef. Dropping the coalesced follow-up here keeps the in-flight
+      // save (awaited next) from spawning one more copy on its way out.
+      finalizedRef.current = true;
+      pendingSaveRef.current = false;
+      // GH #278: an autosave may be mid-flight right now — it will advance
+      // currentDraftIdRef to the copy it is creating (persistDraft, above).
+      // Wait for it to settle so the id we trash is the one actually sitting in
+      // Drafts, not the stale id it superseded. Its own failure is irrelevant
+      // to us here (the send already succeeded), hence the swallowed catch.
+      if (autosavePromiseRef.current) {
+        try {
+          await autosavePromiseRef.current;
+        } catch {
+          // ignore — an autosave error never blocks a completed send
+        }
+      }
       // Best-effort cleanup: the send already succeeded (it's in Sent now),
       // so a failure to trash the stale draft must not surface as a send
       // failure — the user just keeps a leftover draft, same as today's
@@ -489,9 +526,6 @@ export function useComposer(
           // ignore — see comment above
         }
       }
-      // The message left as mail, not a draft: block the unmount flush so the
-      // onClose that follows a successful send can't recreate it as a draft.
-      finalizedRef.current = true;
       dispatch({ type: "sendSucceeded" });
       return true;
     } catch (err) {

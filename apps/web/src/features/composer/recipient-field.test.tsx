@@ -247,6 +247,105 @@ describe("RecipientField", () => {
     });
   });
 
+  // GH #279: pasting "a@x, b@y" used to make one invalid chip — only Enter and
+  // "," split addresses while typing, and a paste bypassed both — and commit()
+  // never deduped, so a repeated address minted a second chip under the same
+  // React key, which handleRemove would then delete in pairs.
+  describe("paste splitting and dedup (#279)", () => {
+    function pasteInto(input: HTMLElement, text: string) {
+      fireEvent.paste(input, { clipboardData: { getData: () => text } });
+    }
+
+    it("splits a comma-separated paste into one chip per address", () => {
+      const onChange = vi.fn();
+      render(<RecipientField label="Para" value={[]} onChange={onChange} />);
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      pasteInto(input, "a@x.com, b@y.com");
+
+      expect(onChange).toHaveBeenCalledWith([
+        { name: null, email: "a@x.com" },
+        { name: null, email: "b@y.com" },
+      ]);
+    });
+
+    it("splits on whitespace and semicolons as well as commas", () => {
+      const onChange = vi.fn();
+      render(<RecipientField label="Para" value={[]} onChange={onChange} />);
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      pasteInto(input, "a@x.com b@y.com;c@z.com");
+
+      expect(onChange).toHaveBeenCalledWith([
+        { name: null, email: "a@x.com" },
+        { name: null, email: "b@y.com" },
+        { name: null, email: "c@z.com" },
+      ]);
+    });
+
+    it("dedups pasted addresses against existing recipients and within the paste itself", () => {
+      const onChange = vi.fn();
+      render(
+        <RecipientField label="Para" value={[{ name: null, email: "a@x.com" }]} onChange={onChange} />,
+      );
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      // a@x.com is already a recipient (pasted here upper-cased); b@y.com repeats
+      // within the paste. Neither may add a second chip.
+      pasteInto(input, "A@x.com, b@y.com, B@y.com");
+
+      expect(onChange).toHaveBeenCalledWith([
+        { name: null, email: "a@x.com" },
+        { name: null, email: "b@y.com" },
+      ]);
+    });
+
+    it("adds the valid pasted addresses and leaves the unparseable ones in the input, flagged", () => {
+      const onChange = vi.fn();
+      render(<RecipientField label="Para" value={[]} onChange={onChange} />);
+      const input = screen.getByRole("combobox", { name: "Para" }) as HTMLInputElement;
+
+      pasteInto(input, "a@x.com, nope, b@y.com");
+
+      expect(onChange).toHaveBeenCalledWith([
+        { name: null, email: "a@x.com" },
+        { name: null, email: "b@y.com" },
+      ]);
+      expect(input.value).toBe("nope");
+      expect(screen.getByText(i18n.t("composer.invalidEmail"))).toBeInTheDocument();
+    });
+
+    it("leaves a single pasted address for normal typing rather than chipping it", () => {
+      const onChange = vi.fn();
+      render(<RecipientField label="Para" value={[]} onChange={onChange} />);
+      const input = screen.getByRole("combobox", { name: "Para" });
+
+      // No separator in the clipboard text: fall through to the browser's own
+      // paste so a partial address can still be typed and committed with Enter.
+      pasteInto(input, "solo@x.com");
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("does not add a duplicate chip when committing an address already present (case-insensitive)", () => {
+      const onChange = vi.fn();
+      render(
+        <RecipientField
+          label="Para"
+          value={[{ name: "Bob", email: "bob@example.com" }]}
+          onChange={onChange}
+        />,
+      );
+      const input = screen.getByRole("combobox", { name: "Para" }) as HTMLInputElement;
+
+      fireEvent.change(input, { target: { value: "BOB@example.com" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(input.value).toBe("");
+    });
+  });
+
   // GH #163: an auto-harvested address must not be offered as if the user had
   // vetted it themselves — otherwise a stranger who mailed you once shows up
   // in autocomplete looking exactly like a colleague you added by hand.

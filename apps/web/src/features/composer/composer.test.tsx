@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { Identity, Signature } from "@webmail/shared";
-import type { ComposerDraft } from "./reply";
+import type { ComposeMode, ComposerDraft } from "./reply";
 import { ToastProvider } from "../../app/ui/toast";
 import { MailApiError } from "../mailbox/api";
 import { Composer } from "./Composer";
@@ -1081,6 +1081,30 @@ describe("Composer", () => {
       expect(screen.getByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       expect(onClose).not.toHaveBeenCalled();
+    });
+  });
+
+  // GH #269: the dialog's accessible name (aria-label) and its visible <h2>
+  // used to be a hardcoded "New message" for every flow, so a screen reader
+  // announced a reply/forward/edit-draft as "New message" — the opposite of
+  // what was happening. Both now follow the compose mode the draft was built
+  // with (reply.ts's ComposeMode, the same distinction #145 remounts on).
+  describe("accessible name reflects the compose mode (#269)", () => {
+    const cases: Array<[ComposeMode | undefined, string]> = [
+      ["new", "composer.newMessage"],
+      ["reply", "composer.reply"],
+      ["reply-all", "composer.replyAll"],
+      ["forward", "composer.forward"],
+      ["draft", "composer.editDraft"],
+      // A draft literal with no mode falls back to "new" — the pre-#269 default.
+      [undefined, "composer.newMessage"],
+    ];
+
+    it.each(cases)("names the dialog and its title for mode %s", async (mode, key) => {
+      renderComposer(vi.fn(), { ...baseDraft(), mode });
+
+      const dialog = await screen.findByRole("dialog", { name: i18n.t(key) });
+      expect(within(dialog).getByRole("heading", { level: 2 })).toHaveTextContent(i18n.t(key));
     });
   });
 });

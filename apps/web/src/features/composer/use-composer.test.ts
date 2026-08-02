@@ -856,6 +856,55 @@ describe("useComposer", () => {
       expect(saveDraftApi).not.toHaveBeenCalled();
     });
 
+    // GH #278: send() trashes the draft copy currently sitting in Drafts, read
+    // from currentDraftIdRef. An autosave in flight is about to advance that id
+    // to the fresh copy it is writing (persistDraft), so reading it too early
+    // trashes the id being superseded and leaves the fresh copy orphaned. send()
+    // now awaits the in-flight autosave first, so the id it trashes is the one
+    // that actually ends up in Drafts.
+    it("awaits an in-flight autosave and trashes the copy it created, leaving no orphan (#278)", async () => {
+      sendEmail.mockReset();
+      updateMessage.mockReset();
+      sendEmail.mockResolvedValueOnce(undefined);
+      updateMessage.mockResolvedValueOnce(undefined);
+      // Hold the autosave's request open so it is genuinely in flight when send()
+      // runs, then release it to the id of the copy it created.
+      let resolveAutosave: (value: { id: string }) => void = () => {};
+      saveDraftApi.mockImplementationOnce(
+        () => new Promise((resolve) => { resolveAutosave = resolve; }),
+      );
+
+      const { result } = renderHook(() =>
+        useComposer({ ...emptyDraft(), to: [{ name: null, email: "bob@example.com" }] }, "trash1"),
+      );
+
+      act(() => {
+        result.current.setField("subject", "Reunión");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+      // Parked on the in-flight request: the copy's id has not landed yet, so a
+      // send() reading currentDraftIdRef right now would see the stale (unset) id.
+      expect(saveDraftApi).toHaveBeenCalledTimes(1);
+      expect(result.current.state.autosaveStatus).toBe("saving");
+
+      let sendResult: boolean | undefined;
+      await act(async () => {
+        const sendPromise = result.current.send();
+        resolveAutosave({ id: "autosaved-copy" });
+        sendResult = await sendPromise;
+        await flushMicrotasks();
+      });
+
+      expect(sendResult).toBe(true);
+      // Exactly the copy the autosave created is trashed — one call, no orphan.
+      expect(updateMessage).toHaveBeenCalledTimes(1);
+      expect(updateMessage).toHaveBeenCalledWith("autosaved-copy", {
+        mailboxIds: { trash1: true },
+      });
+    });
+
     // GH #145 keys <Composer> on the compose param, which turns "switch compose
     // target" into unmount-then-mount. That lands directly on top of the two
     // draft mechanisms living in this hook — the GH #176 unmount flush and GH

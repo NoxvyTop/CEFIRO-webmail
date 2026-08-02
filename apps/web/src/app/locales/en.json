@@ -276,6 +276,7 @@
     "quotedReadOnly": "Shown as plain text. The original formatting is preserved in the message you send.",
     "title": "Compose",
     "newMessage": "New message",
+    "editDraft": "Edit draft",
     "from": "From",
     "to": "To",
     "cc": "Cc",

@@ -9,7 +9,7 @@ import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
 import { htmlToPlainText } from "./plainText";
 import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
-import type { ComposerDraft } from "./reply";
+import type { ComposeMode, ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
 import { Button } from "../../app/ui/Button";
 import { CloseIcon } from "../../app/ui/icons";
@@ -24,6 +24,21 @@ import { AttachmentCard } from "../reader/AttachmentCard";
 // at least this many signatures. One line to revisit if that threshold ever
 // needs to change.
 export const SIGNATURE_SELECTOR_MIN_COUNT = 2;
+
+// GH #269: the composer's accessible name (aria-label) and its visible title
+// used to be a hardcoded "New message" for every flow, so a screen reader
+// announced a reply as "New message" — the opposite of what was happening. The
+// name now follows the compose mode (see reply.ts's ComposeMode), keyed off the
+// same distinction #145 remounts on. All but "draft" reuse existing action
+// labels; a bare literal with no mode (test fixtures, defensive default) reads
+// as a new message.
+const COMPOSER_NAME_KEYS: Record<ComposeMode, string> = {
+  new: "composer.newMessage",
+  reply: "composer.reply",
+  "reply-all": "composer.replyAll",
+  forward: "composer.forward",
+  draft: "composer.editDraft",
+};
 
 interface ComposerProps {
   initial: ComposerDraft;
@@ -146,6 +161,9 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { showToast } = useToast();
   const { state, setField, addFiles, removeAttachment, send, saveDraft, discardDraft, draftWithAi } =
     useComposer(initial, trashMailboxId);
+  // GH #269: derived once from the mode the draft was built with — drives both
+  // the dialog's aria-label and its visible <h2> so the two never disagree.
+  const composerName = t(COMPOSER_NAME_KEYS[initial.mode ?? "new"]);
   // Split into two independent reveal states (#123) — a draft arriving with
   // CC recipients (e.g. reply-all, see reply.ts's replyDraft) must show CC
   // without also showing an unrelated, still-empty BCC field, and vice versa.
@@ -353,7 +371,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
       // GH #253: see DiscardConfirmDialog above — the focus trap was here from
       // #158, the matching promise to assistive tech was not.
       aria-modal="true"
-      aria-label={t("composer.newMessage")}
+      aria-label={composerName}
       tabIndex={-1}
       className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6 outline-none"
       onDragOver={handleDragOver}
@@ -373,7 +391,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           </div>
         )}
         <div className="flex h-12 shrink-0 items-center gap-2.5 rounded-t-[14px] border-b border-line bg-soft px-[18px]">
-          <h2 className="flex-1 text-[14px] font-[650]">{t("composer.newMessage")}</h2>
+          <h2 className="flex-1 text-[14px] font-[650]">{composerName}</h2>
           <button
             type="button"
             onClick={requestClose}

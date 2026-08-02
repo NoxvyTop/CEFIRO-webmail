@@ -10,6 +10,15 @@ import { QUOTE_MARKER_ATTR } from "./signature";
 
 export type DraftAttachment = { blobId: string; name: string; type: string; size: number };
 
+// GH #269: which flow produced this draft, so the composer can announce and
+// title itself for what it actually is (reply/forward/edit) instead of always
+// "New message". This is the same distinction #145 keys the composer's remount
+// on — the compose param's prefix (reply / reply-all / forward / draft / new) —
+// carried on the draft itself rather than re-derived from its fields, since the
+// builders below already know it for certain (a reply-all with no extra
+// recipients, say, is otherwise indistinguishable from a plain reply).
+export type ComposeMode = "new" | "reply" | "reply-all" | "forward" | "draft";
+
 export type ComposerDraft = {
   identityId: string;
   to: EmailAddress[];
@@ -32,6 +41,12 @@ export type ComposerDraft = {
   // of the original JMAP draft being edited, so a successful send can trash
   // the stale copy instead of leaving it behind (see useComposer.ts send()).
   originalDraftId?: string;
+  // GH #269: the flow this draft was built for — see ComposeMode above. Set by
+  // every builder in this file; a bare draft literal (test fixtures) that omits
+  // it is treated as "new". Purely presentational: it is deliberately excluded
+  // from buildComposePayload/serializeDraftPayload (useComposer.ts), so it never
+  // reaches the wire or the autosave fingerprint.
+  mode?: ComposeMode;
 };
 
 function normalizeEmail(email: string): string {
@@ -159,6 +174,7 @@ export function emptyDraft(identities: Identity[]): ComposerDraft {
     bcc: [],
     subject: "",
     bodyHtml: "",
+    mode: "new",
   };
 }
 
@@ -233,6 +249,7 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
     bcc: [],
     subject: deriveSubject(email.subject),
     bodyHtml: quotedBody(email),
+    mode: all ? "reply-all" : "reply",
   };
 
   // RFC 5322 §3.6.4. The two header fields are independently optional, so
@@ -318,6 +335,7 @@ export function buildEditDraft(email: EmailDetail, identities: Identity[]): Comp
     subject: email.subject,
     bodyHtml: sanitized.html,
     originalDraftId: email.id,
+    mode: "draft",
     attachments: email.attachments.map((attachment) => ({
       blobId: attachment.blobId,
       name: attachment.name?.trim() || "attachment",
@@ -347,6 +365,7 @@ export function forwardDraft(email: EmailDetail, identities: Identity[]): Compos
     bcc: [],
     subject: deriveForwardSubject(email.subject),
     bodyHtml: quotedBody(email),
+    mode: "forward",
     attachments: email.attachments.map((attachment) => ({
       blobId: attachment.blobId,
       name: attachment.name?.trim() || "attachment",
