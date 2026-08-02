@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { ContactsSettings } from "./ContactsSettings";
 import { FilterSettings } from "./FilterSettings";
 import { ProfileSettings } from "./ProfileSettings";
@@ -22,7 +22,10 @@ export function SettingsPage() {
   const [section, setSection] = useState<Section>("profile");
 
   return (
-    <main role="main" className="flex min-h-full flex-col gap-6 p-6">
+    // GH #253: no role="main" — <main> already has it, and spelling it out
+    // again is the kind of redundant ARIA that hides real findings in the lint
+    // report. The landmark itself (#200) is unchanged.
+    <main className="flex min-h-full flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
         <Link to="/" className="text-sm text-accent-text underline">

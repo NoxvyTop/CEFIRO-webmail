@@ -15,6 +15,16 @@
  * library: the format is a dozen lines of text and a dependency that pulls in a
  * default-metrics collector would export more about the runtime than about the
  * service.
+ *
+ * GH #240 added the other half of the picture. Everything above is INBOUND: it
+ * shows that a request was slow or failed, never which of the three services
+ * this process calls was the reason — which is the only thing worth knowing at
+ * 3am, because `cefiro_dependency_up` is a boolean that stays at 1 for a
+ * Stalwart answering every probe in 1.9 seconds. So outbound calls now carry
+ * their own latency histogram and outcome counter per dependency
+ * (`cefiro_outbound_*`), and the long-lived SSE proxy reports how many streams
+ * it is holding (`cefiro_sse_streams_open`) — a number that only ever grew
+ * before anyone could see it.
  */
 
 /** What Prometheus expects for the text exposition format it scrapes. */
@@ -49,6 +59,28 @@ const KNOWN_METHODS = new Set([
   "DELETE",
   "OPTIONS",
 ]);
+
+/**
+ * Latency buckets for OUTBOUND calls. Same shape as the inbound set with a
+ * longer tail, because the deadlines differ by an order of magnitude: JMAP gets
+ * 10s but an AI generation gets 60s (core/deadline.ts), so a bucket set ending
+ * at 10s would report every single AI call as `+Inf` and make the one
+ * dependency whose latency actually varies the one whose latency is unreadable.
+ */
+const OUTBOUND_BUCKETS_SECONDS = [
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60,
+] as const;
+
+/**
+ * Dependencies that get their own label, for the same reason `KNOWN_METHODS`
+ * exists: a label value is a time series kept for the life of the process, so
+ * the set of them has to be closed by construction rather than by trusting
+ * every present and future caller to pass one of three strings.
+ */
+const KNOWN_DEPENDENCIES = new Set(["stalwart", "oidc", "ai"]);
+
+/** Label used for an outbound call to something not in `KNOWN_DEPENDENCIES`. */
+export const OTHER_DEPENDENCY = "other";
 
 /** Label used when no route matched — see `routeLabel`. */
 export const UNMATCHED_ROUTE = "<unmatched>";
@@ -87,9 +119,35 @@ export type RequestSample = {
   durationMs: number;
 };
 
+/**
+ * How an outbound call ended. Three values rather than a boolean, because
+ * "timed out" and "refused" are different incidents with different first
+ * moves: one is a dependency that is slow and still accepting connections, the
+ * other is one that is gone. core/deadline.ts is the only thing that can tell
+ * them apart, and it is where these are raised.
+ */
+export type OutboundOutcome = "ok" | "error" | "timeout";
+
+export type OutboundSample = {
+  /** The upstream label core/deadline.ts already carries: stalwart | oidc | ai. */
+  dependency: string;
+  outcome: OutboundOutcome;
+  /** Time to response headers, not to the end of the body — see core/deadline.ts. */
+  durationMs: number;
+};
+
 export type Metrics = {
   /** Records one finished request. Called once per response, from createApp. */
   recordRequest(sample: RequestSample): void;
+  /**
+   * Records one finished OUTBOUND call (GH #240). Fed from core/deadline.ts,
+   * which every call to Stalwart, the IdP and the AI provider already goes
+   * through — instrumenting the one wrapper rather than a dozen call sites is
+   * what makes "did we miss a dependency?" answerable by reading one file.
+   */
+  recordOutbound(sample: OutboundSample): void;
+  /** Publishes the current number of open SSE streams (GH #240). */
+  setOpenStreams(count: number): void;
   /**
    * Renders the whole registry. `dependencies` comes from the cached
    * /api/health probe (core/health.ts) rather than from fresh outbound calls —
@@ -109,6 +167,33 @@ type HistogramEntry = {
   sum: number;
   count: number;
 };
+type OutboundCounterEntry = { dependency: string; outcome: OutboundOutcome; value: number };
+type OutboundHistogramEntry = {
+  dependency: string;
+  buckets: number[];
+  sum: number;
+  count: number;
+};
+
+/**
+ * Adds one observation to a non-cumulative bucket array. Shared by both
+ * histograms so the "first bucket at or above the value" rule — the one that
+ * makes the cumulative rendering below correct — is written once.
+ */
+function observe(
+  entry: { buckets: number[]; sum: number; count: number },
+  boundaries: readonly number[],
+  seconds: number,
+): void {
+  entry.sum += seconds;
+  entry.count += 1;
+  for (let i = 0; i < boundaries.length; i += 1) {
+    if (seconds <= boundaries[i]!) {
+      entry.buckets[i]! += 1;
+      break;
+    }
+  }
+}
 
 /**
  * Escapes a Prometheus label value. Today's labels (route patterns, methods,
@@ -144,6 +229,9 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
   const startedAtSeconds = now() / 1000;
   const counters = new Map<string, CounterEntry>();
   const histograms = new Map<string, HistogramEntry>();
+  const outboundCounters = new Map<string, OutboundCounterEntry>();
+  const outboundHistograms = new Map<string, OutboundHistogramEntry>();
+  let openStreams = 0;
 
   return {
     recordRequest(sample: RequestSample): void {
@@ -168,15 +256,34 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
         };
         histograms.set(histogramKey, histogram);
       }
-      const seconds = Math.max(0, sample.durationMs) / 1000;
-      histogram.sum += seconds;
-      histogram.count += 1;
-      for (let i = 0; i < DURATION_BUCKETS_SECONDS.length; i += 1) {
-        if (seconds <= DURATION_BUCKETS_SECONDS[i]!) {
-          histogram.buckets[i]! += 1;
-          break;
-        }
+      observe(histogram, DURATION_BUCKETS_SECONDS, Math.max(0, sample.durationMs) / 1000);
+    },
+
+    recordOutbound(sample: OutboundSample): void {
+      const dependency = KNOWN_DEPENDENCIES.has(sample.dependency)
+        ? sample.dependency
+        : OTHER_DEPENDENCY;
+
+      const counterKey = `${dependency} ${sample.outcome}`;
+      const counter = outboundCounters.get(counterKey);
+      if (counter) counter.value += 1;
+      else outboundCounters.set(counterKey, { dependency, outcome: sample.outcome, value: 1 });
+
+      let histogram = outboundHistograms.get(dependency);
+      if (!histogram) {
+        histogram = {
+          dependency,
+          buckets: OUTBOUND_BUCKETS_SECONDS.map(() => 0),
+          sum: 0,
+          count: 0,
+        };
+        outboundHistograms.set(dependency, histogram);
       }
+      observe(histogram, OUTBOUND_BUCKETS_SECONDS, Math.max(0, sample.durationMs) / 1000);
+    },
+
+    setOpenStreams(count: number): void {
+      openStreams = Math.max(0, count);
     },
 
     render(dependencies: Record<string, boolean>): string {
@@ -226,6 +333,47 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
       }
 
       lines.push(
+        "# HELP cefiro_outbound_requests_total Outbound calls made, by dependency and outcome.",
+        "# TYPE cefiro_outbound_requests_total counter",
+      );
+      for (const key of [...outboundCounters.keys()].sort()) {
+        const entry = outboundCounters.get(key)!;
+        const labelSet = labels([
+          ["dependency", entry.dependency],
+          ["outcome", entry.outcome],
+        ]);
+        lines.push(`cefiro_outbound_requests_total{${labelSet}} ${entry.value}`);
+      }
+
+      lines.push(
+        "# HELP cefiro_outbound_request_duration_seconds Outbound call latency to response headers, by dependency.",
+        "# TYPE cefiro_outbound_request_duration_seconds histogram",
+      );
+      for (const key of [...outboundHistograms.keys()].sort()) {
+        const entry = outboundHistograms.get(key)!;
+        const base: [string, string][] = [["dependency", entry.dependency]];
+        let cumulative = 0;
+        for (let i = 0; i < OUTBOUND_BUCKETS_SECONDS.length; i += 1) {
+          cumulative += entry.buckets[i]!;
+          const le = formatValue(OUTBOUND_BUCKETS_SECONDS[i]!);
+          lines.push(
+            `cefiro_outbound_request_duration_seconds_bucket{${labels([...base, ["le", le]])}} ${cumulative}`,
+          );
+        }
+        lines.push(
+          `cefiro_outbound_request_duration_seconds_bucket{${labels([...base, ["le", "+Inf"]])}} ${entry.count}`,
+          `cefiro_outbound_request_duration_seconds_sum{${labels(base)}} ${formatValue(entry.sum)}`,
+          `cefiro_outbound_request_duration_seconds_count{${labels(base)}} ${entry.count}`,
+        );
+      }
+
+      lines.push(
+        "# HELP cefiro_sse_streams_open Server-sent event streams currently proxied to clients.",
+        "# TYPE cefiro_sse_streams_open gauge",
+        `cefiro_sse_streams_open ${formatValue(openStreams)}`,
+      );
+
+      lines.push(
         "# HELP cefiro_dependency_up Dependency reachable on the last health probe (1 up, 0 down).",
         "# TYPE cefiro_dependency_up gauge",
       );
@@ -250,6 +398,39 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
       return counters.size;
     },
   };
+}
+
+/**
+ * The registry the process reports into, wired by `createApp` (GH #240).
+ *
+ * Same shape as `registerServer` in core/idle-timeout.ts, and for the same
+ * reason: the things being measured live far from where the registry is built.
+ * The outbound wrapper in core/deadline.ts is imported by the JMAP client, the
+ * OIDC client, both AI adapters and the Stalwart health probe — none of which
+ * receive the registry, and threading one through five constructors to reach a
+ * counter would be a worse trade than a module-level handle in a process that
+ * only ever builds one app. The same goes for the SSE registry, which is itself
+ * a singleton because logout has to reach it by user id.
+ *
+ * Everything below is a no-op when nothing is registered, so a unit test that
+ * exercises a JMAP call without building an app records into nowhere rather
+ * than into a global that outlives it.
+ */
+let active: Metrics | undefined;
+
+/** Wire the registry `/metrics` renders, so process-wide events reach it. */
+export function registerMetrics(metrics: Metrics): void {
+  active = metrics;
+}
+
+/** Records one finished outbound call. Called from core/deadline.ts. */
+export function recordOutbound(sample: OutboundSample): void {
+  active?.recordOutbound(sample);
+}
+
+/** Publishes the open SSE stream count. Called from modules/mail/streams.ts. */
+export function setOpenStreams(count: number): void {
+  active?.setOpenStreams(count);
 }
 
 async function sha256(value: string): Promise<Uint8Array> {

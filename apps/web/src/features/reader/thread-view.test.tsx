@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, useSearchParams } from "react-router-dom";
+import { MemoryRouter, useSearchParams } from "react-router";
 import type { CustomLabel, ThreadDetail } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { ToastProvider } from "../../app/ui/toast";
 import { ThreadView } from "./ThreadView";
+import { expectNoAxeViolations } from "../../test/axe";
 
 const REMOTE_IMAGE_URL = "https://tracker.evil/pixel.png";
 
@@ -39,6 +40,7 @@ const thread: ThreadDetail = {
       references: null,
       inReplyTo: null,
       senderAuth: "unknown",
+      bodyTruncated: false,
     },
     {
       id: "e2",
@@ -61,6 +63,7 @@ const thread: ThreadDetail = {
       references: ["e1@example.com"],
       inReplyTo: ["e1@example.com"],
       senderAuth: "unknown",
+      bodyTruncated: false,
     },
   ],
 };
@@ -1060,6 +1063,44 @@ describe("ThreadView", () => {
     });
   });
 
+  // GH #42: the design's brand footer carries a muted second line under the
+  // sender's name. Its prototype value is a job title, which no real mail
+  // carries — the address stands in for it, except where the name line
+  // already IS the address.
+  describe("brand footer sender line (GH #42)", () => {
+    it("shows the sender's address under their name when the name is a display name", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.from = [{ name: "Carol Díaz", email: "carol@example.com" }];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const footer = await screen.findByTestId("thread-footer-sender-address");
+      expect(footer).toHaveTextContent("carol@example.com");
+    });
+
+    it("omits it when the sender has no display name, so the address is not printed twice", async () => {
+      // The default fixture's newest message (e2) has `name: null`, so
+      // addressLabel already renders the address as the name line.
+      stubFetch();
+      renderThread();
+
+      await screen.findByTestId("thread-footer-actions");
+      expect(screen.queryByTestId("thread-footer-sender-address")).not.toBeInTheDocument();
+    });
+  });
+
   // GH #90: opening a thread used to show every message fully expanded and
   // stacked. Previous, already-read messages now collapse into a one-line
   // stub; the last message and any still-unread message stay expanded.
@@ -1090,6 +1131,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m2",
@@ -1113,6 +1155,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m3",
@@ -1136,6 +1179,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1228,6 +1272,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m2",
@@ -1251,6 +1296,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "m3",
@@ -1275,6 +1321,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1376,6 +1423,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1426,6 +1474,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "n2",
@@ -1448,6 +1497,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1587,6 +1637,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
           {
             id: "p2",
@@ -1609,6 +1660,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            bodyTruncated: false,
           },
         ],
       };
@@ -1636,6 +1688,7 @@ describe("ThreadView", () => {
         references: null,
         inReplyTo: null,
         senderAuth: "unknown",
+        bodyTruncated: false,
       };
     }
 
@@ -1847,6 +1900,10 @@ describe("ThreadView", () => {
 
       const dialog = await screen.findByRole("alertdialog");
       expect(within(dialog).getByText(/Re: Quarterly report/)).toBeInTheDocument();
+      // GH #253: the focus trap (#158) kept Tab inside, but without aria-modal
+      // a screen reader's virtual cursor still roamed the page behind an
+      // irreversible destroy confirmation.
+      expect(dialog).toHaveAttribute("aria-modal", "true");
 
       expect(
         fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
@@ -2181,6 +2238,90 @@ describe("ThreadView action bar at a narrow viewport (GH #214)", () => {
   });
 });
 
+// GH #249: the sibling row #214 did not touch. The reply row at the foot of
+// the last message is Responder / Responder a todos / Reenviar — in Spanish
+// ~400px of buttons inside the ~335px the reader column has on a 375px phone —
+// and it had no flex-wrap, no shrink-0 and no scrollable axis, so Reenviar was
+// simply pushed off the edge with no way back.
+describe("ThreadView footer reply row at a narrow viewport (GH #249)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+  const originalInnerWidth = window.innerWidth;
+
+  function stubReplyAllThread() {
+    // to + cc beyond the sender, so the worst case (all three buttons) renders.
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [{ name: "Bob", email: "bob@example.com" }];
+    state.emails[1]!.cc = [{ name: "Dave", email: "dave@example.com" }];
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: NARROW_VIEWPORT_WIDTH,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: originalInnerWidth,
+      configurable: true,
+      writable: true,
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("wraps the row instead of letting it run off the edge", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    expect(footer.className).toContain("flex-wrap");
+  });
+
+  it("wraps between buttons rather than squeezing their labels", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    const buttons = within(footer).getAllByRole("button");
+    expect(buttons).toHaveLength(3);
+    for (const button of buttons) {
+      expect(button.className).toContain("shrink-0");
+    }
+  });
+
+  it("keeps every action of the worst-case (reply-all) row reachable", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    for (const name of [
+      i18n.t("composer.reply"),
+      i18n.t("composer.replyAll"),
+      i18n.t("composer.forward"),
+    ]) {
+      expect(within(footer).getByRole("button", { name })).toBeVisible();
+    }
+  });
+
+  it("still fires the action the overflow used to swallow", async () => {
+    vi.stubGlobal("fetch", stubReplyAllThread());
+    renderThread("t1", "arch1");
+
+    const footer = await screen.findByTestId("thread-footer-actions");
+    fireEvent.click(within(footer).getByRole("button", { name: i18n.t("composer.forward") }));
+
+    expect(await screen.findByTestId("compose-param")).toHaveTextContent("forward:e2");
+  });
+});
+
 // GH #227: the mutation path used to invalidate the whole ["mail"] namespace
 // on every archive/delete/star, sweeping identities, preferences, signatures
 // and every already-loaded page of the infinite listing. These pin the exact
@@ -2297,5 +2438,87 @@ describe("ThreadView cache invalidation (GH #227)", () => {
         ["mail", "messages"],
       ]),
     );
+  });
+});
+
+// GH #252: the reader, checked by the real engine. It is the screen with the
+// most ARIA surface per pixel — an expandable message stack, a sanitized HTML
+// body, a label popover, an action bar and a destructive confirmation.
+describe("ThreadView accessibility (GH #252)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("passes an axe run over the open thread", async () => {
+    stubFetch();
+    renderThread("t1", "arch1", "inbox1", "trash1");
+
+    await screen.findByTestId("thread-footer-actions");
+    await expectNoAxeViolations(document.body);
+  });
+
+  it("passes an axe run with the destructive confirmation open", async () => {
+    vi.stubGlobal("fetch", stubTrashedThread());
+    renderThread("t1", "arch1", null, "trash1");
+
+    const actionsBar = await screen.findByTestId("thread-actions-bar");
+    fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.deletePermanently") }));
+
+    await screen.findByRole("alertdialog");
+    await expectNoAxeViolations(document.body);
+  });
+});
+
+// GH #140: JMAP cut the body at the fetch budget and the flag was thrown away,
+// so the reader showed a message ending mid-sentence with nothing saying it was
+// incomplete. The notice must reach the user on whichever body path renders.
+describe("truncated body notice (GH #140)", () => {
+  function stubTruncatedThread(bodyTruncated: boolean, asPlainText = false) {
+    const state = structuredClone(thread);
+    const target = state.emails[1]!;
+    target.bodyTruncated = bodyTruncated;
+    if (!asPlainText) {
+      target.bodyHtml = "<p>A very long message that stops right here";
+      target.bodyText = null;
+    }
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+      if (url.includes("/api/mail/preferences")) {
+        return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  it("tells the user the message is incomplete when the body was truncated", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(true));
+    renderThread();
+
+    expect(await screen.findByText(i18n.t("mail.bodyTruncated.title"))).toBeInTheDocument();
+  });
+
+  it("warns that replying will carry the truncation into the thread", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(true));
+    renderThread();
+
+    expect(await screen.findByText(i18n.t("mail.bodyTruncated.hint"))).toBeInTheDocument();
+  });
+
+  it("shows the notice on the plain-text body path too, not only the HTML one", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(true, true));
+    renderThread();
+
+    expect(await screen.findByText(i18n.t("mail.bodyTruncated.title"))).toBeInTheDocument();
+  });
+
+  it("stays silent for a complete message", async () => {
+    vi.stubGlobal("fetch", stubTruncatedThread(false));
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    expect(screen.queryByText(i18n.t("mail.bodyTruncated.title"))).not.toBeInTheDocument();
   });
 });

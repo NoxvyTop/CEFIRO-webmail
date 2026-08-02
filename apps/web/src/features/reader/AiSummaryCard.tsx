@@ -83,8 +83,10 @@ export function AiSummaryCard({ messageId, threadId, messageCount }: AiSummaryCa
           <span aria-hidden="true">✦</span> {t("mail.aiSummaryLoading")}
         </p>
       )}
+      {/* GH #253: a named <section> IS a region — the explicit role="region" on
+          a div was ARIA standing in for markup that already exists. */}
       {ready && (
-        <div role="region" aria-label={t("mail.aiSummaryTitle")} style={{ animation: "fadeUp 0.3s ease" }}>
+        <section aria-label={t("mail.aiSummaryTitle")} style={{ animation: "fadeUp 0.3s ease" }}>
           <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-accent-text">
             <span aria-hidden="true">✦</span> {t("mail.aiSummaryTitle")}
           </h3>
@@ -93,7 +95,7 @@ export function AiSummaryCard({ messageId, threadId, messageCount }: AiSummaryCa
               <li key={index}>{bullet}</li>
             ))}
           </ul>
-        </div>
+        </section>
       )}
     </div>
   );

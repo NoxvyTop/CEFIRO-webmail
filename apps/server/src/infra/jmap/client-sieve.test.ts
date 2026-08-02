@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createJmapClient, type JmapSession } from "./jmap";
+import { createJmapClient, type JmapSession } from "./client";
 
 const auth = { email: "u@noxvytop.com", password: "pw" };
 const session: JmapSession = {

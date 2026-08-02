@@ -46,6 +46,21 @@ export const TEST_DATABASE_URL_ENV = "E2E_DATABASE_URL";
 export const BASE_DATABASE_URL_ENV = "E2E_BASE_DATABASE_URL";
 
 /**
+ * A SECOND throwaway database, for the first-run wizard server (GH #248).
+ *
+ * It cannot share the one above. global-setup.ts seeds that database with an
+ * admin and an SSO config, which is exactly the pair GH #234's completion latch
+ * reads: against it the setup router answers 404 forever and the wizard is
+ * unreachable by construction. A first run needs an instance that has not had
+ * one, so it gets a database nobody seeds — created by serve.ts on boot, like
+ * the other one, and dropped by global-setup.ts's teardown.
+ *
+ * Same opt-out semantics as TEST_DATABASE_URL_ENV: set it yourself and the
+ * suite uses it verbatim, creating and dropping nothing.
+ */
+export const SETUP_DATABASE_URL_ENV = "E2E_SETUP_DATABASE_URL";
+
+/**
  * The shape every database this module is allowed to create or drop must have.
  * Anchored and narrow on purpose: it cannot match `webmail`, `cefiro_dev`, or
  * anything else a human would name, so a misconfigured DATABASE_URL can never

@@ -170,6 +170,9 @@ describe("sidebar custom labels (Gmail-model: create/list/delete)", () => {
 
     const dialog = screen.getByRole("dialog", { name: i18n.t("mail.newLabel") });
     expect(dialog).toBeInTheDocument();
+    // GH #253: the focus trap arrived with #158; the matching promise to
+    // assistive tech that the rest of the page is inert did not.
+    expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(within(dialog).getByPlaceholderText(i18n.t("mail.labelNamePlaceholder"))).toBeInTheDocument();
     for (const hex of CUSTOM_LABEL_PALETTE) {
       expect(

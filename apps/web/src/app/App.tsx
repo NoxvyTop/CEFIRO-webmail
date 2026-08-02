@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
 import { useProfile } from "../features/settings/useProfile";

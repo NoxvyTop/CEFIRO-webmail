@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
@@ -7,6 +7,8 @@ import { useComposer, type PendingUpload } from "./useComposer";
 import { isComposerDraftEmpty } from "./emptiness";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
+import { htmlToPlainText } from "./plainText";
+import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
 import type { ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
 import { Button } from "../../app/ui/Button";
@@ -98,6 +100,11 @@ function DiscardConfirmDialog({
   return (
     <div
       role="alertdialog"
+      // GH #253: the trap is real (useFocusTrap above cycles Tab inside this
+      // dialog), but without aria-modal a screen reader's own virtual cursor
+      // still walks the page behind it — the announced content and the
+      // reachable content disagreed.
+      aria-modal="true"
       aria-label={t("composer.discardConfirm.title")}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
       onClick={onKeepEditing}
@@ -151,6 +158,8 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   // session (on open), not on every render once signatures finish loading.
   const appliedDefaultRef = useRef(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // GH #142: the quoted original is collapsed by default, like Gmail's "•••".
+  const [quoteRevealed, setQuoteRevealed] = useState(false);
   // GH #158: focus-in/Tab-cycling/restore-on-close for the composer's own
   // dialog — previously unmanaged entirely (no initial focus, no restore,
   // no Tab trap). Stays active for the composer's whole mounted lifetime
@@ -278,6 +287,16 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     setField("bodyHtml", applySignature(state.draft.bodyHtml, signature));
   }
 
+  // GH #142. Memoized because it runs DOMParser, and because the identity of
+  // `editable` is what RichTextEditor compares against its own serialization
+  // to decide whether to re-parse the document.
+  //
+  // Note both signature paths above still operate on the FULL state.draft
+  // .bodyHtml, quote included: applySignature places the signature relative to
+  // the quote marker, so hiding the marker from it would move the signature
+  // below the quoted original.
+  const bodySplit = useMemo(() => splitQuotedTail(state.draft.bodyHtml), [state.draft.bodyHtml]);
+
   async function handleSend() {
     const ok = await send();
     if (ok) {
@@ -331,6 +350,9 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     <div
       ref={composerRootRef}
       role="dialog"
+      // GH #253: see DiscardConfirmDialog above — the focus trap was here from
+      // #158, the matching promise to assistive tech was not.
+      aria-modal="true"
       aria-label={t("composer.newMessage")}
       tabIndex={-1}
       className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6 outline-none"
@@ -449,11 +471,44 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             </label>
           )}
 
+          {/* GH #142: only the editable half reaches the editor; the quoted
+              original stays out of the ProseMirror document entirely and is
+              concatenated back on every change (see quoteSplit.ts). */}
           <RichTextEditor
-            html={state.draft.bodyHtml}
-            onChange={(html) => setField("bodyHtml", html)}
+            html={bodySplit.editable}
+            onChange={(html) => setField("bodyHtml", joinQuotedTail(html, bodySplit.quoted))}
             ariaLabel={t("composer.body")}
           />
+
+          {bodySplit.quoted && (
+            <div className="border-t border-line pt-2">
+              <button
+                type="button"
+                onClick={() => setQuoteRevealed((open) => !open)}
+                aria-expanded={quoteRevealed}
+                className="flex items-center gap-1.5 text-xs font-semibold text-muted transition hover:text-ink"
+              >
+                <span aria-hidden="true">•••</span>
+                {quoteRevealed ? t("composer.hideQuoted") : t("composer.showQuoted")}
+              </button>
+              {quoteRevealed && (
+                <>
+                  {/* Rendered as PLAIN TEXT, never as live markup. This block
+                      sits in the app's own document, which — unlike the
+                      reader's `sandbox=""` iframe — has nothing isolating it,
+                      the same reasoning that made ContentEditableFallback a
+                      text-only seed (GH #213). The structure the user cannot
+                      see here is still preserved exactly in what gets sent;
+                      this is a read-only confirmation of what is attached,
+                      not the copy of record. */}
+                  <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-md bg-soft px-2 py-1.5 text-xs leading-[1.6] text-muted">
+                    {htmlToPlainText(bodySplit.quoted)}
+                  </pre>
+                  <p className="mt-1 text-[11px] text-muted">{t("composer.quotedReadOnly")}</p>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-col gap-2">
             <div>
@@ -505,12 +560,23 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2.5 px-5 py-4">
+        {/* GH #249: Enviar + "Redactar con IA" + Descartar want ~370px, and a
+            375px phone leaves ~287px here once the overlay padding and the
+            panel's own px-5 are taken out — so without flex-wrap the row
+            overflowed and Descartar was unreachable. Same treatment #214 gave
+            the dialog rows (see DiscardConfirmDialog above): wrap rather than
+            scroll, since every control has to stay reachable, and shrink-0 on
+            each control so wrapping happens between buttons instead of
+            squeezing their labels. */}
+        <div
+          data-testid="composer-actions"
+          className="flex shrink-0 flex-wrap items-center gap-2.5 px-5 py-4"
+        >
           <Button
             variant="primary"
             onClick={handleSend}
             disabled={state.sending}
-            className="flex h-[38px] items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
+            className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
           >
             {state.sending ? t("composer.sending") : t("composer.send")}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -523,33 +589,40 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               type="button"
               onClick={() => void draftWithAi()}
               disabled={state.aiDrafting}
-              className="flex h-[38px] items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent-text transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+              className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent-text transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
             >
               {state.aiDrafting ? t("composer.draftingWithAi") : t("composer.draftWithAi")}
             </button>
           )}
-          <span className="flex-1" />
-          {/* GH #178: subtle autosave status. Hidden while idle so an untouched
-              composer shows nothing; aria-live so a screen reader hears the
-              transition to "saved" without it stealing focus. */}
-          {state.autosaveStatus !== "idle" && (
-            <span
-              data-testid="autosave-indicator"
-              aria-live="polite"
-              className={`text-xs ${state.autosaveStatus === "error" ? "text-warn" : "text-muted"}`}
+          {/* GH #249: `ml-auto` on the trailing group replaces the old
+              `<span className="flex-1" />` spacer. A zero-basis growing spacer
+              cannot survive wrapping — it stays behind on the first line and
+              leaves Descartar stranded on the left of the second — whereas the
+              auto margin pushes this group to the right edge of whichever line
+              it lands on. */}
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            {/* GH #178: subtle autosave status. Hidden while idle so an untouched
+                composer shows nothing; aria-live so a screen reader hears the
+                transition to "saved" without it stealing focus. */}
+            {state.autosaveStatus !== "idle" && (
+              <span
+                data-testid="autosave-indicator"
+                aria-live="polite"
+                className={`text-xs ${state.autosaveStatus === "error" ? "text-warn" : "text-muted"}`}
+              >
+                {state.autosaveStatus === "saving" && t("composer.autosave.saving")}
+                {state.autosaveStatus === "saved" && t("composer.autosave.saved")}
+                {state.autosaveStatus === "error" && t("composer.autosave.error")}
+              </span>
+            )}
+            <Button
+              variant="secondary"
+              onClick={requestClose}
+              className="shrink-0 rounded-lg px-3 py-2 text-[13px] font-semibold"
             >
-              {state.autosaveStatus === "saving" && t("composer.autosave.saving")}
-              {state.autosaveStatus === "saved" && t("composer.autosave.saved")}
-              {state.autosaveStatus === "error" && t("composer.autosave.error")}
-            </span>
-          )}
-          <Button
-            variant="secondary"
-            onClick={requestClose}
-            className="rounded-lg px-3 py-2 text-[13px] font-semibold"
-          >
-            {t("composer.cancel")}
-          </Button>
+              {t("composer.cancel")}
+            </Button>
+          </div>
         </div>
       </div>
       {discardConfirmOpen && (

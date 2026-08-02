@@ -313,8 +313,8 @@ jobs:
           # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set
           # during the original setup wizard run — see
           # e2e/stalwart/README.md). That host doesn't resolve here, so a
-          # client following the advertised apiUrl verbatim (as
-          # apps/server/src/infra/stalwart/jmap.ts does) cannot reach it.
+          # client following the advertised apiUrl verbatim cannot reach it
+          # (which is what apps/server does under JMAP_URL_MODE=trust).
           # STALWART_PUBLIC_URL overrides the advertised base URL
           # (crates/store/src/registry/local.rs); it must point at this
           # service's own name and container-native port — the only address
@@ -382,6 +382,21 @@ jobs:
         with:
           name: playwright-report
           path: e2e/playwright-report
+      # The retry record (GH #246), published on EVERY run — including the green
+      # ones, which are the whole point. `retries: 1` means a spec that fails
+      # half the time still exits this job 0, so the only place the instability
+      # exists is this file; uploading it only on failure would drop exactly the
+      # runs it was written for. A run with nothing to report still uploads an
+      # empty list, so a missing artifact means a broken step rather than a
+      # clean suite. See e2e/README.md for what is expected to happen when the
+      # same spec keeps showing up in it.
+      - name: publish the e2e retry record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-retries
+          path: e2e/test-results/retries.json
+          if-no-files-found: warn
       # A containerised job runs as root, so everything it writes into the
       # shared workspace ends up root-owned. On a self-hosted runner that
       # workspace persists between runs, and the next job that is NOT
@@ -434,15 +449,146 @@ jobs:
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      # The image build is the most expensive single step in the pipeline and
-      # a runner starts with an empty Docker layer cache, so without this it
+      # BUILD, TEST, THEN PUSH (GH #244) — the build below does not push.
+      #
+      # Nothing in this pipeline had ever STARTED the image it publishes. The
+      # e2e job runs the app from source (e2e/serve.ts), so every property that
+      # only exists in the artifact — the production-only dependency install,
+      # the node_modules copied between stages, STATIC_DIR, the HEALTHCHECK
+      # itself, and since GH #256 the dbSOS scripts — was published untested. A
+      # green pipeline said the source works, never that the thing you deploy
+      # boots.
+      #
+      # The image build is also the most expensive single step in the pipeline
+      # and a runner starts with an empty Docker layer cache, so without this it
       # rebuilds every layer — dependency install included — on every release.
       # mode=max caches intermediate stages too, which is what makes the
-      # multi-stage build actually reuse its install layer.
+      # multi-stage build actually reuse its install layer. It is also what
+      # makes splitting build from push affordable: the push step below is a
+      # cache-only re-export of these exact layers, not a second build.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: cefiro-webmail:ci-smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Supply-chain gate (GH #260). Blocks on HIGH/CRITICAL, and only on what
+      # is actually fixable: an unfixed upstream CVE would otherwise wedge every
+      # release behind a patch nobody has published yet, and a gate that has to
+      # be bypassed to ship stops being a gate. Unfixed findings still print.
+      #
+      # Today's known findings are triaged, one by one and with an expiry date,
+      # in .trivyignore.yaml — read that file before adding anything to it. The
+      # ignore file is passed through TRIVY_IGNOREFILE rather than the action's
+      # `trivyignores` input, which concatenates the files it is given and would
+      # not survive the YAML format the expiry dates need.
+      - name: scan the image for known vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
+        with:
+          image-ref: cefiro-webmail:ci-smoke
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: "1"
+      # Runs the freshly built image against a real Postgres and refuses to
+      # publish unless the container reports ITSELF healthy through its own
+      # HEALTHCHECK and answers on the two surfaces it exists to serve.
+      #
+      # Nothing is published on a host port: the probes run inside the same
+      # user-defined network, from the Postgres container's busybox wget. That
+      # keeps two publish jobs on the shared self-hosted runner from colliding
+      # over a port, and it exercises the real path a reverse proxy takes rather
+      # than a loopback shortcut. Names carry the run id for the same reason.
+      - name: smoke-test the built image
+        env:
+          NET: cefiro-smoke-${{ github.run_id }}
+          DB: cefiro-smoke-db-${{ github.run_id }}
+          APP: cefiro-smoke-app-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          docker network create "$NET"
+          docker run -d --name "$DB" --network "$NET" \
+            -e POSTGRES_USER=webmail -e POSTGRES_PASSWORD=webmail -e POSTGRES_DB=webmail \
+            --health-cmd "pg_isready -U webmail" --health-interval 3s --health-retries 20 \
+            postgres:17-alpine
+          for _ in $(seq 1 40); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' "$DB")" = healthy ] && break
+            sleep 2
+          done
+          [ "$(docker inspect -f '{{.State.Health.Status}}' "$DB")" = healthy ]
+
+          # A GENERATED master key, not a fixture one: with NODE_ENV=production
+          # the config refuses a weak key (GH #223), so booting at all is itself
+          # part of what this proves. NODE_ENV=production also switches on the
+          # static-file serving that STATIC_DIR points at. Built from
+          # /dev/urandom with coreutils rather than `openssl rand`, so the step
+          # does not assume the runner host has openssl — this job also runs on
+          # the self-hosted runner, uncontainerised.
+          docker run -d --name "$APP" --network "$NET" \
+            -e DATABASE_URL="postgres://webmail:webmail@$DB:5432/webmail" \
+            -e MASTER_KEY="$(head -c 32 /dev/urandom | base64 -w0)" \
+            -e APP_URL=http://localhost:8080 \
+            -e NODE_ENV=production \
+            cefiro-webmail:ci-smoke
+
+          # The container's own HEALTHCHECK is the gate, so a broken probe
+          # command in the Dockerfile fails here instead of in production, where
+          # it would either hide a dead container or drain a healthy one.
+          for _ in $(seq 1 60); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' "$APP")"
+            [ "$status" = healthy ] && break
+            [ "$status" = unhealthy ] && break
+            sleep 2
+          done
+          if [ "$(docker inspect -f '{{.State.Health.Status}}' "$APP")" != healthy ]; then
+            echo "::error::the built image never reported healthy"
+            docker logs "$APP" || true
+            exit 1
+          fi
+
+          # Probed from another container on the same network, not from the host.
+          # The response is captured into a variable rather than piped into grep:
+          # `grep -q` exits at the first match and would close the pipe under the
+          # writer, which with `pipefail` turns a passing assertion into a failed
+          # step at random.
+          probe() { docker run --rm --network "$NET" postgres:17-alpine wget -qO- "$1"; }
+          # The API: 200 + status ok, i.e. the app reached Postgres and migrated.
+          health="$(probe "http://$APP:8080/api/health")"
+          echo "$health"
+          case "$health" in *'"status":"ok"'*) ;; *) echo "::error::/api/health did not report ok"; exit 1 ;; esac
+          # The SPA: proves STATIC_DIR names the assets the build stage produced.
+          index="$(probe "http://$APP:8080/")"
+          case "$index" in *'<div id="root">'*) ;; *) echo "::error::the SPA was not served"; exit 1 ;; esac
+          # The dbSOS scripts an operator is told to run on day one (GH #256).
+          docker exec "$APP" test -x /app/scripts/db-backup.sh
+          docker exec "$APP" test -x /app/scripts/db-restore.sh
+          echo "image smoke test passed"
+      - name: tear down the smoke test
+        if: always()
+        env:
+          NET: cefiro-smoke-${{ github.run_id }}
+          DB: cefiro-smoke-db-${{ github.run_id }}
+          APP: cefiro-smoke-app-${{ github.run_id }}
+        run: |
+          docker rm -f "$APP" "$DB" >/dev/null 2>&1 || true
+          docker network rm "$NET" >/dev/null 2>&1 || true
+      # Only now, with the artifact proven to boot: the same layers, re-exported
+      # from cache and pushed. SBOM and provenance attestations ride along
+      # (GH #260) — buildx produces both from the build it already did, so they
+      # cost a flag each and answer "what is inside this image, and which commit
+      # and workflow produced it" without a separate tool. Image signing is NOT
+      # here; see docs/OPERATIONS.md for why and what it would take.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ steps.tags.outputs.list }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max

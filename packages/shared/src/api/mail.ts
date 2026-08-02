@@ -96,6 +96,19 @@ export const emailDetailSchema = emailSummarySchema.extend({
   // hand-written test fixture) parses as "no assertion" rather than either
   // throwing or, far worse, defaulting to a false trust mark.
   senderAuth: senderAuthVerdictSchema.default("unknown"),
+  // GH #140: true when JMAP reported at least one of the fetched body values
+  // as truncated (RFC 8621 §4.1.4 `isTruncated`), i.e. bodyHtml/bodyText hold
+  // a PREFIX of the real body, cut at the server's maxBodyValueBytes budget.
+  // Without this the cut is invisible: the reader shows a message ending
+  // mid-sentence as if that were the whole thing, and composer/reply.ts quotes
+  // the prefix into the next reply, making the loss permanent from there on.
+  //
+  // Defaults to false — "nothing was reported truncated", the absence of an
+  // assertion — so a server predating the field, or an existing fixture,
+  // parses as complete instead of throwing inside threadDetailSchema and
+  // taking down the whole thread view. False therefore means "no truncation
+  // reported", never "verified complete".
+  bodyTruncated: z.boolean().default(false),
 });
 export type EmailDetail = z.infer<typeof emailDetailSchema>;
 

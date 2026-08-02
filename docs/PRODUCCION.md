@@ -1,104 +1,98 @@
 # Hoja de ruta a producción
 
 Estado y plan de endurecimiento de CEFIRO-webmail para llevarlo a producción sin
-riesgo de mala reputación. Sale de una auditoría de cinco dimensiones con
-evidencia `file:line`, sintetizada aquí como punto de partida y objetivo.
+riesgo de mala reputación. Nace de una auditoría de cinco dimensiones con
+evidencia `file:line`, y se reescribe cuando una ola se cierra y la siguiente
+auditoría la sustituye.
 
-## Dónde estamos (auditoría — global ~73%)
+> **Esto es el plan, no el procedimiento.** Cómo se despliega, se promueve, se
+> revierte, se diagnostica y se recupera está en [OPERATIONS.md](OPERATIONS.md),
+> que es la fuente de verdad para operar. Si este documento y el runbook llegaran
+> a contradecirse, **manda el runbook** — y la contradicción es un bug de esta
+> página.
 
-El núcleo está bien construido y es seguro. Lo que falta no es el producto: es lo
-que lo mantiene en pie en producción y lo que ve un usuario en el teléfono.
+## Dónde estamos
 
-| Dimensión | % | Lectura corta |
-|---|---|---|
-| Seguridad y privacidad | **87%** | Sin hallazgo crítico ni de fuga. Cifrado en reposo con rotación, sesiones hasheadas, correo en iframe sandbox, SQL parametrizado. Los huecos son abuso/coste, no confidencialidad. |
-| Testing / CI | **80%** | Tests reales y adversariales, pipeline reproducible. Faltan compuertas de lint y cobertura. |
-| Frontend / diseño / a11y | **72%** | Escritorio casi listo, tokens auditados a WCAG. El móvil está roto. |
-| Fiabilidad / observabilidad | **72%** | Buen manejo de errores y timeouts HTTP; la base de datos es el eslabón sin proteger. |
-| Operaciones / despliegue | **62%** | Config a prueba de balas, cero secretos en el repo; sin backup/DR ni rollback. |
+Las olas **8, 9 y 10 están cerradas**. Son las que trajeron la red de seguridad
+operativa que el runbook documenta hoy: copia de emergencia, rollback por imagen
+inmutable, monitoreo y apagado ordenado. La auditoría inicial situaba el conjunto
+en ~73% con la dimensión de operaciones en 62% y sin backup/DR ni rollback; eso
+ya no describe este repositorio.
 
-Lo que ya está muy bien y no hay que perder de vista: rotación de `MASTER_KEY`
-con guarda de arranque (#172), timeouts salientes (#165), Stalwart caído → 502
-(#187), píxel de rastreo por `<style>` cerrado (#182), cabecera de auth
-falsificada ignorada (#136), rate limit del login de emergencia (#183). El Sieve
-no expone `redirect`/`forward`, así que no hay vector de exfiltración de correo.
-
-## Qué esperamos al finalizar
-
-Cerrar los bloqueadores de operabilidad y móvil sube de ~73% a la franja de los
-85-90%, **sin tocar la arquitectura**. El trabajo se agrupa en tres olas, por
-orden de impacto en reputación.
-
-### Ola 8 — Operabilidad para lanzar (bloqueadores duros)
-
-No se lanza sin esto.
-
-| Issue | Qué | Por qué duele |
-|---|---|---|
-| #189 | **Autobackup interno diario de Postgres + restore probado** | Perder `pgdata` = credenciales de correo de todos irrecuperables |
-| #190 | Imagen inmutable por SHA/semver + rollback | Hoy solo `:latest`/`:staging`: no hay a qué volver |
-| #191 | Acotar Postgres (timeouts + pool) y su caída → 503 | Una query lenta cuelga todo el servicio; caída = 500 "bug nuestro" |
-| #192 | Confirmar `EmailSubmission` en el envío | Hoy un fallo parcial invita a reenviar → entrega duplicada |
-| #193 | Apagado ordenado (SIGTERM drain + `sql.end`) | Cada deploy corta envíos en vuelo |
-
-### Ola 9 — Abuso, límites y compuertas
-
-Antes de escalar usuarios.
-
-| Issue | Qué |
+| Dimensión | Lectura de hoy |
 |---|---|
-| #194 | Rate limit en `/login` (amplificación OIDC) + cuota por usuario en IA (coste) |
-| #195 | `bodyLimit` global + cap de entrada del resumen de IA |
-| #196 | Forzar cookies `Secure`/HTTPS en producción (hoy fail-open por `APP_URL`) |
-| #197 | Health check que cubra Stalwart y devuelva 503 degradado (+ `HEALTHCHECK`) |
-| #198 | Compuerta de lint (biome) en CI |
-| #199 | Medición y umbral de cobertura en CI |
+| Seguridad y privacidad | Sigue sin hallazgo crítico ni de fuga: cifrado en reposo con rotación, sesiones hasheadas, correo en iframe sandbox, SQL parametrizado. Cerrados el rate limit del login y la cuota de IA (#194), el techo de cuerpo (#195), las cookies `Secure` en producción (#196) y la calidad exigida a `MASTER_KEY` (#223). Lo que queda es abuso y superficie residual: #234, #238, #239. |
+| Testing / CI | Compuertas de lint (#198) y de cobertura (#199), esta última por archivo (#228) y extendida a `packages/shared` (#229). La imagen que se publica ya se arranca y se escanea antes de salir (#244, #260). Queda subir los umbrales a la realidad medida (#245), quitar los reintentos que disfrazan tests inestables (#246) y tapar los huecos de e2e (#247, #248). |
+| Frontend / diseño / a11y | El móvil ya no está roto: navegación alcanzable en pantallas estrechas (#177), navegación de Ajustes y Admin sin desbordes (#226) y decisión de estrategia tomada (#202). Queda accesibilidad (#251, #252, #253) y los desbordes que siguen a 375px (#249, #250). |
+| Fiabilidad / observabilidad | Postgres acotado con timeouts y pool (#191), apagado ordenado (#193), health que cubre Stalwart y devuelve 503 degradado (#197), `traceId` en todo el diagnóstico y `LOG_LEVEL` (#219), métricas y alertas (#208). Queda ampliar las métricas más allá del HTTP de entrada (#240) y cerrar el ciclo de vida del SSE (#241, #243). |
+| **Operaciones / despliegue — 86%** | dbSOS diaria cifrada, verificada y con estado monitorizable (#189, #208), imagen inmutable con rollback (#190), scripts de recuperación dentro de la imagen (#256), arranque que falla con un mensaje accionable en vez de un stack trace (#257) y procedimiento de promoción escrito (#262). Queda **ensayar una restauración de verdad** (#258): la copia está verificada, pero verificar no es ensayar. |
 
-### Ola 10 — Pulido y accesibilidad
+## Lo que ya está bien y no hay que perder de vista
 
-| Issue | Qué |
+Rotación de `MASTER_KEY` con guarda de arranque (#172), timeouts salientes
+(#165), Stalwart caído → 502 (#187), píxel de rastreo por `<style>` cerrado
+(#182), cabecera de auth falsificada ignorada (#136), rate limit del login de
+emergencia (#183). El Sieve no expone `redirect`/`forward`, así que no hay vector
+de exfiltración de correo.
+
+## Las olas cerradas
+
+Se dejan escritas porque son el índice de por qué el sistema es como es hoy; cada
+número lleva a la discusión completa.
+
+| Ola | Qué trajo |
 |---|---|
-| #200 | A11y del shell: landmark `<main>`, skip link, errores de login anunciados |
-| #201 | Code splitting por ruta (Admin/Settings/Setup + editor) |
-| #153 | Paginar el listado de usuarios de admin (ya abierto) |
+| **8 — Operabilidad para lanzar** | dbSOS y restauración (#189), imagen inmutable por SHA/semver y rollback (#190), Postgres acotado y su caída → 503 (#191), confirmación de `EmailSubmission` en el envío (#192), apagado ordenado (#193). |
+| **9 — Abuso, límites y compuertas** | Rate limit en `/login` y cuota de IA (#194), `bodyLimit` global (#195), cookies `Secure` forzadas en producción (#196), health con Stalwart + `HEALTHCHECK` (#197), compuerta de lint (#198), compuerta de cobertura (#199). |
+| **10 — Pulido y accesibilidad** | A11y del shell (#200), code splitting por ruta (#201), paginación del listado de usuarios de admin (#153). |
 
-## Backups — SOS de datos (contexto de #189)
+## La ola en curso — auditoría post-v10
 
-Dos capas que se complementan; no dependemos de una sola:
+La auditoría que siguió a la ola 10 abrió una tanda nueva (#231-#262). Agrupada
+por dónde duele:
 
-1. **Autobackup interno diario** (dentro del stack de Céfiro): `pg_dump` cifrado,
-   una vez al día, con retención y **restauración probada**. Es la red de
-   seguridad a nivel aplicación. La clave del backup no vive junto al backup, y
-   un backup restaurado debe seguir descifrable con el llavero vigente (#172).
-2. **Backup externo por ARGOS** (infraestructura, fuera de este repo): ARGOS hará
-   backup de todos los contenedores y los llevará a un bucket **Backblaze B2**.
-   Cubre el nivel de infraestructura; el autobackup interno cubre el de datos de
-   aplicación. Documentar qué cubre cada uno.
+- **Operaciones:** #256, #257, #258, #259, #260, #261, #262.
+- **Testing / CI:** #244, #245, #246, #247, #248.
+- **Seguridad:** #234, #235, #238, #239.
+- **Fiabilidad:** #236, #237, #240, #241, #242, #243.
+- **Frontend / a11y:** #249, #250, #251, #252, #253, #254, #255.
 
-## Estrategia móvil — decisión pendiente (#202, enlaza #177 y #185)
+## Backups — las dos capas
 
-El móvil está roto hoy (#177): la lista de correo se recorta y no hay forma de
-llegar a ella. Es un asesino de primera impresión para un producto comercial.
+No dependemos de una sola, y cubren cosas distintas:
 
-Dos caminos, no excluyentes:
+1. **dbSOS, dentro del stack de Céfiro** (#189, ya en marcha): `pg_dump` cifrado
+   diario, con retención, verificación de cada archivo y un fichero de estado que
+   Prometheus vigila (#208). Es la red **rápida**: recupera en minutos. La clave
+   no vive junto al backup, y un dump restaurado solo es descifrable con el
+   llavero de `MASTER_KEY` vigente al restaurar (#172). Procedimiento completo en
+   [OPERATIONS.md → dbSOS](OPERATIONS.md#dbsos--copia-de-emergencia-de-la-base-de-datos).
+2. **Backup externo por ARGOS** (infraestructura, fuera de este repo): backup de
+   todos los contenedores hacia un bucket **Backblaze B2**. Cubre el nivel de
+   infraestructura y es más lento; la dbSOS no lo sustituye, lo complementa.
 
-- **A — Responsividad de la web actual** (corto plazo, Ola 10): drawer con
-  hamburguesa bajo `lg`. Barato, reutiliza UI y tests, tapa el agujero ya.
-- **B — App nativa multiplataforma** (largo plazo, #185): la hipótesis es que una
-  app nativa **gana más funcionalidades a nivel global** (push real, cuenta del
-  sistema, offline, integración de plataforma). Candidata Flutter; el trade-off
-  mayor es reescribir la UI y el editor rico. Análisis completo en #185.
+Pendiente y consciente: nadie ha ensayado todavía una restauración completa
+(#258). Un backup verificado que nunca se restauró sigue siendo una hipótesis.
 
-**Recomendación:** arreglar #177 con responsividad ya (no quedar inusables
-mientras se decide), y decidir B con calma. Si se va a nativo, la web responsive
-sigue de webmail de escritorio y de fallback.
+## Estrategia móvil — decidida (#202)
 
-## Conexión Céfiro↔Stalwart (contexto, #188)
+Se tomó el camino A: **responsividad de la web actual**, que es lo que cerró #177
+y dejó la navegación alcanzable en pantallas estrechas. La app nativa
+multiplataforma (#185) queda como opción de largo plazo, no como deuda: si algún
+día se aborda, la web responsive sigue siendo el webmail de escritorio y el
+fallback.
 
-Doc de diseño aparte: la conexión es una sola (JMAP sobre `STALWART_URL`; el
-navegador nunca toca Stalwart). La topología de contenedores en la misma red
-(edge-core) ya funciona; falta la confianza TLS agnóstica del proveedor para
-servidores dedicados. Ver #188.
+## Conexión Céfiro↔Stalwart (#188)
+
+Resuelta e implementada (#33/#34/#35): la conexión es una sola (JMAP sobre
+`JMAP_URL`; el navegador nunca toca el proveedor), el modo explícito
+`JMAP_URL_MODE=rewrite|trust` sustituye al viejo booleano `JMAP_FORCE_BASE` con
+`rewrite` por defecto, la confianza TLS para una CA interna se resuelve con
+`NODE_EXTRA_CA_CERTS` (sin perilla propia y **sin ningún modo `insecure`**), y
+el arranque deja una sonda `jmap provider probe` en el log sin fallar duro.
+Las dos topologías con su env exacto y la matriz A×B están en
+[OPERATIONS.md](OPERATIONS.md#topologías-de-conexión-al-proveedor-jmap-188);
+la arquitectura, en [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Fuera de alcance de esta hoja de ruta
 

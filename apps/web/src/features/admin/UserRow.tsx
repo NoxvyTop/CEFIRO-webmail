@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { AdminUser } from "@webmail/shared";
 import { Avatar } from "../../app/ui/Avatar";
 import { setUserActive, setUserCredential, setUserRole } from "./api";
+import { adminErrorKey } from "./errors";
 
 const USERS_QUERY_KEY = ["admin", "users"] as const;
 
@@ -40,7 +41,13 @@ export function UserRow({ user }: { user: AdminUser }) {
     },
   });
 
-  const hasError = roleMutation.isError || activeMutation.isError || credentialMutation.isError;
+  // GH #46: the first failed mutation of the three, so the row can say WHICH
+  // rule refused the action instead of the same "could not be completed" for a
+  // self-demotion, a last-admin block and a dead database alike. Only one of
+  // them can be in flight at a time from this row's controls.
+  const failure = [roleMutation, activeMutation, credentialMutation].find(
+    (mutation) => mutation.isError,
+  );
 
   function handleCredentialSubmit(event: FormEvent) {
     event.preventDefault();
@@ -137,9 +144,9 @@ export function UserRow({ user }: { user: AdminUser }) {
           <button type="button" onClick={handleArchiveClick} className={compactSecondaryButtonClass}>
             {archiveLabel}
           </button>
-          {hasError && (
+          {failure && (
             <p role="alert" className="text-xs text-danger">
-              {t("admin.errors.action")}
+              {t(adminErrorKey(failure.error))}
             </p>
           )}
         </div>

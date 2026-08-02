@@ -18,7 +18,7 @@ import {
   type ThreadDetail,
 } from "@webmail/shared";
 import { requireSession } from "../auth/middleware";
-import { DEFAULT_STALWART_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
+import { DEFAULT_JMAP_TIMEOUT_MS, withDeadlineFetch } from "../../core/deadline";
 import { errorResponse } from "../../core/error-response";
 import { clearIdleTimeout } from "../../core/idle-timeout";
 import { currentLogContext, log, withLogContext } from "../../core/logger";
@@ -26,13 +26,16 @@ import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthVerdict } from "./sender-auth";
+import { guardStream, mailStreams } from "./streams";
 import {
-  withStalwartTransportErrors,
+  jmapAuthHeader,
+  withJmapTransportErrors,
   type JmapAuth,
+  type JmapAuthMode,
   type JmapClient,
   type JmapMethodCall,
   type JmapSession,
-} from "../../infra/stalwart/jmap";
+} from "../../infra/jmap/client";
 
 type JmapMailbox = {
   id: string;
@@ -60,8 +63,18 @@ type JmapEmail = {
   size?: number;
 };
 
+// Per-body-value ceiling asked of JMAP when fetching a thread. The thread
+// endpoint fetches EVERY message in the conversation in one Email/get, so this
+// bounds the whole response, not one message — which is why it stays in place
+// rather than being raised. GH #140 makes the resulting cut visible instead of
+// silent (see collectBodyValues / EmailDetail.bodyTruncated).
+const MAX_BODY_VALUE_BYTES = 524288;
+
 type JmapBodyPart = { partId: string; type?: string | null };
-type JmapBodyValue = { value: string };
+// RFC 8621 §4.1.4: isTruncated is set by the server when `value` had to be cut
+// to honour the request's maxBodyValueBytes budget. Optional because a server
+// may omit it when nothing was truncated (GH #140).
+type JmapBodyValue = { value: string; isTruncated?: boolean };
 type JmapAttachment = {
   blobId?: string;
   name?: string | null;
@@ -164,14 +177,22 @@ function toEmailSummary(email: JmapEmail): EmailSummary {
   };
 }
 
-function concatBodyValues(
+// GH #140: returns the concatenated body alongside whether JMAP reported any
+// of the parts it was assembled from as truncated. The flag used to be dropped
+// on the floor here, which is what made the 512 KB cut (see MAX_BODY_VALUE_BYTES
+// below) silent: the caller could not tell a message that ends mid-sentence
+// from one that genuinely ends there.
+function collectBodyValues(
   parts: JmapBodyPart[] | undefined,
   bodyValues: Record<string, JmapBodyValue> | undefined,
-): string | null {
+): { value: string | null; truncated: boolean } {
   const values = (parts ?? [])
-    .map((part) => bodyValues?.[part.partId]?.value)
-    .filter((value): value is string => value !== undefined);
-  return values.length === 0 ? null : values.join("");
+    .map((part) => bodyValues?.[part.partId])
+    .filter((entry): entry is JmapBodyValue => entry !== undefined);
+  return {
+    value: values.length === 0 ? null : values.map((entry) => entry.value).join(""),
+    truncated: values.some((entry) => entry.isTruncated === true),
+  };
 }
 
 function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
@@ -187,22 +208,28 @@ function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
 }
 
 function toEmailDetail(email: JmapEmailDetail): EmailDetail {
+  const html = collectBodyValues(email.htmlBody, email.bodyValues);
+  const text = collectBodyValues(email.textBody, email.bodyValues);
   return {
     ...toEmailSummary(email),
     cc: toEmailAddresses(email.cc),
     replyTo: toEmailAddresses(email.replyTo),
-    bodyHtml: concatBodyValues(email.htmlBody, email.bodyValues),
-    bodyText: concatBodyValues(email.textBody, email.bodyValues),
+    bodyHtml: html.value,
+    bodyText: text.value,
+    // GH #140: the OR of both alternatives rather than only the one the client
+    // happens to render. Which alternative that is, is the client's choice
+    // (the reader prefers HTML and falls back to text; composer/reply.ts's
+    // quotedBody does the same), so reporting per-alternative here would push
+    // the decision to the wrong layer. The asymmetry is deliberate: warning
+    // about a message that turns out to be renderable in full costs a notice,
+    // while staying quiet about a truncated one is the bug being fixed.
+    bodyTruncated: html.truncated || text.truncated,
     attachments: toAttachments(email.attachments),
     messageId: email.messageId ?? null,
     references: email.references ?? null,
     inReplyTo: email.inReplyTo ?? null,
     senderAuth: deriveSenderAuthVerdict(email.headers),
   };
-}
-
-function basicAuthHeader(auth: { email: string; password: string }): string {
-  return `Basic ${btoa(`${auth.email}:${auth.password}`)}`;
 }
 
 // Content-types that are safe to render inline in the browser: no active script
@@ -377,20 +404,25 @@ async function trashSupersededDraft(input: {
 export function createMailRouter(deps: MailDeps) {
   const router = new Hono<{ Variables: MailVariables }>();
   const baseFetch = deps.fetchFn ?? fetch;
-  // GH #211: these three routes talk to Stalwart directly instead of through
-  // the JMAP client, so the client's "a rejecting fetch means the dependency is
-  // down" mapping did not reach them — a Stalwart that refuses the connection
-  // answered 500 "internal" on the event stream and on attachments while every
-  // other route already answered 502 stalwart_unavailable. Same wrapper, same
-  // verdict, for every call this server makes to Stalwart.
-  const uploadFetch = withStalwartTransportErrors(baseFetch);
+  // GH #211: these three routes talk to the JMAP provider directly instead of
+  // through the JMAP client, so the client's "a rejecting fetch means the
+  // dependency is down" mapping did not reach them — a provider that refuses
+  // the connection answered 500 "internal" on the event stream and on
+  // attachments while every other route already answered 502
+  // stalwart_unavailable. Same wrapper, same verdict, everywhere.
+  const uploadFetch = withJmapTransportErrors(baseFetch);
   // GH #165: they also need their own deadline. It only covers
   // time-to-response-headers, which is what lets the event stream stay open
-  // for as long as the client wants while still failing fast on a Stalwart
+  // for as long as the client wants while still failing fast on a provider
   // that accepts the connection and never answers.
-  const fetchFn = withStalwartTransportErrors(
-    withDeadlineFetch(baseFetch, "stalwart", deps.timeoutMs ?? DEFAULT_STALWART_TIMEOUT_MS),
+  const fetchFn = withJmapTransportErrors(
+    withDeadlineFetch(baseFetch, "stalwart", deps.timeoutMs ?? DEFAULT_JMAP_TIMEOUT_MS),
   );
+  // GH #35: the same credential presentation the JMAP client uses, so a
+  // `bearer` provider is not half-configured — API through the client speaking
+  // Bearer while attachments and the event stream still send Basic.
+  const authMode: JmapAuthMode = deps.authMode ?? "basic";
+  const authHeader = (auth: JmapAuth) => jmapAuthHeader(auth, authMode);
 
   router.use("*", requireSession(deps.sessions));
 
@@ -517,27 +549,57 @@ export function createMailRouter(deps: MailDeps) {
       return errorResponse(c, "stalwart_unavailable", 502);
     }
 
+    const streamUser = c.get("user");
+    // Registered BEFORE the upstream call, so a client looping on connect is
+    // refused without costing a Stalwart connection each time (GH #241). A
+    // refused EventSource fails that one connection instead of retrying, so
+    // this cannot become a reconnect storm — see ./streams.ts.
+    const stream = mailStreams.open(streamUser.userId);
+    if (!stream) {
+      return errorResponse(c, "too_many_streams", 429);
+    }
+
     const upstreamUrl = session.eventSourceUrl
       .replaceAll("{types}", "Email,Mailbox")
       .replaceAll("{closeafter}", "no")
       .replaceAll("{ping}", "30");
 
-    const upstream = await fetchFn(upstreamUrl, {
-      headers: {
-        authorization: basicAuthHeader(c.get("jmapAuth")),
-        accept: "text/event-stream",
-      },
-      signal: c.req.raw.signal,
-    });
+    let upstream: Response;
+    try {
+      upstream = await fetchFn(upstreamUrl, {
+        headers: {
+          authorization: authHeader(c.get("jmapAuth")),
+          accept: "text/event-stream",
+        },
+        // The stream's own signal, not the request's: it is aborted by a client
+        // disconnect (wired just below), by the silence watchdog, and by
+        // `evictMailSession` at logout, so every one of those tears the
+        // Stalwart connection down instead of abandoning it.
+        signal: stream.signal,
+      });
+    } catch (error) {
+      // Nothing downstream will release the registration if the call that was
+      // supposed to produce the stream never returns one.
+      stream.close();
+      throw error;
+    }
 
     if (!upstream.ok || !upstream.body) {
+      stream.close();
       return errorResponse(c, "stalwart_unavailable", 502);
     }
+
+    // A client that goes away must take its registration and its upstream
+    // socket with it, whatever the body stream is doing at that moment.
+    if (c.req.raw.signal.aborted) stream.close();
+    else c.req.raw.signal.addEventListener("abort", () => stream.close(), { once: true });
 
     // This connection legitimately sits idle between Stalwart's 30s keepalive
     // pings, longer than Bun.serve's 10s global idleTimeout. Clear the idle
     // deadline for THIS socket only so it isn't force-closed and reconnect-
     // stormed (GH #204); the global default still guards every other route.
+    // What replaces it for this socket is the per-stream silence watchdog in
+    // ./streams.ts — clearing Bun's deadline must not mean having none.
     clearIdleTimeout(c.req.raw);
 
     const headers = {
@@ -554,7 +616,7 @@ export function createMailRouter(deps: MailDeps) {
     const contacts = deps.contacts;
     const jmap = deps.jmap;
     if (contacts && jmap) {
-      const user = c.get("user");
+      const user = streamUser;
       const auth = c.get("jmapAuth");
       // The harvest runs whenever mail arrives, which is long after this
       // handler returned — carry the request's log context with it so its
@@ -575,10 +637,10 @@ export function createMailRouter(deps: MailDeps) {
             }),
           ),
       });
-      return new Response(tapped, { headers });
+      return new Response(guardStream({ source: tapped, handle: stream }), { headers });
     }
 
-    return new Response(upstream.body, { headers });
+    return new Response(guardStream({ source: upstream.body, handle: stream }), { headers });
   });
 
   router.post("/blobs", requireMail(deps), async (c) => {
@@ -602,7 +664,7 @@ export function createMailRouter(deps: MailDeps) {
     const upstream = await uploadFetch(uploadUrl, {
       method: "POST",
       headers: {
-        authorization: basicAuthHeader(c.get("jmapAuth")),
+        authorization: authHeader(c.get("jmapAuth")),
         "content-type": contentType,
       },
       body: c.req.raw.body,
@@ -646,7 +708,7 @@ export function createMailRouter(deps: MailDeps) {
     const range = c.req.header("range");
     const upstream = await fetchFn(downloadUrl, {
       headers: {
-        authorization: basicAuthHeader(c.get("jmapAuth")),
+        authorization: authHeader(c.get("jmapAuth")),
         ...(range ? { range } : {}),
       },
       signal: c.req.raw.signal,
@@ -813,7 +875,7 @@ export function createMailRouter(deps: MailDeps) {
           ],
           fetchHTMLBodyValues: true,
           fetchTextBodyValues: true,
-          maxBodyValueBytes: 524288,
+          maxBodyValueBytes: MAX_BODY_VALUE_BYTES,
         },
         "g",
       ],

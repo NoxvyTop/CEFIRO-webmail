@@ -1,12 +1,13 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { CreateUserInput } from "@webmail/shared";
 import {
   createAdminUser, fetchAdminInstance, fetchAdminSso, fetchAdminUsers,
   updateAdminInstance, updateAdminSso,
 } from "./api";
+import { adminErrorKey } from "./errors";
 import { MailboxGauge } from "./MailboxGauge";
 import { UserRow } from "./UserRow";
 
@@ -286,7 +287,7 @@ export function AdminPage() {
                 </form>
                 {createMutation.isError && (
                   <p role="alert" className="text-sm text-danger">
-                    {t("admin.errors.action")}
+                    {t(adminErrorKey(createMutation.error))}
                   </p>
                 )}
               </section>
@@ -484,7 +485,7 @@ export function AdminPage() {
               </div>
               {instanceMutation.isError && (
                 <p role="alert" className="text-sm text-danger">
-                  {t("admin.errors.action")}
+                  {t(adminErrorKey(instanceMutation.error))}
                 </p>
               )}
             </section>

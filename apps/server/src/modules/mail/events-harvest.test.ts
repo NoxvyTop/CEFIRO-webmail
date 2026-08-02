@@ -12,7 +12,7 @@ import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createMailRouter } from "./router";
-import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
+import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";
 
 const sql = createDb(testDatabaseUrl());
 

@@ -46,6 +46,15 @@
    contiene lógica propia donde aporta valor: provisioning, preferencias e
    integración con Odoo.
 
+   El adaptador (`infra/jmap/`) habla **JMAP (RFC 8620/8621) a secas**, no
+   Stalwart (#33): el proveedor se configura por rol con `JMAP_URL`, las URLs
+   que anuncia en su sesión se resuelven según `JMAP_URL_MODE`
+   (`rewrite` por defecto, `trust` para host partido — #34) y la credencial se
+   presenta según `JMAP_AUTH_MODE` (`basic` o `bearer` para proveedores con
+   token — #35). Como el navegador nunca consume esas URLs anunciadas, el BFF
+   puede reescribirlas al camino directo sin que nada más se entere. Ver la
+   matriz de topologías en [OPERATIONS.md](OPERATIONS.md).
+
 3. **PostgreSQL guarda solo datos propios de la aplicación**:
    firmas, preferencias de usuario, configuración del administrador y mapeos
    con Odoo. Los correos, carpetas y etiquetas viven en Stalwart — nunca se
@@ -193,13 +202,29 @@ cifrado y conexión a Postgres.
 
 Al estilo Stalwart, `BOOTSTRAP_MODE=true` en el entorno cumple dos roles:
 
-- **Primer arranque**: la aplicación inicia en modo configuración e imprime
-  en consola un usuario administrador temporal con contraseña generada. Con
-  esa cuenta se configura el administrador real, el proveedor OIDC y las
-  credenciales de buzón iniciales desde una pantalla mínima de setup.
+- **Primer arranque**: la aplicación inicia en modo configuración con un
+  usuario administrador temporal cuya contraseña **fija quien despliega** en
+  `BOOTSTRAP_PASSWORD` (#235). Con esa cuenta se configura el administrador
+  real, el proveedor OIDC y las credenciales de buzón iniciales desde una
+  pantalla mínima de setup.
 - **Recuperación**: si una configuración OIDC defectuosa deja a todos sin
-  acceso, se activa el modo, se entra con la credencial temporal de consola,
-  se corrige la configuración y se vuelve a producción.
+  acceso, se activa el modo, se entra por el login de emergencia, se corrige la
+  configuración desde el portal de administración y se vuelve a producción.
+
+La credencial no la genera ni la registra el proceso. Antes se inventaba al
+arrancar y se escribía en claro en el log, que es el sitio de un contenedor con
+más lectores y más retención; pedírsela al operador borra el problema de
+entrega en vez de moverlo, y la deja en el mismo gestor de secretos que
+`MASTER_KEY` — que es la frontera de confianza que le corresponde, porque
+concede acceso de administración.
+
+La bandera de entorno no es la única compuerta del setup: `/api/setup` se cierra
+por sí mismo en cuanto el setup está terminado —existe un administrador activo y
+SSO configurado— aunque `BOOTSTRAP_MODE` siga puesto (#234). El estado se lee de
+la base de datos, no de una columna que alguien marque, así que sobrevive a un
+reinicio, a un redespliegue y a un rollback sin nada que migrar. Es la
+recuperación la que cambia de puerta: a partir de ahí se entra por el login de
+emergencia y se corrige en el portal de administración, no en el asistente.
 
 Al volver el entorno a producción y reiniciar, el modo desaparece. La
 pantalla de setup es la semilla del portal de administración de la Fase 2.
@@ -277,7 +302,7 @@ apps/server/src/
 │   ├── settings/       # firmas, preferencias
 │   └── setup/          # modo bootstrap
 ├── core/               # tipos de dominio, errores, puertos
-└── infra/              # adaptadores: Postgres, cliente Stalwart, cliente Authentik
+└── infra/              # adaptadores: Postgres, cliente JMAP (infra/jmap/), cliente Authentik
 ```
 
 ### Modelo de datos propio

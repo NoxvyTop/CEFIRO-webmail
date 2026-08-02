@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config";
+import { loadConfig, MIN_BOOTSTRAP_PASSWORD_LENGTH } from "./config";
+
+/** A break-glass credential of the shape GH #235 asks the operator to set. */
+const BOOTSTRAP_PASSWORD = "A".repeat(MIN_BOOTSTRAP_PASSWORD_LENGTH);
 
 const validEnv = {
   DATABASE_URL: "postgres://u:p@localhost:5434/db",
@@ -33,15 +36,19 @@ describe("loadConfig", () => {
       ...validEnv,
       PORT: "9000",
       BOOTSTRAP_MODE: "true",
+      BOOTSTRAP_PASSWORD,
       SESSION_TTL_HOURS: "2",
     });
     expect(config.port).toBe(9000);
     expect(config.bootstrapMode).toBe(true);
+    expect(config.bootstrapPassword).toBe(BOOTSTRAP_PASSWORD);
     expect(config.sessionTtlHours).toBe(2);
   });
 
   it("accepts BOOTSTRAP_MODE=1 as true", () => {
-    expect(loadConfig({ ...validEnv, BOOTSTRAP_MODE: "1" }).bootstrapMode).toBe(true);
+    expect(
+      loadConfig({ ...validEnv, BOOTSTRAP_MODE: "1", BOOTSTRAP_PASSWORD }).bootstrapMode,
+    ).toBe(true);
   });
 
   it("rejects a missing MASTER_KEY", () => {
@@ -138,29 +145,100 @@ describe("loadConfig", () => {
     });
   });
 
-  it("parses optional STALWART_URL and treats empty as undefined", () => {
-    expect(loadConfig(validEnv).stalwartUrl).toBeUndefined();
-    expect(loadConfig({ ...validEnv, STALWART_URL: "" }).stalwartUrl).toBeUndefined();
-    expect(
-      loadConfig({ ...validEnv, STALWART_URL: "https://mail.noxvytop.com" }).stalwartUrl,
-    ).toBe("https://mail.noxvytop.com");
+  it("parses optional JMAP_URL and treats empty as undefined", () => {
+    expect(loadConfig(validEnv).jmapUrl).toBeUndefined();
+    expect(loadConfig({ ...validEnv, JMAP_URL: "" }).jmapUrl).toBeUndefined();
+    expect(loadConfig({ ...validEnv, JMAP_URL: "https://mail.noxvytop.com" }).jmapUrl).toBe(
+      "https://mail.noxvytop.com",
+    );
   });
 
-  describe("JMAP_FORCE_BASE (off by default)", () => {
-    it("defaults jmapForceBase to false when JMAP_FORCE_BASE is absent", () => {
-      expect(loadConfig(validEnv).jmapForceBase).toBe(false);
+  // GH #33. The old names keep working, loudly: an upgrade must not silently
+  // boot with no mail backend just because a variable was renamed.
+  describe("renamed variables (GH #33)", () => {
+    it("still reads STALWART_URL, and says so", () => {
+      const config = loadConfig({ ...validEnv, STALWART_URL: "https://mail.noxvytop.com" });
+      expect(config.jmapUrl).toBe("https://mail.noxvytop.com");
+      expect(config.deprecations).toEqual([
+        expect.objectContaining({ variable: "STALWART_URL" }),
+      ]);
+      expect(config.deprecations[0]?.message).toContain("JMAP_URL");
     });
 
-    it("parses JMAP_FORCE_BASE=true the same way BOOTSTRAP_MODE is parsed", () => {
-      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "true" }).jmapForceBase).toBe(true);
+    it("still reads STALWART_TIMEOUT_MS, and says so", () => {
+      const config = loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "2500" });
+      expect(config.jmapTimeoutMs).toBe(2500);
+      expect(config.deprecations).toEqual([
+        expect.objectContaining({ variable: "STALWART_TIMEOUT_MS" }),
+      ]);
     });
 
-    it("parses JMAP_FORCE_BASE=1 as true", () => {
-      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "1" }).jmapForceBase).toBe(true);
+    it("prefers the new name when both are set, and says the old one is ignored", () => {
+      const config = loadConfig({
+        ...validEnv,
+        STALWART_URL: "https://old.noxvytop.com",
+        JMAP_URL: "https://mail.noxvytop.com",
+      });
+      expect(config.jmapUrl).toBe("https://mail.noxvytop.com");
+      expect(config.deprecations[0]?.message).toContain("ignored");
     });
 
-    it("treats any other JMAP_FORCE_BASE value as false", () => {
-      expect(loadConfig({ ...validEnv, JMAP_FORCE_BASE: "yes" }).jmapForceBase).toBe(false);
+    it("reports nothing when only the new names are used", () => {
+      expect(loadConfig({ ...validEnv, JMAP_URL: "https://mail.noxvytop.com" }).deprecations)
+        .toEqual([]);
+    });
+  });
+
+  // GH #34 / design GH #188. `rewrite` replaces the JMAP_FORCE_BASE boolean AND
+  // flips its default, so the removed variable has to be announced, not mapped.
+  describe("JMAP_URL_MODE (rewrite by default)", () => {
+    it("defaults to rewrite when JMAP_URL_MODE is absent", () => {
+      expect(loadConfig(validEnv).jmapUrlMode).toBe("rewrite");
+    });
+
+    it("accepts trust", () => {
+      expect(loadConfig({ ...validEnv, JMAP_URL_MODE: "trust" }).jmapUrlMode).toBe("trust");
+    });
+
+    it("normalises case and surrounding whitespace", () => {
+      expect(loadConfig({ ...validEnv, JMAP_URL_MODE: " Trust " }).jmapUrlMode).toBe("trust");
+    });
+
+    it("refuses to boot on an unknown mode instead of silently choosing one", () => {
+      expect(() => loadConfig({ ...validEnv, JMAP_URL_MODE: "auto" })).toThrow();
+    });
+
+    it("ignores JMAP_FORCE_BASE and reports its removal", () => {
+      const config = loadConfig({ ...validEnv, JMAP_FORCE_BASE: "false" });
+      expect(config.jmapUrlMode).toBe("rewrite");
+      expect(config.deprecations).toEqual([
+        expect.objectContaining({ variable: "JMAP_FORCE_BASE" }),
+      ]);
+      expect(config.deprecations[0]?.message).toContain("JMAP_URL_MODE");
+    });
+
+    it("says nothing about JMAP_FORCE_BASE when it is not set", () => {
+      expect(loadConfig(validEnv).deprecations).toEqual([]);
+    });
+  });
+
+  // GH #35. Off-by-default in the only sense that matters: `basic` is what
+  // every existing deployment already does.
+  describe("JMAP_AUTH_MODE (basic by default)", () => {
+    it("defaults to basic when JMAP_AUTH_MODE is absent", () => {
+      expect(loadConfig(validEnv).jmapAuthMode).toBe("basic");
+    });
+
+    it("accepts bearer", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTH_MODE: "bearer" }).jmapAuthMode).toBe("bearer");
+    });
+
+    it("normalises case and surrounding whitespace", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTH_MODE: " Bearer " }).jmapAuthMode).toBe("bearer");
+    });
+
+    it("refuses an unknown auth mode", () => {
+      expect(() => loadConfig({ ...validEnv, JMAP_AUTH_MODE: "oauth" })).toThrow();
     });
   });
 
@@ -233,30 +311,30 @@ describe("loadConfig", () => {
   describe("outbound deadlines (GH #165)", () => {
     it("defaults every upstream deadline so no deployment has to set one", () => {
       const config = loadConfig(validEnv);
-      expect(config.stalwartTimeoutMs).toBe(10_000);
+      expect(config.jmapTimeoutMs).toBe(10_000);
       expect(config.aiTimeoutMs).toBe(60_000);
       expect(config.oidcTimeoutMs).toBe(10_000);
     });
 
-    it("gives the AI provider a looser deadline than Stalwart by default", () => {
+    it("gives the AI provider a looser deadline than the mail provider by default", () => {
       const config = loadConfig(validEnv);
-      expect(config.aiTimeoutMs).toBeGreaterThan(config.stalwartTimeoutMs);
+      expect(config.aiTimeoutMs).toBeGreaterThan(config.jmapTimeoutMs);
     });
 
-    it("reads STALWART_TIMEOUT_MS, AI_TIMEOUT_MS and OIDC_TIMEOUT_MS overrides", () => {
+    it("reads JMAP_TIMEOUT_MS, AI_TIMEOUT_MS and OIDC_TIMEOUT_MS overrides", () => {
       const config = loadConfig({
         ...validEnv,
-        STALWART_TIMEOUT_MS: "2500",
+        JMAP_TIMEOUT_MS: "2500",
         AI_TIMEOUT_MS: "120000",
         OIDC_TIMEOUT_MS: "7000",
       });
-      expect(config.stalwartTimeoutMs).toBe(2500);
+      expect(config.jmapTimeoutMs).toBe(2500);
       expect(config.aiTimeoutMs).toBe(120_000);
       expect(config.oidcTimeoutMs).toBe(7000);
     });
 
     it("treats an empty deadline variable as absent", () => {
-      expect(loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "" }).stalwartTimeoutMs).toBe(10_000);
+      expect(loadConfig({ ...validEnv, JMAP_TIMEOUT_MS: "" }).jmapTimeoutMs).toBe(10_000);
     });
 
     it("rejects a non-numeric deadline", () => {
@@ -264,7 +342,7 @@ describe("loadConfig", () => {
     });
 
     it("rejects a zero or negative deadline, which would abort every call", () => {
-      expect(() => loadConfig({ ...validEnv, STALWART_TIMEOUT_MS: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, JMAP_TIMEOUT_MS: "0" })).toThrow();
       expect(() => loadConfig({ ...validEnv, OIDC_TIMEOUT_MS: "-1" })).toThrow();
     });
 
@@ -461,6 +539,92 @@ describe("loadConfig", () => {
         "/app/apps/web/dist",
       );
       expect(loadConfig({ ...validEnv, STATIC_DIR: "" }).staticDir).toBe("../web/dist");
+    });
+  });
+
+  // GH #259: the same defect one variable later. METRICS_TOKEN was read
+  // straight from process.env inside createApp, so it never passed through
+  // here — and a misspelled name produced a 404 indistinguishable from
+  // "metrics deliberately off", which is how monitoring disappears unnoticed.
+  describe("METRICS_TOKEN", () => {
+    it("is absent by default, which is what leaves /metrics unregistered", () => {
+      expect(loadConfig(validEnv).metricsToken).toBeUndefined();
+    });
+
+    it("reads METRICS_TOKEN", () => {
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "scrape-token" }).metricsToken).toBe(
+        "scrape-token",
+      );
+    });
+
+    it("treats an empty or whitespace-only token as absent, never as a secret", () => {
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "" }).metricsToken).toBeUndefined();
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "   " }).metricsToken).toBeUndefined();
+    });
+
+    it("trims a token that picked up whitespace from a compose file", () => {
+      expect(loadConfig({ ...validEnv, METRICS_TOKEN: "  tok  " }).metricsToken).toBe("tok");
+    });
+  });
+
+  // GH #238: the proxy contract every per-IP ceiling and the audit `ip` column
+  // are keyed on. It travels through the same schema as the rest so a
+  // fat-fingered value refuses to boot instead of silently changing who the
+  // rate limiters think is calling.
+  describe("TRUSTED_PROXY_HOPS (GH #238)", () => {
+    it("defaults to the single appending proxy this repository documents", () => {
+      expect(loadConfig(validEnv).trustedProxyHops).toBe(1);
+    });
+
+    it("accepts a longer chain", () => {
+      expect(loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops).toBe(2);
+    });
+
+    it("accepts zero, which means the header is not trusted at all", () => {
+      // Unlike every other numeric knob here, zero is a legitimate setting: it
+      // is the right answer for a process exposed directly, at the price of the
+      // ceilings becoming global.
+      expect(loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops).toBe(0);
+    });
+
+    it("refuses a negative or fractional hop count", () => {
+      expect(() => loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "-1" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "1.5" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, TRUSTED_PROXY_HOPS: "one" })).toThrow();
+    });
+  });
+
+  // GH #235: the break-glass credential is the operator's to set now — the
+  // process used to mint one and print it to the log stream in plaintext.
+  describe("BOOTSTRAP_PASSWORD (GH #235)", () => {
+    it("refuses to boot with BOOTSTRAP_MODE=true and no credential", () => {
+      expect(() => loadConfig({ ...validEnv, BOOTSTRAP_MODE: "true" })).toThrow(
+        /BOOTSTRAP_PASSWORD/,
+      );
+    });
+
+    it("refuses a credential shorter than the secret it replaces", () => {
+      expect(() =>
+        loadConfig({
+          ...validEnv,
+          BOOTSTRAP_MODE: "true",
+          BOOTSTRAP_PASSWORD: "A".repeat(MIN_BOOTSTRAP_PASSWORD_LENGTH - 1),
+        }),
+      ).toThrow(/BOOTSTRAP_PASSWORD/);
+    });
+
+    it("accepts exactly the minimum length", () => {
+      expect(
+        loadConfig({ ...validEnv, BOOTSTRAP_MODE: "true", BOOTSTRAP_PASSWORD }).bootstrapPassword,
+      ).toBe(BOOTSTRAP_PASSWORD);
+    });
+
+    it("does not require one — or reject a leftover one — with the mode off", () => {
+      expect(loadConfig(validEnv).bootstrapPassword).toBeUndefined();
+      expect(
+        loadConfig({ ...validEnv, BOOTSTRAP_MODE: "false", BOOTSTRAP_PASSWORD: "short" })
+          .bootstrapMode,
+      ).toBe(false);
     });
   });
 });

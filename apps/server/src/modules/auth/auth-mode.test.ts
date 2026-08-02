@@ -9,11 +9,18 @@ import { createApp } from "../../app";
 const sql = createDb(testDatabaseUrl());
 const sessions = createSessionStore(sql);
 
+// Operator-set break-glass credential (GH #235): the process no longer mints
+// one, so a bootstrap that is meant to be enabled has to be handed a secret.
+const BOOTSTRAP_PASSWORD = "test-bootstrap-secret-0123456789";
+
 afterAll(() => sql.end());
 
 function appWith(enabled: boolean) {
   return createApp({
-    authRouter: createAuthRouter({ sessions, bootstrap: createBootstrap(enabled) }),
+    authRouter: createAuthRouter({
+      sessions,
+      bootstrap: createBootstrap(enabled, BOOTSTRAP_PASSWORD),
+    }),
   });
 }
 

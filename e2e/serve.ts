@@ -11,6 +11,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { bunArgs } from "./app-env";
 import { BASE_DATABASE_URL_ENV, createTestDatabase, isThrowawayDatabase } from "./test-db";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -75,11 +76,17 @@ if (process.env.E2E_SKIP_BUILD !== "1") {
   }
 }
 
-// Quoted because `shell: true` hands the argument list to a shell verbatim, so
-// an unquoted path splits on the first space and `bun` is asked to run a file
-// that does not exist — the checkout only has to live under a directory such as
+// Quoting: `shell: true` hands the argument list to a shell verbatim, so an
+// unquoted path splits on the first space and `bun` is asked to run a file that
+// does not exist — the checkout only has to live under a directory such as
 // "cefiro web" for that to happen (GH #151).
-const server = spawn("bun", [`"${serverEntry}"`], {
+//
+// The env-file pin (GH #231) has to be repeated here, not just on the outer
+// script: this is a FRESH `bun` process, so it performs its own auto-load of
+// the repository root's `.env` and would inherit every variable playwright's
+// config does not set explicitly — which is how a developer's STALWART_URL
+// ended up reconfiguring the server under test. See app-env.ts.
+const server = spawn("bun", bunArgs(serverEntry), {
   stdio: "inherit",
   env: process.env,
   shell: true,

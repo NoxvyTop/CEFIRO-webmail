@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";

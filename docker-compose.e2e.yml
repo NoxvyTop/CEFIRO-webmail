@@ -12,11 +12,16 @@ services:
       # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set during the
       # original setup wizard run — see e2e/stalwart/README.md). "mail.cefiro.test"
       # doesn't resolve from the host/CI runner, so a client following that
-      # advertised apiUrl verbatim (as apps/server/src/infra/stalwart/jmap.ts
-      # does) cannot reach it. Stalwart reads STALWART_PUBLIC_URL at boot to
-      # override the advertised base URL (crates/store/src/registry/local.rs),
-      # so pointing it at the same published host:port fixes JMAP session URLs
-      # without touching the committed seed data or any app/server source.
+      # advertised apiUrl verbatim cannot reach it. Stalwart reads
+      # STALWART_PUBLIC_URL at boot to override the advertised base URL
+      # (crates/store/src/registry/local.rs), so pointing it at the same
+      # published host:port fixes JMAP session URLs without touching the
+      # committed seed data or any app/server source.
+      #
+      # Kept even though `JMAP_URL_MODE=rewrite` (the default since GH #34/#188)
+      # would now paper over the same mismatch on the client side: it makes the
+      # fixture advertise the truth rather than relying on the app to correct
+      # it, which is what keeps the `trust`-mode e2e path meaningful.
       STALWART_PUBLIC_URL: "http://localhost:8096"
     # Probes the three ports the tests use rather than asking the binary its
     # version — `stalwart --version` answers before any listener is serving, so

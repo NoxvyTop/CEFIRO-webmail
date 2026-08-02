@@ -1,16 +1,17 @@
 import { DomainError } from "./errors";
 import { log } from "./logger";
+import { recordOutbound } from "./metrics";
 
 // Outbound deadlines, one per upstream. Explicit rather than inherited from a
 // single shared number, because the three services this server calls have
 // latency profiles an order of magnitude apart: a ceiling loose enough for an
 // AI generation is no ceiling at all for a mailbox listing.
 //
-// Stalwart (JMAP): a mailbox listing or an Email/get is a sub-second call to a
-// service that is normally on the same host or LAN. 10s leaves two orders of
-// magnitude of headroom and still fails well inside the patience of whatever
-// reverse proxy sits in front of us.
-export const DEFAULT_STALWART_TIMEOUT_MS = 10_000;
+// JMAP (Stalwart, or any other RFC 8620 provider): a mailbox listing or an
+// Email/get is a sub-second call to a service that is normally on the same host
+// or LAN. 10s leaves two orders of magnitude of headroom and still fails well
+// inside the patience of whatever reverse proxy sits in front of us.
+export const DEFAULT_JMAP_TIMEOUT_MS = 10_000;
 // AI providers: a thread summary is a real generation of up to 1024 tokens,
 // frequently against a self-hosted or rate-limited endpoint. Tens of seconds
 // is normal there, not broken, so a JMAP-sized ceiling would turn healthy
@@ -37,6 +38,34 @@ export const UPSTREAM_TIMEOUT_CODE = "upstream_timeout";
 export function upstreamTimeoutError(upstream: string, timeoutMs: number): DomainError {
   log("error", "upstream timed out", { upstream, timeoutMs });
   return new DomainError(UPSTREAM_TIMEOUT_CODE, 504, "errors.upstream_timeout");
+}
+
+/**
+ * Times one outbound attempt and reports it to `/metrics` (GH #240).
+ *
+ * Every call this process makes to the JMAP provider, the identity provider and the AI
+ * provider already passes through one of the two wrappers below, and both
+ * already carry the dependency's name in order to write the timeout log line —
+ * so this is the one place where "latency and error rate per dependency" can be
+ * had without touching a single call site, and the one place that can tell a
+ * deadline apart from a refused connection. It measures time to RESPONSE
+ * HEADERS, the same window the deadline itself bounds: counting the body would
+ * put the hours-long SSE stream in the same histogram as a mailbox listing.
+ */
+async function measured<T>(dependency: string, run: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  const finish = (outcome: "ok" | "error" | "timeout") =>
+    recordOutbound({ dependency, outcome, durationMs: Date.now() - startedAt });
+  try {
+    const result = await run();
+    finish("ok");
+    return result;
+  } catch (error) {
+    finish(
+      error instanceof DomainError && error.code === UPSTREAM_TIMEOUT_CODE ? "timeout" : "error",
+    );
+    throw error;
+  }
 }
 
 /**
@@ -94,7 +123,7 @@ export function withDeadlineFetch(
     // would surface as an unhandled promise rejection.
     running.catch(() => {});
 
-    return (async () => {
+    return measured(upstream, async () => {
       try {
         return await Promise.race([running, deadline]);
       } catch (error) {
@@ -105,7 +134,7 @@ export function withDeadlineFetch(
       } finally {
         clearTimeout(timer);
       }
-    })();
+    });
   };
 
   // `typeof fetch` also carries the runtime's `preconnect` extension, which
@@ -140,7 +169,7 @@ export function withDeadline<T>(
   const running = (async () => run(controller.signal))();
   running.catch(() => {});
 
-  return (async () => {
+  return measured(upstream, async () => {
     try {
       return await Promise.race([running, deadline]);
     } catch (error) {
@@ -149,5 +178,5 @@ export function withDeadline<T>(
     } finally {
       clearTimeout(timer);
     }
-  })();
+  });
 }

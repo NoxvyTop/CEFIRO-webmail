@@ -3,12 +3,15 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
   BASE_DATABASE_URL_ENV,
+  SETUP_DATABASE_URL_ENV,
   TEST_DATABASE_URL_ENV,
   requireBaseDatabaseUrl,
   uniqueDbName,
   withDatabase,
 } from "./test-db";
+import { bunCommand } from "./app-env";
 import { IDP_ISSUER_ENV } from "./oidc-idp";
+import { SETUP_BASE_URL_ENV, SETUP_TOKEN, SETUP_TOKEN_ENV } from "./setup-server";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.E2E_PORT ?? 8199);
@@ -59,6 +62,21 @@ const DATABASE_URL =
   process.env[TEST_DATABASE_URL_ENV] ?? withDatabase(BASE_DATABASE_URL, uniqueDbName());
 process.env[TEST_DATABASE_URL_ENV] = DATABASE_URL;
 
+// GH #248: a third app server, for the first-run wizard. Same binary, same
+// bootstrap mode as the default one — the difference that matters is the
+// database. This one is minted here and seeded by NOBODY, so the instance has
+// no administrator and no SSO config, which is the only state in which the
+// setup router is open at all (GH #234's completion latch closes it the moment
+// both exist, and global-setup.ts creates both in the default database).
+// See setup-server.ts.
+const SETUP_PORT = Number(process.env.E2E_SETUP_PORT ?? PORT + 3);
+const SETUP_BASE_URL = process.env[SETUP_BASE_URL_ENV] ?? `http://localhost:${SETUP_PORT}`;
+process.env[SETUP_BASE_URL_ENV] = SETUP_BASE_URL;
+process.env[SETUP_TOKEN_ENV] = SETUP_TOKEN;
+const SETUP_DATABASE_URL =
+  process.env[SETUP_DATABASE_URL_ENV] ?? withDatabase(BASE_DATABASE_URL, uniqueDbName());
+process.env[SETUP_DATABASE_URL_ENV] = SETUP_DATABASE_URL;
+
 // Shared by both app servers; each one adds its own PORT, APP_URL and
 // BOOTSTRAP_MODE on top.
 const appServerEnv = {
@@ -71,31 +89,40 @@ const appServerEnv = {
   // first, and needs a connectable admin URL to do so, which this is.
   [BASE_DATABASE_URL_ENV]: BASE_DATABASE_URL,
   MASTER_KEY,
-  // Only pass STALWART_URL through when E2E_STALWART_URL is actually
+  // Only pass JMAP_URL through when E2E_STALWART_URL is actually
   // set (no default here, mirroring global-setup.ts's raw env read).
   // Enables the mail router (apps/server/src/index.ts only creates the
-  // JMAP client when config.stalwartUrl is set), so a default here
+  // JMAP client when config.jmapUrl is set), so a default here
   // would make the router non-null even for non-mail runs where no
   // Stalwart fixture is running. Bring up the Stalwart fixture
   // separately before running mail specs:
   //   export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
   //   docker compose -f docker-compose.e2e.yml up -d --build
   //
-  // Explicitly EMPTY rather than simply omitted when there is no fixture: `bun`
-  // auto-loads the repo-root .env into every process it starts, so a developer's
-  // own STALWART_URL — pointing at a remote mail host, as the committed example
-  // does — otherwise reaches the app server and quietly defeats the paragraph
-  // above. It also makes /api/health probe that host, which degrades the
-  // instance to 503 and leaves Playwright waiting on a `url` that never goes
-  // ready. A real environment variable outranks .env, and core/config.ts reads
-  // `env.STALWART_URL || undefined`, so "" is exactly "no mail backend".
-  STALWART_URL: process.env.E2E_STALWART_URL ?? "",
+  // The HARNESS-side variable keeps the name E2E_STALWART_URL: it names the
+  // fixture container this suite starts (e2e/stalwart/, the `stalwart` service
+  // in CI), which really is Stalwart. The SERVER-side one is the role-based
+  // JMAP_URL of GH #33.
+  //
+  // Explicitly EMPTY rather than simply omitted when there is no fixture, so
+  // "no mail backend" is stated rather than inferred: core/config.ts reads
+  // `env.JMAP_URL || undefined`, so "" is exactly that.
+  //
+  // This line was once the ONLY thing standing between the harness and a
+  // developer's own STALWART_URL, because `bun` auto-loads the repo-root .env
+  // into every process it starts (GH #217). Pointed at a remote mail host — as
+  // the committed example does — it made /api/health probe that host, degrade
+  // the instance to 503, and leave Playwright waiting out its 120s on a server
+  // that would never go ready. That whole class is closed at the source now:
+  // every `bun` here runs with --env-file (see app-env.ts, GH #231), so no
+  // variable this file does not set can reach a server under test.
+  JMAP_URL: process.env.E2E_STALWART_URL ?? "",
 };
 
-// Quoted: Playwright hands `command` to a shell, so an unquoted path splits on
-// its first space and the checkout only has to live under a directory such as
-// "cefiro web" for the webServer to never start (GH #151).
-const bun = (script: string) => `bun "${resolve(here, script)}"`;
+// GH #151 (quoting) and GH #231 (the env-file pin) — see app-env.ts. Every
+// `bun` process this harness starts goes through here, so none of them can
+// auto-load the repository root's `.env` into a server under test.
+const bun = (script: string) => bunCommand(resolve(here, script));
 
 export default defineConfig({
   testDir: "./tests",
@@ -105,8 +132,21 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
+  // One retry on CI, none locally: a genuine infrastructure hiccup should not
+  // turn the pipeline red, but the tolerance stays at one because a spec that
+  // needs two is not flaky, it is broken.
+  //
+  // The cost of that tolerance used to be invisible (GH #246). A spec that
+  // failed and passed on the retry produced a green job and no record anywhere,
+  // so it looked exactly like a healthy one for as long as nobody opened the
+  // log. ./retry-reporter.ts below writes every retry down — annotations, job
+  // summary, and a JSON artifact that can be compared across runs — and
+  // e2e/README.md states what has to happen when the same spec keeps appearing
+  // there. Raising this number is not one of the options.
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
+  reporter: process.env.CI
+    ? [["github"], ["./retry-reporter.ts"], ["html", { open: "never" }]]
+    : [["list"], ["./retry-reporter.ts"]],
   use: {
     baseURL: BASE_URL,
     storageState: resolve(here, ".auth/state.json"),
@@ -116,7 +156,7 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /oidc-login\.spec\.ts/,
+      testIgnore: /(oidc-login|setup-wizard)\.spec\.ts/,
     },
     {
       // The OIDC login flow drives the bootstrap-free server instead, and starts
@@ -126,6 +166,18 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: SSO_BASE_URL,
+        storageState: { cookies: [], origins: [] },
+      },
+    },
+    {
+      // The first-run wizard drives the unseeded server (GH #248), and — like a
+      // real first run — starts with no session, because the instance has no
+      // account to hold one yet.
+      name: "setup",
+      testMatch: /setup-wizard\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: SETUP_BASE_URL,
         storageState: { cookies: [], origins: [] },
       },
     },
@@ -162,7 +214,16 @@ export default defineConfig({
           url: `${BASE_URL}/api/health`,
           timeout: 120_000,
           reuseExistingServer: !process.env.CI,
-          env: { ...appServerEnv, APP_URL: BASE_URL, PORT: String(PORT), BOOTSTRAP_MODE: "true" },
+          env: {
+            ...appServerEnv,
+            APP_URL: BASE_URL,
+            PORT: String(PORT),
+            BOOTSTRAP_MODE: "true",
+            // Required alongside BOOTSTRAP_MODE=true since GH #235 — the
+            // server no longer mints its own break-glass credential. No spec
+            // signs in with it; it is here so this server boots.
+            BOOTSTRAP_PASSWORD: "e2e-bootstrap-password-0123456789",
+          },
         },
         {
           command: bun("serve.ts"),
@@ -178,6 +239,32 @@ export default defineConfig({
             // Playwright starts every webServer at once, but these two share one
             // database and one apps/web/dist. Waiting for the first means this
             // one neither races it to CREATE DATABASE nor rebuilds the SPA.
+            E2E_WAIT_FOR: `${BASE_URL}/api/health`,
+            E2E_SKIP_BUILD: "1",
+          },
+        },
+        {
+          // The first-run wizard server (GH #248). Its DATABASE_URL is the one
+          // thing that separates it from the default server above: a database
+          // global-setup.ts never touches, so the instance still has no admin
+          // and no SSO config and the setup router is genuinely open. serve.ts
+          // creates it on boot from the admin URL, exactly like the other one.
+          command: bun("serve.ts"),
+          cwd: resolve(here, ".."),
+          url: `${SETUP_BASE_URL}/api/health`,
+          timeout: 120_000,
+          reuseExistingServer: !process.env.CI,
+          env: {
+            ...appServerEnv,
+            DATABASE_URL: SETUP_DATABASE_URL,
+            APP_URL: SETUP_BASE_URL,
+            PORT: String(SETUP_PORT),
+            BOOTSTRAP_MODE: "true",
+            BOOTSTRAP_PASSWORD: SETUP_TOKEN,
+            // Shares apps/web/dist with the servers above, so it waits on the
+            // first rather than rebuilding the SPA underneath it. It does NOT
+            // share their database, so there is no CREATE DATABASE race to
+            // serialize here — only the build.
             E2E_WAIT_FOR: `${BASE_URL}/api/health`,
             E2E_SKIP_BUILD: "1",
           },

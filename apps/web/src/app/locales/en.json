@@ -74,8 +74,13 @@
       "create": "Create"
     },
     "errors": {
+      "forbidden": "You need administrator permissions to do this",
+      "generic": "The action could not be completed",
+      "last_admin": "Not allowed: this is the only active administrator. Appoint another one before changing this account.",
       "load": "Could not load users",
-      "action": "The action could not be completed"
+      "self_archive": "You cannot archive your own account",
+      "self_demotion": "You cannot remove your own administrator role",
+      "user_exists": "A user with that email already exists"
     },
     "search": {
       "placeholder": "Search by name or email…",
@@ -113,9 +118,10 @@
     "subtitle": "Sign in to your team's mail",
     "credentialsDisabled": "Credential-based sign-in is disabled. Available only in recovery mode.",
     "errors": {
-      "state": "The sign-in attempt expired, try again",
-      "unknown_user": "Your account is not registered in the mail system",
-      "oidc": "Sign-in could not be completed"
+      "account_archived": "Your account is archived. Ask an administrator to reactivate it.",
+      "generic": "Sign-in could not be completed",
+      "oidc_email_unverified": "Your identity provider has not verified your email address. Verify it and try again.",
+      "state": "The sign-in attempt expired, try again"
     },
     "bootstrap": {
       "title": "Emergency access",
@@ -244,6 +250,10 @@
       "passLabel": "Sender authentication passed (SPF/DKIM/DMARC verified)",
       "failLabel": "Sender authentication failed — this message may be spoofed"
     },
+    "bodyTruncated": {
+      "title": "This message is incomplete",
+      "hint": "It exceeded the size limit, so only the beginning was loaded. Replying or forwarding will quote only the part shown here."
+    },
     "showQuotedContent": "Show quoted content",
     "hideQuotedContent": "Hide quoted content",
     "showFullMessage": "View entire message",
@@ -261,6 +271,9 @@
     "showInInbox": "Show in main inbox"
   },
   "composer": {
+    "showQuoted": "Show quoted message",
+    "hideQuoted": "Hide quoted message",
+    "quotedReadOnly": "Shown as plain text. The original formatting is preserved in the message you send.",
     "title": "Compose",
     "newMessage": "New message",
     "from": "From",
@@ -377,12 +390,14 @@
     "saved": "Saved",
     "delete": "Delete",
     "edit": "Edit",
+    "retry": "Try again",
     "errors": {
       "invalid_body": "The data is not valid",
       "invalid_order": "The rule order is out of date — reload and try again",
       "not_found": "Not found",
       "sieve_invalid": "The generated filter script was rejected — contact your administrator",
       "sieve_sync_failed": "Saved, but not applied to the mail server yet",
+      "sieve_unsupported": "Your mail server does not support filters or automatic replies",
       "vacationMessageRequired": "Write a message for the automatic reply",
       "vacationDateOrder": "The end date must not be before the start date",
       "imageInvalidType": "Unsupported image type (use PNG, JPEG, or WebP)",
@@ -426,7 +441,26 @@
     "moveDown": "Move down",
     "reapply": "Reapply filters",
     "reapplied": "Filters applied",
-    "empty": "No rules yet"
+    "empty": "No rules yet",
+    "unavailable": "Your mail server does not support filters, so no rule could be applied here.",
+    "sync": {
+      "pending": "Your rules are saved, but they are not being applied yet: the mail server has not accepted them.",
+      "failed": "The last attempt to apply your rules to the mail server failed. They are saved, but they are not filtering anything yet.",
+      "invalid": "Your rules are saved, but the mail server rejected the generated script — this will not fix itself. Contact your administrator."
+    },
+    "advanced": {
+      "title": "Advanced: edit the Sieve script",
+      "intro": "This is the Sieve script your rules produce. You can take it over and write it by hand for anything the rule builder does not cover.",
+      "active": "This hand-written script is what your mail server is running.",
+      "label": "Sieve script",
+      "takeoverWarning": "If you save this, it becomes what your mail server runs: your rules and automatic replies stay saved, but stop being applied until you go back to them.",
+      "save": "Save and use this script",
+      "saved": "Script saved and applied",
+      "useRules": "Go back to my rules",
+      "keptOnReturn": "Going back keeps your script: it stops being applied, and you will find it here unchanged.",
+      "rejected": "Your mail server refused this script, so nothing was saved. Fix it and try again.",
+      "notice": "You are using a hand-written Sieve script, and that is what runs. These rules are saved, but they are not being applied until you go back to them from the advanced editor."
+    }
   },
   "vacation": {
     "title": "Automatic replies",
@@ -437,7 +471,9 @@
     "endsAt": "End date (optional)",
     "intervalDays": "Days between replies to the same sender",
     "save": "Save",
-    "saved": "Saved"
+    "saved": "Saved",
+    "unavailable": "Your mail server does not support automatic replies.",
+    "advancedNotice": "You are using a hand-written Sieve script, and that is what runs. Automatic replies set here are saved, but they are not being sent until you go back to your rules from the advanced editor in Filters."
   },
   "contacts": {
     "title": "Contacts",

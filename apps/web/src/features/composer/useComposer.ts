@@ -5,6 +5,7 @@ import { fetchAiDraft } from "./aiApi";
 import { isComposerDraftEmpty } from "./emptiness";
 import { MailApiError, updateMessage } from "../mailbox/api";
 import { errorMessageKey } from "../../app/errorMessages";
+import { composeTextBody } from "./plainText";
 import type { ComposerDraft } from "./reply";
 import { stripSignatureMarkers } from "./signature";
 
@@ -149,14 +150,6 @@ function initState(draft: ComposerDraft): ComposerState {
   };
 }
 
-function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
-    .trim();
-}
-
 // Shared by send() and saveDraft() (GH #125): both submit the same compose
 // fields (identity, recipients, subject, body, attachments, threading
 // headers) to structurally identical schemas (see
@@ -190,7 +183,13 @@ function buildComposePayload(
     cc: draft.cc,
     bcc: draft.bcc,
     subject: draft.subject,
-    textBody: htmlToPlainText(outgoingBodyHtml),
+    // GH #141: derived from draft.bodyHtml, NOT from outgoingBodyHtml. The
+    // quote marker composeTextBody keys on to find the quoted original is one
+    // of the very markers stripMarkers removes, so building the text
+    // alternative from the stripped HTML would leave the quote unmarked —
+    // exactly the bug. Both alternatives still describe the same message: the
+    // marker is an attribute on a wrapper div, so dropping it changes no text.
+    textBody: composeTextBody(draft.bodyHtml),
     htmlBody: outgoingBodyHtml,
     attachments: attachments.map((attachment) => ({
       blobId: attachment.blobId, name: attachment.name, type: attachment.type,
@@ -204,10 +203,29 @@ function buildComposePayload(
 // tell "the content actually changed" from "React re-rendered". Autosave skips
 // a save whenever this matches what was last persisted, so returning the body
 // to an already-saved state, or a re-render that touches no compose field,
-// never fires a redundant save. Built from the same payload the save sends
-// (markers kept, exactly as saveDraft persists them) so the two cannot drift.
+// never fires a redundant save.
+//
+// It covers the same fields buildComposePayload sends, minus textBody, which is
+// a pure function of bodyHtml and so adds no information the fingerprint does
+// not already carry. Excluding it matters since GH #141: deriving textBody
+// means a full DOMParser pass over the body, and this runs on the change-
+// detection path — the guard in the debounce effect, the guard in the unmount
+// flush, and again inside autosave's coalescing loop — where the payload is
+// usually being built only to be compared and thrown away. persistDraft
+// fingerprints through this same function, so what is compared and what is
+// stored cannot drift.
 function serializeDraftPayload(draft: ComposerDraft, attachments: Attachment[]): string {
-  return JSON.stringify(buildComposePayload(draft, attachments, { stripMarkers: false }));
+  return JSON.stringify({
+    identityId: draft.identityId,
+    to: draft.to,
+    cc: draft.cc,
+    bcc: draft.bcc,
+    subject: draft.subject,
+    bodyHtml: draft.bodyHtml,
+    attachments,
+    inReplyTo: draft.inReplyTo,
+    references: draft.references,
+  });
 }
 
 export function useComposer(
@@ -291,7 +309,7 @@ export function useComposer(
   async function persistDraft(): Promise<void> {
     const { draft, attachments } = stateRef.current;
     const payload = buildComposePayload(draft, attachments, { stripMarkers: false });
-    const snapshot = JSON.stringify(payload);
+    const snapshot = serializeDraftPayload(draft, attachments);
     const input: SaveDraftInput = { ...payload, originalDraftId: currentDraftIdRef.current };
     const result = await saveDraftRequest(input);
     currentDraftIdRef.current = result.id;

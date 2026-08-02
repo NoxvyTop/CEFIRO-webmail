@@ -1,10 +1,48 @@
 /// <reference types="vitest/config" />
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+// A <script> with no src, i.e. one whose body is inline in the HTML.
+const INLINE_SCRIPT = /<script(?![^>]*\bsrc=)[^>]*>/i;
+
+/**
+ * Fails the production build if Vite emits an inline <script> (GH #47).
+ *
+ * The server ships `script-src 'self'` with no nonce and no hash (see
+ * DEFAULT_CSP in apps/server/src/app.ts), so an inline bootstrap script would be
+ * refused by the browser — and refused the way CSP refuses things: silently, at
+ * runtime, on the production build only, on a blank page with a console message
+ * nobody is watching. Nothing about the current output emits one, which is
+ * exactly why this is worth pinning: it is a property of Vite's HTML emission,
+ * not of any code in this repo, so it can change under us on a version bump.
+ *
+ * Checked here rather than in a test because the artefact only exists after a
+ * build, and this is the one place that is guaranteed to run for every build
+ * that could be deployed.
+ */
+function assertNoInlineScripts(): Plugin {
+  return {
+    name: "cefiro:assert-no-inline-scripts",
+    enforce: "post",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (!fileName.endsWith(".html") || output.type !== "asset") continue;
+        if (!INLINE_SCRIPT.test(String(output.source))) continue;
+        this.error(
+          `${fileName} contains an inline <script>, which the deployed ` +
+            "Content-Security-Policy (script-src 'self', no nonce/hash) blocks. " +
+            "Move the code into the bundle, or add a nonce/hash to DEFAULT_CSP " +
+            "in apps/server/src/app.ts — see GH #47.",
+        );
+      }
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), assertNoInlineScripts()],
   server: {
     proxy: { "/api": "http://localhost:8080" },
     watch: process.env.CHOKIDAR_USEPOLLING
@@ -94,19 +132,34 @@ export default defineConfig({
       // the package must clear. That is the stronger guarantee for the failure
       // this issue is about; the aggregate figures stay visible in the report.
       //
-      // The floor sits under the worst-covered file measured today — App.tsx
-      // (82.23% lines / 36.36% functions) for lines/statements/functions and
-      // features/admin/api.ts (58.33%) for branches — with room left for the
-      // ordinary churn of a file being edited. A ratchet floor, not a target:
-      // raise it as the weakest files improve. For reference, today's
-      // aggregate is lines/statements 96.02%, functions 86.90%, branches
-      // 90.73%.
+      // The floor sits one notch under the worst-covered file measured today —
+      // App.tsx (82.23% lines/statements, 36.36% functions) and
+      // features/admin/api.ts (58.33% branches). Today's aggregate, for
+      // reference, is lines/statements 96.70%, functions 87.93%, branches
+      // 91.30%.
+      //
+      // GH #245 re-measured these. They were set to 75/30/50 while several
+      // agents were editing at once, which left functions 6 points and branches
+      // 8 points below the real worst file — enough that a NEW file could land
+      // at 31% functions, fail nothing, and become the new worst. The gap is
+      // now 2-3 points, which is the margin an ordinary edit needs and not
+      // more.
+      //
+      // Why not sit exactly on the measurement: these are small files, so a
+      // percentage point is not a fine-grained unit. App.tsx covers 4 of its 11
+      // functions; adding a twelfth uncovered one drops it to 33.33%. A floor
+      // at 36 would fail on that, which is churn rather than regression. A
+      // floor at 34 fails on a real DROP — a function that used to be covered
+      // and no longer is — which is what a ratchet is for.
+      //
+      // A ratchet, not a target: raise it as the weakest files improve, and
+      // close the gap on a file by testing it rather than by lowering this.
       thresholds: {
         perFile: true,
-        lines: 75,
-        statements: 75,
-        functions: 30,
-        branches: 50,
+        lines: 80,
+        statements: 80,
+        functions: 34,
+        branches: 55,
       },
     },
   },

@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
-import { readResponse, withConversationRetry } from "./smtp-seed";
+import {
+  buildRawMessage,
+  extractEnvelopeAddress,
+  prepareMimePart,
+  readResponse,
+  type SeedEmail,
+  withConversationRetry,
+} from "./smtp-seed";
 
 // Regression cover for GH #184. A Stalwart that is still finishing startup
 // accepts the TCP/TLS socket and then closes it *mid-conversation* — before it
@@ -73,3 +80,105 @@ test("withConversationRetry stays bounded and surfaces the close error after exh
   // CONNECT_RETRIES === 5: the retry is bounded, never an infinite loop.
   expect(attempts).toBe(5);
 }, 15_000);
+
+// GH #247. Everything below is the message the seeder puts on the wire. None of
+// it can fail the seed — a malformed DATA block is accepted by Stalwart and
+// delivered as something other than what the fixture says — so a bug here shows
+// up as a mail spec failing against a body it never received, or as a Junk
+// fixture that silently never arrives. That is the harness-bug class this issue
+// is about: a green suite that proved nothing.
+
+const PLAIN: SeedEmail = {
+  from: "Carla Ibarra <carla@partner.test>",
+  to: "admin@cefiro.test",
+  subject: "Presupuesto revisado",
+  body: "Hola,\nadjunto el presupuesto.",
+  messageId: "presupuesto@partner.test",
+};
+
+/** The DATA block's end-of-data terminator, as RFC 5321 §4.1.1.4 defines it. */
+const END_OF_DATA = "\r\n.\r\n";
+
+test("prepareMimePart normalizes every line ending to CRLF", () => {
+  // Fixtures are authored as ordinary template literals, so they arrive with
+  // bare LFs that no SMTP server is obliged to accept inside DATA.
+  expect(prepareMimePart("uno\ndos\r\ntres")).toBe("uno\r\ndos\r\ntres");
+});
+
+test("prepareMimePart dot-stuffs a line that starts with a dot", () => {
+  // Without the stuffing, ".\r\n" inside a body IS the end-of-data terminator:
+  // the message is truncated there and the rest is read as SMTP commands.
+  expect(prepareMimePart(".hidden\nplain")).toBe("..hidden\r\nplain");
+  // Only a LEADING dot is doubled; one mid-line is ordinary text.
+  expect(prepareMimePart("a.b")).toBe("a.b");
+});
+
+test("buildRawMessage terminates the DATA block exactly once, at the end", () => {
+  const raw = buildRawMessage(PLAIN, "run-1");
+  expect(raw.endsWith(END_OF_DATA)).toBe(true);
+  // An earlier terminator would truncate the message; this is the assertion
+  // dot-stuffing exists to keep true for hostile bodies.
+  expect(raw.indexOf(END_OF_DATA)).toBe(raw.length - END_OF_DATA.length);
+});
+
+test("buildRawMessage keeps a body that opens with a dot inside the message", () => {
+  const raw = buildRawMessage({ ...PLAIN, body: ".\nfin" }, "run-1");
+  expect(raw.indexOf(END_OF_DATA)).toBe(raw.length - END_OF_DATA.length);
+  expect(raw).toContain("\r\n..\r\nfin");
+});
+
+test("buildRawMessage namespaces the Message-ID per run", () => {
+  // Stalwart's default ruleset deduplicates by Message-ID and keeps the FIRST
+  // delivery silently, so a fixture re-seeded with its literal id no-ops
+  // against whatever mailbox the previous run left it in.
+  expect(buildRawMessage(PLAIN, "run-1")).toContain(
+    "Message-ID: <run-1.presupuesto@partner.test>",
+  );
+  expect(buildRawMessage(PLAIN, "run-2")).toContain(
+    "Message-ID: <run-2.presupuesto@partner.test>",
+  );
+});
+
+test("buildRawMessage sends a plain fixture as a single text/plain part", () => {
+  const raw = buildRawMessage(PLAIN, "run-1");
+  expect(raw).toContain("Content-Type: text/plain; charset=utf-8");
+  expect(raw).not.toContain("multipart/alternative");
+  // Headers end at the first blank line; the body follows it.
+  expect(raw).toContain("\r\n\r\nHola,\r\nadjunto el presupuesto.");
+});
+
+test("buildRawMessage sends an html fixture as multipart/alternative, text part first", () => {
+  const raw = buildRawMessage({ ...PLAIN, html: "<p>Hola</p>" }, "run-1");
+  const boundary = raw.match(/boundary="([^"]+)"/)?.[1];
+  expect(boundary).toBeDefined();
+  // RFC 2046 §5.1.4: the alternatives are ordered worst-to-best, so the
+  // text/plain fallback has to precede the text/html part.
+  expect(raw.indexOf("Content-Type: text/plain")).toBeLessThan(
+    raw.indexOf("Content-Type: text/html"),
+  );
+  // Opening delimiter for each part, and the closing delimiter exactly once.
+  expect(raw.split(`--${boundary}\r\n`).length - 1).toBe(2);
+  expect(raw).toContain(`\r\n--${boundary}--\r\n`);
+  expect(raw.endsWith(END_OF_DATA)).toBe(true);
+});
+
+test("buildRawMessage derives a boundary that is a legal MIME token", () => {
+  // The id becomes part of a Content-Type parameter; an unescaped space or
+  // quote there makes the whole multipart structure unparseable.
+  const raw = buildRawMessage(
+    { ...PLAIN, messageId: 'raro id "con" espacios@x.test', html: "<p>x</p>" },
+    "run 1",
+  );
+  const boundary = raw.match(/boundary="([^"]+)"/)?.[1] ?? "";
+  expect(boundary).toMatch(/^[A-Za-z0-9._-]+$/);
+});
+
+test("extractEnvelopeAddress unwraps a display-name mailbox", () => {
+  // seedJunk uses this for MAIL FROM: sending the display string verbatim is a
+  // syntax error, and the junk fixtures never arrive at all.
+  expect(extractEnvelopeAddress("Carla Ibarra <carla@partner.test>")).toBe("carla@partner.test");
+});
+
+test("extractEnvelopeAddress passes a bare address through untouched", () => {
+  expect(extractEnvelopeAddress("carla@partner.test")).toBe("carla@partner.test");
+});

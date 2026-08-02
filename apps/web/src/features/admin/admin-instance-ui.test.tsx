@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AdminPage } from "./AdminPage";
@@ -91,6 +91,6 @@ describe("AdminPage instance settings panel (GH #86)", () => {
     const toggle = await screen.findByLabelText(i18n.t("admin.settings.footer.label"));
     fireEvent.click(toggle);
 
-    expect(await screen.findByText(i18n.t("admin.errors.action"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });
 });

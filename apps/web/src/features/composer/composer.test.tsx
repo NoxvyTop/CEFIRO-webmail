@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { Identity, Signature } from "@webmail/shared";
@@ -8,6 +8,7 @@ import type { ComposerDraft } from "./reply";
 import { ToastProvider } from "../../app/ui/toast";
 import { MailApiError } from "../mailbox/api";
 import { Composer } from "./Composer";
+import { expectNoAxeViolations } from "../../test/axe";
 
 const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft, saveDraft } = vi.hoisted(() => ({
   fetchIdentities: vi.fn(),
@@ -646,7 +647,14 @@ describe("Composer", () => {
       // freshly opened reply would.
       const body = await screen.findByRole("textbox", { name: i18n.t("composer.body") });
       await waitFor(() => expect(body.textContent).toContain("Thanks"));
-      expect(body.textContent).toContain("Original message");
+      // GH #142: the quoted original is deliberately NOT inside the editable
+      // document any more — it lives in the collapsed block beside it — so the
+      // precondition is checked there instead. What the assertion is really
+      // guarding is unchanged: quote AND signature are both present, and an
+      // untouched reply carrying both still closes without a confirmation.
+      expect(body.textContent).not.toContain("Original message");
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("composer.showQuoted") }));
+      expect(screen.getByText(/Original message/)).toBeInTheDocument();
 
       pressEscape();
 
@@ -659,11 +667,18 @@ describe("Composer", () => {
         ...baseDraft(),
         to: [{ name: null, email: "bob@example.com" }],
       });
-      await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+      const composerDialog = await screen.findByRole("dialog", {
+        name: i18n.t("composer.newMessage"),
+      });
+      // GH #253: both of the composer's dialogs trapped focus from #158
+      // without ever telling assistive tech the page behind them is inert.
+      expect(composerDialog).toHaveAttribute("aria-modal", "true");
 
       pressEscape();
 
-      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      const confirm = await screen.findByRole("alertdialog");
+      expect(confirm).toBeInTheDocument();
+      expect(confirm).toHaveAttribute("aria-modal", "true");
       expect(onClose).not.toHaveBeenCalled();
     });
 
@@ -1067,5 +1082,102 @@ describe("Composer", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       expect(onClose).not.toHaveBeenCalled();
     });
+  });
+});
+
+// GH #249: the sibling row #214 did not touch. Enviar + "Redactar con IA" +
+// Descartar want ~370px, and a 375px phone leaves ~287px inside the panel once
+// the overlay padding and the panel's own px-5 are taken out — with no
+// flex-wrap, no shrink-0 and no scrollable axis, Descartar was pushed off the
+// edge with no way back.
+describe("Composer action row at a narrow viewport (GH #249)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+  const originalInnerWidth = window.innerWidth;
+
+  beforeEach(() => {
+    searchContacts.mockResolvedValue([]);
+    Object.defineProperty(window, "innerWidth", {
+      value: NARROW_VIEWPORT_WIDTH,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      value: originalInnerWidth,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("wraps the row instead of letting it run off the edge", async () => {
+    renderComposer();
+
+    const actions = await screen.findByTestId("composer-actions");
+    expect(actions.className).toContain("flex-wrap");
+  });
+
+  it("wraps between controls rather than squeezing their labels", async () => {
+    renderComposer();
+
+    const actions = await screen.findByTestId("composer-actions");
+    for (const name of [i18n.t("composer.send"), i18n.t("composer.draftWithAi")]) {
+      expect(within(actions).getByRole("button", { name }).className).toContain("shrink-0");
+    }
+    // The trailing group (autosave status + Descartar) travels as one unit, so
+    // Descartar cannot be separated from the status it sits beside.
+    const cancel = within(actions).getByRole("button", { name: i18n.t("composer.cancel") });
+    expect(cancel.className).toContain("shrink-0");
+    expect(cancel.parentElement?.className).toContain("ml-auto");
+  });
+
+  it("keeps every action of the worst-case row reachable", async () => {
+    renderComposer();
+
+    const actions = await screen.findByTestId("composer-actions");
+    for (const name of [
+      i18n.t("composer.send"),
+      i18n.t("composer.draftWithAi"),
+      i18n.t("composer.cancel"),
+    ]) {
+      expect(within(actions).getByRole("button", { name })).toBeVisible();
+    }
+  });
+
+  it("still closes through the button the overflow used to swallow", async () => {
+    const { onClose } = renderComposer();
+
+    const actions = await screen.findByTestId("composer-actions");
+    fireEvent.click(within(actions).getByRole("button", { name: i18n.t("composer.cancel") }));
+
+    // An untouched draft closes straight through (GH #159's requestClose).
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+});
+
+// GH #252: the composer is the densest screen in the app — two dialogs, a
+// rich-text editor, three recipient comboboxes, an attachment list — and the
+// one #249 shipped an overflow bug through. It gets the real engine too.
+describe("Composer accessibility (GH #252)", () => {
+  beforeEach(() => {
+    searchContacts.mockResolvedValue([]);
+  });
+
+  it("passes an axe run over the open composer", async () => {
+    renderComposer();
+
+    await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    await expectNoAxeViolations(document.body);
+  });
+
+  it("passes an axe run with the discard confirmation on top", async () => {
+    renderComposer(vi.fn(), { ...baseDraft(), subject: "Hello there" });
+
+    await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("composer.cancel") }));
+
+    await screen.findByRole("alertdialog");
+    await expectNoAxeViolations(document.body);
   });
 });

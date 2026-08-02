@@ -36,6 +36,166 @@ const CSS_REMOTE_REFERENCE_PATTERN = new RegExp(
   "i",
 );
 
+// GH #239: the three patterns above are matched against NORMALISED CSS, never
+// against raw text, because both spellings below are ordinary valid CSS that
+// the browser resolves long before it looks at the value:
+//
+//   url(\68 ttps://tracker/p.png)    \68 is the CSS escape for "h"
+//   url(/*x*/https://tracker/p.png)  a comment interleaved in the value
+//
+// Neither contains the literal substring the patterns look for, so both walked
+// straight through the inline-[style] check AND the <style>-element check and
+// fetched the pixel with the remote-content block fully on — defeating #182 and
+// #224. Deciding on the resolved text closes the whole class of these instead
+// of the two spellings the issue happened to name.
+const CSS_HEX_DIGIT = /[0-9a-fA-F]/;
+// CSS whitespace (Syntax §4.2) — deliberately NOT \s, which also matches
+// U+00A0 and friends that the tokenizer does not treat as whitespace.
+const CSS_WHITESPACE = /[ \t\n\r\f]/;
+const CSS_MAX_ESCAPE_HEX_DIGITS = 6;
+const CSS_MAX_CODE_POINT = 0x10ffff;
+const UNICODE_REPLACEMENT = "�";
+
+/**
+ * Resolves the one escape sequence that starts at `value[start]` (a backslash),
+ * returning the text it denotes and the index just past it — CSS Syntax §4.3.7.
+ *
+ * The invariant that keeps this from becoming a bypass in its own right: an
+ * escape never resolves to nothing except for a line continuation, so it can
+ * never swallow the character that follows it out of the value.
+ */
+function readCssEscape(value: string, start: number): { text: string; next: number } {
+  const first = value[start + 1];
+  // A trailing backslash escapes nothing; keep it verbatim.
+  if (first === undefined) return { text: "\\", next: start + 1 };
+
+  // Backslash-newline: a line continuation inside a string, and not a valid
+  // escape anywhere else (there it is a parse error that voids the whole
+  // declaration). Dropping it in both cases only ever rejoins text that was
+  // split apart, which is the fail-closed direction.
+  //
+  // The CR arm is unreachable from the two callers as they stand — HTML
+  // input-stream preprocessing has already collapsed every CR and CRLF to a
+  // bare LF by the time the parser yields a <style>'s text or a style
+  // attribute — but a CRLF is one line break rather than two, and getting that
+  // wrong would leave a stray LF sitting in the middle of a scheme. Cheaper to
+  // be right here than to depend on where the string came from.
+  if (first === "\n" || first === "\f") return { text: "", next: start + 2 };
+  if (first === "\r") {
+    return { text: "", next: start + (value[start + 2] === "\n" ? 3 : 2) };
+  }
+
+  // Not a hex digit: the character stands for itself (\h -> h, \: -> :).
+  if (!CSS_HEX_DIGIT.test(first)) return { text: first, next: start + 2 };
+
+  // Up to six hex digits, then at most ONE whitespace character that acts as
+  // the sequence terminator and is consumed with it. That terminator is the
+  // whole trick in `\68 ttps`: the space ends the escape rather than appearing
+  // in the value, so it spells "https" and not "h ttps".
+  let hex = "";
+  let index = start + 1;
+  let digit = value[index];
+  while (
+    digit !== undefined &&
+    hex.length < CSS_MAX_ESCAPE_HEX_DIGITS &&
+    CSS_HEX_DIGIT.test(digit)
+  ) {
+    hex += digit;
+    index += 1;
+    digit = value[index];
+  }
+  const terminator = value[index];
+  if (terminator === "\r" && value[index + 1] === "\n") index += 2;
+  else if (terminator !== undefined && CSS_WHITESPACE.test(terminator)) index += 1;
+
+  const code = Number.parseInt(hex, 16);
+  // Null, lone surrogates and out-of-range values all become U+FFFD per the
+  // spec — a character, never an empty string.
+  const isInvalid = code === 0 || (code >= 0xd800 && code <= 0xdfff) || code > CSS_MAX_CODE_POINT;
+  return { text: isInvalid ? UNICODE_REPLACEMENT : String.fromCodePoint(code), next: index };
+}
+
+/**
+ * Rewrites CSS text into the form the browser actually acts on: escape
+ * sequences resolved to the characters they denote, comments removed. The
+ * remote-reference patterns are then matched against THAT rather than against
+ * whatever the message author typed.
+ *
+ * Why this cannot be turned into a new bypass: the walk only ever *removes
+ * comments* and *resolves escapes*, and never deletes anything else, so no URL
+ * text can go missing from the string the patterns see. The two places an
+ * attacker could try to steer it are both closed:
+ *
+ *  - Escapes are resolved FIRST, in every state. That is what stops an escaped
+ *    quote (\") from opening or closing a string and an escaped slash (\/*)
+ *    from opening a comment — exactly the reading the CSS tokenizer gives them.
+ *  - Comments are recognised only OUTSIDE strings, so a "/*" sitting inside a
+ *    quoted URL — url("https:/*x*\/y") — is left alone instead of taking the
+ *    rest of the value away with it.
+ *
+ * Text removed as a comment is text the browser also discards, so a reference
+ * that only exists inside a comment is one that never fetches. In the other
+ * direction the normalisation is deliberately generous: it resolves escapes and
+ * strips comments in positions where a browser would instead treat the value as
+ * a parse error and fetch nothing (inside an unquoted url() token, say), which
+ * can only over-detect. Over-detecting costs a dropped style declaration and a
+ * "remote content blocked" banner; under-detecting costs the tracking pixel.
+ */
+function normalizeCss(value: string): string {
+  // Neither an escape nor a comment can be present, so the raw text already IS
+  // the normalised text — the overwhelmingly common case pays nothing.
+  if (!value.includes("\\") && !value.includes("/*")) return value;
+
+  let out = "";
+  let quote: '"' | "'" | null = null;
+  let index = 0;
+  while (index < value.length) {
+    const char = value[index];
+    if (char === undefined) break;
+
+    if (char === "\\") {
+      const resolved = readCssEscape(value, index);
+      out += resolved.text;
+      index = resolved.next;
+      continue;
+    }
+
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      out += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      out += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === "/" && value[index + 1] === "*") {
+      // An unterminated comment runs to the end of the text, as it does in the
+      // tokenizer.
+      const end = value.indexOf("*/", index + 2);
+      index = end === -1 ? value.length : end + 2;
+      continue;
+    }
+
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+/**
+ * The single entry point both remote-reference checks go through, so neither
+ * can be left matching raw text while the other matches normalised text.
+ */
+function referencesRemoteCss(css: string, pattern: RegExp): boolean {
+  return pattern.test(normalizeCss(css));
+}
+
 // GH #224: attributes the browser fetches as soon as the element renders.
 // This used to be just src/srcset on a hard-coded "img, source" query, which
 // left <video poster="https://tracker/p.png"> downloading on render — a
@@ -116,7 +276,7 @@ function stripRemoteStyleElements(
   const doc = new DOMParser().parseFromString(raw, "text/html");
   let hasRemoteStyle = false;
   for (const styleEl of Array.from(doc.querySelectorAll("style"))) {
-    if (!CSS_REMOTE_REFERENCE_PATTERN.test(styleEl.textContent ?? "")) continue;
+    if (!referencesRemoteCss(styleEl.textContent ?? "", CSS_REMOTE_REFERENCE_PATTERN)) continue;
     hasRemoteStyle = true;
     if (!allowRemoteImages) styleEl.remove();
   }
@@ -204,7 +364,7 @@ export function sanitizeEmailHtml(
 
   for (const el of Array.from(doc.querySelectorAll("[style]"))) {
     const style = el.getAttribute("style");
-    if (style && CSS_REMOTE_URL_PATTERN.test(style)) {
+    if (style && referencesRemoteCss(style, CSS_REMOTE_URL_PATTERN)) {
       hasRemoteImages = true;
       if (!options.allowRemoteImages) {
         // Conservative: drop the whole style attribute rather than trying to

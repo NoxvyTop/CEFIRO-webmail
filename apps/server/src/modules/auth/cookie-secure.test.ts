@@ -64,7 +64,9 @@ async function makeApp(opts: { isProduction: boolean; appUrl: string }) {
   const masterKey = await importMasterKey(
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
-  const boot = createBootstrap(true);
+  // Operator-set break-glass credential (GH #235): the process no longer mints
+  // one, so a bootstrap that is meant to be enabled has to be handed a secret.
+  const boot = createBootstrap(true, "test-bootstrap-secret-0123456789");
   const app = createApp({
     authRouter: createAuthRouter({
       sessions: fakeSessions(),

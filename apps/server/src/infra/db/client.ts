@@ -68,7 +68,7 @@ export const DATABASE_UNAVAILABLE_CODE = "database_unavailable";
 // statement_timeout cancel (57014) — carries a 5-character SQLSTATE code that is
 // deliberately absent from this set, so it passes through untouched and is never
 // mislabeled as the database being unavailable. This is the database analogue
-// of the transport-vs-status split infra/stalwart/jmap.ts draws for Stalwart
+// of the transport-vs-status split infra/jmap/client.ts draws for Stalwart
 // (GH #187).
 const CONNECTION_ERROR_CODES = new Set([
   "CONNECT_TIMEOUT",
@@ -129,7 +129,7 @@ function rejectMapped<T>(promise: PromiseLike<T>): Promise<T> {
  * Wraps the postgres client so a connection/transport failure on ANY query or
  * transaction surfaces as a 503 `database_unavailable` DomainError, without
  * each repo needing its own try/catch (the DB counterpart to how
- * infra/stalwart/jmap.ts wraps its fetch — GH #187).
+ * infra/jmap/client.ts wraps its fetch — GH #187).
  *
  * Repos only ever await query results (verified: no `.cursor`/`.values`/
  * `.forEach` usage across apps/server), so returning a mapped Promise in place

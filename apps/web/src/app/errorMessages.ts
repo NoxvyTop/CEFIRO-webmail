@@ -5,14 +5,15 @@ import i18n from "./i18n";
  * for a server error code. Each one MUST define `<namespace>.errors.generic`,
  * which is what an unmapped code resolves to.
  */
-export type ErrorNamespace = "mail" | "composer";
+export type ErrorNamespace = "admin" | "auth" | "composer" | "mail" | "settings";
 
 /**
  * Every `code` the server can put in an ApiError envelope
  * (packages/shared/src/api/envelope.ts) on a route this app calls — the mail,
- * reader, and composer endpoints, plus the codes their shared infrastructure
- * and the global error handler can raise on any of them (`internal`,
- * `not_found`, `unauthorized`, `payload_too_large`, `upstream_timeout`,
+ * reader, composer, settings (filters/sieve, vacation, profile, contacts) and
+ * admin-console endpoints, plus the codes their shared infrastructure and the
+ * global error handler can raise on any of them (`internal`, `not_found`,
+ * `unauthorized`, `payload_too_large`, `upstream_timeout`,
  * `database_unavailable`).
  *
  * This is the wire contract, not an allowlist: nothing here gates what gets
@@ -29,14 +30,28 @@ export const SERVER_ERROR_CODES = [
   "ai_disabled",
   "ai_provider_error",
   "ai_rate_limited",
+  // GH #255: the settings routes' own codes. They travel the same envelope as
+  // the rest, so the coverage walk below has to see them or a settings code
+  // could reach the user with nothing behind it — the exact failure #215 fixed
+  // for `mail` and `composer`.
+  "contact_exists",
   "database_unavailable",
   "destroy_failed",
+  // GH #46: the admin console's own codes (`forbidden`, `last_admin`,
+  // `self_archive`, `self_demotion`, `user_exists`). The three 409s exist to
+  // EXPLAIN a block, and the console collapsed all of them into "the action
+  // could not be completed" — which throws away the only thing a guardrail is
+  // worth. Same reasoning as #215/#255: listed here so the coverage walk can
+  // see them, not as an allowlist that gates what gets shown.
+  "forbidden",
   "generic",
   "internal",
   "invalid_body",
   "invalid_identity",
+  "invalid_order",
   "invalid_query",
   "jmap_error",
+  "last_admin",
   "mail_auth_failed",
   "mail_credentials_missing",
   "mail_not_configured",
@@ -46,11 +61,20 @@ export const SERVER_ERROR_CODES = [
   "not_in_trash",
   "payload_too_large",
   "save_draft_failed",
+  "self_archive",
+  "self_demotion",
   "send_failed",
+  "sieve_invalid",
+  "sieve_sync_failed",
+  // GH #36: the account's JMAP provider does not advertise the Sieve
+  // extension, so filters and vacation cannot be enforced there at all. Not a
+  // transient failure and not retryable — see modules/sieve/router.ts.
+  "sieve_unsupported",
   "stalwart_unavailable",
   "unauthorized",
   "update_failed",
   "upstream_timeout",
+  "user_exists",
 ] as const;
 
 export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];

@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
+import { expectNoAxeViolations } from "../../test/axe";
 
 const user = {
   userId: "u1",
@@ -105,5 +107,36 @@ describe("mailbox sidebar", () => {
     expect(starredButton).toHaveAttribute("aria-current", "true");
     const inbox = screen.getAllByText(inboxName)[0];
     expect(inbox!.closest("button")).not.toHaveAttribute("aria-current");
+  });
+});
+
+// GH #252: the app had no automated accessibility check at all. This one runs
+// the real axe engine over the whole mail screen as the router assembles it —
+// app shell, sidebar and message list together — which is the level at which
+// most ARIA defects actually appear (a landmark, a control named only by its
+// icon, a role whose children do not match it).
+describe("mail screen accessibility (GH #252)", () => {
+  // See message-list.test.tsx: the per-row star button is not an allowed child
+  // of a listbox, and both available placements break a rule. Excluded here for
+  // the same documented reason and pinned there.
+  const LISTBOX_ROW_CONTROL_DEBT = ["aria-required-children"];
+
+  it("passes an axe run over the assembled mail screen", async () => {
+    stubFetch();
+    renderAt("/");
+
+    await screen.findAllByText(inboxName);
+    await expectNoAxeViolations(document.body, LISTBOX_ROW_CONTROL_DEBT);
+  });
+
+  it("passes an axe run with the label dialog open", async () => {
+    stubFetch();
+    renderAt("/");
+
+    await screen.findAllByText(inboxName);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("mail.newLabel") }));
+
+    await screen.findByRole("dialog", { name: i18n.t("mail.newLabel") });
+    await expectNoAxeViolations(document.body, LISTBOX_ROW_CONTROL_DEBT);
   });
 });

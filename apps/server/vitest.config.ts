@@ -1,17 +1,31 @@
 import { defineConfig } from "vitest/config";
+import { TEST_WORKER_COUNT } from "./vitest.workers";
 
 export default defineConfig({
   test: {
-    // Provisions an isolated, throwaway Postgres database for the whole run and
-    // drops it afterwards, so the suite never writes into a shared/development
-    // database and cleans up after itself (GH #181). Requires DATABASE_URL.
+    // Provisions isolated, throwaway Postgres databases for the run — one per
+    // worker slot — and drops them afterwards, so the suite never writes into a
+    // shared/development database and cleans up after itself (GH #181, GH #14).
+    // Requires DATABASE_URL.
     globalSetup: ["./vitest.global-setup.ts"],
-    // Integration tests share one Postgres instance and a singleton
-    // sso_config row (id = 1). Running test files in parallel lets
-    // concurrent beforeAll() calls stomp each other's encrypted
-    // client secret, causing intermittent AES-GCM decrypt failures.
-    // Serialize file execution to keep the shared row consistent.
-    fileParallelism: false,
+    // GH #14. This used to be `fileParallelism: false`, because integration
+    // tests shared one Postgres database and therefore one `sso_config`
+    // singleton row (id = 1): concurrent beforeAll() calls stomped each other's
+    // encrypted client secret and produced intermittent AES-GCM decrypt
+    // failures. Serializing every file was a stopgap that made the whole suite
+    // pay for one row.
+    //
+    // The sharing is gone instead: each worker slot gets its own database (see
+    // vitest.global-setup.ts and src/infra/db/test-db.ts), which also closes
+    // the two neighbours of that bug parallelism exposed — admin-users.test.ts
+    // asserting a delta on aggregate user counts another file was moving, and
+    // migrate.test.ts holding a database-wide advisory lock.
+    //
+    // Pinned rather than left to the CPU count: the databases are minted before
+    // any worker exists, so the count has to be known up front. See
+    // vitest.workers.ts.
+    maxWorkers: TEST_WORKER_COUNT,
+    minWorkers: 1,
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "text"],
@@ -52,20 +66,39 @@ export default defineConfig({
       // the package must clear. That is the stronger guarantee for the failure
       // this issue is about; the aggregate figures stay visible in the report.
       //
-      // The floor sits under the worst-covered file measured today —
-      // infra/db/migrate.ts (60% lines, most of its work happening in
-      // globalSetup, outside the instrumented workers), modules/auth/router.ts
-      // (40% functions) and modules/ai/router.ts (71.15% branches) — with room
-      // left for the ordinary churn of a file being edited. A ratchet floor,
-      // not a target: raise it as the weakest files improve. For reference,
-      // today's aggregate is lines/statements 95.80%, functions 95.16%,
-      // branches 87.34%.
+      // The floor sits one notch under the worst-covered file measured today:
+      //
+      //   lines/statements  modules/profile/router.ts   90.00%
+      //   branches          modules/ai/router.ts        71.15%
+      //   functions         modules/auth/router.ts      50.00%
+      //
+      // Today's aggregate, for reference, is lines/statements 97.76%,
+      // functions 97.04%, branches 88.95%.
+      //
+      // GH #245 re-measured all of this, because the numbers below had drifted
+      // into meaning nothing. They were set to 55/35/60 while several agents
+      // were editing at once, and the paragraph that justified them named
+      // infra/db/migrate.ts "at 60% lines" — a file that measures 100% today,
+      // and may well have by the time that sentence was written. A floor 35
+      // points under the worst real file is not a ratchet: a new module could
+      // land at 56% lines, pass the gate, and become the weakest file in the
+      // package without anything objecting. The gap is now 3-5 points.
+      //
+      // The functions figure is the one to treat with care. It is set by
+      // modules/auth/router.ts, and it is a LOWER bound rather than a
+      // measurement: that file was being edited while this was measured, and
+      // the edit stops one of its tests short — code that does not run counts
+      // as uncovered. 45 leaves room for the real number to be higher, which
+      // is the only direction it can be.
+      //
+      // A ratchet, not a target: raise these as the weakest files improve, and
+      // close a gap by testing the file rather than by lowering the floor.
       thresholds: {
         perFile: true,
-        lines: 55,
-        statements: 55,
-        functions: 35,
-        branches: 60,
+        lines: 85,
+        statements: 85,
+        functions: 45,
+        branches: 68,
       },
     },
   },

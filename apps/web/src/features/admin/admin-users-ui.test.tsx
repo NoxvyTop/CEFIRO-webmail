@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import type { AdminUser, AdminUsersPage } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
@@ -189,7 +189,7 @@ describe("AdminPage users table", () => {
       target: { value: "admin" },
     });
 
-    expect(await within(row).findByText(i18n.t("admin.errors.action"))).toBeInTheDocument();
+    expect(await within(row).findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });
 
   it("submits the new-user form and calls createAdminUser", async () => {

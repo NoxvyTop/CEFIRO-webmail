@@ -4,9 +4,13 @@ import {
   createFilterRule,
   deleteFilterRule,
   fetchFilterRules,
+  fetchGeneratedSieveScript,
   fetchProfile,
+  fetchSieveRawScript,
   fetchVacationSettings,
   reorderFilterRules,
+  saveSieveRawScript,
+  switchToRuleBuilder,
   syncFilters,
   updateFilterRule,
   updateProfile,
@@ -241,6 +245,77 @@ describe("settings api — write endpoints and error branches", () => {
       vi.fn(async () => new Response(JSON.stringify({ message: "nope" }), { status: 500 })),
     );
     await expect(fetchProfile()).rejects.toMatchObject({ status: 500, code: "internal" });
+  });
+});
+
+// GH #23: the advanced mode's four endpoints. The two writes are the whole
+// ownership model on the wire — saving takes the script over, and the way back
+// is its own call that never sends a script, so nothing about going back can
+// overwrite what is stored.
+describe("sieve advanced mode api (GH #23)", () => {
+  const rawState = { mode: "raw", script: 'fileinto "Ops";\n', updatedAt: "2026-07-01T10:00:00.000Z" };
+
+  it("reads the advanced state", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(rawState), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await fetchSieveRawScript()).toEqual(rawState);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe("/api/mail/filters/raw");
+  });
+
+  it("reads the generated seed from its own endpoint", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ script: "# rule: x\n" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await fetchGeneratedSieveScript()).script).toBe("# rule: x\n");
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe("/api/mail/filters/raw/generated");
+  });
+
+  it("sends the script verbatim on save", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(rawState), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveSieveRawScript('fileinto "Ops";\n');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mail/filters/raw");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({ script: 'fileinto "Ops";\n' });
+  });
+
+  it("surfaces a script the mail server refused as sieve_invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ code: "sieve_invalid", message: "errors.sieve_invalid", traceId: "t1" }),
+            { status: 422 },
+          ),
+      ),
+    );
+    await expect(saveSieveRawScript("if header {")).rejects.toMatchObject({
+      status: 422,
+      code: "sieve_invalid",
+    });
+  });
+
+  it("sends no script at all when handing the account back to the rule builder", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ ...rawState, mode: "rules" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The stored script comes BACK unchanged: this call cannot be the thing
+    // that overwrites it, because it carries nothing to overwrite it with.
+    expect((await switchToRuleBuilder()).script).toBe(rawState.script);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mail/filters/raw/rules");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
   });
 });
 

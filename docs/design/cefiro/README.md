@@ -31,7 +31,13 @@ Los archivos de este paquete son **referencias de diseño creadas en HTML** — 
 - Producto: `#5B8DEF` / `rgba(91,141,239,0.14)`
 - Diseño: `#E5A13D` / `rgba(229,161,61,0.15)`
 - Finanzas: `#34C79A` / `rgba(52,199,154,0.14)`
-- Estrella activa: `#E8C24A`
+
+### Estrella activa (NO es igual en ambos temas)
+- Oscuro: `#E8C24A` — el valor del prototipo.
+- Claro: `#a78415` — divergencia deliberada por contraste. `#E8C24A` mide
+  1,71:1 sobre blanco, por debajo incluso del mínimo de 3:1 para elementos no
+  textuales; el valor de claro mide 3,53:1. Ver `theme.css` (CLARO-11), donde
+  está anotado con la medición.
 
 ### Avatares
 Paleta rotativa por id: `#3E8E7E #4E6E9E #6E5E9E #8E6E4E #4E8E5E #5E7E9E #9E5E6E #5E9E8E`, texto `#F4FBF8`.

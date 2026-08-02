@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
@@ -75,6 +75,10 @@ function DeletePermanentlyConfirmDialog({
   return (
     <div
       role="alertdialog"
+      // GH #253: this one guards an irreversible destroy, which makes the gap
+      // between "Tab is trapped" and "the screen reader can still read and
+      // activate the page behind it" the worst place to have it.
+      aria-modal="true"
       aria-label={t("mail.deletePermanentlyConfirm.title")}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
       onClick={onCancel}
@@ -836,7 +840,12 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                   <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
                 )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
-                  <EmailBody bodyHtml={email.bodyHtml} bodyText={email.bodyText} attachments={email.attachments} />
+                  <EmailBody
+                    bodyHtml={email.bodyHtml}
+                    bodyText={email.bodyText}
+                    attachments={email.attachments}
+                    bodyTruncated={email.bodyTruncated}
+                  />
                 </div>
                 {visibleAttachments.length > 0 && (
                   <div className="mt-5">
@@ -854,6 +863,25 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                   <>
                     <div className="mt-5 border-t border-line pt-4">
                       <p className="text-[13.5px] font-semibold">{addressLabel(sender)}</p>
+                      {/* GH #42: the design's brand footer puts a second,
+                          muted 12.5px line under the sender's name — a job
+                          title ("Ingeniería de plataforma") in the prototype,
+                          which is mock data: no such field exists on a JMAP
+                          Email, in the contacts schema, or anywhere else the
+                          server can supply. The address is the only real
+                          identity fact available, so it takes that slot.
+                          Skipped when the name line already IS the address —
+                          addressLabel falls back to `email` for senders with
+                          no display name, and printing it twice reads as a
+                          rendering bug rather than as design parity. */}
+                      {sender?.name && (
+                        <p
+                          data-testid="thread-footer-sender-address"
+                          className="mt-0.5 text-[12.5px] text-muted"
+                        >
+                          {sender.email}
+                        </p>
+                      )}
                       {sentWithFooter && (
                         <p
                           data-testid="sent-with-footer"
@@ -872,11 +900,22 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                         </p>
                       )}
                     </div>
-                    <div data-testid="thread-footer-actions" className="mt-[26px] flex gap-2.5">
+                    {/* GH #249: Responder / Responder a todos / Reenviar want
+                        ~400px, and a 375px phone leaves ~335px for the reader
+                        column — so without flex-wrap the row overflowed and
+                        Reenviar was pushed off screen. #214 gave the reader's
+                        top action bar and the dialog rows this same treatment
+                        and left this one behind. shrink-0 on each button so the
+                        row wraps between buttons rather than crushing their
+                        labels. */}
+                    <div
+                      data-testid="thread-footer-actions"
+                      className="mt-[26px] flex flex-wrap gap-2.5"
+                    >
                       <button
                         type="button"
                         onClick={() => openCompose(`reply:${lastEmail.id}`)}
-                        className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                        className="flex h-[38px] shrink-0 items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                       >
                         <ReplyIcon size={14} />
                         {t("composer.reply")}
@@ -885,7 +924,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                         <button
                           type="button"
                           onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-                          className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                          className="flex h-[38px] shrink-0 items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                         >
                           {t("composer.replyAll")}
                         </button>
@@ -893,7 +932,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                       <button
                         type="button"
                         onClick={() => openCompose(`forward:${lastEmail.id}`)}
-                        className="flex h-[38px] items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
+                        className="flex h-[38px] shrink-0 items-center gap-2 rounded-[10px] border border-line bg-panel px-[18px] text-[13.5px] font-semibold text-ink transition hover:bg-hover"
                       >
                         {t("composer.forward")}
                       </button>

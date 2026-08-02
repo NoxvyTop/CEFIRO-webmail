@@ -57,6 +57,9 @@ export function NewLabelModal({ customLabels, onCreateLabel, onClose }: NewLabel
   return (
     <div
       role="dialog"
+      // GH #253: the last of the four dialogs that trapped focus (#158) without
+      // telling assistive tech the rest of the page is inert.
+      aria-modal="true"
       aria-label={t("mail.newLabel")}
       className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-6"
       onClick={onClose}

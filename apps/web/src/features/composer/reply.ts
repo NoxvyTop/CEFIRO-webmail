@@ -21,10 +21,9 @@ export type ComposerDraft = {
   // by replyDraft from the parent message's own Message-ID, References and
   // In-Reply-To (see EmailDetail.messageId/.references/.inReplyTo in
   // packages/shared/src/api/mail.ts) so replies thread correctly in the
-  // recipient's mail client. Left unset by
-  // forwardDraft (a forward starts a new conversation) and by buildEditDraft
-  // (see the comment there for why reopening a draft can't safely
-  // reconstruct them).
+  // recipient's mail client, and restored by buildEditDraft from the reopened
+  // draft's own stored headers (GH #146). Left unset by forwardDraft, which
+  // starts a new conversation rather than continuing one.
   inReplyTo?: string[];
   references?: string[];
   // present only on forward drafts: original attachments reattached by blobId
@@ -134,11 +133,22 @@ function quotedBody(email: EmailDetail): string {
   const sender = email.from[0];
   const senderLabel = sender ? sender.name || sender.email : "";
   const attribution = `<p>${escapeHtml(email.receivedAt)} — ${escapeHtml(senderLabel)}:</p>`;
+  // GH #140, second half: the body handed to us may be a prefix of the real
+  // message (see EmailDetail.bodyTruncated). Quoting it unmarked is what made
+  // the loss permanent — from that reply onward the thread carries the cut
+  // version as if it were the whole history, and nobody downstream can tell.
+  // Marking it keeps the reply honest about what it is actually quoting.
+  //
+  // "[…]" rather than a sentence because this string ships inside an outgoing
+  // email: reply.ts is a pure builder with no i18n context, and the bracketed
+  // ellipsis is the long-standing, language-independent convention for elided
+  // quoted text — so it reads correctly whatever language the thread is in.
+  const elision = email.bodyTruncated ? "<p>[&hellip;]</p>" : "";
   // Wrapped in a marked container so composer/signature.ts can place the
   // auto-applied default signature above the whole quoted block (Gmail
   // model) instead of guessing based on the raw <blockquote> tag, which
   // could also appear inside the quoted original itself (nested quotes).
-  return `<div ${QUOTE_MARKER_ATTR}="true"><br><br>${attribution}<blockquote>${sanitized.html}</blockquote></div>`;
+  return `<div ${QUOTE_MARKER_ATTR}="true"><br><br>${attribution}<blockquote>${sanitized.html}${elision}</blockquote></div>`;
 }
 
 export function emptyDraft(identities: Identity[]): ComposerDraft {
@@ -269,13 +279,20 @@ export function replyDraft(email: EmailDetail, identities: Identity[], all: bool
 // forwardDraft, this does not quote/wrap the body — the draft's own body is
 // the thing being edited, verbatim — and it carries originalDraftId so a
 // successful send can trash the stale original (see useComposer.ts).
-// KNOWN LIMITATION: does not restore inReplyTo/references when reopening a
-// reply draft for editing. email.messageId here is the draft's own id, not
-// its parent's, so reusing it as inReplyTo would misrepresent the thread.
-// EmailDetail does now expose the draft's own In-Reply-To header (added for
-// the RFC 5322 §3.6.4 References fallback in replyDraft above), so restoring
-// the headers has become feasible — but wiring it into the draft-edit path
-// is a separate behavior change and remains out of scope here (GH #120).
+//
+// GH #146: the draft's threading headers are restored as they were stored,
+// NOT derived. This is the one caller where derivation would be wrong:
+// replyDraft is looking at the *parent* of the message it is composing, so it
+// has to build a chain; here the message being reopened is the reply itself,
+// and its own In-Reply-To/References already name its parent and ancestry.
+// email.messageId is deliberately ignored for the same reason — it is the
+// draft's own identifier, so folding it in would make the reply claim to be
+// its own parent.
+//
+// The ids still pass through keepSendableIds/trimMessageIdChain: a draft
+// written by another client against the same account can carry a chain that
+// sendEmailSchema rejects, and losing an ancestry link beats a reply the user
+// cannot send (same trade-off replyDraft documents above).
 export function buildEditDraft(email: EmailDetail, identities: Identity[]): ComposerDraft {
   const identity = pickIdentityByFrom(email, identities);
   const rawHtml = email.bodyHtml ?? escapeHtml(email.bodyText ?? "");
@@ -288,7 +305,7 @@ export function buildEditDraft(email: EmailDetail, identities: Identity[]): Comp
   // here rather than plumbing blob resolution into the draft-edit path.
   const sanitized = sanitizeEmailHtml(rawHtml, { allowRemoteImages: false });
 
-  return {
+  const draft: ComposerDraft = {
     identityId: identity?.id ?? identities[0]?.id ?? "",
     to: dedupeAddresses(email.to),
     cc: dedupeAddresses(email.cc),
@@ -308,6 +325,17 @@ export function buildEditDraft(email: EmailDetail, identities: Identity[]): Comp
       size: attachment.size,
     })),
   };
+
+  // Each field is independently optional (RFC 5322 §3.6.4) and omitted
+  // entirely — never sent as an empty array — when the draft carries none,
+  // matching replyDraft and keeping a plain new-mail draft free of threading
+  // headers it never had.
+  const inReplyTo = trimMessageIdChain(dedupeStrings(keepSendableIds(email.inReplyTo ?? [])));
+  const references = trimMessageIdChain(dedupeStrings(keepSendableIds(email.references ?? [])));
+  if (inReplyTo.length > 0) draft.inReplyTo = inReplyTo;
+  if (references.length > 0) draft.references = references;
+
+  return draft;
 }
 
 export function forwardDraft(email: EmailDetail, identities: Identity[]): ComposerDraft {

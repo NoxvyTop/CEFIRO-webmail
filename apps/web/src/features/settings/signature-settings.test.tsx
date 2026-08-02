@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { Signature } from "@webmail/shared";
+import { MailApiError } from "../mailbox/api";
 import { SignatureSettings } from "./SignatureSettings";
 
 const { fetchSignatures, createSignature, updateSignature, deleteSignature } = vi.hoisted(() => ({
@@ -214,6 +215,119 @@ describe("SignatureSettings", () => {
       await waitFor(() =>
         expect(updateSignature).toHaveBeenCalledWith("sig2", expect.objectContaining({ isDefault: true })),
       );
+    });
+  });
+
+  // GH #250: the panel used to `return null` whenever the query had no data,
+  // which rendered a failed load as an empty white panel — the same thing a
+  // user sees while it is still loading, and nothing to act on either way.
+  describe("failed load (GH #250)", () => {
+    it("says the load failed instead of rendering a blank panel", async () => {
+      fetchSignatures.mockRejectedValue(new MailApiError(503, "database_unavailable"));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SignatureSettings />
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      // The blank editor is the EMPTY state, so it must not be what a failure
+      // shows — that is exactly the confusion this issue is about.
+      expect(screen.queryByLabelText(i18n.t("settings.name"))).not.toBeInTheDocument();
+    });
+
+    it("recovers through the retry button without a page reload", async () => {
+      fetchSignatures.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SignatureSettings />
+        </QueryClientProvider>,
+      );
+
+      await screen.findByRole("alert");
+      fetchSignatures.mockResolvedValue([signature]);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+      expect(await screen.findByLabelText(i18n.t("settings.name"))).toHaveValue("Default");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows the loading state, not the empty editor, before the first response", async () => {
+      fetchSignatures.mockReturnValue(new Promise(() => {}));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <SignatureSettings />
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByTestId("settings-loading")).toBeInTheDocument();
+      expect(screen.queryByLabelText(i18n.t("settings.name"))).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #148: the load half of this was closed by #250; the write half was not.
+  // A failed create/edit/delete changed nothing visible at all, so "saved" and
+  // "silently lost" looked the same — the sibling sections (profile, vacation,
+  // contacts) have surfaced the mutation error in a role="alert" all along.
+  describe("failed save (GH #148)", () => {
+    it("says a failed create failed, and keeps the draft on screen to retry", async () => {
+      createSignature.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      renderSettings([]);
+
+      const nameInput = await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.change(nameInput, { target: { value: "Draft" } });
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      // The whole point of reporting it: the editor is still there, still
+      // holding what the user typed, so pressing save again is the retry.
+      expect(screen.getByLabelText(i18n.t("settings.name"))).toHaveValue("Draft");
+    });
+
+    it("says a failed edit failed instead of leaving the form looking saved", async () => {
+      updateSignature.mockRejectedValueOnce(new MailApiError(400, "invalid_body"));
+      renderSettings([signature]);
+
+      const nameInput = await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.change(nameInput, { target: { value: "Renamed" } });
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+      // The server's code, not the generic message: the alert goes through the
+      // same settingsErrorKey map the sibling sections use.
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        i18n.t("settings.errors.invalid_body"),
+      );
+    });
+
+    it("says a failed delete failed, with the signature still listed", async () => {
+      deleteSignature.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+      renderSettings([signature, secondSignature]);
+
+      await screen.findByText("Alt");
+      fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[1]!);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
+      expect(screen.getByText("Alt")).toBeInTheDocument();
+    });
+
+    it("clears the alert once a later save succeeds", async () => {
+      updateSignature
+        .mockRejectedValueOnce(new MailApiError(503, "database_unavailable"))
+        .mockResolvedValueOnce({ ...signature, name: "Renamed" });
+      renderSettings([signature]);
+
+      const nameInput = await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.change(nameInput, { target: { value: "Renamed" } });
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+      await screen.findByRole("alert");
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.save") }));
+
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     });
   });
 

@@ -16,6 +16,7 @@ import Link from "@tiptap/extension-link";
 import TextAlign from "@tiptap/extension-text-align";
 import { useTranslation } from "react-i18next";
 import { MarkerBlock } from "./markerBlockExtension";
+import { htmlToPlainText } from "./plainText";
 import {
   IMAGE_SIZE_PRESETS,
   ResizableImage,
@@ -86,61 +87,11 @@ class EditorErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
-// Elements whose text content is machinery rather than message text — CSS
-// rules, script source, an unrendered <template>'s markup. textContent would
-// otherwise splice them into the visible quote verbatim.
-const NON_RENDERED_TEXT_SELECTOR = "script, style, noscript, template, title";
-
-// Elements that end a visual line when rendered, so their boundary becomes a
-// newline rather than silently concatenating two paragraphs into one run-on.
-const LINE_BREAKING_TAGS = new Set([
-  "address", "article", "blockquote", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
-  "header", "li", "p", "pre", "section", "table", "tr", "ul", "ol",
-]);
-
-/**
- * Renders `html` as the plain text a reader would see, dropping every element
- * and attribute. Parsing happens in a detached DOMParser document — the same
- * pattern reader/sanitize.ts and reader/EmailBody.tsx already rely on: it only
- * reads nodes into a document that is never attached to this page, so nothing
- * in the untrusted markup executes, loads a resource, or applies a style.
- *
- * Only text nodes survive, so the returned string carries no markup at all —
- * which is the point: see ContentEditableFallback below for why this path
- * cannot render live HTML.
- */
-export function htmlToPlainText(html: string): string {
-  if (!html) return "";
-
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  for (const el of Array.from(doc.querySelectorAll(NON_RENDERED_TEXT_SELECTOR))) {
-    el.remove();
-  }
-
-  const parts: string[] = [];
-
-  function walk(node: ChildNode) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      parts.push(node.textContent ?? "");
-      return;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const element = node as Element;
-    const tag = element.tagName.toLowerCase();
-    if (tag === "br") {
-      parts.push("\n");
-      return;
-    }
-    for (const child of Array.from(element.childNodes)) walk(child);
-    if (LINE_BREAKING_TAGS.has(tag)) parts.push("\n");
-  }
-
-  for (const child of Array.from(doc.body.childNodes)) walk(child);
-
-  // Collapse the runs of blank lines that nested block wrappers produce (a
-  // <div><p>…</p></div> contributes two newlines for one visual break).
-  return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
-}
+// Re-exported (rather than defined here) since GH #141 moved the HTML → text
+// flattening into ./plainText, which the outgoing text/plain alternative now
+// shares with this fallback. Kept exported from this module so its existing
+// importers — and its tests — keep resolving it where they always have.
+export { htmlToPlainText };
 
 // GH #213: this fallback is a plain contentEditable div in the APP's own
 // document — nothing isolates what it renders, unlike the reader, whose email

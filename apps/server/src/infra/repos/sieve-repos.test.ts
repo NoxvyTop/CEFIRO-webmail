@@ -5,6 +5,7 @@ import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
 import { createUsersRepo } from "./users";
 import { createFilterRulesRepo } from "./filter-rules";
+import { createSieveRawScriptRepo } from "./sieve-raw-script";
 import { createVacationSettingsRepo } from "./vacation-settings";
 
 const sql = createDb(testDatabaseUrl());
@@ -13,6 +14,7 @@ let userId: string;
 let otherUserId: string;
 const filterRules = createFilterRulesRepo(sql);
 const vacationSettings = createVacationSettingsRepo(sql);
+const sieveRawScript = createSieveRawScriptRepo(sql);
 
 const input = {
   name: "invoices",
@@ -111,5 +113,47 @@ describe("vacation settings repo", () => {
     });
     expect(again.enabled).toBe(false);
     expect(again.startsAt).toBeNull();
+  });
+});
+
+// GH #23: the repo the advanced mode rests on. The property that matters is
+// asymmetry — saving takes ownership and replaces the text, handing back only
+// flips the mode — because it is what makes a mode switch unable to lose work.
+describe("sieve raw script repo", () => {
+  const script = 'require ["fileinto"];\nfileinto "Ops";\n';
+
+  it("reports rule-builder mode with nothing stored when no row exists", async () => {
+    expect(await sieveRawScript.get(otherUserId)).toEqual({
+      mode: "rules",
+      script: "",
+      updatedAt: null,
+    });
+  });
+
+  it("takes ownership as part of saving, with no separate activation step", async () => {
+    const saved = await sieveRawScript.save(userId, script);
+    expect(saved.mode).toBe("raw");
+    expect(saved.script).toBe(script);
+    expect(saved.updatedAt).not.toBeNull();
+    expect(await sieveRawScript.get(userId)).toMatchObject({ mode: "raw", script });
+  });
+
+  it("keeps the script when ownership is handed back to the rule builder", async () => {
+    const handedBack = await sieveRawScript.handBackToRules(userId);
+    expect(handedBack.mode).toBe("rules");
+    // Deactivated, never deleted: the user must find their script unchanged.
+    expect(handedBack.script).toBe(script);
+    expect(await sieveRawScript.get(userId)).toMatchObject({ mode: "rules", script });
+  });
+
+  it("re-activates the same text without needing it sent again", async () => {
+    const again = await sieveRawScript.save(userId, script);
+    expect(again).toMatchObject({ mode: "raw", script });
+  });
+
+  it("keeps each user's script to themselves", async () => {
+    await sieveRawScript.handBackToRules(otherUserId);
+    expect(await sieveRawScript.get(otherUserId)).toMatchObject({ mode: "rules", script: "" });
+    expect(await sieveRawScript.get(userId)).toMatchObject({ mode: "raw", script });
   });
 });

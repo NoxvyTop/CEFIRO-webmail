@@ -36,10 +36,34 @@
     "enabled": true,
     "rules": {
       "recommended": true,
-      // Pre-existing accessibility debt (61 findings across the UI) is downgraded
-      // to warn, not disabled: the gate stays green today and still surfaces these
-      // for review. Fixing them (icon titles, keyboard handlers, roles) is left to
-      // a dedicated pass rather than a UI-wide rewrite inside a CI-hardening change.
+      // Accessibility findings are downgraded to warn, not disabled: the gate
+      // stays green and still surfaces them for review.
+      //
+      // Recounted honestly in GH #253 — the "61 findings" this comment used to
+      // claim overstated the debt about fourfold. The 55 warnings outside tests
+      // today break down as:
+      //
+      //   27  noSvgWithoutTitle in app/ui/icons.tsx, where aria-hidden IS set —
+      //       via the `commonProps` spread (icons.tsx:3-10), which Biome cannot
+      //       follow statically. False positives, every one.
+      //   15  backdrop divs (5 noStaticElementInteractions + 10
+      //       useKeyWithClickEvents): a click-to-dismiss overlay that already
+      //       has the real Escape handler beside it, on an element that is not
+      //       the only way to perform the action.
+      //   13  ARIA patterns the rules read as suspicious but that are correct:
+      //       the resize handle's role="separator" with aria-valuenow, TipTap's
+      //       contenteditable textbox (focusable only at runtime), and
+      //       RecipientField's combobox popup, whose options are addressed by
+      //       aria-activedescendant rather than by being focusable.
+      //
+      // #253 fixed the genuinely actionable ones: the two aria-labels on
+      // generic <span>s that no assistive tech ever announced, the redundant
+      // role="main", and role="region" on a div that should have been a
+      // <section>. Automated a11y coverage now lives in the test suite (GH
+      // #252, apps/web/src/test/axe.ts) rather than in this lint budget.
+      //
+      // Treat a NEW warning here as real rather than assuming it joins the
+      // noise — the categories above are closed, not open-ended.
       "a11y": {
         "noSvgWithoutTitle": "warn",
         "useKeyWithClickEvents": "warn",

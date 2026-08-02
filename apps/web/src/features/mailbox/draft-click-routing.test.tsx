@@ -14,7 +14,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
@@ -39,6 +40,10 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
           size: options.estimateSize(index),
         })),
       getTotalSize: () => options.count * options.estimateSize(0),
+      // GH #251: MessageList now scrolls the selected row into view. Every row
+      // is already "visible" in this double, so the call has nothing to do —
+      // but it must exist, or the selection effect throws.
+      scrollToIndex: () => {},
     }),
   };
 });

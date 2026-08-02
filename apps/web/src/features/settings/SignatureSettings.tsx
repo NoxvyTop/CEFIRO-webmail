@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { Signature, SignatureInput } from "@webmail/shared";
 import { createSignature, deleteSignature, fetchSignatures, updateSignature } from "../composer/api";
 import { RichTextEditor } from "../composer/RichTextEditor";
+import { SettingsLoadError, SettingsLoading, SettingsMutationError } from "./PanelStates";
 
 const SIGNATURES_QUERY_KEY = ["mail", "signatures"] as const;
 
@@ -29,6 +30,13 @@ export function SignatureSettings() {
   // data (which it would otherwise do, since the draft isn't saved yet and
   // still counts as "one signature" from the query's point of view).
   const [creatingAdditional, setCreatingAdditional] = useState(false);
+  // GH #148: the last failed create/edit/delete, or null. Held here rather than
+  // read off the three mutations' own `error` fields because those keep their
+  // last failure until the SAME mutation runs again — a create that failed
+  // would go on being reported while an unrelated delete succeeded. One slot,
+  // cleared the moment any write is attempted or lands, is what the sibling
+  // sections (ProfileSettings, VacationSettings, ContactsSettings) already do.
+  const [mutationError, setMutationError] = useState<unknown>(null);
 
   const signatures = signaturesQuery.data ?? [];
   const isListView = signatures.length >= LIST_VIEW_MIN_COUNT;
@@ -45,25 +53,37 @@ export function SignatureSettings() {
     setCreatingAdditional(false);
   }
 
+  // A new attempt clears the previous verdict, so the alert on screen always
+  // belongs to the write the user is watching.
+  function beginMutation() {
+    setMutationError(null);
+  }
+
   const createMutation = useMutation({
     mutationFn: (input: SignatureInput) => createSignature(input),
+    onMutate: beginMutation,
     onSuccess: async () => {
       await invalidateSignatures();
       resetForm();
     },
+    onError: (error) => setMutationError(error),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, input }: { id: string; input: SignatureInput }) => updateSignature(id, input),
+    onMutate: beginMutation,
     onSuccess: async () => {
       await invalidateSignatures();
       resetForm();
     },
+    onError: (error) => setMutationError(error),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteSignature(id),
+    onMutate: beginMutation,
     onSuccess: () => invalidateSignatures(),
+    onError: (error) => setMutationError(error),
   });
 
   // Keeps the edit-first view's form synced to the current solo/default
@@ -127,14 +147,32 @@ export function SignatureSettings() {
     }
   }
 
+  // GH #250: loading, failed and empty are three different things. Empty is
+  // the open blank editor below (#132's edit-first view), so only the first
+  // two are handled here — the previous `if (!data) return null` collapsed a
+  // failed load into a blank panel with nothing to retry.
+  if (signaturesQuery.isError) {
+    return (
+      <SettingsLoadError
+        error={signaturesQuery.error}
+        onRetry={() => void signaturesQuery.refetch()}
+      />
+    );
+  }
+
   if (!signaturesQuery.data) {
-    return null;
+    return <SettingsLoading />;
   }
 
   const showForm = !isListView || formOpen;
 
   return (
     <div className="flex flex-col gap-4">
+      {/* GH #148: a create/edit/delete that failed used to change nothing on
+          screen at all — the form stayed open with the same content, which is
+          also what a successful edit of the solo signature looks like. */}
+      {mutationError != null && <SettingsMutationError error={mutationError} />}
+
       {isListView && (
         <ul className="flex flex-col gap-2">
           {signatures.map((signature) => (

@@ -5,6 +5,8 @@ import {
   filterOrderSchema,
   filterRuleInputSchema,
   filterRuleSchema,
+  sieveRawScriptInputSchema,
+  sieveRawScriptSchema,
   vacationSettingsInputSchema,
   vacationSettingsSchema,
 } from "./sieve";
@@ -251,5 +253,57 @@ describe("vacationSettingsInputSchema", () => {
     expect(() => vacationSettingsInputSchema.parse({ enabled: false, intervalDays: 0 })).toThrow();
     expect(() => vacationSettingsInputSchema.parse({ enabled: false, intervalDays: 61 })).toThrow();
     expect(vacationSettingsInputSchema.parse({ enabled: false, intervalDays: 60 }).intervalDays).toBe(60);
+  });
+});
+
+// GH #23: the advanced mode. This input is the ONE place a user's own Sieve
+// enters the system, and its contract is narrow on purpose — reject what cannot
+// be stored or cannot be meant, and rewrite nothing. Whether the script is
+// valid Sieve is the mail server's answer to give, through SieveScript/validate.
+describe("sieveRawScriptInputSchema", () => {
+  it("accepts a hand-written script unchanged, newlines and all", () => {
+    const script = 'require ["fileinto"];\r\nif header :contains "to" "ops" {\n  fileinto "Ops";\n}\n';
+    expect(sieveRawScriptInputSchema.parse({ script }).script).toBe(script);
+  });
+
+  it("rejects a blank script rather than reading it as 'filter nothing'", () => {
+    // Handing the script back to the rule builder is how a user stops using
+    // theirs. Accepting an emptied textarea here would make an accident the one
+    // way a saved script gets discarded.
+    expect(() => sieveRawScriptInputSchema.parse({ script: "" })).toThrow();
+    expect(() => sieveRawScriptInputSchema.parse({ script: "  \n\t " })).toThrow();
+  });
+
+  it("rejects a NUL byte, which a Postgres text column cannot hold", () => {
+    expect(() => sieveRawScriptInputSchema.parse({ script: "stop;\u0000" })).toThrow();
+  });
+
+  it("bounds the script", () => {
+    expect(() => sieveRawScriptInputSchema.parse({ script: "a".repeat(65_537) })).toThrow();
+    expect(sieveRawScriptInputSchema.parse({ script: "a".repeat(65_536) }).script).toHaveLength(
+      65_536,
+    );
+  });
+});
+
+describe("sieveRawScriptSchema", () => {
+  it("carries the mode, the stored script and when it was written", () => {
+    expect(
+      sieveRawScriptSchema.parse({
+        mode: "raw",
+        script: "stop;",
+        updatedAt: "2026-07-01T10:00:00.000Z",
+      }),
+    ).toEqual({ mode: "raw", script: "stop;", updatedAt: "2026-07-01T10:00:00.000Z" });
+    // A user who never opened the editor: rule-builder mode, nothing stored.
+    expect(
+      sieveRawScriptSchema.parse({ mode: "rules", script: "", updatedAt: null }).updatedAt,
+    ).toBeNull();
+  });
+
+  it("admits no third author", () => {
+    expect(() =>
+      sieveRawScriptSchema.parse({ mode: "merged", script: "", updatedAt: null }),
+    ).toThrow();
   });
 });

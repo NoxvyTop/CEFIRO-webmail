@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { apiErrorSchema, healthResponseSchema } from "@webmail/shared";
 import { createApp } from "./app";
+import { withDeadlineFetch } from "./core/deadline";
 import { errorResponse } from "./core/error-response";
+import { DomainError } from "./core/errors";
 import { DEFAULT_HEALTH_BUDGET_MS } from "./core/health";
 import { log } from "./core/logger";
 import { createRateLimiter } from "./core/rate-limit";
@@ -66,6 +68,119 @@ describe("app", () => {
     const body = apiErrorSchema.parse(await res.json());
     expect(body.code).toBe("not_found");
     expect(body.message).toBe("errors.not_found");
+  });
+});
+
+// GH #47. Every directive here was measured against the real `vite build`
+// output served behind these exact headers, not against the dev server: the
+// bundle was loaded in a browser under this policy (nothing blocked) and again
+// under a tightened one, to find out which parts are load-bearing rather than
+// assumed. These assertions record that measurement, because a CSP that is
+// wrong in the tightening direction breaks silently, at runtime, on the
+// production build only — which is the failure mode this issue is about.
+describe("the deployed Content-Security-Policy (GH #47)", () => {
+  async function policy(): Promise<string> {
+    const res = await createApp().request("/api/health");
+    return res.headers.get("content-security-policy") ?? "";
+  }
+
+  it("never relaxes script execution", async () => {
+    const csp = await policy();
+    // The built index.html carries no inline script (apps/web/vite.config.ts
+    // fails the build if that changes), so neither of these is ever needed.
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+  });
+
+  it("keeps the inline styles the email body cannot render without", async () => {
+    // A srcdoc iframe inherits this policy, and every message body carries its
+    // own <style> plus the message's inline styles. Measured: under `style-src
+    // 'self'` the whole email renders unstyled.
+    expect(await policy()).toContain("style-src 'self' 'unsafe-inline'");
+  });
+
+  it("allows the attachment viewer's blob: object-URL iframe", async () => {
+    // Measured under `frame-src 'self'`: the browser reports a frame-src
+    // violation for `blob` and the preview does not render.
+    expect(await policy()).toContain("frame-src 'self' blob:");
+  });
+
+  it("still pins everything a self-hosted SPA has no reason to allow", async () => {
+    const csp = await policy();
+    for (const directive of [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "connect-src 'self'",
+    ]) {
+      expect(csp).toContain(directive);
+    }
+  });
+});
+
+// GH #48. The headers were applied only after `await next()` returned, so the
+// coverage depended on a thrown handler error unwinding back through this
+// middleware — which is a detail of the router, not of this app. The three
+// answers a request can end on (handler return, thrown DomainError, thrown
+// anything else) must carry the same headers, or a caller can tell which one it
+// hit from the response envelope alone.
+describe("security headers on error responses (GH #48)", () => {
+  function expectSecurityHeaders(res: Response) {
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(res.headers.get("strict-transport-security")).toContain("max-age=");
+  }
+
+  it("sets them on a DomainError answered by onError", async () => {
+    const router = new Hono().get("/boom", () => {
+      throw new DomainError("not_in_trash", 409, "errors.not_in_trash");
+    });
+
+    const res = await createApp({ mailRouter: router }).request("/api/mail/boom");
+
+    expect(res.status).toBe(409);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe("not_in_trash");
+    expectSecurityHeaders(res);
+  });
+
+  it("sets them on the 500 an unhandled error is turned into", async () => {
+    const router = new Hono().get("/boom", () => {
+      throw new Error("something nobody mapped");
+    });
+
+    // The unhandled branch of app.onError writes an `error` line; swallow it so
+    // the deliberate failure does not look like a broken run.
+    const { res } = await captureLogs(() =>
+      createApp({ mailRouter: router }).request("/api/mail/boom"),
+    );
+
+    expect(res.status).toBe(500);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe("internal");
+    expectSecurityHeaders(res);
+  });
+
+  it("sets them on the notFound envelope", async () => {
+    expectSecurityHeaders(await createApp().request("/api/nope"));
+  });
+
+  it("leaves a route's own security header alone rather than clobbering it", async () => {
+    // The attachment proxy answers with `content-security-policy: sandbox`;
+    // these are defaults, not an override.
+    const router = new Hono().get("/blob", (c) => {
+      c.header("content-security-policy", "sandbox");
+      return c.body("bytes", 200);
+    });
+
+    const res = await createApp({ mailRouter: router }).request("/api/mail/blob");
+
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 });
 
@@ -144,6 +259,83 @@ describe("health budget (GH #212)", () => {
     });
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
+  });
+
+  it("cancels a check that overruns instead of just abandoning it (GH #242)", async () => {
+    // The defect: the probe stopped WAITING at its budget but the check kept
+    // running to its own upstream deadline (~10s for Stalwart), so every
+    // cold-cache poll left seconds of outbound work behind an answer that had
+    // already been sent — against a dependency that is by hypothesis struggling.
+    let observed: AbortSignal | undefined;
+    const app = createApp({
+      checks: {
+        stalwart: (signal) => {
+          observed = signal;
+          return new Promise<boolean>(() => {});
+        },
+      },
+      healthBudgetMs: 50,
+    });
+
+    expect((await app.request("/api/health")).status).toBe(503);
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it("cancels a check that finished too, so nothing is left holding the signal", async () => {
+    let observed: AbortSignal | undefined;
+    const app = createApp({
+      checks: {
+        postgres: async (signal) => {
+          observed = signal;
+          return true;
+        },
+      },
+    });
+
+    expect((await app.request("/api/health")).status).toBe(200);
+    expect(observed?.aborted).toBe(true);
+  });
+});
+
+// GH #242. Liveness and readiness are two questions, and collapsing them meant
+// a Stalwart outage marked this container unhealthy — so Swarm restarted a
+// process that was working, and `depends_on: service_healthy` refused to start
+// what waited on it. Restarting this container has never fixed a down
+// dependency.
+describe("liveness endpoint (GH #242)", () => {
+  it("answers 200 while the process is serving", async () => {
+    const res = await createApp().request("/api/health/live");
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { status: string }).toEqual({ status: "alive" });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("stays 200 with every dependency down, while readiness reports 503", async () => {
+    // The whole point of the split: the container is alive and serving the SPA;
+    // it is the DEPENDENCY that is unavailable, and that is readiness' answer.
+    const app = createApp({ checks: { postgres: async () => false } });
+    expect((await app.request("/api/health/live")).status).toBe(200);
+    expect((await app.request("/api/health")).status).toBe(503);
+  });
+
+  it("runs no dependency check at all", async () => {
+    // It must not become a second way to generate load on Stalwart, and it must
+    // answer even when every probe is stalled.
+    let probes = 0;
+    const app = createApp({
+      checks: {
+        stalwart: () => {
+          probes += 1;
+          return new Promise<boolean>(() => {});
+        },
+      },
+      healthBudgetMs: 5_000,
+    });
+
+    const startedAt = Date.now();
+    expect((await app.request("/api/health/live")).status).toBe(200);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(probes).toBe(0);
   });
 });
 
@@ -262,7 +454,6 @@ describe("metrics endpoint (GH #208)", () => {
     // The route is not registered, so it answers exactly like any other unknown
     // path — an instance that never enabled metrics must not confirm the
     // endpoint is there, not even by answering 401.
-    vi.stubEnv("METRICS_TOKEN", "");
     const app = createApp();
     const res = await app.request("/metrics");
     const unknown = await app.request("/definitely-not-a-route");
@@ -275,13 +466,16 @@ describe("metrics endpoint (GH #208)", () => {
   });
 
   it("treats an empty configured token as unset rather than as a valid secret", async () => {
-    vi.stubEnv("METRICS_TOKEN", "   ");
-    expect((await createApp().request("/metrics")).status).toBe(404);
+    expect((await createApp({ metricsToken: "   " }).request("/metrics")).status).toBe(404);
   });
 
-  it("reads the token from the environment when the caller passes none", async () => {
+  it("never reads the token from the environment behind the caller's back (GH #259)", async () => {
+    // The token arrives through core/config.ts now. Reading process.env here as
+    // a fallback meant a misspelled variable name produced a 404 that looked
+    // exactly like "metrics deliberately off", so monitoring could disappear
+    // with nothing to distinguish the two.
     vi.stubEnv("METRICS_TOKEN", TOKEN);
-    expect((await scrape(createApp())).status).toBe(200);
+    expect((await scrape(createApp())).status).toBe(404);
   });
 
   it("refuses a scrape with no credentials or the wrong token", async () => {
@@ -377,6 +571,31 @@ describe("metrics endpoint (GH #208)", () => {
 
     expect((await scrape(app, "guess-1", "10.0.0.2")).status).toBe(401);
     expect((await scrape(app, "guess-2", "10.0.0.2")).status).toBe(429);
+  });
+
+  it("reports outbound calls made anywhere in the process (GH #240)", async () => {
+    // The gap this closes: the counters above show THAT a request failed, never
+    // which dependency was the reason. Both calls below go through the same
+    // wrapper the JMAP client, the OIDC client and the AI adapters use, which
+    // is why instrumenting one file covers every outbound call there is.
+    const app = createApp({ metricsToken: TOKEN });
+
+    const answering = (async () => new Response("{}")) as unknown as typeof fetch;
+    const reachable = withDeadlineFetch(answering, "stalwart", 1_000);
+    await reachable("https://mail.test/.well-known/jmap");
+
+    // Accepts the connection and never answers — the case the deadline exists
+    // for, and the one that must not be labelled the same as "refused".
+    const mute = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    const silent = withDeadlineFetch(mute, "oidc", 10);
+    await expect(silent("https://auth.test/.well-known/openid-configuration")).rejects.toThrow();
+
+    const body = await (await scrape(app)).text();
+    expect(body).toContain('cefiro_outbound_requests_total{dependency="stalwart",outcome="ok"} 1');
+    // A deadline, not a refused connection — the distinction that decides the
+    // first move at 3am, and the only place able to draw it.
+    expect(body).toContain('cefiro_outbound_requests_total{dependency="oidc",outcome="timeout"} 1');
+    expect(body).toContain('cefiro_outbound_request_duration_seconds_count{dependency="stalwart"} 1');
   });
 
   it("keeps its budget separate from the health poll's", async () => {

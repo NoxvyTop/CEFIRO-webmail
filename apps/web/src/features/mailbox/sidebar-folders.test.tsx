@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { Mailbox } from "@webmail/shared";
 import "../../app/i18n";
@@ -85,13 +85,17 @@ describe("sidebar folder localization, order and unread badge", () => {
   it("shows the unread accent badge only on the inbox row, even though other folders have unread mail", () => {
     renderSidebar();
 
+    // GH #253: the badge's accessible text is a real sr-only node now, not an
+    // aria-label on a generic <span> (which is never announced), so the badge
+    // is identified by that text rather than by the presence of the attribute.
+    const unreadLabel = i18n.t("mail.unread", { count: 5 });
     const inboxRow = screen.getByText(i18n.t("mail.folders.inbox")).closest("button")!;
-    expect(inboxRow.querySelector("[aria-label]")).toBeInTheDocument();
+    expect(within(inboxRow).getByText(unreadLabel)).toBeInTheDocument();
     expect(inboxRow).toHaveTextContent("5");
 
     for (const role of ["archive", "drafts", "junk"] as const) {
       const row = screen.getByText(i18n.t(`mail.folders.${role}`)).closest("button")!;
-      expect(row.querySelector("[aria-label]")).not.toBeInTheDocument();
+      expect(within(row).queryByText(/\d+ (sin leer|unread)/)).not.toBeInTheDocument();
     }
   });
 });
