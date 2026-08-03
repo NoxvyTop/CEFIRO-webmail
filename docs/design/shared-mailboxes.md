@@ -149,6 +149,88 @@ miembro a la cuenta compartida por Basic, y copia real grupo→personal). Detall
 
 ---
 
+## Diseño concreto de G-1 (acceso) y G-2 (copia) — 2026-08-03
+
+### G-1 · Acceso a buzones compartidos
+
+**Backend**
+
+1. **Exponer el mapa `accounts`.** `getSession` (`apps/server/src/infra/jmap/
+   client.ts`) hoy solo lee `primaryAccounts[mail]` y **descarta** el resto.
+   Añadir a `JmapSession` un `accounts: Array<{id, name, isPersonal}>`.
+   `accountId` sigue siendo la personal (back-compat).
+2. **Endpoint `GET /api/mail/shared-accounts`.** Devuelve las cuentas
+   **no-personales** (los buzones compartidos accesibles) leyendo la sesión
+   **cacheada** — sin llamada JMAP extra.
+3. **Parametrizar el `accountId`.** Hoy **~20 sitios** en `mail/router.ts` fijan
+   `session.accountId`, más los builders de URL de blobs (descarga/subida).
+   Introducir un helper `resolveAccountId(session, requested)`:
+   `undefined` → personal; `requested ∈ session.accounts` → lo devuelve; si no →
+   **403 `account_forbidden`**. El `accountId` llega por query param
+   (`?accountId=`). Sustituir `session.accountId` por el helper en cada ruta y en
+   los builders de blob URL.
+4. **Autorización.** El 403 del BFF es defensa en profundidad: Stalwart YA
+   impide que un miembro vea cuentas de las que no es miembro (su sesión solo
+   lista las suyas). El BFF valida contra `session.accounts` para un error limpio
+   y no filtrar ids.
+5. **SSE.** La EventSource de JMAP empuja `StateChange` de **todas** las cuentas
+   de la sesión (incl. compartidas), así que el tap existente ya recibe eventos
+   del buzón compartido. *A revisar en impl:* que el harvesting/notif no asuma el
+   accountId personal.
+
+**Frontend — fork de UX (decisión del owner)**
+
+- **Opción 1 · Selector de cuenta (recomendada MVP):** un chip/dropdown en la
+  cabecera que cambia TODA la vista al buzón compartido (como el selector de
+  Gmail). Modelo mental claro, un buzón a la vez, poco estado nuevo (el
+  `accountId` entra en las claves de TanStack Query).
+- **Opción 2 · Sidebar unificado:** los buzones compartidos como secciones extra
+  en la barra lateral, bajo los personales. Todo a la vista pero más estado y más
+  riesgo de mezclar contextos.
+- **Recomendación:** Opción 1 para el MVP; Opción 2 diferida.
+
+### G-2 · Copia a la bandeja privada
+
+**Fork que cambia el modelo — ¿copia Céfiro o Stalwart nativamente?**
+
+- **Modelo NATIVO (probablemente el más barato — a confirmar):** configurar el
+  grupo en Stalwart para que el correo entrante caiga en el buzón compartido **Y**
+  se entregue una copia a cada miembro (entrega dual / expansión de lista +
+  buzón). Si Stalwart lo soporta, la copia es **gratis a nivel MTA** y Céfiro no
+  hace nada. Encaja con "config solo desde Stalwart". **Necesita 1 confirmación**
+  de config/doc: que Stalwart entregue a ambos (buzón del grupo + miembros).
+- **Modelo APP / `Email/copy` (probado en el spike):** Céfiro copia con la
+  credencial del **miembro**. Necesario si Stalwart no hace la entrega dual, o
+  para **opt-in por miembro** (la expansión MTA es todo-o-nada por config del
+  grupo) y para copias **retroactivas/selectivas**.
+
+**El PUSH/daemon del diseño original (F2: suscripción al EventSource del grupo +
+credencial potente del grupo) queda DESCARTADO:** el spike demostró que no hace
+falta credencial del grupo; si Céfiro copia, lo hace con la del miembro (PULL).
+
+**Sub-fork del modelo APP (cuándo copia):**
+- **Manual (primer slice recomendado):** el miembro pulsa "copiar a mi bandeja"
+  en un mensaje del grupo. Trivial, el miembro controla, sin job de fondo.
+- **Automático de fondo:** un job del BFF recorre miembros y usa la credencial
+  cifrada de cada uno para copiar el correo nuevo del grupo. Automático, pero es
+  infra nueva y usa credenciales de miembros offline.
+
+**Decisiones de producto (owner) — recomendaciones**
+- **Opt-in:** toggle por buzón compartido, **default OFF** (opt-in explícito).
+- **Retención / cascada:** **sin borrado en cascada en el MVP.** La copia es
+  correo del propio miembro en su propia bandeja; él la gestiona. La purga con
+  retención (F1) aplica solo al buzón del grupo, si acaso. El F3 (cascada) queda
+  diferido.
+- **Direcciones:** qué buzones activan copia se decide **por buzón**, no global.
+- **Caveats del spike:** la copia cuenta contra la **cuota personal** del miembro;
+  poner `keywords`/`mailboxIds` explícitos para conservar flags.
+
+**Orden recomendado de G-2:** confirmar primero el modelo **NATIVO** (barato,
+cero código); si no da (o si el opt-in por miembro lo exige), usar el modelo
+**APP manual** como primer slice; el automático de fondo solo si se pide.
+
+---
+
 ## 1. Los dos modelos, lado a lado
 
 | | **F2 Modelo A** (ya hecho) | **#50 Modelo A+** (grupal con copia) | **#13 Modelo B** (compartido + colaborativo) |
