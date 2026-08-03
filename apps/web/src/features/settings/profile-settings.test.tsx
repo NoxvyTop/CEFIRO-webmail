@@ -85,6 +85,29 @@ describe("ProfileSettings", () => {
     expect(screen.queryByText("CB")).not.toBeInTheDocument();
   });
 
+  // GH #272: a failed load used to `return null` — a blank panel with no sign
+  // of the failure and no retry. It now shows #250's load-error language, and
+  // the retry recovers into the form.
+  it("shows a retry instead of a blank panel when the profile cannot be loaded", async () => {
+    const { MailApiError } = await import("../mailbox/api");
+    fetchProfile.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ProfileSettings />
+      </QueryClientProvider>,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(i18n.t("settings.errors.generic"));
+    expect(screen.queryByLabelText(i18n.t("settings.displayName"))).not.toBeInTheDocument();
+
+    fetchProfile.mockResolvedValue(profile);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+    expect(await screen.findByLabelText(i18n.t("settings.displayName"))).toBeInTheDocument();
+  });
+
   it("editing the name and saving triggers a PATCH with the new displayName only", async () => {
     updateProfile.mockResolvedValueOnce({ ...profile, displayName: "New Name" });
     renderSettings();

@@ -39,6 +39,14 @@ const RAW_MODE: SieveRawScript = {
   script: HAND_WRITTEN,
   updatedAt: "2026-07-01T10:00:00.000Z",
 };
+// GH #267: a hand-written script that was saved, then deactivated by handing the
+// account back to the rule builder. It is stored (`script`) but NOT running
+// (`mode: "rules"` — the generated script is what runs).
+const INACTIVE_STORED: SieveRawScript = {
+  mode: "rules",
+  script: HAND_WRITTEN,
+  updatedAt: "2026-07-01T10:00:00.000Z",
+};
 
 /** Renders with whatever the state fetcher is already stubbed to do. */
 function renderRaw() {
@@ -209,6 +217,73 @@ describe("SieveAdvancedEditor", () => {
 
     expect(await screen.findByTestId("settings-loading")).toBeInTheDocument();
     expect(screen.queryByLabelText(i18n.t("filters.advanced.label"))).not.toBeInTheDocument();
+  });
+
+  // GH #267: a hand-written script is stored but inactive (mode is `rules`, so
+  // the generated script is what runs). The header used to claim the textarea
+  // was "the script your rules produce" while showing this dormant one — so a
+  // user read their own old script as the output of their live rules, and could
+  // save the garbage back into service believing they were confirming it.
+  it("says the stored script is saved but not applied, instead of claiming the rules produce it", async () => {
+    renderEditor(INACTIVE_STORED);
+    await open();
+
+    expect(screen.getByText(i18n.t("filters.advanced.storedInactive"))).toBeInTheDocument();
+    // The misleading intro is gone.
+    expect(screen.queryByText(i18n.t("filters.advanced.intro"))).not.toBeInTheDocument();
+    // The stored hand-written script is shown, editable, and re-activating it is
+    // stated as a takeover before the button is pressed.
+    expect(screen.getByLabelText(i18n.t("filters.advanced.label"))).toHaveValue(HAND_WRITTEN);
+    expect(screen.getByText(i18n.t("filters.advanced.takeoverWarning"))).toBeInTheDocument();
+    // Nothing was regenerated just to show the stored script.
+    expect(fetchGeneratedSieveScript).not.toHaveBeenCalled();
+  });
+
+  it("lets the user view the rules-generated script separately, without losing the saved one", async () => {
+    renderEditor(INACTIVE_STORED);
+    await open();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.advanced.viewGenerated") }));
+
+    const generated = (await screen.findByLabelText(
+      i18n.t("filters.advanced.generatedLabel"),
+    )) as HTMLTextAreaElement;
+    expect(generated).toHaveValue(GENERATED);
+    // Read-only: a preview to look at, never the thing a save would activate.
+    expect(generated.readOnly).toBe(true);
+    await waitFor(() => expect(fetchGeneratedSieveScript).toHaveBeenCalled());
+
+    // Back to the saved script — still there, unchanged. The two are distinct.
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.advanced.viewStored") }));
+    expect(screen.getByLabelText(i18n.t("filters.advanced.label"))).toHaveValue(HAND_WRITTEN);
+  });
+
+  it("says the button re-activates the saved script, and saving takes it over", async () => {
+    saveSieveRawScript.mockResolvedValueOnce(RAW_MODE);
+    renderEditor(INACTIVE_STORED);
+    await open();
+
+    const button = screen.getByRole("button", { name: i18n.t("filters.advanced.saveReactivate") });
+    expect(button).toBeInTheDocument();
+    fireEvent.click(button);
+
+    await waitFor(() => expect(saveSieveRawScript).toHaveBeenCalledWith(HAND_WRITTEN));
+  });
+
+  it("offers no save over the read-only generated preview", async () => {
+    renderEditor(INACTIVE_STORED);
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.advanced.viewGenerated") }));
+    await screen.findByLabelText(i18n.t("filters.advanced.generatedLabel"));
+
+    expect(
+      screen.queryByRole("button", { name: i18n.t("filters.advanced.saveReactivate") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("filters.advanced.save") }),
+    ).not.toBeInTheDocument();
+    // And nothing warns about a takeover while merely looking at the preview.
+    expect(screen.queryByText(i18n.t("filters.advanced.takeoverWarning"))).not.toBeInTheDocument();
   });
 
   it("closes again without losing what was typed", async () => {

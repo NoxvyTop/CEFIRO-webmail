@@ -65,7 +65,11 @@ test("the first run configures SSO, mints the first admin, and closes the wizard
   await page.getByLabel("Client Secret").fill(SETUP_WIZARD_SSO.clientSecret);
   // "Guardar" belongs to the SSO form; the account form's button is "Crear".
   await page.getByRole("button", { name: "Guardar" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Error: revisa los datos");
+  // GH #271: the wizard now maps errors by code instead of one blanket
+  // "Error: revisa los datos" — a client-side invalid issuer is `invalid_body`.
+  await expect(page.getByRole("alert")).toHaveText(
+    "Revisa los datos: hay campos incompletos o con un formato inválido.",
+  );
 
   await page.getByLabel("Issuer", { exact: true }).fill(SETUP_WIZARD_SSO.issuer);
   await page.getByRole("button", { name: "Guardar" }).click();
@@ -81,10 +85,16 @@ test("the first run configures SSO, mints the first admin, and closes the wizard
   await page.getByRole("button", { name: "Crear" }).click();
   await expect(page.getByText("Usuario creado")).toBeVisible();
 
-  // Creating the SAME account again must be refused (409 user_exists) rather
-  // than quietly minting a second admin on the same address.
+  // Creating again must be refused rather than quietly minting a second admin.
+  // Note the mechanism: by now an admin exists AND SSO is configured, so the
+  // completion latch (GH #234) has already CLOSED the router — the second create
+  // is refused with 404 (closed), which surfaces the generic error, not the 409
+  // user_exists path. Either way it's refused; we assert the refusal (an alert
+  // appears and no second "Usuario creado") without pinning a brittle string.
+  // (The generic copy for a closed router is unhelpful — tracked in a follow-up.)
   await page.getByRole("button", { name: "Crear" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Error: revisa los datos");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByText("Usuario creado")).toHaveCount(0);
 
   // GH #234, end to end. The instance now has an active admin AND an SSO
   // config, so the setup router is closed — permanently, and to everyone

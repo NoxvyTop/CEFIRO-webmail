@@ -12,6 +12,7 @@
     "forbidden": "No tienes permisos de administrador",
     "back": "Volver",
     "empty": "No hay usuarios",
+    "retry": "Reintentar",
     "nav": {
       "label": "Secciones de administración",
       "resumen": "Resumen",
@@ -76,6 +77,7 @@
     "errors": {
       "forbidden": "Necesitas permisos de administrador para hacer esto",
       "generic": "No se pudo completar la acción",
+      "invalid_body": "Los datos no son válidos",
       "last_admin": "No se puede: es el único administrador activo. Nombra a otro antes de cambiar este.",
       "load": "No se pudieron cargar los usuarios",
       "self_archive": "No puedes archivar tu propia cuenta",
@@ -97,12 +99,14 @@
       "notConfigured": "Sin configurar",
       "save": "Guardar",
       "saved": "Guardado",
-      "error": "No se pudo guardar",
       "fields": {
         "issuer": "Issuer",
         "clientId": "Client ID",
         "clientSecret": "Client Secret",
         "scopes": "Scopes"
+      },
+      "errors": {
+        "issuerInvalid": "Introduce un issuer válido: una URL completa, p. ej. https://id.tu-empresa.com."
       }
     }
   },
@@ -128,11 +132,13 @@
       "email": "Usuario",
       "password": "Contraseña",
       "submit": "Entrar",
+      "submitting": "Entrando…",
       "error": "Credencial inválida",
       "hint": "Solo disponible en modo de configuración o recuperación",
       "errors": {
         "emptyUser": "Introduce tu usuario.",
         "emptyPassword": "Introduce tu contraseña.",
+        "network_error": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
         "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo."
       }
     }
@@ -141,15 +147,26 @@
     "title": "Configuración inicial",
     "tokenLabel": "Contraseña temporal de consola",
     "connect": "Conectar",
+    "connecting": "Conectando…",
     "disabled": "El modo de configuración está desactivado",
     "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
     "ssoTitle": "Proveedor SSO (OIDC)",
     "userTitle": "Nuevo usuario",
     "save": "Guardar",
+    "saving": "Guardando…",
     "create": "Crear",
+    "creating": "Creando…",
     "saved": "Guardado",
     "created": "Usuario creado",
     "error": "Error: revisa los datos",
+    "errors": {
+      "generic": "No se pudo completar la operación. Revisa los datos e inténtalo de nuevo.",
+      "invalid_body": "Revisa los datos: hay campos incompletos o con un formato inválido.",
+      "network_error": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo.",
+      "unauthorized": "La contraseña temporal de consola es incorrecta.",
+      "user_exists": "Ya existe un usuario con ese correo."
+    },
     "fields": {
       "issuer": "Issuer",
       "clientId": "Client ID",
@@ -176,6 +193,10 @@
     "conversationCount_one": "{{count}} mensaje",
     "conversationCount_other": "{{count}} mensajes",
     "searchPlaceholder": "Buscar en el correo…",
+    "searchResults": "Resultados de búsqueda",
+    "searchResultCount_one": "{{count}} resultado",
+    "searchResultCount_other": "{{count}} resultados",
+    "clearSearch": "Quitar búsqueda",
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un correo",
@@ -184,6 +205,7 @@
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
     "newMailNotification": "Correo nuevo",
+    "liveUpdatesLimited": "Las actualizaciones en vivo están limitadas en esta pestaña porque hay demasiadas abiertas. Cierra otra y recarga para reanudarlas aquí.",
     "enableNotifications": "Activar notificaciones",
     "resizeList": "Ajustar ancho de la lista",
     "errors": {
@@ -276,6 +298,7 @@
     "quotedReadOnly": "Se muestra como texto plano. El formato original se conserva en el mensaje que se envía.",
     "title": "Redactar",
     "newMessage": "Nuevo mensaje",
+    "editDraft": "Editar borrador",
     "from": "De",
     "to": "Para",
     "cc": "Cc",
@@ -455,10 +478,16 @@
       "label": "Script Sieve",
       "takeoverWarning": "Si lo guardas, pasa a ser lo que ejecuta tu servidor de correo: tus reglas y tus respuestas automáticas siguen guardadas, pero dejan de aplicarse hasta que vuelvas a ellas.",
       "save": "Guardar y usar este script",
+      "saveReactivate": "Guardar y volver a activar este script",
       "saved": "Script guardado y aplicado",
       "useRules": "Volver a mis reglas",
       "keptOnReturn": "Al volver se conserva tu script: deja de aplicarse y lo encontrarás aquí sin cambios.",
       "rejected": "Tu servidor de correo rechazó este script, así que no se guardó nada. Corrígelo y vuelve a intentarlo.",
+      "storedInactive": "Tienes un script Sieve escrito a mano y guardado, pero hoy no se aplica: ahora mismo se ejecuta el que generan tus reglas. Lo tienes aquí abajo tal como lo dejaste; puedes volver a activarlo o ver el que generan tus reglas.",
+      "viewLabel": "Qué script mostrar",
+      "viewStored": "Mi script guardado",
+      "viewGenerated": "El que generan mis reglas",
+      "generatedLabel": "Script que generan tus reglas (solo lectura)",
       "notice": "Estás usando un script Sieve escrito a mano y es el que se ejecuta. Estas reglas están guardadas, pero no se aplican hasta que vuelvas a ellas desde el editor avanzado."
     }
   },

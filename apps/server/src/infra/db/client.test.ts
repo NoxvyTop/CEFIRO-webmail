@@ -7,7 +7,9 @@ import {
   DEFAULT_DB_POOL_MAX,
   DEFAULT_DB_STATEMENT_TIMEOUT_MS,
   isConnectionError,
+  isUniqueViolation,
   mapDbError,
+  UNIQUE_VIOLATION_CODE,
   wrapDbErrors,
 } from "./client";
 
@@ -105,6 +107,25 @@ describe("mapDbError (GH #191 — DB transport failure → 503)", () => {
   it("does not double-wrap an existing DomainError", () => {
     const already = new DomainError("upstream_timeout", 504, "errors.upstream_timeout");
     expect(mapDbError(already)).toBe(already);
+  });
+});
+
+describe("isUniqueViolation (GH #277 — 23505 → the caller's 409, not a 500)", () => {
+  it("recognizes a unique-constraint violation and leaves it a server-side query error", () => {
+    const dup = queryErr(UNIQUE_VIOLATION_CODE);
+    expect(isUniqueViolation(dup)).toBe(true);
+    // A 23505 is NOT the connection dying, so mapDbError must pass it through
+    // untouched for the caller (admin user creation) to catch and map itself.
+    expect(mapDbError(dup)).toBe(dup);
+    expect(isConnectionError(dup)).toBe(false);
+  });
+
+  it("is false for any other error", () => {
+    expect(isUniqueViolation(queryErr("23503"))).toBe(false);
+    expect(isUniqueViolation(connErr("ECONNREFUSED"))).toBe(false);
+    expect(isUniqueViolation(new Error("boom"))).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation("23505")).toBe(false);
   });
 });
 

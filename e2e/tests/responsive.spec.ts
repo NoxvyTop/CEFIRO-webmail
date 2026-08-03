@@ -138,7 +138,9 @@ test.describe("phone viewport (375x812)", () => {
 
     // Reenviar is the one the clipping used to swallow.
     await footer.getByRole("button", { name: "Reenviar" }).click();
-    await expect(page.getByRole("dialog", { name: "Nuevo mensaje" })).toBeVisible();
+    // The dialog is named by compose mode now (GH #269): forwarding names it
+    // "Reenviar", not the old blanket "Nuevo mensaje".
+    await expect(page.getByRole("dialog", { name: "Reenviar" })).toBeVisible();
   });
 
   test("the reader's top action bar still fits too (GH #214 at 375px)", async ({ page }) => {

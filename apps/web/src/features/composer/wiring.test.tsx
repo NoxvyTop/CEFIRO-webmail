@@ -96,7 +96,8 @@ describe("composer wiring", () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=reply:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: a reply composer now announces itself as a reply, not "New message".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.reply") });
     expect(within(dialog).getByText("a@x.com")).toBeInTheDocument();
   });
 
@@ -104,7 +105,8 @@ describe("composer wiring", () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=forward:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: a forward composer now announces itself as a forward, not "New message".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.forward") });
     const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
     expect((subject as HTMLInputElement).value).toMatch(/^Fwd: /);
     expect(within(dialog).getByText(/doc\.pdf/)).toBeInTheDocument();

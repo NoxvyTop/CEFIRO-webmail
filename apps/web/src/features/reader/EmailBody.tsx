@@ -12,6 +12,12 @@ interface EmailBodyProps {
   // "not truncated") so the many existing call sites and fixtures that predate
   // the flag keep their meaning.
   bodyTruncated?: boolean;
+  // GH #275: reports the cids of referenced, safe-inline-image attachments
+  // whose blob fetch failed, so they never rendered inline. ThreadView uses
+  // this to keep such an attachment reachable as a downloadable chip instead
+  // of leaving it as a broken inline icon with no download path. Optional so
+  // existing callers/fixtures are unaffected.
+  onInlineImageError?: (failedCids: string[]) => void;
 }
 
 // Mirrors the server's SAFE_INLINE_CONTENT_TYPES image subset (see also
@@ -81,7 +87,7 @@ async function fetchAsDataUrl(blobId: string, name: string | null, type: string)
 function useResolvedCidImageMap(
   bodyHtml: string | null,
   attachments: AttachmentMeta[] | undefined,
-): Record<string, string> {
+): { resolvedMap: Record<string, string>; failedCids: string[] } {
   const candidates = useMemo(() => {
     if (!bodyHtml) return [];
     const referencedCids = extractReferencedCids(bodyHtml);
@@ -94,37 +100,48 @@ function useResolvedCidImageMap(
   }, [bodyHtml, attachments]);
 
   const [resolvedMap, setResolvedMap] = useState<Record<string, string>>({});
+  // GH #275: cids among the candidates whose fetch rejected — a candidate is,
+  // by construction, a referenced safe-image attachment that was SUPPOSED to
+  // render inline, so a failure here means it renders as nothing (broken icon)
+  // and must be surfaced as a downloadable chip instead of vanishing.
+  const [failedCids, setFailedCids] = useState<string[]>([]);
 
   useEffect(() => {
     let isCurrent = true;
 
     if (candidates.length === 0) {
       setResolvedMap({});
+      setFailedCids([]);
       return;
     }
 
-    // Clear any previous message's resolved entries immediately so a stale
-    // map is never briefly attributed to the new message.
+    // Clear any previous message's resolved/failed entries immediately so a
+    // stale map is never briefly attributed to the new message.
     setResolvedMap({});
+    setFailedCids([]);
 
     Promise.all(
       candidates.map(async (attachment) => {
         try {
           const dataUrl = await fetchAsDataUrl(attachment.blobId, attachment.name, attachment.type);
-          return [attachment.cid, dataUrl] as const;
+          return { cid: attachment.cid, dataUrl } as const;
         } catch {
           // Fetch/network failure: leave this cid unresolved rather than
-          // falling back to an unauthenticated (401-prone) blob URL.
-          return null;
+          // falling back to an unauthenticated (401-prone) blob URL, and
+          // record it as failed so its attachment stays reachable (GH #275).
+          return { cid: attachment.cid, dataUrl: null } as const;
         }
       }),
     ).then((results) => {
       if (!isCurrent) return;
       const resolved: Record<string, string> = {};
+      const failed: string[] = [];
       for (const entry of results) {
-        if (entry) resolved[entry[0]] = entry[1];
+        if (entry.dataUrl) resolved[entry.cid] = entry.dataUrl;
+        else failed.push(entry.cid);
       }
       setResolvedMap(resolved);
+      setFailedCids(failed);
     });
 
     return () => {
@@ -132,7 +149,7 @@ function useResolvedCidImageMap(
     };
   }, [candidates]);
 
-  return resolvedMap;
+  return { resolvedMap, failedCids };
 }
 
 // HTML emails are authored assuming a light background (the Gmail/Outlook
@@ -160,43 +177,64 @@ const EMAIL_PAPER_COLOR_SCHEME = "light";
 // remaining case that still shows a void while the iframe is unmeasurable.
 const FALLBACK_HEIGHT = "min(50vh, 520px)";
 
-// GH #135: very long HTML messages (typically marketing/newsletter mail)
-// render clipped, with a "View entire message" control that reveals the
-// rest. "Too long" is measured on the message's extracted VISIBLE TEXT
-// length, not raw HTML character count — raw HTML length is a poor proxy
-// for what the reader actually experiences: a table-heavy marketing
-// newsletter can spend most of its bytes on layout markup (nested
-// presentation tables, repeated inline styles, attribute-heavy <img> tags)
-// around a comparatively small amount of actual copy, while a plain-prose
-// email of the same byte size is almost entirely reading material. Raw byte
-// count would treat those as equally "long"; extracted text doesn't. It's
-// also the only measure available from OUTSIDE the sandboxed iframe:
-// contentDocument access (and therefore real rendered pixel height) is
-// blocked in real sandboxed browsers by design — see useContentHeight below
-// — so, unlike FALLBACK_HEIGHT, this can't be based on a post-render
-// measurement at all; it has to be decided up front, before the iframe ever
-// mounts, from the sanitized HTML string itself.
+// GH #135/#276: very long/tall HTML messages (typically marketing/newsletter
+// mail, or an image-heavy signature or receipt) render clipped, with a "View
+// entire message" control that reveals the rest.
 //
-// 1000 sits with real headroom below this reader's own newsletter fixture
-// (e2e/fixtures/mail.ts's ~14KB Solandra Outlet HTML newsletter, seeded into
-// Junk specifically to exercise this — extracts to roughly 1,570 characters
-// of visible text) and comfortably above an ordinary multi-paragraph human
-// reply (typically a few hundred characters), so everyday correspondence
-// isn't clipped by accident.
-const BODY_TRUNCATE_TEXT_THRESHOLD = 1000;
+// GH #276: the decision is made on the message's RENDERED HEIGHT, not its text
+// length. The real rendered height is used whenever it can be measured (see
+// useContentHeight below). It usually can't: a sandbox iframe without
+// allow-same-origin gives its srcdoc an opaque origin, so contentDocument —
+// and therefore the real pixel height — is unreachable from here in real
+// browsers by design (loosening that would weaken the isolation of untrusted
+// email HTML, so it stays as-is). For that common case the height is ESTIMATED
+// from the sanitized HTML string itself, before the iframe ever mounts — the
+// same "decide from outside the sandbox, up front" constraint that
+// detectAuthoredContentWidth works under. Crucially the estimate counts
+// IMAGES, not just characters: a short-text-but-tall message (a signature or
+// receipt built mostly from images) used to slip under the old text-only
+// threshold, fall to FALLBACK_HEIGHT, and hide its lower half behind the
+// invisible overlay scrollbar #160 documents — exactly the GH #276 bug.
+
+// Real measured px above which the body is clipped. Sits well above an
+// ordinary reply and the FALLBACK_HEIGHT box, so only a genuinely tall
+// message is clipped once its true height is known.
+const MEASURED_CLIP_HEIGHT_PX = 640;
+
+// Estimate px above which the body is clipped when the real height can't be
+// measured — same px unit as estimateRenderedHeightPx below. Calibrated to
+// roughly the old ~1000-character trigger for text-only mail (this reader's
+// ~14KB Solandra Outlet newsletter fixture in e2e/fixtures/mail.ts extracts
+// to ~1,570 characters, comfortably over it) while now also catching
+// image-heavy short-text bodies, and staying above an ordinary
+// multi-paragraph human reply so everyday correspondence isn't clipped.
+const ESTIMATED_CLIP_HEIGHT_PX = 280;
+
+// Coarse per-node contributions for the pre-mount estimate — it only needs to
+// tell "tall" from "short", never be pixel-accurate.
+const ESTIMATE_LINE_PX = 22; // ~one wrapped line of 15px/1.65 body text
+const ESTIMATE_CHARS_PER_LINE = 80; // rough wrap width in the reader column
+const ESTIMATE_IMAGE_PX = 180; // a typical inline image / logo / banner row
 
 // Clipped preview height — enough to establish context (subject/opening
 // content) without showing a near-full screen of an unread message.
 // Viewport-proportional, matching FALLBACK_HEIGHT's own pattern.
 const CLIPPED_BODY_HEIGHT = "min(35vh, 260px)";
 
-// Extracts the visible text length from an HTML string via the same safe,
+// Best-effort rendered-height estimate (px) from a sanitized HTML string,
+// used only when the real height can't be measured — see the GH #276 note
+// above for why that's the common case. Parsed via the same safe,
 // detached-document DOMParser pattern used throughout this file
-// (isEffectivelyPlainText, splitQuotedHtml, ...) — reads text content only,
-// never executes anything in the (already-sanitized, here) markup.
-function visibleTextLength(html: string): number {
+// (isEffectivelyPlainText, splitQuotedHtml, ...) — reads structure/text only,
+// never executes anything in the (already-sanitized, here) markup. Counts
+// visible text wrapped to lines PLUS a flat contribution per image, which is
+// what makes an image-heavy signature/receipt tall despite little text.
+function estimateRenderedHeightPx(html: string): number {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  return (doc.body.textContent ?? "").trim().length;
+  const textLength = (doc.body.textContent ?? "").trim().length;
+  const textPx = Math.ceil(textLength / ESTIMATE_CHARS_PER_LINE) * ESTIMATE_LINE_PX;
+  const imagePx = doc.body.querySelectorAll("img").length * ESTIMATE_IMAGE_PX;
+  return textPx + imagePx;
 }
 
 // Tags that show up when plain text gets wrapped in trivial HTML (line/
@@ -474,6 +512,17 @@ function splitQuotedText(bodyText: string): { newContent: string; quotedTrail: s
   };
 }
 
+// GH #270: the email body iframe stays sandboxed with NO scripts and NO
+// same-origin access — untrusted email HTML must never run code or reach the
+// app's origin/session. It only grants the two popup tokens: with a bare
+// sandbox="" the browser BLOCKS the `target="_blank"` every sanitized <a>
+// carries (see sanitize.ts), so no link in an HTML email opened at all.
+// `allow-popups` lets a click open a new tab and `allow-popups-to-escape-sandbox`
+// makes that tab a normal, unsandboxed page — the link opens outside the
+// sandbox without ever loosening the sandbox around the email content itself.
+// Deliberately does NOT include allow-scripts or allow-same-origin.
+const IFRAME_SANDBOX = "allow-popups allow-popups-to-escape-sandbox";
+
 // GH #160: srcDoc's own <style> gets an extra `body{zoom:<scale>}` rule
 // whenever the email's authored width doesn't fit — see
 // detectAuthoredContentWidth/computeEmailScale below for how scale is
@@ -584,24 +633,33 @@ function useContainerWidth() {
  */
 function useContentHeight(resetKey: string): {
   height: string;
+  // The real measured px when contentDocument was reachable, else null. GH
+  // #276 clips on this when present (the true rendered height), falling back
+  // to a pre-mount estimate when it's null (the common opaque-origin case).
+  measuredHeight: number | null;
   onLoad: (event: SyntheticEvent<HTMLIFrameElement>) => void;
 } {
   const [height, setHeight] = useState<string>(FALLBACK_HEIGHT);
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
 
   useEffect(() => {
     setHeight(FALLBACK_HEIGHT);
+    setMeasuredHeight(null);
   }, [resetKey]);
 
   function onLoad(event: SyntheticEvent<HTMLIFrameElement>) {
     try {
       const measured = event.currentTarget.contentDocument?.documentElement.scrollHeight;
-      if (measured) setHeight(`${measured}px`);
+      if (measured) {
+        setHeight(`${measured}px`);
+        setMeasuredHeight(measured);
+      }
     } catch {
       // Cross-origin access blocked by the sandbox — expected, keep the fallback height.
     }
   }
 
-  return { height, onLoad };
+  return { height, measuredHeight, onLoad };
 }
 
 /**
@@ -644,7 +702,12 @@ export function EmailBody({ bodyTruncated = false, ...props }: EmailBodyProps) {
   );
 }
 
-function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyProps, "bodyTruncated">) {
+function EmailBodyContent({
+  bodyHtml,
+  bodyText,
+  attachments,
+  onInlineImageError,
+}: Omit<EmailBodyProps, "bodyTruncated">) {
   const { t } = useTranslation();
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
   const [quoteRevealed, setQuoteRevealed] = useState(false);
@@ -689,7 +752,16 @@ function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyPro
   // inside the sandboxed iframe itself. Built from the FULL raw bodyHtml
   // (pre-split) so cid: images resolve the same whether they land in the
   // new-content half or the quoted-trail half below.
-  const cidMap = useResolvedCidImageMap(bodyHtml, attachments);
+  const { resolvedMap: cidMap, failedCids } = useResolvedCidImageMap(bodyHtml, attachments);
+
+  // GH #275: bubble up the cids that failed to render inline so the parent can
+  // keep their attachments reachable as downloadable chips. failedCids is a
+  // stable reference across renders unless its contents actually change, so
+  // this only re-reports on a real change; the parent guards against a
+  // redundant report anyway.
+  useEffect(() => {
+    onInlineImageError?.(failedCids);
+  }, [failedCids, onInlineImageError]);
 
   // Splits the raw bodyHtml at the first detected quote boundary (GH #91).
   // This is a structural, pre-sanitize split — see splitQuotedHtml. Only
@@ -715,7 +787,11 @@ function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyPro
     return sanitizeEmailHtml(htmlSplit.quotedHtml, { allowRemoteImages, cidMap });
   }, [htmlSplit, allowRemoteImages, cidMap]);
 
-  const { height: newHeight, onLoad: onNewLoad } = useContentHeight(sanitizedNew?.html ?? "");
+  const {
+    height: newHeight,
+    measuredHeight: newMeasuredHeight,
+    onLoad: onNewLoad,
+  } = useContentHeight(sanitizedNew?.html ?? "");
   const { height: quotedHeight, onLoad: onQuotedLoad } = useContentHeight(sanitizedQuoted?.html ?? "");
 
   // GH #160: measures the real available width of the (un-sandboxed)
@@ -735,16 +811,21 @@ function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyPro
     [sanitizedQuoted, containerWidth],
   );
 
-  // GH #135: measured on sanitizedNew only — the new-content half of the
+  // GH #135/#276: measured on sanitizedNew only — the new-content half of the
   // GH #91 split, never the quoted trail. The quoted trail already has its
   // own single show/hide toggle (renderQuoteToggle); layering a second,
   // independent clipping control on the same content (hidden by the quote
   // toggle, then re-clipped by this one once revealed) would be confusing,
   // so truncation simply never applies there, however long it is.
-  const isBodyTooLong = useMemo(
-    () => (sanitizedNew ? visibleTextLength(sanitizedNew.html) > BODY_TRUNCATE_TEXT_THRESHOLD : false),
-    [sanitizedNew],
-  );
+  //
+  // GH #276: decided by rendered height — the real measured px when the
+  // sandbox let us read it, otherwise the pre-mount estimate (which counts
+  // images, so a tall image-heavy body is caught even with little text).
+  const isBodyTooLong = useMemo(() => {
+    if (!sanitizedNew) return false;
+    if (newMeasuredHeight != null) return newMeasuredHeight > MEASURED_CLIP_HEIGHT_PX;
+    return estimateRenderedHeightPx(sanitizedNew.html) > ESTIMATED_CLIP_HEIGHT_PX;
+  }, [sanitizedNew, newMeasuredHeight]);
   const isBodyClipped = isBodyTooLong && !bodyExpanded;
 
   // Plain-text counterpart of the HTML split above — used only when the
@@ -779,7 +860,7 @@ function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyPro
               Expanding therefore can never reveal anything sanitize hasn't
               already processed. */}
           <iframe
-            sandbox=""
+            sandbox={IFRAME_SANDBOX}
             srcDoc={wrapDocument(sanitizedNew.html, newScale)}
             onLoad={onNewLoad}
             title={t("mail.emailContent")}
@@ -815,7 +896,7 @@ function EmailBodyContent({ bodyHtml, bodyText, attachments }: Omit<EmailBodyPro
             {quoteRevealed && (
               <div className="mt-2 overflow-hidden rounded-[10px] border border-line">
                 <iframe
-                  sandbox=""
+                  sandbox={IFRAME_SANDBOX}
                   srcDoc={wrapDocument(sanitizedQuoted.html, quotedScale)}
                   onLoad={onQuotedLoad}
                   title={t("mail.emailContent")}

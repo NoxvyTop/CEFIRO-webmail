@@ -36,7 +36,11 @@ export function MailPage() {
   const { width: listWidth, maxWidth: paneMaxWidth, startDrag, handleKeyDown } = useResizablePane();
   const isAdmin = user?.role === "admin";
 
-  useMailEvents(true);
+  // GH #274: the stream may refuse this tab's handshake with 429 too_many_streams
+  // (the 8/user cap of #241). When it does, the hook stops the silent retry loop
+  // and reports it here so the tab can say live updates are limited rather than
+  // spinning forever with no sign to the user.
+  const { liveUpdatesLimited } = useMailEvents(true);
 
   const mailboxParam = searchParams.get("mailbox");
   const threadParam = searchParams.get("thread");
@@ -272,6 +276,19 @@ export function MailPage() {
     });
   }
 
+  // GH #268: leaves the search and returns to the folder. The search box lives
+  // in the app shell (App.tsx), so the list header carries its own clear
+  // affordance — this drops `q` (and any open thread from a result) so the view
+  // falls back to the folder/label it was scoped to.
+  function handleClearSearch() {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("q");
+      next.delete("thread");
+      return next;
+    });
+  }
+
   function handleSelectMessage(email: EmailSummary) {
     // Gmail behavior: a draft has nothing to "read" — clicking it should
     // resume writing, not open the read-only reader. The JMAP $draft keyword
@@ -435,6 +452,17 @@ export function MailPage() {
           threadParam ? "hidden lg:flex" : "flex"
         } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
+        {/* GH #274: this tab could not open a live stream (429 too_many_streams).
+            A persistent, polite banner — not a toast that fades — because the
+            limitation lasts until a stream frees up and the tab is reloaded. */}
+        {liveUpdatesLimited && (
+          <p
+            role="status"
+            className="shrink-0 border-b border-line bg-soft px-4 py-2 text-xs text-warn"
+          >
+            {t("mail.liveUpdatesLimited")}
+          </p>
+        )}
         {otherMailboxError && (
           <p role="alert" className="p-4 text-sm text-warn">
             {t(mailErrorKey(mailboxesQuery.error))}
@@ -489,6 +517,7 @@ export function MailPage() {
             onLabels={handleLabels}
             activeLabel={labelParam ?? undefined}
             onClearLabel={handleClearLabel}
+            onClearSearch={handleClearSearch}
             archiveMailboxId={archiveMailboxId}
             onArchived={handleArchived}
             customLabels={customLabels}

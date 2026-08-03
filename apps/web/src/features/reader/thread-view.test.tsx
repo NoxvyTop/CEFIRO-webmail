@@ -220,7 +220,8 @@ describe("ThreadView", () => {
     const loadImagesButton = await screen.findByRole("button", { name: i18n.t("mail.loadImages") });
 
     const iframe = (await screen.findByTitle(i18n.t("mail.emailContent"))) as HTMLIFrameElement;
-    expect(iframe.getAttribute("sandbox")).toBe("");
+    // GH #270: popup-escape only — still no scripts, still no same-origin.
+    expect(iframe.getAttribute("sandbox")).toBe("allow-popups allow-popups-to-escape-sandbox");
     expect(iframe.getAttribute("srcdoc")).not.toContain(REMOTE_IMAGE_URL);
 
     fireEvent.click(loadImagesButton);
@@ -516,12 +517,17 @@ describe("ThreadView", () => {
           { blobId: "b1", name: "report.pdf", type: "application/pdf", size: 2048, cid: null },
           { blobId: "logo-blob", name: "logo.png", type: "image/png", size: 512, cid: "logo123" },
         ];
+        const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
         vi.stubGlobal(
           "fetch",
           vi.fn(async (input: RequestInfo | URL) => {
             const url = String(input);
             if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
             if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            // The inline image resolves successfully, so it renders in the body
+            // and is correctly de-duplicated out of the chip list (GH #275: a
+            // FAILED fetch is the case that keeps the chip — covered below).
+            if (url.includes("/api/mail/blobs/logo-blob")) return new Response(pngBytes, { status: 200 });
             return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
           }),
         );
@@ -531,6 +537,38 @@ describe("ThreadView", () => {
         expect(await screen.findByText(i18n.t("attachments.count", { count: 1 }))).toBeInTheDocument();
         expect(screen.getByText(/report\.pdf/)).toBeInTheDocument();
         expect(screen.queryByText(/logo\.png/)).not.toBeInTheDocument();
+      });
+
+      // GH #275: the flip side of the de-dup above. When a referenced,
+      // safe-image cid's blob fetch FAILS, it never renders inline — so hiding
+      // its chip too (as the de-dup does) would make the attachment
+      // unreachable: no inline render, no download link. EmailBody reports the
+      // failure and the chip must reappear so the file stays downloadable.
+      it("keeps a cid attachment reachable as a downloadable chip when its inline blob fetch fails", async () => {
+        const state = structuredClone(thread);
+        state.emails[0]!.bodyHtml = `<p>See the logo below.</p><img src="cid:logo123">`;
+        state.emails[0]!.attachments = [
+          { blobId: "logo-blob", name: "logo.png", type: "image/png", size: 512, cid: "logo123" },
+        ];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+            if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+            // The inline blob fetch fails — the exact GH #275 failure mode.
+            if (url.includes("/api/mail/blobs/logo-blob")) {
+              return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+            }
+            return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+          }),
+        );
+        renderThread();
+
+        // Optimistically hidden while the fetch is in flight, then the failure
+        // brings the chip back so the attachment is still downloadable.
+        expect(await screen.findByText(/logo\.png/)).toBeInTheDocument();
+        expect(screen.getByText(i18n.t("attachments.count", { count: 1 }))).toBeInTheDocument();
       });
 
       it("keeps a real image attachment (sent as an actual attachment, not embedded via cid:) in the chip list", async () => {

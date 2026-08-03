@@ -37,9 +37,30 @@ function fakeJmap(options: {
   validateError?: unknown;
   setResponse?: Record<string, unknown>;
   mailboxes?: { name: string; role?: string | null }[];
+  /**
+   * Override which script the provider considers ACTIVE. Defaults to the
+   * existing managed script, because this system always activates it (every
+   * create/update below carries `onSuccessActivateScript`).
+   */
+  activeScriptId?: string | null;
+  /**
+   * Simulate a provider that ignores `onSuccessDeactivateScript` — used to
+   * prove a destroy that follows a failed deactivation is still surfaced as a
+   * failure rather than a silent success (GH #266).
+   */
+  deactivatable?: boolean;
 }) {
   const calls: Recorded[] = [];
   const uploads: string[] = [];
+  const existingScripts = options.existingScripts ?? [];
+  // The fake tracks the active script so it can enforce RFC 9661 honestly: a
+  // destroy aimed at the active script is refused with a `sieveIsActive`
+  // SetError, exactly as Stalwart does (GH #266). Without this the old
+  // single-call destroy path passed here while 502ing against a live server.
+  let activeScriptId: string | null =
+    options.activeScriptId !== undefined
+      ? options.activeScriptId
+      : (existingScripts.find((s) => s.name === MANAGED_SCRIPT_NAME)?.id ?? null);
   const client = {
     async getSession() {
       return session;
@@ -58,13 +79,40 @@ function fakeJmap(options: {
         ];
       }
       if (method === "SieveScript/get") {
-        return [["SieveScript/get", { list: options.existingScripts ?? [] }, "0"]];
+        return [["SieveScript/get", { list: existingScripts }, "0"]];
       }
       if (method === "SieveScript/validate") {
         return [["SieveScript/validate", { error: options.validateError ?? null }, "0"]];
       }
       if (method === "SieveScript/set") {
-        return [["SieveScript/set", options.setResponse ?? {}, "0"]];
+        const setArgs = args as {
+          destroy?: string[];
+          onSuccessActivateScript?: string | null;
+          onSuccessDeactivateScript?: boolean;
+        };
+        // RFC 9661: onSuccess(De)activate are applied AFTER create/update/
+        // destroy, so a destroy of the still-active script is refused with a
+        // `sieveIsActive` SetError whatever activation argument it carries.
+        const blockedId = (setArgs.destroy ?? []).find((id) => id === activeScriptId);
+        if (blockedId !== undefined) {
+          return [
+            ["SieveScript/set", { notDestroyed: { [blockedId]: { type: "sieveIsActive" } } }, "0"],
+          ];
+        }
+        // A canned response drives the notCreated failure path, once the
+        // active-destroy rule above has had its say.
+        if (options.setResponse) {
+          return [["SieveScript/set", options.setResponse, "0"]];
+        }
+        // Apply the activation semantics a real server would: deactivate first
+        // (how the empty-rule path frees the managed script), then activate.
+        if (setArgs.onSuccessDeactivateScript === true && options.deactivatable !== false) {
+          activeScriptId = null;
+        }
+        if (typeof setArgs.onSuccessActivateScript === "string") {
+          activeScriptId = setArgs.onSuccessActivateScript;
+        }
+        return [["SieveScript/set", {}, "0"]];
       }
       return [[method, {}, "0"]];
     },
@@ -105,15 +153,33 @@ describe("syncSieveScript", () => {
     });
   });
 
-  it("destroys the managed script when nothing remains", async () => {
+  it("deactivates the managed script before destroying it when nothing remains", async () => {
     const { client, calls, uploads } = fakeJmap({
       existingScripts: [{ id: "s9", name: MANAGED_SCRIPT_NAME }],
     });
     await syncSieveScript({ jmap: client, auth, session, rules: [], vacation: null });
     expect(uploads).toHaveLength(0);
-    const set = calls.at(-1)!;
-    expect(set.method).toBe("SieveScript/set");
-    expect(set.args).toMatchObject({ destroy: ["s9"], onSuccessActivateScript: null });
+    // RFC 9661: the active script can only be destroyed after a SEPARATE
+    // deactivation (GH #266). The fake refuses a same-call destroy with
+    // `sieveIsActive`, so this passing proves the two-call shape.
+    const setCalls = calls.filter((c) => c.method === "SieveScript/set");
+    expect(setCalls).toHaveLength(2);
+    expect(setCalls[0]!.args).toMatchObject({ onSuccessDeactivateScript: true });
+    expect(setCalls[0]!.args).not.toHaveProperty("destroy");
+    expect(setCalls[1]!.args).toMatchObject({ destroy: ["s9"] });
+  });
+
+  it("surfaces sieve_sync_failed when the provider refuses to deactivate the active script", async () => {
+    // A provider that ignores the deactivation leaves the managed script active,
+    // so the following destroy is refused with `sieveIsActive` and must be
+    // reported as a failure, never swallowed as a silent success (GH #266).
+    const { client } = fakeJmap({
+      existingScripts: [{ id: "s9", name: MANAGED_SCRIPT_NAME }],
+      deactivatable: false,
+    });
+    await expect(
+      syncSieveScript({ jmap: client, auth, session, rules: [], vacation: null }),
+    ).rejects.toMatchObject({ code: "sieve_sync_failed" });
   });
 
   it("does nothing when nothing remains and no managed script exists", async () => {

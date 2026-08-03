@@ -97,15 +97,44 @@ describe("AdminPage SSO config panel", () => {
     expect(await screen.findByText(i18n.t("admin.sso.saved"))).toBeInTheDocument();
   });
 
-  it("shows an error message when saving fails", async () => {
+  // GH #282: an invalid/empty issuer used to reach the server and come back as a
+  // single fixed "could not save" with no clue which field was wrong. The issuer
+  // is now validated at the field (mirroring the server's `z.string().url()`),
+  // so the doomed request is never sent and the hint names the field.
+  it("shows a per-field hint for an invalid issuer without sending the request", async () => {
     fetchAdminUsers.mockResolvedValue([]);
     fetchAdminSso.mockResolvedValue(configuredSso);
-    updateAdminSso.mockRejectedValue(new Error("boom"));
+    // This file has no beforeEach reset, so clear the shared spy's prior calls.
+    updateAdminSso.mockClear();
     renderPage();
 
     await screen.findByText(i18n.t("admin.sso.configured"));
+    fireEvent.change(screen.getByLabelText("Issuer"), { target: { value: "not-a-url" } });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.sso.save") }));
 
-    expect(await screen.findByText(i18n.t("admin.sso.error"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("admin.sso.errors.issuerInvalid"))).toBeInTheDocument();
+    expect(updateAdminSso).not.toHaveBeenCalled();
+  });
+
+  // GH #282: a server rejection now resolves through the per-code map, and the
+  // form — the client secret above all — survives the failure, so fixing one
+  // field does not mean re-typing the secret.
+  it("shows the server error by code and keeps the client secret on failure", async () => {
+    const { MailApiError } = await import("../mailbox/api");
+    fetchAdminUsers.mockResolvedValue([]);
+    fetchAdminSso.mockResolvedValue(configuredSso);
+    updateAdminSso.mockRejectedValue(new MailApiError(400, "invalid_body"));
+    renderPage();
+
+    await screen.findByText(i18n.t("admin.sso.configured"));
+    fireEvent.change(screen.getByLabelText("Issuer"), { target: { value: "https://auth.test" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "webmail" } });
+    fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "s3cr3t" } });
+    fireEvent.change(screen.getByLabelText("Scopes"), { target: { value: "openid email" } });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.sso.save") }));
+
+    expect(await screen.findByText(i18n.t("admin.errors.invalid_body"))).toBeInTheDocument();
+    const secret = screen.getByLabelText("Client Secret") as HTMLInputElement;
+    expect(secret.value).toBe("s3cr3t");
   });
 });

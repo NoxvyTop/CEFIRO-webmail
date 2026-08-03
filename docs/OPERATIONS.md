@@ -922,8 +922,39 @@ si la base se corrompe, para no dejar parados a los usuarios de producción.
 (La recuperación completa a nivel infraestructura se hace por otra vía y es más
 lenta; la dbSOS no la sustituye, la complementa.)
 
-Scripts: [`scripts/db-backup.sh`](../scripts/db-backup.sh) y
-[`scripts/db-restore.sh`](../scripts/db-restore.sh).
+Scripts: [`scripts/db-backup.sh`](../scripts/db-backup.sh),
+[`scripts/db-restore.sh`](../scripts/db-restore.sh) y el ensayo automatizado
+[`scripts/db-restore-drill.sh`](../scripts/db-restore-drill.sh).
+
+### RPO y RTO
+
+Números concretos, no aspiraciones. Son el contrato de recuperación que las
+alertas y la programación de la dbSOS tienen que sostener:
+
+| Objetivo | Valor | De dónde sale |
+|---|---|---|
+| **RPO** (pérdida máxima de datos) | **≤ 24 h** con la dbSOS diaria; **≈ el intervalo del backup** si se programa más a menudo | La dbSOS corre una vez al día, así que una corrupción justo antes de la siguiente copia pierde hasta un día de correo enviado, sesiones y auditoría. Para bajarlo, subir la frecuencia del cron (p. ej. cada hora → RPO ≈ 1 h). La copia a nivel infraestructura, con su propia cadencia, es el otro sumando. |
+| **RTO** (tiempo hasta volver a servir) | **objetivo ≤ 15 min** por la vía dbSOS | La base es pequeña (usuarios, sesiones, auditoría y credenciales cifradas; los backups verificados rondan pocos MB). El grueso del RTO es humano/operativo: parar la app, `db-restore.sh` (descifrar + `pg_restore -j` en paralelo, segundos-minutos), arrancar y confirmar `/api/health`. La recuperación a nivel infraestructura es la vía **lenta** de respaldo, no la del RTO. |
+
+Estos números valen solo si la restauración de verdad funciona — por eso se
+**ensaya de forma automatizada**, ver [Ensayo de restauración](#ensayo-de-restauración-drill).
+
+### Copia fuera del host (obligatorio)
+
+`DBSOS_DIR` es local. Una copia que vive en el mismo host que Postgres **no es
+DR**: perder el host (disco, borrado, ransomware, baja del proveedor) se lleva la
+base **y todas sus copias a la vez**. Requisito, no recomendación:
+
+- **Cada dump verificado se copia fuera del host** — a otra máquina, un bucket de
+  objetos (S3/B2/GCS) o un volumen en otro dominio de fallo. Idealmente con
+  versionado/inmutabilidad (object-lock) para que un atacante con acceso al host
+  no pueda borrar también el histórico remoto.
+- **La clave (`DBSOS_KEY_FILE`) vive aparte de ambos** — ni junto a la base ni
+  junto a los backups (el script ya se niega a lo segundo). Sin la clave el dump
+  remoto es inútil; con la clave al lado del dump, el cifrado no protege nada.
+- El envío remoto es responsabilidad del despliegue (fuera de este repo): el
+  paso que sube `dbsos-*.dump.enc` al almacenamiento externo se añade junto al
+  cron de la copia diaria.
 
 ### Cómo conseguir los scripts
 
@@ -1037,19 +1068,32 @@ Regla práctica: **no retirar una versión de clave del llavero mientras exista
 algún backup que la use** — y la ventana de backups es `DBSOS_RETENTION_DAYS`,
 no "desde que se rotó".
 
-### Nunca probar sobre datos vivos
+### Ensayo de restauración (drill)
 
-El round-trip (backup → corromper → restaurar) se prueba **sobre una copia
-desechable**, jamás sobre la base de producción. Patrón verificado:
+Un backup que **verifica** (`pg_restore -l`, solo el índice del archivo) no es un
+backup que **restaura**: el `-l` no toca los datos. La brecha se cierra con un
+ensayo que ejercita la restauración de verdad y **falla ruidosamente** si no
+reproduce el origen — nunca sobre datos vivos, siempre sobre bases desechables.
+
+Automatizado en CI: [`scripts/db-restore-drill.sh`](../scripts/db-restore-drill.sh)
+crea una base fuente desechable, la siembra, corre el `db-backup.sh` real, restaura
+el dump cifrado en una base nueva con el `db-restore.sh` real y compara los datos
+(conteos + un hash por tabla, con una clave foránea de por medio para que un orden
+de restauración roto no pase inadvertido). Lo corre el job `restore-drill` de
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) en cada push/PR, y
+**bloquea el publish** si la restauración deja de reproducir la fuente — así una
+vía de restore que se pudre se descubre aquí, no en una emergencia.
+
+Para lanzarlo a mano contra cualquier Postgres donde se puedan crear bases:
 
 ```sh
-# fuente sana → backup → restaurar en una BD nueva y vacía → comparar conteos
-createdb cefiro_sos_test
-DATABASE_URL=".../origen"  DBSOS_KEY_FILE=... /opt/cefiro/dbsos/db-backup.sh
-DATABASE_URL=".../cefiro_sos_test" DBSOS_KEY_FILE=... DBSOS_YES=1 \
-  /opt/cefiro/dbsos/db-restore.sh latest
-# select count(*) en ambas debe coincidir; dropdb cefiro_sos_test
+# Usa una BD de mantenimiento (p. ej. `postgres`) para crear/soltar las desechables.
+ADMIN_DATABASE_URL="postgres://USER:PASS@HOST:5432/postgres" \
+  bash scripts/db-restore-drill.sh
 ```
+
+No toca la base de la aplicación: crea y suelta `dbsos_drill_src`/`dbsos_drill_dst`
+(configurables) y limpia al salir.
 
 ## Rotación de `MASTER_KEY`
 

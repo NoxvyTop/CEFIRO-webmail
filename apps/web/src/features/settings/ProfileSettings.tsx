@@ -5,6 +5,7 @@ import type { UpdateProfileInput } from "@webmail/shared";
 import { Avatar } from "../../app/ui/Avatar";
 import { updateProfile } from "./api";
 import { settingsErrorKey } from "./errors";
+import { SettingsLoadError, SettingsLoading } from "./PanelStates";
 import { PROFILE_QUERY_KEY, useProfile } from "./useProfile";
 
 // Mirrors apps/web/src/features/composer/RichTextEditor.tsx's raster-only
@@ -115,8 +116,17 @@ export function ProfileSettings() {
     saveMutation.mutate(input);
   }
 
+  // GH #272: propagate #250's loading/error language. A failed load used to
+  // `return null`, leaving a blank panel with no sign of the failure and no
+  // retry — the same silent gap #250 closed for the other settings panels.
+  if (profileQuery.isError) {
+    return (
+      <SettingsLoadError error={profileQuery.error} onRetry={() => void profileQuery.refetch()} />
+    );
+  }
+
   if (displayName === null) {
-    return null;
+    return <SettingsLoading />;
   }
 
   return (

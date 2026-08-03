@@ -334,7 +334,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     expect(FakeEventSource.instances).toHaveLength(4);
   });
 
-  it("stops reconnecting for good once /api/auth/me confirms a 401", async () => {
+  it("stops reconnecting for good once the events endpoint answers 401 (session gone)", async () => {
     vi.useFakeTimers();
     const probe = stubAuthProbe(401);
     const { invalidate, wrapper } = makeWrapper();
@@ -343,13 +343,48 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     act(() => FakeEventSource.instances[0]?.refuseHandshake());
     await flushProbe();
 
-    expect(probe).toHaveBeenCalledWith("/api/auth/me");
+    // GH #274: the probe now re-asks the events endpoint itself — the only
+    // thing that can tell a 401 (session) from a 429 (stream cap) apart — not
+    // /api/auth/me, which cannot see the cap.
+    expect(probe).toHaveBeenCalledWith(
+      "/api/mail/events",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
     // No amount of waiting reopens the stream: only a fresh login can.
     act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
     expect(FakeEventSource.instances).toHaveLength(1);
     // And the session is re-read, so RequireAuth routes to the login screen
     // instead of leaving a mailbox that quietly stopped updating.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+  });
+
+  // GH #274: a second tab over the 8/user cap gets 429 too_many_streams. That
+  // closes the stream exactly like a 401 does, but the session is fine — the
+  // old code probed /api/auth/me, saw !=401, and retried forever in silence, so
+  // the tab never went live and never said why. It must now stop and surface it.
+  it("distinguishes a 429 too_many_streams: stops retrying and reports live updates limited, leaving the session alone", async () => {
+    vi.useFakeTimers();
+    const probe = stubAuthProbe(429);
+    const { invalidate, wrapper } = makeWrapper();
+    const { result } = renderHook(() => useMailEvents(true), { wrapper });
+
+    expect(result.current.liveUpdatesLimited).toBe(false);
+
+    act(() => FakeEventSource.instances[0]?.refuseHandshake());
+    await flushProbe();
+
+    // It asked the events endpoint — the only place that knows about the cap.
+    expect(probe).toHaveBeenCalledWith(
+      "/api/mail/events",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    // The tab is flagged limited so the UI can say so...
+    expect(result.current.liveUpdatesLimited).toBe(true);
+    // ...the session is left untouched (this is not a 401)...
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+    // ...and it never silently reconnects again.
+    act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
+    expect(FakeEventSource.instances).toHaveLength(1);
   });
 
   it("keeps retrying when the handshake was refused but the session is still good", async () => {

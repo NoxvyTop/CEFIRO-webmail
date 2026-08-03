@@ -111,6 +111,29 @@ describe("VacationSettings", () => {
     expect(updateVacationSettings).not.toHaveBeenCalled();
   });
 
+  // GH #272: a failed load used to `return null` — a blank panel that admits
+  // nothing and offers no way back. It now shows #250's load-error language with
+  // a retry that recovers into the form.
+  it("shows a retry instead of a blank panel when the settings cannot be loaded", async () => {
+    const { MailApiError } = await import("../mailbox/api");
+    fetchVacationSettings.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <VacationSettings />
+      </QueryClientProvider>,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(i18n.t("settings.errors.generic"));
+    expect(screen.queryByLabelText(i18n.t("vacation.message"))).not.toBeInTheDocument();
+
+    fetchVacationSettings.mockResolvedValue(settings);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+    expect(await screen.findByLabelText(i18n.t("vacation.message"))).toBeInTheDocument();
+  });
+
   it("shows the sync-failed error from the server", async () => {
     const { MailApiError } = await import("../mailbox/api");
     updateVacationSettings.mockRejectedValueOnce(new MailApiError(502, "sieve_sync_failed"));

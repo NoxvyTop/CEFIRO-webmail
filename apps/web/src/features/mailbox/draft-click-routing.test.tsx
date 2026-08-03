@@ -178,7 +178,8 @@ describe("compose=draft:<id> resolution", () => {
   it("opens the composer at compose=draft:d1 with the draft's own subject/to/body — not a reply/forward quote", async () => {
     renderAt("/?mailbox=mb-drafts&thread=td1&compose=draft:d1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: an edit-draft composer now announces itself as such, not "New message".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.editDraft") });
     const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
     expect((subject as HTMLInputElement).value).toBe("Draft subject");
     // RecipientField chips display name || email — "Bob" here, matching how
@@ -195,7 +196,8 @@ describe("draft-click routing", () => {
     expect(row).toBeTruthy();
     fireEvent.click(row as HTMLElement);
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: opening an existing draft names the dialog "Edit draft".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.editDraft") });
     const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
     expect((subject as HTMLInputElement).value).toBe("Draft subject");
   });
@@ -218,7 +220,8 @@ describe("delete-on-send for an edited draft", () => {
   it("moves the original draft to Trash after successfully sending the edit", async () => {
     const { fetchMock } = renderAt("/?mailbox=mb-drafts&thread=td1&compose=draft:d1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: edit-draft composer name.
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.editDraft") });
     const sendButton = within(dialog).getByRole("button", { name: i18n.t("composer.send") });
     fireEvent.click(sendButton);
 
@@ -246,7 +249,8 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
   it("clears both compose and thread on Cancel, so the reader doesn't show the abandoned draft's thread", async () => {
     renderAt("/?mailbox=mb-drafts&thread=td1&compose=draft:d1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: edit-draft composer name.
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.editDraft") });
     const cancelButton = within(dialog).getByRole("button", { name: i18n.t("composer.cancel") });
     fireEvent.click(cancelButton);
 
@@ -259,7 +263,7 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
     fireEvent.click(discardButton);
 
     expect(
-      screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+      screen.queryByRole("dialog", { name: i18n.t("composer.editDraft") }),
     ).not.toBeInTheDocument();
     expect(screen.queryByTestId("thread-actions-bar")).not.toBeInTheDocument();
   });
@@ -267,13 +271,14 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
   it("clears the thread param after a successful send, so the reader doesn't linger on the sent-and-trashed draft", async () => {
     renderAt("/?mailbox=mb-drafts&thread=td1&compose=draft:d1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: edit-draft composer name.
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.editDraft") });
     const sendButton = within(dialog).getByRole("button", { name: i18n.t("composer.send") });
     fireEvent.click(sendButton);
 
     await vi.waitFor(() => {
       expect(
-        screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+        screen.queryByRole("dialog", { name: i18n.t("composer.editDraft") }),
       ).not.toBeInTheDocument();
     });
     expect(screen.queryByTestId("thread-actions-bar")).not.toBeInTheDocument();
@@ -282,7 +287,8 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
   it("does NOT clear the thread param when closing a non-draft compose (e.g. reply), unchanged from prior behavior", async () => {
     renderAt("/?mailbox=mb-inbox&thread=t1&compose=reply:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    // GH #269: a reply composer now announces itself as a reply, not "New message".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.reply") });
     const cancelButton = within(dialog).getByRole("button", { name: i18n.t("composer.cancel") });
     fireEvent.click(cancelButton);
 
@@ -295,7 +301,7 @@ describe("clearing the piggybacked thread param when a draft-mode composer close
     fireEvent.click(discardButton);
 
     expect(
-      screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+      screen.queryByRole("dialog", { name: i18n.t("composer.reply") }),
     ).not.toBeInTheDocument();
     // Reply/forward never piggybacked `thread` — closing must keep showing
     // the reader for the thread the user was actually viewing.

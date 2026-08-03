@@ -434,6 +434,26 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const knownEmailIdsRef = useRef<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
 
+  // GH #275: cids (per email) of inline images that failed to load inside the
+  // body. An inline cid image is normally hidden from the attachment chip list
+  // (it renders in the body instead), but if its blob fetch fails it renders
+  // as nothing AND had no chip — the attachment became unreachable. EmailBody
+  // reports the failures up here so those attachments surface as downloadable
+  // chips after all.
+  const [failedInlineCids, setFailedInlineCids] = useState<Record<string, string[]>>({});
+
+  function reportFailedInlineCids(emailId: string, cids: string[]) {
+    setFailedInlineCids((previous) => {
+      const existing = previous[emailId] ?? [];
+      // Bail when unchanged so a repeated report (EmailBody re-runs its effect
+      // whenever this component re-renders) can't loop re-renders.
+      if (existing.length === cids.length && existing.every((cid) => cids.includes(cid))) {
+        return previous;
+      }
+      return { ...previous, [emailId]: cids };
+    });
+  }
+
   useEffect(() => {
     const currentEmails = threadQuery.data?.emails;
     if (!currentEmails || currentEmails.length === 0) return;
@@ -772,11 +792,21 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
             // excluding it here too would make the file completely
             // unreachable — neither shown inline (broken image icon) nor
             // downloadable. It must still surface as a regular attachment.
+            //
+            // GH #275: an inline cid image whose blob fetch failed (reported
+            // up via onInlineImageError below) never actually rendered inline,
+            // so hiding its chip too would make it unreachable — it's kept
+            // visible as a downloadable chip in that case.
             const referencedCids = extractReferencedCids(email.bodyHtml);
-            const visibleAttachments = email.attachments.filter(
-              (attachment) =>
-                !(attachment.cid && referencedCids.has(attachment.cid) && isSafeInlineImage(attachment.type)),
-            );
+            const failedCids = failedInlineCids[email.id] ?? [];
+            const visibleAttachments = email.attachments.filter((attachment) => {
+              const rendersInline =
+                Boolean(attachment.cid) &&
+                referencedCids.has(attachment.cid as string) &&
+                isSafeInlineImage(attachment.type);
+              if (!rendersInline) return true;
+              return attachment.cid != null && failedCids.includes(attachment.cid);
+            });
 
             // GH #119: the header of an expanded, collapsible message is
             // itself the collapse control — clicking it re-collapses the
@@ -845,6 +875,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                     bodyText={email.bodyText}
                     attachments={email.attachments}
                     bodyTruncated={email.bodyTruncated}
+                    onInlineImageError={(cids) => reportFailedInlineCids(email.id, cids)}
                   />
                 </div>
                 {visibleAttachments.length > 0 && (

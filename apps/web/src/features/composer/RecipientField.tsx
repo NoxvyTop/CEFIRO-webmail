@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { Contact, EmailAddress } from "@webmail/shared";
 import { searchContacts } from "../contacts/api";
@@ -103,9 +103,62 @@ export function RecipientField({ label, placeholder = label, value, onChange }: 
       setInvalid(true);
       return;
     }
+    // GH #279: adding an address already present would mint a second chip with
+    // the same React key (the chips key on address.email, RecipientField's
+    // list below), and removing either one would then delete both. Drop the
+    // duplicate silently — the recipient is already there — and just clear the
+    // input, so re-typing an existing address reads as a no-op, not an error.
+    if (value.some((address) => suggestionKey(address.email) === suggestionKey(candidate))) {
+      setInputValue("");
+      setInvalid(false);
+      closeSuggestions();
+      return;
+    }
     onChange([...value, { name: null, email: candidate }]);
     setInputValue("");
     setInvalid(false);
+    closeSuggestions();
+  }
+
+  // GH #279: a pasted "a@x, b@y" used to land as one chip that fails the email
+  // shape check, because only Enter and "," split addresses while typing — a
+  // paste bypasses both. Splitting here on comma/semicolon/whitespace turns a
+  // pasted list into one chip per address. Only intercepts when the clipboard
+  // actually carries a separator: a single pasted token falls through to the
+  // browser's own paste so a partial address can still be typed out and
+  // committed with Enter as before.
+  function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
+    const text = event.clipboardData?.getData("text") ?? "";
+    const tokens = text
+      .split(/[\s,;]+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+    if (tokens.length <= 1) return;
+
+    event.preventDefault();
+
+    // Seed the seen-set with the existing recipients so a paste dedups both
+    // against what is already there and against repeats within the paste
+    // itself (same reasoning as commit's dedup above).
+    const seen = new Set(value.map((address) => suggestionKey(address.email)));
+    const additions: EmailAddress[] = [];
+    const rejected: string[] = [];
+    for (const token of tokens) {
+      if (!isValidEmailShape(token)) {
+        rejected.push(token);
+        continue;
+      }
+      const key = suggestionKey(token);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      additions.push({ name: null, email: token });
+    }
+
+    if (additions.length > 0) onChange([...value, ...additions]);
+    // Anything unparseable stays in the input for the user to fix, flagged so
+    // the existing invalid hint shows — rather than being silently dropped.
+    setInputValue(rejected.join(", "));
+    setInvalid(rejected.length > 0);
     closeSuggestions();
   }
 
@@ -202,6 +255,7 @@ export function RecipientField({ label, placeholder = label, value, onChange }: 
             scheduleSearch(event.target.value);
           }}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onBlur={closeSuggestions}
           className="min-w-24 flex-1 border-none bg-transparent px-0.5 text-[14px] text-ink field-focus-line placeholder:text-muted"
         />

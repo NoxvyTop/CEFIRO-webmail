@@ -173,6 +173,43 @@ describe("admin users api", () => {
     expect(malformed.status).toBe(400);
   });
 
+  it("POST /users: a duplicate that races the unique index returns 409, not 500 (GH #277)", async () => {
+    const admin = await createAdmin();
+    // A repo that passes the findByEmail pre-check (returns null) but whose
+    // insert then loses the race to the unique index on users.email — exactly
+    // the TOCTOU window two concurrent creates open. The raw 23505 used to
+    // escape as 500 `internal`; it must now be the same 409 the pre-check gives.
+    const racingUsers = {
+      ...users,
+      async findByEmail() {
+        return null;
+      },
+      async create() {
+        throw Object.assign(new Error("duplicate key value violates unique constraint"), {
+          code: "23505",
+        });
+      },
+    } as unknown as typeof users;
+    const racingApp = createApp({
+      adminRouter: createAdminRouter({
+        sessions,
+        users: racingUsers,
+        mailCredentials,
+        audit,
+        ssoConfig,
+        instanceSettings,
+      }),
+    });
+
+    const res = await racingApp.request("/api/admin/users", {
+      method: "POST",
+      headers: { cookie: `session=${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ email: `race-${crypto.randomUUID()}@noxvytop.com`, displayName: "Race" }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("user_exists");
+  });
+
   it("PUT /users/:id/role: updates role, 404 for missing id", async () => {
     const admin = await createAdmin();
     const target = await users.create({

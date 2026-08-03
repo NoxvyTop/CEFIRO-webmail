@@ -243,6 +243,47 @@ jobs:
       - if: always()
         run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
 
+  # dbSOS restore DRILL (GH #258). db-backup.sh only verifies the archive index;
+  # nothing ever proved the RESTORE reconstructs data. This job runs the real
+  # backup and restore scripts against a throwaway database and fails loudly if
+  # the restored data does not match the source — so a rotted restore path is
+  # caught here, not during an outage. Gated behind lint to fail fast; a failure
+  # blocks publish (see that job's `needs`).
+  restore-drill:
+    needs: [lint]
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    # The Postgres client MUST match the server's major version — pg_dump refuses
+    # to dump a server newer than itself — so this job runs in the postgres:17
+    # image, which carries pg_dump/pg_restore/psql 17. The node image used by
+    # `test` ships an older client that would abort against the 17 service.
+    # openssl is the one tool that image lacks; it is installed below.
+    container: postgres:17
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends openssl
+      - name: run the dbSOS restore drill
+        # A maintenance database the drill creates/drops its throwaway DBs off.
+        # It never touches the application `webmail` database.
+        env:
+          ADMIN_DATABASE_URL: postgres://webmail:webmail@postgres:5432/postgres
+        run: bash scripts/db-restore-drill.sh
+      # A containerised job runs as root; hand workspace ownership back so a later
+      # non-containerised job on the self-hosted runner can clean its checkout.
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
   e2e:
     # The fixture job resolves — and publishes if missing — the exact image
     # this job pulls, so the tag can never name bytes other than the ones this
@@ -410,7 +451,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [test, e2e, coverage]
+    needs: [test, e2e, coverage, restore-drill]
     # A release tag is cut from main, so it validates and publishes on neutral
     # GitHub-hosted infra just like main does.
     runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}

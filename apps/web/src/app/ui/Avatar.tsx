@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const AVATAR_COLORS = [
   "#3E8E7E",
   "#4E6E9E",
@@ -45,8 +47,16 @@ type AvatarProps = {
 // not another entry in the deterministic per-sender color rotation.
 export function Avatar({ name, email, size = 38, tone = "palette", imageUrl }: AvatarProps) {
   const isAccent = tone === "accent";
+  // GH #282: an avatar URL can 404 the moment it is fetched — the admin list
+  // builds rows from `avatarUrl`, and a photo removed between building the list
+  // and painting it (GH #205) would otherwise leave a broken-image icon. On the
+  // image's `error` we remember the URL that failed and fall back to the initials
+  // block below. Keying the fallback on the URL (rather than a plain boolean)
+  // means a later, different photo gets a fresh attempt on its own — e.g. the
+  // header avatar refetched after a profile save.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
-  if (imageUrl) {
+  if (imageUrl && failedUrl !== imageUrl) {
     return (
       <img
         src={imageUrl}
@@ -57,6 +67,7 @@ export function Avatar({ name, email, size = 38, tone = "palette", imageUrl }: A
         // data: URLs still passed by the header/profile.
         loading="lazy"
         decoding="async"
+        onError={() => setFailedUrl(imageUrl)}
         className="shrink-0 rounded-full object-cover"
         style={{ width: size, height: size }}
       />
