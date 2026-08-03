@@ -128,11 +128,6 @@ export function LoginPage() {
                 {t("auth.redirecting")}
               </p>
             )}
-            {mode?.bootstrapMode === false && (
-              <div className="mt-[18px] rounded-[10px] border border-line bg-soft px-3.5 py-3 text-center text-xs leading-[1.55] text-muted">
-                {t("auth.credentialsDisabled")}
-              </div>
-            )}
           </>
         )}
         {mode?.bootstrapMode === true && (

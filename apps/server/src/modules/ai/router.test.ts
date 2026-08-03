@@ -196,6 +196,32 @@ describe("ai router — software-level gate", () => {
   });
 });
 
+describe("ai router — status (GH #292)", () => {
+  it("reports enabled=true when an AI client is configured", async () => {
+    const app = makeApp(fakeAiClient(), null);
+    const res = await app.request("/api/mail/ai/status", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ enabled: true });
+  });
+
+  it("reports enabled=false when no AI client is configured", async () => {
+    const app = makeApp(null, null);
+    const res = await app.request("/api/mail/ai/status", {
+      headers: { cookie: `session=${token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ enabled: false });
+  });
+
+  it("requires a session", async () => {
+    const app = makeApp(fakeAiClient(), null);
+    const res = await app.request("/api/mail/ai/status");
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("ai router — summarize", () => {
   it("fetches the message body via JMAP and returns 3 bullets from the AI client", async () => {
     const { client } = stubJmap("Please review the invoice attached.");

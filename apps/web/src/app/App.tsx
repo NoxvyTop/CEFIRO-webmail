@@ -110,7 +110,11 @@ export function App() {
           {t("app.skipToContent")}
         </a>
         {/* no overflow clipping here: it would cut off the absolutely-positioned user menu */}
-        <header className="flex h-[60px] shrink-0 items-center gap-5 border-b border-line bg-panel px-5 text-ink">
+        {/* GH #293: paint into the status-bar safe area on notched phones/PWA
+            (viewport-fit=cover in index.html opts the viewport in). min-h keeps
+            the 60px bar on desktop, where env(safe-area-inset-top) resolves to
+            0, and lets it grow by the inset rather than squeezing its content. */}
+        <header className="flex min-h-[60px] shrink-0 items-center gap-5 border-b border-line bg-panel px-5 pt-[env(safe-area-inset-top)] text-ink">
           <Link
             to="/"
             aria-label={t("app.home")}
@@ -146,7 +150,10 @@ export function App() {
                 type="button"
                 aria-haspopup="dialog"
                 onClick={() => setShowShortcuts((current) => !current)}
-                className="flex h-[34px] shrink-0 items-center gap-[7px] rounded-[8px] border border-line px-3 text-[13px] text-muted transition hover:bg-hover hover:text-ink"
+                // GH #295: keyboard shortcuts don't apply on touch devices, so
+                // the "Atajos" launcher only shows from md+ (where a keyboard
+                // is present). The Escape/`?` handlers stay wired regardless.
+                className="hidden h-[34px] shrink-0 items-center gap-[7px] rounded-[8px] border border-line px-3 text-[13px] text-muted transition hover:bg-hover hover:text-ink md:flex"
               >
                 <kbd aria-hidden="true" className="rounded border border-line px-[6px] py-[1px] text-[11px]">?</kbd>
                 {t("shortcuts.title")}

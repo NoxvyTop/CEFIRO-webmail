@@ -28,6 +28,10 @@ export interface RichTextEditorProps {
   html: string;
   onChange(html: string): void;
   ariaLabel: string;
+  // GH #292: the empty-body placeholder. Optional so callers/tests that don't
+  // care keep the default copy; the composer passes a variant without the
+  // "…or ask the AI" hint when AI is disabled on the server.
+  placeholder?: string;
 }
 
 // Protocols allowed for links inserted or auto-linked in the composer. Anything else
@@ -109,7 +113,7 @@ export { htmlToPlainText };
 // the one seed that carries no markup to isolate in the first place. Losing
 // the quote's formatting is the deliberate cost, on an emergency path the
 // user only ever reaches when the real editor has already crashed.
-export function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextEditorProps) {
+export function ContentEditableFallback({ html, onChange, ariaLabel, placeholder }: RichTextEditorProps) {
   const { t } = useTranslation();
   // Flattened once, not on every render: re-deriving it would reset the
   // contentEditable's DOM (and the caret with it) while the user types.
@@ -132,7 +136,7 @@ export function ContentEditableFallback({ html, onChange, ariaLabel }: RichTextE
     <div className="relative">
       {isEmpty && (
         <p className="pointer-events-none absolute left-0.5 top-3.5 text-[14.5px] leading-[1.6] text-muted">
-          {t("composer.bodyPlaceholder")}
+          {placeholder ?? t("composer.bodyPlaceholder")}
         </p>
       )}
       <div
@@ -289,7 +293,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
+function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditorProps) {
   const { t } = useTranslation();
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
@@ -536,7 +540,12 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
 
   return (
     <div className="flex flex-col">
-      <div role="toolbar" className="flex items-center gap-1 border-b border-line pb-1.5">
+      {/* GH #291: on a phone-width composer the full control set (B/I/•, text
+          align, link, image insert, image size, image align) overflowed the row
+          — it clipped controls and scrolled sideways. flex-wrap lets it flow
+          onto extra rows so every control stays reachable; on desktop it stays
+          a single row. Same wrap-not-scroll treatment #249 gave the action row. */}
+      <div role="toolbar" className="flex flex-wrap items-center gap-1 border-b border-line pb-1.5">
         <button
           type="button"
           aria-label={t("composer.bold")}
@@ -705,7 +714,7 @@ function TipTapEditor({ html, onChange, ariaLabel }: RichTextEditorProps) {
       <div className="relative">
         {isEmpty && (
           <p className="pointer-events-none absolute left-0.5 top-3.5 text-[14.5px] leading-[1.6] text-muted">
-            {t("composer.bodyPlaceholder")}
+            {placeholder ?? t("composer.bodyPlaceholder")}
           </p>
         )}
         <EditorContent editor={editor} className="min-h-[220px] px-0.5 py-3.5 text-[14.5px] leading-[1.6]" />

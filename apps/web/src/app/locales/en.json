@@ -308,6 +308,7 @@
     "subject": "Subject",
     "body": "Message",
     "bodyPlaceholder": "Write your message… or ask the AI",
+    "bodyPlaceholderNoAi": "Write your message…",
     "signature": "Signature",
     "noSignature": "None",
     "reply": "Reply",

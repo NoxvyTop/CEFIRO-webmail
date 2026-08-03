@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
 import { fetchIdentities, fetchSignatures } from "./api";
+import { fetchAiStatus } from "./aiApi";
 import { useComposer, type PendingUpload } from "./useComposer";
 import { isComposerDraftEmpty } from "./emptiness";
 import { RecipientField } from "./RecipientField";
@@ -281,6 +282,10 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
 
   const identitiesQuery = useQuery({ queryKey: ["mail", "identities"], queryFn: fetchIdentities });
   const signaturesQuery = useQuery({ queryKey: ["mail", "signatures"], queryFn: fetchSignatures });
+  // GH #292: AI is off by default, so hide the "draft with AI" CTA and the AI
+  // hint in the body placeholder unless the server reports it enabled. Defaults
+  // to hidden (false) while the status query is pending or has errored.
+  const { data: aiEnabled = false } = useQuery({ queryKey: ["ai", "status"], queryFn: fetchAiStatus });
 
   const identities: Identity[] = identitiesQuery.data ?? [];
   const signatures: Signature[] = signaturesQuery.data ?? [];
@@ -496,6 +501,8 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
             html={bodySplit.editable}
             onChange={(html) => setField("bodyHtml", joinQuotedTail(html, bodySplit.quoted))}
             ariaLabel={t("composer.body")}
+            // GH #292: drop the "…or ask the AI" hint when AI is disabled.
+            placeholder={aiEnabled ? t("composer.bodyPlaceholder") : t("composer.bodyPlaceholderNoAi")}
           />
 
           {bodySplit.quoted && (
@@ -602,7 +609,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               <path d="M22 2 15 22l-4-9-9-4Z" />
             </svg>
           </Button>
-          {!state.aiUnavailable && (
+          {aiEnabled && !state.aiUnavailable && (
             <button
               type="button"
               onClick={() => void draftWithAi()}

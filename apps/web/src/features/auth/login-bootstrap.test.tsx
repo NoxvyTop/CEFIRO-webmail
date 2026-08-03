@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
@@ -53,7 +53,7 @@ describe("login screen bootstrap form", () => {
     expect(screen.queryByText("Iniciar sesión con SSO")).not.toBeInTheDocument();
   });
 
-  it("shows the SSO action and the disabled-credentials notice when bootstrapMode is false", async () => {
+  it("shows the SSO action and no disabled-credentials notice when bootstrapMode is false", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
@@ -64,10 +64,11 @@ describe("login screen bootstrap form", () => {
     expect(screen.queryByLabelText("Contraseña")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Usuario")).not.toBeInTheDocument();
     expect(screen.queryByText("Acceso de emergencia")).not.toBeInTheDocument();
-    expect(await screen.findByText(i18n.t("auth.credentialsDisabled"))).toBeInTheDocument();
+    // GH #289: the "credentials disabled" notice is no longer shown to end users.
+    expect(screen.queryByText(i18n.t("auth.credentialsDisabled"))).not.toBeInTheDocument();
   });
 
-  it("does not flash the disabled-credentials notice while the mode is still loading", async () => {
+  it("never shows a disabled-credentials notice, even after the mode resolves to false (GH #289)", async () => {
     let resolveMode: (response: Response) => void = () => {};
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
@@ -87,13 +88,17 @@ describe("login screen bootstrap form", () => {
     );
     renderAt("/");
 
-    // SSO renders immediately (mode undefined !== true), but the notice must
-    // wait for an explicit bootstrapMode: false — never shown speculatively.
+    // SSO renders immediately (mode undefined !== true), with no notice.
     expect(await screen.findByText("Iniciar sesión con SSO")).toBeInTheDocument();
     expect(screen.queryByText(i18n.t("auth.credentialsDisabled"))).not.toBeInTheDocument();
 
+    // And once the mode explicitly resolves to false, still no notice — the
+    // block that used to render it was removed for end users.
     resolveMode(new Response(JSON.stringify({ bootstrapMode: false })));
-    expect(await screen.findByText(i18n.t("auth.credentialsDisabled"))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(i18n.t("auth.credentialsDisabled"))).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Iniciar sesión con SSO")).toBeInTheDocument();
   });
 
   it("shows a Conectando… state and the redirecting hint after clicking SSO, then redirects", async () => {

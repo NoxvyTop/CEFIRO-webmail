@@ -10,12 +10,13 @@ import { MailApiError } from "../mailbox/api";
 import { Composer } from "./Composer";
 import { expectNoAxeViolations } from "../../test/axe";
 
-const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft, saveDraft } = vi.hoisted(() => ({
+const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDraft, fetchAiStatus, saveDraft } = vi.hoisted(() => ({
   fetchIdentities: vi.fn(),
   fetchSignatures: vi.fn(),
   sendEmail: vi.fn(),
   uploadAttachment: vi.fn(),
   fetchAiDraft: vi.fn(),
+  fetchAiStatus: vi.fn(),
   saveDraft: vi.fn(),
 }));
 
@@ -25,7 +26,7 @@ const { fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, fetchAiDr
 const { searchContacts } = vi.hoisted(() => ({ searchContacts: vi.fn() }));
 
 vi.mock("./api", () => ({ fetchIdentities, fetchSignatures, sendEmail, uploadAttachment, saveDraft }));
-vi.mock("./aiApi", () => ({ fetchAiDraft }));
+vi.mock("./aiApi", () => ({ fetchAiDraft, fetchAiStatus }));
 vi.mock("../contacts/api", () => ({ searchContacts }));
 
 const identities: Identity[] = [
@@ -83,6 +84,10 @@ describe("Composer", () => {
     saveDraft.mockReset();
     searchContacts.mockReset();
     searchContacts.mockResolvedValue([]);
+    // GH #292: default the AI status to enabled so the existing "draft with AI"
+    // tests see the CTA; individual tests override this to exercise the off case.
+    fetchAiStatus.mockReset();
+    fetchAiStatus.mockResolvedValue(true);
   });
 
   it("renders a dialog with identities in the From select", async () => {
@@ -616,6 +621,18 @@ describe("Composer", () => {
         expect(screen.queryByRole("button", { name: i18n.t("composer.draftWithAi") })).not.toBeInTheDocument(),
       );
     });
+
+    it("does not render the CTA at all when the server reports AI disabled (GH #292)", async () => {
+      fetchAiStatus.mockResolvedValue(false);
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Reunión de mañana" });
+
+      // The composer chrome mounts (Enviar is present)…
+      await screen.findByRole("button", { name: i18n.t("composer.send") });
+      // …but the "draft with AI" CTA never appears without an enabled backend.
+      expect(
+        screen.queryByRole("button", { name: i18n.t("composer.draftWithAi") }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   // GH #125: Escape closes the composer immediately when the draft is empty,
@@ -1120,6 +1137,9 @@ describe("Composer action row at a narrow viewport (GH #249)", () => {
 
   beforeEach(() => {
     searchContacts.mockResolvedValue([]);
+    // GH #292: this row includes the "draft with AI" CTA, so keep AI enabled here.
+    fetchAiStatus.mockReset();
+    fetchAiStatus.mockResolvedValue(true);
     Object.defineProperty(window, "innerWidth", {
       value: NARROW_VIEWPORT_WIDTH,
       configurable: true,
@@ -1146,6 +1166,8 @@ describe("Composer action row at a narrow viewport (GH #249)", () => {
     renderComposer();
 
     const actions = await screen.findByTestId("composer-actions");
+    // GH #292: the AI CTA renders once the async ai/status query resolves enabled.
+    await within(actions).findByRole("button", { name: i18n.t("composer.draftWithAi") });
     for (const name of [i18n.t("composer.send"), i18n.t("composer.draftWithAi")]) {
       expect(within(actions).getByRole("button", { name }).className).toContain("shrink-0");
     }
@@ -1160,6 +1182,8 @@ describe("Composer action row at a narrow viewport (GH #249)", () => {
     renderComposer();
 
     const actions = await screen.findByTestId("composer-actions");
+    // GH #292: wait for the async AI CTA before asserting the worst-case row.
+    await within(actions).findByRole("button", { name: i18n.t("composer.draftWithAi") });
     for (const name of [
       i18n.t("composer.send"),
       i18n.t("composer.draftWithAi"),

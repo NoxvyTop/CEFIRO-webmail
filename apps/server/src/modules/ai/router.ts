@@ -193,6 +193,14 @@ export function createAiRouter(deps: AiDeps) {
 
   router.use("*", requireSession(deps.sessions));
 
+  // GH #292: lets the SPA learn whether AI is usable BEFORE offering the
+  // "draft with AI" CTA, instead of discovering it reactively from an
+  // `ai_disabled` error after the user clicks. `enabled` is the same
+  // software-level gate every route below checks — the AI client is only wired
+  // when AI_ENABLED and an API key are both set (see index.ts buildAiClient).
+  // Session-gated like the rest of the router; no quota, since it does no work.
+  router.get("/ai/status", (c) => c.json({ enabled: deps.aiClient != null }));
+
   router.post("/messages/:id/summarize", requireAiEnabled(deps), quota, requireMail(deps), async (c) => {
     const id = c.req.param("id");
     const session = c.get("jmapSession");
