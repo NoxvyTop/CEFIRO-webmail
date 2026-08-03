@@ -1,47 +1,53 @@
 import { describe, expect, it } from "vitest";
 import { deriveSenderAuthVerdict } from "./sender-auth";
 
-// GH #136: deriveSenderAuthVerdict is a pure function, deliberately free of
-// I/O — same reasoning as extractHarvestCandidates in contacts-harvest.ts —
-// so every case below is a plain unit test over a `headers` array shaped
-// exactly like the JMAP Email "headers" property (RFC 8621 §4.1.1).
+// GH #136 / GH #152: deriveSenderAuthVerdict is a pure function, deliberately
+// free of I/O — same reasoning as extractHarvestCandidates in
+// contacts-harvest.ts — so every case below is a plain unit test over a
+// `headers` array shaped exactly like the JMAP Email "headers" property (RFC
+// 8621 §4.1.1), plus this deployment's own configured authserv-id.
 //
 // The header values in these fixtures follow the RFC 8601 Authentication-Results
 // grammar. Several are copied verbatim from a live Stalwart fixture (see the
 // GH #136 investigation notes) to ground the parser in a real server's actual
 // output, not just hand-crafted examples.
 
+// The authserv-id used by every single-header fixture below, matching the
+// "mail.example.com;" prefix of those header values.
+const OWN = "mail.example.com";
+
 function headerList(value: string, name = "Authentication-Results") {
   return [{ name, value }];
 }
 
+/** Verdict for a lone header, trusting the fixture's own authserv-id. */
+function verdictFor(value: string, name = "Authentication-Results") {
+  return deriveSenderAuthVerdict(headerList(value, name), OWN);
+}
+
 describe("deriveSenderAuthVerdict", () => {
   it("returns 'pass' for an explicit DMARC pass", () => {
-    const verdict = deriveSenderAuthVerdict(
-      headerList(
-        "mail.example.com; spf=pass smtp.mailfrom=partner.test; dkim=pass header.d=partner.test; " +
-          "dmarc=pass (p=reject) header.from=partner.test",
-      ),
+    const verdict = verdictFor(
+      "mail.example.com; spf=pass smtp.mailfrom=partner.test; dkim=pass header.d=partner.test; " +
+        "dmarc=pass (p=reject) header.from=partner.test",
     );
     expect(verdict).toBe("pass");
   });
 
   it("returns 'fail' for an explicit DMARC fail", () => {
-    const verdict = deriveSenderAuthVerdict(
-      headerList(
-        "mail.example.com; spf=fail smtp.mailfrom=attacker.test; dkim=fail header.d=attacker.test; " +
-          "dmarc=fail (p=reject) header.from=cefiro.test",
-      ),
+    const verdict = verdictFor(
+      "mail.example.com; spf=fail smtp.mailfrom=attacker.test; dkim=fail header.d=attacker.test; " +
+        "dmarc=fail (p=reject) header.from=cefiro.test",
     );
     expect(verdict).toBe("fail");
   });
 
   it("returns 'unknown' — not 'pass' — when there is no Authentication-Results header at all", () => {
     // Mirrors the real fixture: mail seeded via authenticated SMTP submission
-    // (Stalwart skips its authentication milter for a trusted, authenticated
-    // session) carries DKIM-Signature headers Stalwart itself added, but no
-    // Authentication-Results header — confirmed live against the running
-    // e2e Stalwart fixture (GH #137's seedInbox path).
+    // (Stalwart adds no Authentication-Results header of its own for a trusted,
+    // authenticated session) carries DKIM-Signature headers Stalwart itself
+    // added, but no Authentication-Results header — confirmed live against the
+    // running e2e Stalwart fixture (GH #137's seedInbox path).
     const headers = [
       { name: "Delivered-To", value: " admin@cefiro.test" },
       { name: "X-Spam-Status", value: " No" },
@@ -49,23 +55,27 @@ describe("deriveSenderAuthVerdict", () => {
       { name: "From", value: " Carla Ibarra <carla@partner.test>" },
       { name: "Subject", value: " Q3 budget draft ready for review" },
     ];
-    expect(deriveSenderAuthVerdict(headers)).toBe("unknown");
+    expect(deriveSenderAuthVerdict(headers, OWN)).toBe("unknown");
   });
 
   it("returns 'unknown' when the headers list is empty or undefined", () => {
-    expect(deriveSenderAuthVerdict([])).toBe("unknown");
-    expect(deriveSenderAuthVerdict(undefined)).toBe("unknown");
+    expect(deriveSenderAuthVerdict([], OWN)).toBe("unknown");
+    expect(deriveSenderAuthVerdict(undefined, OWN)).toBe("unknown");
+    expect(deriveSenderAuthVerdict(null, OWN)).toBe("unknown");
   });
 
   it("returns 'unknown' — not 'pass' — for an unparseable header value", () => {
-    expect(deriveSenderAuthVerdict(headerList("this is not a valid Authentication-Results header"))).toBe(
-      "unknown",
-    );
-    expect(deriveSenderAuthVerdict(headerList(""))).toBe("unknown");
+    // "this is not a valid ..." has no ";", so its whole text is the authserv-id
+    // segment and never matches OWN — as good as no trusted header.
+    expect(verdictFor("this is not a valid Authentication-Results header")).toBe("unknown");
+    expect(verdictFor("")).toBe("unknown");
+    // A header that DOES match the authserv-id but has no resinfo after it still
+    // degrades to "unknown" rather than a guessed pass.
+    expect(verdictFor("mail.example.com;")).toBe("unknown");
   });
 
   it("returns 'unknown' for the bare 'none' token (RFC 8601 §2.2: no authentication was performed)", () => {
-    expect(deriveSenderAuthVerdict(headerList("mail.example.com; none"))).toBe("unknown");
+    expect(verdictFor("mail.example.com; none")).toBe("unknown");
   });
 
   // SPF/DKIM passing for a domain unrelated to the visible From header is
@@ -73,8 +83,8 @@ describe("deriveSenderAuthVerdict", () => {
   // sender being genuine. DMARC is what checks alignment with From, so the
   // verdict must come from DMARC's own result, not from SPF/DKIM directly.
   it("does NOT return 'pass' when SPF/DKIM pass but DMARC is absent from the header entirely", () => {
-    const verdict = deriveSenderAuthVerdict(
-      headerList("mail.example.com; spf=pass smtp.mailfrom=attacker.test; dkim=pass header.d=attacker.test"),
+    const verdict = verdictFor(
+      "mail.example.com; spf=pass smtp.mailfrom=attacker.test; dkim=pass header.d=attacker.test",
     );
     expect(verdict).not.toBe("pass");
     expect(verdict).toBe("unknown");
@@ -87,21 +97,17 @@ describe("deriveSenderAuthVerdict", () => {
   // signal, so it must surface as the warning verdict, not get lost among the
   // unrelated SPF/DKIM passes.
   it("does NOT return 'pass' when SPF/DKIM pass but DMARC explicitly fails due to From misalignment", () => {
-    const verdict = deriveSenderAuthVerdict(
-      headerList(
-        "mail.example.com; spf=pass smtp.mailfrom=cuentas@cefiro-verificacion-segura.test; " +
-          "dkim=pass header.d=cefiro-verificacion-segura.test; " +
-          "dmarc=fail (p=reject sp=reject dis=none) header.from=cefiro.test",
-      ),
+    const verdict = verdictFor(
+      "mail.example.com; spf=pass smtp.mailfrom=cuentas@cefiro-verificacion-segura.test; " +
+        "dkim=pass header.d=cefiro-verificacion-segura.test; " +
+        "dmarc=fail (p=reject sp=reject dis=none) header.from=cefiro.test",
     );
     expect(verdict).toBe("fail");
   });
 
   for (const result of ["none", "neutral", "temperror", "permerror"]) {
     it(`does NOT return 'pass' for DMARC result '${result}'`, () => {
-      const verdict = deriveSenderAuthVerdict(
-        headerList(`mail.example.com; dmarc=${result} header.from=partner.test`),
-      );
+      const verdict = verdictFor(`mail.example.com; dmarc=${result} header.from=partner.test`);
       expect(verdict).not.toBe("pass");
       expect(verdict).toBe("unknown");
     });
@@ -119,12 +125,14 @@ describe("deriveSenderAuthVerdict", () => {
       "cuentas@cefiro-verificacion-segura.test) smtp.mailfrom=cuentas@cefiro-verificacion-segura.test; " +
       "iprev=permerror (dns record not found) policy.iprev=172.23.0.1; " +
       "dmarc=none header.from=cefiro-verificacion-segura.test policy.dmarc=none";
-    expect(deriveSenderAuthVerdict(headerList(real))).toBe("unknown");
+    // authserv-id here is mail.cefiro.test, so trust it with that id.
+    expect(deriveSenderAuthVerdict(headerList(real), "mail.cefiro.test")).toBe("unknown");
   });
 
   it("matches the header name case-insensitively", () => {
     const verdict = deriveSenderAuthVerdict(
       headerList("mail.example.com; dmarc=pass header.from=partner.test", "authentication-results"),
+      OWN,
     );
     expect(verdict).toBe("pass");
   });
@@ -133,31 +141,97 @@ describe("deriveSenderAuthVerdict", () => {
     const folded =
       " mail.cefiro.test;\r\n\tspf=none (no record) smtp.helo=external-relay.test;\r\n\t" +
       "dmarc=pass header.from=partner.test policy.dmarc=none";
-    expect(deriveSenderAuthVerdict(headerList(folded))).toBe("pass");
+    expect(deriveSenderAuthVerdict(headerList(folded), "mail.cefiro.test")).toBe("pass");
   });
 
-  // The critical anti-spoofing case: this Stalwart e2e fixture does NOT strip
-  // a sender-injected Authentication-Results header before adding its own
-  // (confirmed live — see GH #136 investigation notes), and the JMAP
-  // "header:Authentication-Results:asText" single-value accessor returns
-  // whichever instance is LAST in the raw header list, not necessarily the
-  // genuine one. A receiving MTA always prepends its own trust headers ahead
-  // of the original message content, so the first (topmost) occurrence is the
-  // one actually added by our own server; anything after it can be attacker-
-  // controlled. deriveSenderAuthVerdict is given the full ordered `headers`
-  // array specifically so it can pick the first occurrence itself, instead of
-  // trusting an accessor that (on this server) surfaces the wrong one.
-  it("trusts only the FIRST Authentication-Results header when the message forged a second one", () => {
-    const headers = [
-      { name: "Delivered-To", value: " admin@cefiro.test" },
-      // Genuine header, added by the receiving server: DMARC did not pass.
-      { name: "Authentication-Results", value: " mail.cefiro.test; dmarc=none header.from=spoof-test.test" },
-      { name: "From", value: ' "Fake Trusted Sender" <attacker@spoof-test.test>' },
-      { name: "Subject", value: " Header injection probe" },
-      // Forged header, injected by the sender inside the original message,
-      // claiming a pass it never earned.
-      { name: "Authentication-Results", value: " mail.cefiro.test; dmarc=pass header.from=cefiro.test" },
-    ];
-    expect(deriveSenderAuthVerdict(headers)).toBe("unknown");
+  // ── GH #152: authserv-id matching (RFC 8601 §5) ──────────────────────────
+  //
+  // The trust decision is keyed off the authserv-id, NOT header position. The
+  // cases below are the point of the issue: they prove a sender-forged header —
+  // the first and only one on an authenticated submission, where this server
+  // adds none of its own — cannot mint a "verified sender" badge.
+  describe("authserv-id matching (GH #152)", () => {
+    // The live-reproduced exploit. On authenticated submission Stalwart adds no
+    // Authentication-Results header of its own, so a header the SENDER forged is
+    // the first and only one. Trusting it (the old #136 behaviour) handed a
+    // green "verified sender" badge to a message spoofed from an ordinary
+    // mailbox credential. Its authserv-id does not match ours, so it is ignored.
+    it("ignores a forged DMARC pass whose authserv-id does not match ours (the authenticated-submission exploit)", () => {
+      const headers = [
+        { name: "Delivered-To", value: " victim@cefiro.test" },
+        { name: "DKIM-Signature", value: " v=1; a=ed25519-sha256; d=cefiro.test; ..." },
+        { name: "From", value: ' "Banco Seguro" <no-reply@banco-seguro.test>' },
+        { name: "Subject", value: " Su cuenta ha sido bloqueada" },
+        // Forged by the sender, claiming a pass from some other server.
+        {
+          name: "Authentication-Results",
+          value: " forged-mta.attacker.test; dmarc=pass header.from=banco-seguro.test",
+        },
+      ];
+      expect(deriveSenderAuthVerdict(headers, "mail.cefiro.test")).toBe("unknown");
+    });
+
+    it("returns the real verdict for a genuine header from the configured authserv-id", () => {
+      const headers = [
+        { name: "Received", value: " from mx.partner.test by mail.cefiro.test" },
+        {
+          name: "Authentication-Results",
+          value: " mail.cefiro.test; dmarc=pass (p=reject) header.from=partner.test",
+        },
+        { name: "From", value: " Carla Ibarra <carla@partner.test>" },
+      ];
+      expect(deriveSenderAuthVerdict(headers, "mail.cefiro.test")).toBe("pass");
+    });
+
+    it("lets the genuine (matching authserv-id) header win over a forged one placed first, regardless of order", () => {
+      const headers = [
+        { name: "Delivered-To", value: " victim@cefiro.test" },
+        // Forged, injected by the sender ABOVE the genuine one, claiming a pass.
+        {
+          name: "Authentication-Results",
+          value: " forged-mta.attacker.test; dmarc=pass header.from=cefiro.test",
+        },
+        { name: "From", value: ' "Fake Trusted Sender" <attacker@spoof-test.test>' },
+        // Genuine, added by our own receiving MTA: DMARC actually failed.
+        {
+          name: "Authentication-Results",
+          value: " mail.cefiro.test; dmarc=fail (p=reject) header.from=cefiro.test",
+        },
+      ];
+      // The forged header sits first, but it is not from our authserv-id, so the
+      // genuine "fail" is what surfaces — never the forged "pass".
+      expect(deriveSenderAuthVerdict(headers, "mail.cefiro.test")).toBe("fail");
+    });
+
+    it("trusts nothing when the authserv-id is unset — every verdict is 'unknown' (fail-safe)", () => {
+      const genuinePass = headerList("mail.cefiro.test; dmarc=pass header.from=partner.test");
+      for (const unset of [undefined, null, "", "   "]) {
+        expect(deriveSenderAuthVerdict(genuinePass, unset)).toBe("unknown");
+      }
+    });
+
+    it("matches the authserv-id case-insensitively and trimmed", () => {
+      const headers = headerList("MAIL.Cefiro.TEST; dmarc=pass header.from=partner.test");
+      expect(deriveSenderAuthVerdict(headers, "  mail.cefiro.test  ")).toBe("pass");
+    });
+
+    it("ignores an optional authserv-id version and any leading comment", () => {
+      // RFC 8601 §5: `authserv-id [ CFWS version ]`, and CFWS may precede the id.
+      const withVersion = headerList("mail.cefiro.test 1; dmarc=pass header.from=partner.test");
+      expect(deriveSenderAuthVerdict(withVersion, "mail.cefiro.test")).toBe("pass");
+      const withComment = headerList("(added by mx) mail.cefiro.test; dmarc=pass header.from=partner.test");
+      expect(deriveSenderAuthVerdict(withComment, "mail.cefiro.test")).toBe("pass");
+    });
+
+    it("requires a whole-token match, not a loose substring", () => {
+      // The attacker's authserv-id merely CONTAINS the configured one. A
+      // substring check would trust it; a whole-token compare must not.
+      const lookAlike = headerList("evil-mail.test; dmarc=pass header.from=cefiro.test");
+      expect(deriveSenderAuthVerdict(lookAlike, "mail.test")).toBe("unknown");
+      // The reverse (configured id merely a suffix/prefix of a longer id) is
+      // just as untrusted.
+      const longer = headerList("mail.test.attacker.example; dmarc=pass header.from=cefiro.test");
+      expect(deriveSenderAuthVerdict(longer, "mail.test")).toBe("unknown");
+    });
   });
 });

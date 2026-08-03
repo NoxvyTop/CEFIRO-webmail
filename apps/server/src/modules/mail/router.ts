@@ -85,12 +85,13 @@ type JmapAttachment = {
   cid?: string | null;
 };
 
-// GH #136: the full, ordered header list (RFC 8621 §4.1.1) — requested
-// instead of the narrower `header:Authentication-Results:asText` accessor
-// because this server can return the WRONG instance from that accessor when
-// a message carries more than one header with the same name (e.g. a sender-
-// forged one). See sender-auth.ts's file header for the live investigation
-// behind this choice.
+// GH #136 / GH #152: the full, ordered header list (RFC 8621 §4.1.1) —
+// requested instead of the narrower `header:Authentication-Results:asText`
+// accessor because this server can return the WRONG instance from that accessor
+// when a message carries more than one header with the same name (e.g. a
+// sender-forged one). deriveSenderAuthVerdict then trusts only the header whose
+// authserv-id matches this deployment's configured JMAP_AUTHSERV_ID — see
+// sender-auth.ts's file header for the trust model behind this choice.
 type JmapHeader = { name: string; value: string };
 
 type JmapEmailDetail = JmapEmail & {
@@ -207,7 +208,12 @@ function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
     }));
 }
 
-function toEmailDetail(email: JmapEmailDetail): EmailDetail {
+// GH #152: `authServId` is this deployment's own configured authserv-id
+// (JMAP_AUTHSERV_ID), threaded through so deriveSenderAuthVerdict can trust only
+// the Authentication-Results header our own MTA stamped. Passed explicitly
+// rather than closed over so this stays a pure mapper like the rest of the
+// to*() helpers; undefined here means the fail-safe "unknown" for every message.
+function toEmailDetail(email: JmapEmailDetail, authServId: string | undefined): EmailDetail {
   const html = collectBodyValues(email.htmlBody, email.bodyValues);
   const text = collectBodyValues(email.textBody, email.bodyValues);
   return {
@@ -228,7 +234,7 @@ function toEmailDetail(email: JmapEmailDetail): EmailDetail {
     messageId: email.messageId ?? null,
     references: email.references ?? null,
     inReplyTo: email.inReplyTo ?? null,
-    senderAuth: deriveSenderAuthVerdict(email.headers),
+    senderAuth: deriveSenderAuthVerdict(email.headers, authServId),
   };
 }
 
@@ -423,6 +429,11 @@ export function createMailRouter(deps: MailDeps) {
   // Bearer while attachments and the event stream still send Basic.
   const authMode: JmapAuthMode = deps.authMode ?? "basic";
   const authHeader = (auth: JmapAuth) => jmapAuthHeader(auth, authMode);
+  // GH #152: the authserv-id whose Authentication-Results header this server
+  // trusts for the sender-authenticity badge. Undefined when unconfigured,
+  // which deriveSenderAuthVerdict treats as fail-safe "unknown" for every
+  // message.
+  const authServId = deps.authServId;
 
   router.use("*", requireSession(deps.sessions));
 
@@ -894,7 +905,7 @@ export function createMailRouter(deps: MailDeps) {
 
     const thread: ThreadDetail = {
       id: threadId,
-      emails: emails.map(toEmailDetail),
+      emails: emails.map((email) => toEmailDetail(email, authServId)),
     };
     return c.json(thread);
   });

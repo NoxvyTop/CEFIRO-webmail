@@ -120,7 +120,12 @@ beforeAll(async () => {
 });
 afterAll(() => sql.end());
 
-function makeApp(jmap: JmapClient | null) {
+// GH #152: the sender-authenticity fixtures below stamp `mail.cefiro.test` as
+// their authserv-id, so tests that assert a verdict pass that as the configured
+// id. Omitting it (undefined) exercises the fail-safe path — every verdict
+// "unknown" — which is why it is a plain optional, not a defaulted, parameter:
+// a default would swallow an explicit `undefined` and hide that path.
+function makeApp(jmap: JmapClient | null, authServId?: string) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -128,6 +133,7 @@ function makeApp(jmap: JmapClient | null) {
       signatures: createSignaturesRepo(sql),
       userPreferences: createUserPreferencesRepo(sql),
       jmap,
+      authServId,
     }),
   });
 }
@@ -276,7 +282,7 @@ const senderAuthStubJmap: JmapClient = {
 
 describe("GET /api/mail/threads/:threadId — sender authentication (GH #136)", () => {
   it("requests the headers property and maps a genuine DMARC pass to senderAuth 'pass'", async () => {
-    const res = await makeApp(senderAuthStubJmap).request("/api/mail/threads/t2", {
+    const res = await makeApp(senderAuthStubJmap, "mail.cefiro.test").request("/api/mail/threads/t2", {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(200);
@@ -292,13 +298,123 @@ describe("GET /api/mail/threads/:threadId — sender authentication (GH #136)", 
   });
 
   it("maps a non-pass DMARC result (e.g. 'none', the spoofed-sender fixture shape) to senderAuth 'unknown', never 'pass'", async () => {
-    const res = await makeApp(senderAuthStubJmap).request("/api/mail/threads/t2", {
+    const res = await makeApp(senderAuthStubJmap, "mail.cefiro.test").request("/api/mail/threads/t2", {
       headers: { cookie: `session=${token}` },
     });
     const body = threadDetailSchema.parse(await res.json());
 
     const authNone = body.emails.find((e) => e.id === "auth-none");
     expect(authNone?.senderAuth).toBe("unknown");
+  });
+});
+
+// GH #152: the authenticated-submission exploit, wired end to end. On
+// authenticated submission this server adds no Authentication-Results header of
+// its own, so a header the SENDER forged is the first and only one. The old
+// #136 "trust the first" behaviour handed that forged dmarc=pass a green
+// "verified sender" badge on a message spoofed from an ordinary mailbox
+// credential (reproduced live). Its authserv-id does not match ours, so the
+// verdict must be "unknown".
+const submissionExploitStubJmap: JmapClient = {
+  getSession: async () => ({
+    apiUrl: "https://mail.test/jmap/",
+    accountId: "acc-1",
+    eventSourceUrl: "https://mail.test/es",
+    uploadUrl: "https://mail.test/upload/{accountId}/",
+    downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+  }),
+  request: async (_auth, _session, methodCalls) => {
+    calls = methodCalls;
+    return [
+      ["Thread/get", { list: [{ id: "t4", emailIds: ["forged", "genuine"] }] }, "t"],
+      [
+        "Email/get",
+        {
+          list: [
+            {
+              id: "forged",
+              threadId: "t4",
+              mailboxIds: { mb1: true },
+              from: [{ name: "Banco Seguro", email: "no-reply@banco-seguro.test" }],
+              to: [],
+              subject: "Su cuenta ha sido bloqueada",
+              receivedAt: "2026-07-06T10:00:00Z",
+              preview: "",
+              keywords: {},
+              hasAttachment: false,
+              size: 10,
+              messageId: null,
+              references: null,
+              inReplyTo: null,
+              // The forged header is first and only, and its authserv-id is NOT
+              // this deployment's — a sender-suppliable value.
+              headers: [
+                { name: "From", value: ' "Banco Seguro" <no-reply@banco-seguro.test>' },
+                {
+                  name: "Authentication-Results",
+                  value: " forged-mta.attacker.test; dmarc=pass header.from=banco-seguro.test",
+                },
+              ],
+            },
+            {
+              id: "genuine",
+              threadId: "t4",
+              mailboxIds: { mb1: true },
+              from: [{ name: "Carla Ibarra", email: "carla@partner.test" }],
+              to: [],
+              subject: "Genuine",
+              receivedAt: "2026-07-06T11:00:00Z",
+              preview: "",
+              keywords: {},
+              hasAttachment: false,
+              size: 10,
+              messageId: null,
+              references: null,
+              inReplyTo: null,
+              headers: [
+                {
+                  name: "Authentication-Results",
+                  value: " mail.cefiro.test; dmarc=pass (p=reject) header.from=partner.test",
+                },
+              ],
+            },
+          ],
+        },
+        "g",
+      ],
+    ];
+  },
+  uploadBlob: async () => "blob-id",
+};
+
+describe("GET /api/mail/threads/:threadId — authenticated-submission exploit (GH #152)", () => {
+  it("does NOT trust a forged Authentication-Results whose authserv-id is not ours — verdict 'unknown', not 'pass'", async () => {
+    const res = await makeApp(submissionExploitStubJmap, "mail.cefiro.test").request(
+      "/api/mail/threads/t4",
+      { headers: { cookie: `session=${token}` } },
+    );
+    expect(res.status).toBe(200);
+    const body = threadDetailSchema.parse(await res.json());
+
+    const forged = body.emails.find((e) => e.id === "forged");
+    expect(forged?.senderAuth).toBe("unknown");
+    expect(forged?.senderAuth).not.toBe("pass");
+
+    // The genuine header (matching authserv-id) is still honoured.
+    const genuine = body.emails.find((e) => e.id === "genuine");
+    expect(genuine?.senderAuth).toBe("pass");
+  });
+
+  it("degrades every verdict to 'unknown' when no authserv-id is configured (fail-safe)", async () => {
+    // No authserv-id configured (parameter omitted) — the fail-safe path.
+    const res = await makeApp(submissionExploitStubJmap).request("/api/mail/threads/t4", {
+      headers: { cookie: `session=${token}` },
+    });
+    const body = threadDetailSchema.parse(await res.json());
+
+    // Even the genuine DMARC pass asserts nothing without JMAP_AUTHSERV_ID set.
+    expect(body.emails.find((e) => e.id === "genuine")?.senderAuth).toBe("unknown");
+    expect(body.emails.find((e) => e.id === "forged")?.senderAuth).toBe("unknown");
   });
 });
 

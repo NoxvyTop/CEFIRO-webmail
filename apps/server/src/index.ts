@@ -199,6 +199,21 @@ log("info", "mail proxy", {
   authMode: config.jmapAuthMode,
 });
 
+// GH #152: the "verified sender" badge is only trustworthy when this process
+// can tell its own receiving MTA's Authentication-Results header apart from one
+// a sender forged, which needs JMAP_AUTHSERV_ID. Without it, sender-authenticity
+// is fail-safe OFF: every verdict is "unknown" and no message ever asserts a
+// verified sender (see modules/mail/sender-auth.ts). Warned loudly, once, at
+// boot — but only when a mail backend is actually configured, since the badge is
+// moot otherwise — so this is a deliberate state and not a silent gap.
+if (config.jmapUrl && !config.jmapAuthServId) {
+  log(
+    "warn",
+    "sender authenticity disabled: set JMAP_AUTHSERV_ID (your MTA's Authentication-Results authserv-id) to enable the verified-sender badge; until then every verdict is 'unknown'",
+    {},
+  );
+}
+
 // Boot-time reachability probe (GH #188). Deliberately NOT awaited: the mail
 // provider and this process usually start together, so blocking the listener on
 // a dependency that may still be coming up would turn a normal ordering race
@@ -342,6 +357,9 @@ const app = createApp({
     // credential the same way the JMAP client does, or `bearer` would work for
     // the API and 401 on every attachment (GH #35).
     authMode: config.jmapAuthMode,
+    // GH #152: the authserv-id whose Authentication-Results header is trusted
+    // for the sender-authenticity badge. Undefined = fail-safe "unknown".
+    authServId: config.jmapAuthServId,
   }),
   sieveRouter: createSieveRouter({
     sessions,
