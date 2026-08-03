@@ -26,10 +26,12 @@
   barato y autónomo) y mantener #13 **diferido**. Antes de codear #50 hay que
   resolver un **prerrequisito de infraestructura que hoy NO existe** (cuenta
   grupal + acceso cross-account confirmado).
-- **Actualización (spike G-0, 2026-08-03)**: el spike **cerró la duda de fondo**
-  — `Email/copy` está implementado y la copia **solo necesita la credencial del
-  miembro** (Stalwart expone la cuenta grupal en su sesión vía membresía). El
-  "hueco de viabilidad crítico" de la Sección 3 queda **resuelto para la copia**;
+- **Actualización (spike G-0, 2026-08-03)**: el spike **cerró la duda de fondo,
+  confirmado empíricamente end-to-end** — `Email/copy` está implementado y la
+  copia grupo→personal **solo necesita la credencial del miembro** (Stalwart
+  expone la cuenta grupal en su sesión por Basic vía membresía; se probó con dos
+  cuentas reales). El "hueco de viabilidad crítico" de la Sección 3 queda
+  **resuelto para la copia**;
   el prerrequisito real que persiste es **aprovisionar** grupos/miembros, que
   exige OAuth admin (`Principal/set` cerrado sobre Basic). Ver "Resultado del
   spike G-0" abajo — **supersede** el análisis de las Secciones 3 y D-50.5.
@@ -59,7 +61,7 @@ credencial propia del miembro.
 
 | Fase | Qué entrega | Riesgo / prerrequisito |
 |---|---|---|
-| **G-0** ✅ | Spike: `Email/copy` en Stalwart + modelo de credencial. **Cerrado (ver resultado abajo).** | Veredicto: copia **viable** con la credencial del miembro; el hueco real es el aprovisionamiento (crear grupos/miembros) que exige OAuth admin. |
+| **G-0** ✅ | Spike: `Email/copy` en Stalwart + modelo de credencial. **Cerrado y confirmado empíricamente end-to-end (ver resultado abajo).** | Veredicto: copia **viable** con la credencial del miembro (B y C probados con cuentas reales); el hueco real es el aprovisionamiento (crear grupos/miembros) que exige OAuth admin/UI. |
 | **G-1 (acceso)** | Zona de grupos: listar los buzones compartidos del usuario y **entrar** a ellos **con su propia credencial** (Stalwart los expone en la sesión JMAP del miembro). Autorización por petición (403 si no es miembro). | **NO** necesita credencial extra en el BFF: es la del miembro. Sí depende de que la cuenta grupal + membresía existan → aprovisionamiento (ver G-0). Cambio de código: dejar de descartar el mapa `accounts` de la sesión. |
 | **G-2 (copia)** | Copia opt-in a la bandeja privada vía `Email/copy` (from grupo → to personal, credencial del miembro) + purga con retención. | Cerrar los 2 chequeos empíricos residuales de G-0 (buzón compartido visible sobre Basic + copia real) y decidir retención/opt-in. La copia cuenta contra la cuota personal del miembro. |
 | **(aprovisionamiento)** | Crear grupos y añadir miembros. | `Principal/set` está cerrado sobre Basic → necesita OAuth admin. MVP: hacerlo **manual** en el webadmin de Stalwart (ops); automatizarlo en el BFF es un item aparte. |
@@ -71,7 +73,8 @@ defecto) siguen abiertas más abajo; se resuelven al entrar en G-2 / G-1.
 ### Resultado del spike G-0 (2026-08-03)
 
 Ejecutado contra el Stalwart v0.16.12 de la demo. **Veredicto: la copia es
-viable.** Detalle:
+viable — CONFIRMADO EMPÍRICAMENTE end-to-end** (método `Email/copy`, acceso del
+miembro a la cuenta compartida por Basic, y copia real grupo→personal). Detalle:
 
 - **`Email/copy` está implementado** (confirmado empíricamente). Una copia
   a la misma cuenta devuelve `invalidArguments "From accountId is equal to
@@ -96,11 +99,23 @@ viable.** Detalle:
   `members`/`memberOf`. El source de Stalwart re-sincroniza la lista de cuentas
   compartidas en la sesión (`synchronize_mailboxes()`), así que el BFF debe
   **re-pedir la sesión** del miembro tras un cambio de share (hoy la cachea).
-- **Chequeos residuales** (bloqueados en el spike por no poder crear una 2ª
-  cuenta sin OAuth admin; cada uno es un curl una vez exista la 2ª cuenta):
-  (B) que el buzón compartido aparezca en la sesión del miembro **autenticado
-  por Basic** (no solo OAuth); (C) la copia real grupo→personal. La evidencia
-  de docs+source apunta a que ambos funcionan.
+- **Chequeos B y C — CONFIRMADOS empíricamente end-to-end (2026-08-03).** Se
+  crearon dos cuentas desechables (`ventas@` tipo grupo + `member@` individual)
+  y se añadió `member@` como miembro del grupo:
+  - **(B)** La sesión JMAP de `member@` **autenticado por HTTP Basic** lista
+    **dos** cuentas: la personal (`isPersonal:true`) y `ventas@`
+    (`isPersonal:false`). El miembro puede `Mailbox/get`/`Email/query` contra la
+    cuenta del grupo. → El acceso funciona con la credencial propia del miembro.
+  - **(C)** Con la credencial Basic del miembro, un único `Email/copy`
+    (`fromAccountId`=ventas, `accountId`=member, `onSuccessDestroyOriginal:false`)
+    copió un correo del grupo a su inbox personal: aterrizó en el inbox del
+    miembro y el original quedó intacto en `ventas`. → La copia grupo→personal
+    es real y solo necesita la credencial del miembro.
+- **Nota de aprovisionamiento (confirmada en la práctica):** crear esas cuentas
+  NO se pudo por shell (`Principal/set` devuelve `notRequest` con Basic y con
+  Bearer; la CLI no tiene subcomando de cuentas; `/api/*` da 404). Hubo que
+  crearlas por la **UI del webadmin** (sesión OAuth). Confirma que el
+  aprovisionamiento es el único paso que exige gestión OAuth/UI.
 - **Caveats de producción:** la copia cuenta contra la **cuota personal** del
   miembro (los blobs se deduplican por contenido, la metadata no); poner
   `keywords`/`mailboxIds` explícitos en el `create` si se quieren conservar
