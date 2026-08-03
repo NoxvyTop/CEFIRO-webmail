@@ -308,6 +308,7 @@
     "subject": "Asunto",
     "body": "Mensaje",
     "bodyPlaceholder": "Escribe tu mensaje… o pídeselo a la IA",
+    "bodyPlaceholderNoAi": "Escribe tu mensaje…",
     "signature": "Firma",
     "noSignature": "Ninguna",
     "reply": "Responder",
