@@ -9,6 +9,7 @@ import {
   THREAD_SUMMARY_BULLET_COUNT,
   THREAD_SUMMARY_SYSTEM_PROMPT,
   buildDraftReplyPrompt,
+  buildSummarizeUserPrompt,
   buildThreadSummaryPrompt,
   parseBullets,
 } from "./prompts";
@@ -110,7 +111,7 @@ export function createOpenAiCompatibleClient(input: {
       try {
         const content = await chatComplete([
           { role: "system", content: SUMMARIZE_SYSTEM_PROMPT },
-          { role: "user", content: body },
+          { role: "user", content: buildSummarizeUserPrompt(body) },
         ]);
         return parseBullets(content, SUMMARY_BULLET_COUNT);
       } catch (error) {
