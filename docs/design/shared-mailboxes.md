@@ -64,11 +64,36 @@ credencial propia del miembro.
 | **G-0** ✅ | Spike: `Email/copy` en Stalwart + modelo de credencial. **Cerrado y confirmado empíricamente end-to-end (ver resultado abajo).** | Veredicto: copia **viable** con la credencial del miembro (B y C probados con cuentas reales); el hueco real es el aprovisionamiento (crear grupos/miembros) que exige OAuth admin/UI. |
 | **G-1 (acceso)** | Zona de grupos: listar los buzones compartidos del usuario y **entrar** a ellos **con su propia credencial** (Stalwart los expone en la sesión JMAP del miembro). Autorización por petición (403 si no es miembro). | **NO** necesita credencial extra en el BFF: es la del miembro. Sí depende de que la cuenta grupal + membresía existan → aprovisionamiento (ver G-0). Cambio de código: dejar de descartar el mapa `accounts` de la sesión. |
 | **G-2 (copia)** | Copia opt-in a la bandeja privada vía `Email/copy` (from grupo → to personal, credencial del miembro) + purga con retención. | Cerrar los 2 chequeos empíricos residuales de G-0 (buzón compartido visible sobre Basic + copia real) y decidir retención/opt-in. La copia cuenta contra la cuota personal del miembro. |
-| **(aprovisionamiento)** | Crear grupos y añadir miembros. | `Principal/set` está cerrado sobre Basic → necesita OAuth admin. MVP: hacerlo **manual** en el webadmin de Stalwart (ops); automatizarlo en el BFF es un item aparte. |
+| **(aprovisionamiento)** | Crear grupos y añadir miembros. | **Decisión del owner: SIEMPRE manual en el webadmin de Stalwart (ops), NUNCA desde Céfiro.** `Principal/set` está cerrado sobre Basic/Bearer (`notRequest`), la CLI no tiene subcomando y `/api/*` da 404 → solo la UI OAuth. Automatizar el alta desde el BFF queda **descartado**. El usuario final nunca toca Stalwart; solo el admin/ops. |
 | **(diferido)** | Capa colaborativa (#13). | YAGNI hasta que el volumen lo justifique. |
 
 Las decisiones de producto pendientes (retención, direcciones, opt-in por
 defecto) siguen abiertas más abajo; se resuelven al entrar en G-2 / G-1.
+
+### Frescura de sesión tras cambios de membresía (decisión 2026-08-03)
+
+Cuando ops añade/quita a un miembro de un grupo en Stalwart, el BFF cachea la
+sesión JMAP (`SESSION_CACHE_TTL_MS = 5 min`, `apps/server/src/modules/mail/
+context.ts`), así que el buzón compartido no aparece/desaparece hasta que el
+BFF **re-pide** la sesión. **Decisión: A + C.** Y una distinción de fondo:
+**invalidar la caché de sesión ≠ cerrar la sesión (logout).** Lo que se hace es
+invalidar la caché → el usuario **sigue logueado** y en su siguiente request el
+BFF re-pide la sesión; NO se fuerza re-login.
+
+- **A (mecanismo normal):** apoyarse en el **TTL de 5 min** que ya existe. Un
+  cambio de membresía se refleja en ≤5 min de forma automática, sin código
+  nuevo. El acceso no es time-critical, así que basta. (Opcional: bajar el TTL.)
+- **C (escape de ops, break-glass):** una acción de admin que **invalida TODAS
+  las cachés de sesión** (no logout) para que todos re-pidan la sesión en su
+  siguiente request. Útil tras reorganizar grupos en bloque. Se apoya en
+  `evictMailSession(userId)` (hoy dropea caché + cierra streams del usuario);
+  nota de implementación: para un "refrescar solo la sesión" sin cortar el SSE
+  haría falta una variante que no cierre streams, o se acepta que el SSE
+  reconecta.
+- **Descartado / diferido:** forzar logout por cambio de grupo (disruptivo, no
+  hace falta); botón de refresco por usuario (B, diferido); vigilar
+  `sessionState` para propagación instantánea (D, diferido — además habría que
+  confirmar con 1 curl que Stalwart bumpea `sessionState` al cambiar membresía).
 
 ### Resultado del spike G-0 (2026-08-03)
 
