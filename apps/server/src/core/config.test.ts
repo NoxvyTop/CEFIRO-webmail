@@ -242,6 +242,32 @@ describe("loadConfig", () => {
     });
   });
 
+  // GH #152: the authserv-id whose Authentication-Results header the sender-
+  // authenticity badge trusts. Optional and fail-safe: unset means no header is
+  // trusted (see modules/mail/sender-auth.ts), so it must not carry a default.
+  describe("JMAP_AUTHSERV_ID (GH #152)", () => {
+    it("is absent by default, which is what leaves sender authenticity fail-safe off", () => {
+      expect(loadConfig(validEnv).jmapAuthServId).toBeUndefined();
+    });
+
+    it("reads JMAP_AUTHSERV_ID", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTHSERV_ID: "mail.cefiro.test" }).jmapAuthServId).toBe(
+        "mail.cefiro.test",
+      );
+    });
+
+    it("treats an empty or whitespace-only value as absent, never as an authserv-id", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTHSERV_ID: "" }).jmapAuthServId).toBeUndefined();
+      expect(loadConfig({ ...validEnv, JMAP_AUTHSERV_ID: "   " }).jmapAuthServId).toBeUndefined();
+    });
+
+    it("trims an id that picked up whitespace from a compose file", () => {
+      expect(loadConfig({ ...validEnv, JMAP_AUTHSERV_ID: "  mail.cefiro.test  " }).jmapAuthServId).toBe(
+        "mail.cefiro.test",
+      );
+    });
+  });
+
   describe("AI feature gate (off by default)", () => {
     it("defaults aiEnabled to false when AI_ENABLED is absent", () => {
       expect(loadConfig(validEnv).aiEnabled).toBe(false);

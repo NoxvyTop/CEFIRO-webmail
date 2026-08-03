@@ -100,6 +100,22 @@ const configSchema = z.object({
   // and most self-hosted providers want Basic; token/OAuth providers want
   // Bearer, and until this existed they simply could not be talked to.
   jmapAuthMode: z.enum(["basic", "bearer"]).default("basic"),
+  // GH #152: the authserv-id (RFC 8601 §5) that this deployment's own
+  // receiving MTA — Stalwart, in our deployments — stamps as the first token
+  // of every `Authentication-Results` header it adds. It is what tells our own
+  // trust header apart from one a sender forged: an Authentication-Results
+  // header is trusted for the "verified sender" badge ONLY when its authserv-id
+  // matches this value; any other is attacker-suppliable and is ignored (see
+  // modules/mail/sender-auth.ts).
+  //
+  // Optional, and fail-safe by design: with it unset, NO header can be
+  // attributed to our own MTA, so every verdict degrades to "unknown" and no
+  // message ever shows a "verified sender" badge. That is deliberate — a badge
+  // that cannot be forged is worth more than one that can — and index.ts warns
+  // loudly, once, at boot while it is unset. It CANNOT be guessed on the
+  // deployment's behalf (a wrong guess would trust the wrong header), so it has
+  // no default.
+  jmapAuthServId: z.string().min(1).optional(),
   // Outbound deadlines (GH #165). One per upstream rather than one shared
   // number: see core/deadline.ts for why each default is what it is. Every one
   // has a default, so no deployment has to set anything.
@@ -390,6 +406,12 @@ export function loadConfig(
     // one" is exactly the class of silent misconfiguration this replaces.
     jmapUrlMode: env.JMAP_URL_MODE?.trim().toLowerCase() || undefined,
     jmapAuthMode: env.JMAP_AUTH_MODE?.trim().toLowerCase() || undefined,
+    // Trimmed before validation, like METRICS_TOKEN above: a stray space in a
+    // compose file is not an authserv-id and must not accidentally configure
+    // one — that would trust a header no server ever stamped. NOT lower-cased
+    // here: the authserv-id keeps the operator's spelling, and the comparison
+    // in sender-auth.ts is case-insensitive on both sides.
+    jmapAuthServId: env.JMAP_AUTHSERV_ID?.trim() || undefined,
     jmapTimeoutMs: renamed.get("JMAP_TIMEOUT_MS"),
     aiTimeoutMs: env.AI_TIMEOUT_MS || undefined,
     oidcTimeoutMs: env.OIDC_TIMEOUT_MS || undefined,

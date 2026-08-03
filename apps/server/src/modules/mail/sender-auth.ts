@@ -1,38 +1,55 @@
 import type { SenderAuthVerdict } from "@webmail/shared";
 
-// GH #136: derives the reader's sender-authenticity verdict from the
+// GH #136 / GH #152: derives the reader's sender-authenticity verdict from the
 // message's Authentication-Results header (RFC 8601). Deliberately free of
 // I/O, like extractHarvestCandidates in contacts-harvest.ts, so it is trivial
 // to unit test against real fixture values without a JMAP round trip.
 //
-// Investigation summary (against a live Stalwart v0.16 e2e fixture — see
-// e2e/fixtures/mail.ts and docker-compose.e2e.yml):
+// Trust model — authserv-id matching (RFC 8601 §5), NOT header position:
 //
-//  - RFC 8621's `header:Authentication-Results:asText` single-value property
-//    accessor DOES work against this server, but only returns ONE instance
-//    when a message carries more than one header with that name — and it
-//    returned the LAST one in raw header order, not the first. Confirmed by
-//    delivering a message whose body already contained a forged
-//    "Authentication-Results: mail.cefiro.test; dmarc=pass ..." header via
-//    unauthenticated SMTP: Stalwart does not strip or rename it before
-//    prepending its own genuine header, and the singular `asText` accessor
-//    resolved to the ATTACKER'S header, not Stalwart's. The `:all:asText`
-//    form (which would return every instance) is silently unsupported by
-//    this server version — it's dropped from the Email/get response with no
-//    error.
-//  - The only reliable way to get every header instance in original order is
-//    the generic `headers` property (RFC 8621 §4.1.1), which router.ts
-//    requests and passes in here unmodified. A receiving MTA prepends its own
-//    trust headers ahead of the original message content on every hop, so
-//    the FIRST (topmost) "Authentication-Results" entry is the one our own
-//    server actually added; anything after it can be attacker-controlled.
-//    This function trusts only that first occurrence — see the "forged a
-//    second one" test in sender-auth.test.ts for the regression this guards.
-//  - Authenticated, trusted SMTP submission (the seedInbox path used by
-//    e2e/smtp-seed.ts) carries no Authentication-Results header at all —
-//    Stalwart skips its authentication milter for that session. That must
-//    resolve to "unknown", never "pass": the absence of a header is not
-//    evidence of anything.
+//  - An Authentication-Results header can appear more than once on a message,
+//    and this server does not strip or rename a sender-injected one. The only
+//    reliable way to see every instance in original order is the generic
+//    `headers` property (RFC 8621 §4.1.1), which router.ts requests and passes
+//    in here unmodified. (RFC 8621's `header:Authentication-Results:asText`
+//    single-value accessor returns the LAST instance on this server, and the
+//    `:all:asText` form is silently unsupported — both were confirmed live and
+//    are why the generic property is used.)
+//
+//  - GH #136 originally trusted the FIRST (topmost) occurrence, on the
+//    assumption that a receiving MTA always prepends its own trust header ahead
+//    of the original content on every hop. That assumption is FALSE for
+//    authenticated submission: when a user submits over authenticated SMTP,
+//    this server adds NO Authentication-Results header of its own, so a header
+//    the sender forged is the first and only one — and "trust the first" handed
+//    that forged "dmarc=pass" straight to a green "verified sender" badge on a
+//    message spoofed from an ordinary mailbox credential (reproduced live; see
+//    GH #152). Position is not evidence of provenance.
+//
+//  - What IS evidence is the authserv-id: RFC 8601 §5 defines it as the first
+//    token of the header (before the first ";"), naming the server that
+//    performed the checks. This deployment configures its own via
+//    JMAP_AUTHSERV_ID (core/config.ts). A header is trusted ONLY when its
+//    authserv-id matches that configured value (case-insensitive, trimmed —
+//    but a whole-token match, so `evil-mail.test` never matches `mail.test`).
+//    The first matching header wins, so a genuine one is honoured wherever it
+//    sits and a forged one with any other (or no) authserv-id is ignored — see
+//    the exploit and ordering tests in sender-auth.test.ts.
+//
+//  - Fail-safe when unset: with no configured authserv-id, NO header can be
+//    attributed to this deployment, so every verdict is "unknown" and no badge
+//    is ever asserted. Better no badge than a forgeable one.
+//
+//  - The authserv-id check narrows WHICH header is trusted; it does not stop a
+//    sender who forges the exact configured authserv-id on authenticated
+//    submission, where this server adds none of its own to prepend ahead of it.
+//    Closing that last gap needs the receiving MTA to strip inbound
+//    Authentication-Results headers claiming its own authserv-id (RFC 8601 §5) —
+//    an operational Stalwart-side setting, documented in docs/OPERATIONS.md.
+//
+//  - Authenticated submission that carries NO Authentication-Results header at
+//    all (the seedInbox path in e2e/smtp-seed.ts) still resolves to "unknown",
+//    never "pass": the absence of a header is not evidence of anything.
 
 type HeaderEntry = { name: string; value: string };
 
@@ -129,19 +146,72 @@ function verdictFromEntries(entries: ResInfoEntry[]): SenderAuthVerdict {
   return "unknown";
 }
 
+// Removes RFC 5322 parenthesised comments "(...)" — which may nest — from a
+// header fragment, so a comment can neither hide nor be mistaken for the
+// authserv-id token. Depth never goes negative on an unmatched ")": it is
+// treated as a literal, matching splitTopLevel's discipline above.
+function stripComments(value: string): string {
+  let depth = 0;
+  let out = "";
+  for (const char of value) {
+    if (char === "(") depth += 1;
+    else if (char === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0) out += char;
+  }
+  return out;
+}
+
+// Extracts the authserv-id (RFC 8601 §5) from one Authentication-Results header
+// value (unfolding it first), lower-cased for a case-insensitive compare, or
+// null when the header has no usable id. The authserv-id is the first
+// ";"-delimited segment; within it, the id is the first whitespace-delimited
+// token — an optional trailing version number (`authserv-id [ version ]`) and
+// any CFWS/comment are not part of the id. Returning the whole token (not a
+// prefix) is what makes the match in deriveSenderAuthVerdict a whole-id compare
+// rather than a substring one, so a look-alike authserv-id cannot slip through.
+function extractAuthServId(headerValue: string): string | null {
+  const unfolded = unfold(headerValue);
+  if (!unfolded) return null;
+  const [firstSegment] = splitTopLevel(unfolded, ";");
+  if (firstSegment === undefined) return null;
+  const token = stripComments(firstSegment).trim().split(/\s+/)[0];
+  return token ? token.toLowerCase() : null;
+}
+
 /**
- * Given a message's full, ordered `headers` list (RFC 8621 §4.1.1 shape),
- * returns the sender-authenticity verdict for the reader's trust indicator.
- * Only the FIRST "Authentication-Results" header is trusted (see the file
- * header comment for why); a missing header, an unparseable value, or a
- * DMARC result other than an unambiguous "pass"/"fail" all resolve to
- * "unknown" rather than ever guessing a "pass".
+ * Given a message's full, ordered `headers` list (RFC 8621 §4.1.1 shape) and
+ * this deployment's own configured authserv-id (JMAP_AUTHSERV_ID), returns the
+ * sender-authenticity verdict for the reader's trust indicator.
+ *
+ * Only an "Authentication-Results" header whose authserv-id matches `authServId`
+ * (case-insensitive, trimmed, whole-token) is trusted — the first such header
+ * wins, so a genuine one is honoured wherever it sits and a sender-forged one
+ * with any other authserv-id is ignored (see the file header comment for the
+ * full trust model, and GH #152 for the exploit this closes). When `authServId`
+ * is unset, NO header can be trusted and the verdict is always "unknown"
+ * (fail-safe). A missing/foreign header, an unparseable value, or a DMARC result
+ * other than an unambiguous "pass"/"fail" all resolve to "unknown" rather than
+ * ever guessing a "pass".
  */
-export function deriveSenderAuthVerdict(headers: HeaderEntry[] | undefined | null): SenderAuthVerdict {
+export function deriveSenderAuthVerdict(
+  headers: HeaderEntry[] | undefined | null,
+  authServId: string | undefined | null,
+): SenderAuthVerdict {
   if (!headers) return "unknown";
 
-  const header = headers.find((entry) => entry.name.toLowerCase() === "authentication-results");
-  if (!header || typeof header.value !== "string") return "unknown";
+  // Fail-safe: with no authserv-id configured, no header can be attributed to
+  // this deployment's own MTA, so none is trustworthy — every verdict is
+  // "unknown" and no "verified sender" badge is ever asserted.
+  const configured = authServId?.trim().toLowerCase();
+  if (!configured) return "unknown";
+
+  const header = headers.find(
+    (entry) =>
+      entry.name.toLowerCase() === "authentication-results" &&
+      typeof entry.value === "string" &&
+      extractAuthServId(entry.value) === configured,
+  );
+  if (!header) return "unknown";
 
   try {
     return verdictFromEntries(parseResInfoEntries(header.value));

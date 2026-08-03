@@ -33,6 +33,15 @@ export type MailDeps = {
    * existed, so nothing that omits it changes behaviour.
    */
   authMode?: JmapAuthMode;
+  /**
+   * GH #152: this deployment's own authserv-id (RFC 8601 §5) — the value its
+   * receiving MTA / Stalwart stamps into the Authentication-Results header it
+   * adds. Only a header whose authserv-id matches this is trusted for the
+   * sender-authenticity verdict (see modules/mail/sender-auth.ts). Optional and
+   * fail-safe: when unset, every verdict is "unknown", so a sender-forged
+   * header can never mint a "verified sender" badge.
+   */
+  authServId?: string;
   // Optional (GH #124): when wired, sender addresses are harvested into the
   // user's contacts. As of GH #180 this happens once per delivery, off the JMAP
   // event subscription that feeds GET /events, not on every GET /messages read —

@@ -100,6 +100,7 @@ Stalwart es el proveedor que usamos, no una dependencia dura.
 | `JMAP_URL` | — | URL del proveedor JMAP por el **camino más directo** (red interna, nombre de servicio, link privado). Nunca el borde TLS público: ver [Topologías](#topologías-de-conexión-al-proveedor-jmap-188). |
 | `JMAP_URL_MODE` | `rewrite` | Qué hacer con las URLs que el proveedor anuncia en su sesión (`apiUrl`/`uploadUrl`/`downloadUrl`/`eventSourceUrl`). `rewrite` reescribe **solo el origen** al de `JMAP_URL` y conserva ruta, query y los marcadores `{accountId}`/`{blobId}`. `trust` las usa tal cual. No hay `auto`. |
 | `JMAP_AUTH_MODE` | `basic` | Cómo se presenta la credencial de buzón: `basic` (HTTP Basic `email:contraseña`, Stalwart y casi todo servidor autoalojado) o `bearer` (`Authorization: Bearer <credencial>`, proveedores con token/OAuth). |
+| `JMAP_AUTHSERV_ID` | — | authserv-id (RFC 8601 §5) de **tu** MTA receptor: el primer token de la cabecera `Authentication-Results` que Stalwart añade. Solo se confía en esa cabecera para la tilde de "remitente verificado". Vacío = a prueba de fallos, todos los veredictos en `unknown`. Ver [Autenticidad del remitente](#autenticidad-del-remitente-jmap_authserv_id-152). |
 | `JMAP_TIMEOUT_MS` | `10000` | Plazo de las llamadas salientes al proveedor. |
 | `NODE_EXTRA_CA_CERTS` | — | **No es una perilla de Céfiro**: la respetan Bun y Node. Ruta a un bundle PEM para confiar en un proveedor con certificado privado o CA interna. No existe ningún modo `insecure`. |
 
@@ -173,6 +174,53 @@ No falla el arranque a propósito: el proveedor puede levantar después. Qué mi
 | `reachable` | Contestó (2xx o 401) | Nada. Si además hay `advertisedApiUrl` ≠ `resolvedApiUrl`, `rewrite` está haciendo su trabajo. |
 | `not-serving` | Contestó 5xx | El proveedor está arriba pero no sirve JMAP. |
 | `unreachable` | Conexión rechazada, DNS, cert no confiable o plazo agotado | `JMAP_URL`, red/firewall, y `NODE_EXTRA_CA_CERTS` si es un cert privado. |
+
+### Autenticidad del remitente (JMAP_AUTHSERV_ID) (#152)
+
+La tilde verde de **"remitente verificado"** sale del veredicto DMARC que Céfiro
+lee de la cabecera `Authentication-Results` del mensaje (RFC 8601). El problema:
+un mensaje puede traer **varias** cabeceras `Authentication-Results`, y el
+remitente puede falsificar una. En **submission autenticada** (un usuario con
+credencial de buzón envía por SMTP autenticado) Stalwart **no añade ninguna
+cabecera propia**, así que la falsificada por el remitente sería la única — y
+antes de este arreglo se devolvía `pass`, pintando la tilde en un correo
+suplantado enviado desde una cuenta cualquiera.
+
+**El arreglo — coincidencia de authserv-id (RFC 8601 §5).** El `authserv-id` es
+el primer token de la cabecera (antes del primer `;`) y nombra al servidor que
+hizo las comprobaciones. Céfiro solo confía en la cabecera cuyo `authserv-id`
+coincide con `JMAP_AUTHSERV_ID` (comparación sin distinguir mayúsculas, sin
+espacios, y por **token completo**: `evil-mail.test` no coincide con
+`mail.test`). Cualquier otra la ignora.
+
+**Cómo averiguar el tuyo.** Es lo que tu MTA receptor estampa como primer token
+al añadir la cabecera — normalmente el hostname del servidor de correo. Míralo en
+una cabecera real:
+
+- Abre un correo **entrante** (recibido por el puerto 25, no enviado por ti) y
+  mira la fuente: la línea `Authentication-Results: <esto>; dmarc=...`. Ese
+  `<esto>` es tu authserv-id (p. ej. `mail.cefiro.test`).
+- O en Stalwart es el `server.hostname` (a menos que se haya configurado un
+  authserv-id explícito). En caso de duda, la cabecera real de un entrante manda.
+
+**Por defecto (sin fijar): a prueba de fallos → `unknown`.** Si `JMAP_AUTHSERV_ID`
+está vacío, **ninguna** cabecera se considera de confianza y todos los veredictos
+quedan en `unknown`: simplemente no se pinta la tilde. Es deliberado — mejor no
+insignia que una falsificable — y el servidor deja un `warn` en cada arranque
+(`sender authenticity disabled: set JMAP_AUTHSERV_ID ...`) mientras siga así. No
+se adivina solo: fijar uno equivocado confiaría en la cabecera equivocada.
+
+**Recomendación del lado de Stalwart (RFC 8601 §5).** La coincidencia de
+authserv-id acota *cuál* cabecera se cree, pero no frena a un atacante que
+falsifique **exactamente tu** authserv-id en submission autenticada, donde
+Stalwart no añade ninguna propia por delante. Para cerrar ese último hueco, el
+MTA receptor debe **eliminar las cabeceras `Authentication-Results` entrantes que
+reclamen su propio authserv-id** antes de añadir la suya (justo lo que pide RFC
+8601 §5). Revisa la configuración de Stalwart para confirmar que lo hace; si tu
+versión no lo hiciera, repórtalo aguas arriba. Esto es guía operativa: el
+Stalwart real no se configura desde este repo (el `config.json` del fixture es
+solo el bootstrap de RocksDB; los ajustes reales viven en el store y en
+`docker-cefiro`).
 
 **Base de datos.** El cliente acota la conexión para que una query lenta no
 cuelgue el servicio.
