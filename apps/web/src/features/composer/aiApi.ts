@@ -24,11 +24,14 @@ export async function fetchAiStatus(): Promise<boolean> {
   }
 }
 
-export async function fetchAiDraft(subject: string): Promise<string> {
+// GH #299: `context` is the original message body on a reply draft, so the
+// server can ground the draft in what it is replying to. Omitted for a brand-
+// new compose (no original message), which keeps the request shape unchanged.
+export async function fetchAiDraft(subject: string, context?: string): Promise<string> {
   const res = await fetch("/api/mail/compose/draft", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(draftInputSchema.parse({ subject })),
+    body: JSON.stringify(draftInputSchema.parse(context ? { subject, context } : { subject })),
   });
   if (!res.ok) return parseError(res);
   return draftResultSchema.parse(await res.json()).body;

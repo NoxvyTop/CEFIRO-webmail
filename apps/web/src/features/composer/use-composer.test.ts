@@ -307,11 +307,42 @@ describe("useComposer", () => {
         await result.current.draftWithAi();
       });
 
-      expect(fetchAiDraft).toHaveBeenCalledWith("Hi");
+      // GH #299: a brand-new compose (no quoted original) sends no context.
+      expect(fetchAiDraft).toHaveBeenCalledWith("Hi", undefined);
       expect(result.current.state.aiDrafting).toBe(false);
       expect(result.current.state.aiDraftError).toBeNull();
       expect(result.current.state.aiDraftNotice).toBe(true);
       expect(result.current.state.draft.bodyHtml).toContain("Estimado equipo, este es el borrador.");
+    });
+
+    // GH #299: on a reply the composer carries the message being replied to as
+    // the quoted tail of the body; draftWithAi must forward it as `context` so
+    // the draft is grounded in the original, not just the subject.
+    it("sends the original message body as context on a reply draft", async () => {
+      // The mock is shared across this file's tests — clear its accumulated call
+      // history so the count/args below describe only this test's own call.
+      fetchAiDraft.mockClear();
+      fetchAiDraft.mockResolvedValueOnce("Estimado equipo, respuesta generada.");
+      const replyDraft: ComposerDraft = {
+        ...baseDraft(),
+        subject: "Re: Presupuesto",
+        bodyHtml:
+          "<p>Hola equipo</p>" +
+          '<div data-cefiro-quote="true"><p>2026-07-01 — Alice:</p>' +
+          "<blockquote><p>¿Puedes confirmar el total antes del viernes?</p></blockquote></div>",
+      };
+      const { result } = renderHook(() => useComposer(replyDraft));
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      expect(fetchAiDraft).toHaveBeenCalledTimes(1);
+      const [subject, context] = fetchAiDraft.mock.calls[0] as [string, string | undefined];
+      expect(subject).toBe("Re: Presupuesto");
+      expect(context).toContain("¿Puedes confirmar el total antes del viernes?");
+      // The user's own freshly-typed text is not part of the original-message context.
+      expect(context).not.toContain("Hola equipo");
     });
 
     it("hides the feature (aiUnavailable) without an inline error when the backend reports ai_disabled", async () => {

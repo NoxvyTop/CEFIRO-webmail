@@ -24,6 +24,20 @@ describe("composer AI draft client", () => {
     expect(JSON.parse(init.body as string)).toEqual({ subject: "Presupuesto" });
   });
 
+  // GH #299: on a reply the original message body rides along as `context`.
+  it("includes the context in the request body when one is provided", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ body: "Estimado cliente…" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchAiDraft("Re: Pedido", "¿Confirmas el total?")).resolves.toBe("Estimado cliente…");
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      subject: "Re: Pedido",
+      context: "¿Confirmas el total?",
+    });
+  });
+
   it("rejects an invalid subject before issuing any request", async () => {
     const fetchMock = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetchMock);
