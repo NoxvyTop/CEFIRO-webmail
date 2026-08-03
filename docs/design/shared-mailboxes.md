@@ -193,12 +193,20 @@ miembro a la cuenta compartida por Basic, y copia real grupo→personal). Detall
 
 **Fork que cambia el modelo — ¿copia Céfiro o Stalwart nativamente?**
 
-- **Modelo NATIVO (probablemente el más barato — a confirmar):** configurar el
-  grupo en Stalwart para que el correo entrante caiga en el buzón compartido **Y**
-  se entregue una copia a cada miembro (entrega dual / expansión de lista +
-  buzón). Si Stalwart lo soporta, la copia es **gratis a nivel MTA** y Céfiro no
-  hace nada. Encaja con "config solo desde Stalwart". **Necesita 1 confirmación**
-  de config/doc: que Stalwart entregue a ambos (buzón del grupo + miembros).
+- **Modelo NATIVO — CONFIRMADO NO DISPONIBLE (2026-08-03).** La idea era
+  configurar el grupo para que el correo cayera en el buzón compartido **Y** se
+  copiara a cada miembro (entrega dual). **Stalwart v0.16 no lo hace hoy:**
+  - *Empírico:* en el spike, el correo a `ventas@` cayó **solo** en el buzón del
+    grupo; la bandeja de `member@` quedó vacía hasta el `Email/copy`.
+  - *Docs:* un `group` = buzón compartido (acceso); una `mailing list` = copias a
+    miembros **sin** buzón compartido. Ningún principal hace las dos.
+  - *Comunidad:* "dar al grupo la opción de copiar a cada miembro" está **en
+    discusión, sin implementar** (stalwart discussion #2931).
+  - *Alternativa native-ish descartada:* un Sieve `redirect :copy` en el buzón del
+    grupo copiaría a cada miembro conservando el buzón, pero **no da opt-in por
+    miembro** (habría que editar el script por cada alta/baja) y re-inyecta el
+    correo. No encaja con el opt-in que se quiere.
+  → Por tanto, la copia debe ir por el **modelo APP**.
 - **Modelo APP / `Email/copy` (probado en el spike):** Céfiro copia con la
   credencial del **miembro**. Necesario si Stalwart no hace la entrega dual, o
   para **opt-in por miembro** (la expansión MTA es todo-o-nada por config del
@@ -225,9 +233,10 @@ falta credencial del grupo; si Céfiro copia, lo hace con la del miembro (PULL).
 - **Caveats del spike:** la copia cuenta contra la **cuota personal** del miembro;
   poner `keywords`/`mailboxIds` explícitos para conservar flags.
 
-**Orden recomendado de G-2:** confirmar primero el modelo **NATIVO** (barato,
-cero código); si no da (o si el opt-in por miembro lo exige), usar el modelo
-**APP manual** como primer slice; el automático de fondo solo si se pide.
+**Decisión (2026-08-03): modelo APP.** Confirmado que el nativo no está
+disponible, G-2 va por `Email/copy` con la credencial del miembro. **Primer
+slice = copia manual** ("copiar a mi bandeja"); el automático de fondo, solo si
+se pide después. Opt-in por buzón (default OFF), sin cascada en el MVP.
 
 ---
 
