@@ -25,7 +25,14 @@
 - **Recomendación (análisis)**: hacer #50 (por fases, empezando por lo más
   barato y autónomo) y mantener #13 **diferido**. Antes de codear #50 hay que
   resolver un **prerrequisito de infraestructura que hoy NO existe** (cuenta
-  grupal + credencial en el BFF + acceso cross-account confirmado).
+  grupal + acceso cross-account confirmado).
+- **Actualización (spike G-0, 2026-08-03)**: el spike **cerró la duda de fondo**
+  — `Email/copy` está implementado y la copia **solo necesita la credencial del
+  miembro** (Stalwart expone la cuenta grupal en su sesión vía membresía). El
+  "hueco de viabilidad crítico" de la Sección 3 queda **resuelto para la copia**;
+  el prerrequisito real que persiste es **aprovisionar** grupos/miembros, que
+  exige OAuth admin (`Principal/set` cerrado sobre Basic). Ver "Resultado del
+  spike G-0" abajo — **supersede** el análisis de las Secciones 3 y D-50.5.
 
 ---
 
@@ -44,21 +51,61 @@ internas) **sigue diferida** — no forma parte de esta decisión.
 
 **El owner expresó dudas** sobre priorizar copia vs acceso. Por eso el
 fraseo por fases de abajo importa: se entrega primero lo barato y probado
-(acceso), y la copia entra después, detrás del spike de factibilidad, para no
-comprometerse con `Email/copy` cross-account antes de confirmar que Stalwart lo
-permite con una credencial delegada.
+(acceso), y la copia entra después. El spike G-0 (abajo) ya cerró la duda de
+fondo: **la copia es viable y NO necesita credencial delegada** — basta la
+credencial propia del miembro.
 
 **Orden acordado (supera la recomendación de análisis de arriba):**
 
 | Fase | Qué entrega | Riesgo / prerrequisito |
 |---|---|---|
-| **G-0** | Spike: confirmar `Email/copy` cross-account en Stalwart + modelo de credencial delegada. Sin esto, la copia no se puede prometer. | Sin código de app; decide si la copia es viable. |
-| **G-1 (acceso)** | Zona de grupos: listar los buzones compartidos del usuario y **entrar** a ellos con su credencial. Autorización por petición (403 si no es miembro). | Necesita la cuenta grupal + credencial cifrada en el BFF (tabla nueva). Barato, sin cross-account. Es el valor "ver y entrar" que el owner pidió. |
-| **G-2 (copia)** | Copia opt-in a la bandeja privada vía `Email/copy` + purga con retención. | Solo si G-0 confirma la viabilidad. Es lo más pesado. |
+| **G-0** ✅ | Spike: `Email/copy` en Stalwart + modelo de credencial. **Cerrado (ver resultado abajo).** | Veredicto: copia **viable** con la credencial del miembro; el hueco real es el aprovisionamiento (crear grupos/miembros) que exige OAuth admin. |
+| **G-1 (acceso)** | Zona de grupos: listar los buzones compartidos del usuario y **entrar** a ellos **con su propia credencial** (Stalwart los expone en la sesión JMAP del miembro). Autorización por petición (403 si no es miembro). | **NO** necesita credencial extra en el BFF: es la del miembro. Sí depende de que la cuenta grupal + membresía existan → aprovisionamiento (ver G-0). Cambio de código: dejar de descartar el mapa `accounts` de la sesión. |
+| **G-2 (copia)** | Copia opt-in a la bandeja privada vía `Email/copy` (from grupo → to personal, credencial del miembro) + purga con retención. | Cerrar los 2 chequeos empíricos residuales de G-0 (buzón compartido visible sobre Basic + copia real) y decidir retención/opt-in. La copia cuenta contra la cuota personal del miembro. |
+| **(aprovisionamiento)** | Crear grupos y añadir miembros. | `Principal/set` está cerrado sobre Basic → necesita OAuth admin. MVP: hacerlo **manual** en el webadmin de Stalwart (ops); automatizarlo en el BFF es un item aparte. |
 | **(diferido)** | Capa colaborativa (#13). | YAGNI hasta que el volumen lo justifique. |
 
 Las decisiones de producto pendientes (retención, direcciones, opt-in por
 defecto) siguen abiertas más abajo; se resuelven al entrar en G-2 / G-1.
+
+### Resultado del spike G-0 (2026-08-03)
+
+Ejecutado contra el Stalwart v0.16.12 de la demo. **Veredicto: la copia es
+viable.** Detalle:
+
+- **`Email/copy` está implementado** (confirmado empíricamente). Una copia
+  a la misma cuenta devuelve `invalidArguments "From accountId is equal to
+  fromAccountId"` — un error del *handler*, no `unknownMethod` (se verificó con
+  un método falso `Foo/bar` que sí da `unknownMethod`). El método parsea
+  `fromAccountId`/`accountId` y exige que sean **distintos**: la copia es
+  cross-account por diseño.
+- **Modelo de credencial (lo importante):** son DOS cosas distintas, no
+  mezclarlas:
+  - *Copia en runtime (acción del usuario):* **solo la credencial propia del
+    miembro.** Stalwart expone la cuenta grupal como cuenta compartida en la
+    sesión JMAP del miembro (vía membresía), así que un único `Email/copy`
+    (`fromAccountId`=grupo, `accountId`=miembro) autenticado como el miembro
+    basta. **Sin credencial delegada, sin admin, sin descargar-y-resubir.** (No
+    se puede usar una "credencial del grupo": los principals de grupo no pueden
+    hacer login.)
+  - *Aprovisionar (crear grupo, añadir miembros):* **requiere OAuth admin.**
+    `Principal/set` sobre HTTP Basic devuelve `notRequest`; solo funciona con un
+    Bearer de sesión de gestión. El REST viejo `/api/principal` ya no existe en
+    v0.16. La credencial Basic del BFF **no** puede aprovisionar.
+- **Acceso = membresía**, no ACL por buzón: se accede al inbox del grupo por
+  `members`/`memberOf`. El source de Stalwart re-sincroniza la lista de cuentas
+  compartidas en la sesión (`synchronize_mailboxes()`), así que el BFF debe
+  **re-pedir la sesión** del miembro tras un cambio de share (hoy la cachea).
+- **Chequeos residuales** (bloqueados en el spike por no poder crear una 2ª
+  cuenta sin OAuth admin; cada uno es un curl una vez exista la 2ª cuenta):
+  (B) que el buzón compartido aparezca en la sesión del miembro **autenticado
+  por Basic** (no solo OAuth); (C) la copia real grupo→personal. La evidencia
+  de docs+source apunta a que ambos funcionan.
+- **Caveats de producción:** la copia cuenta contra la **cuota personal** del
+  miembro (los blobs se deduplican por contenido, la metadata no); poner
+  `keywords`/`mailboxIds` explícitos en el `create` si se quieren conservar
+  flags; para compartir a nivel más fino que "todo el inbox del grupo" haría
+  falta el camino ACL/`shareWith`, no la membresía.
 
 ---
 
@@ -217,11 +264,16 @@ defecto) siguen abiertas más abajo; se resuelven al entrar en G-2 / G-1.
   acerca la solución al **acceso** de #13 sin capa colaborativa.
 
 **D-50.5 · ¿Se acepta que el BFF tenga una credencial con acceso cross-account?**
-- **Contexto:** ver §3.3. La copia y la cascada necesitan escribir/borrar en la
-  bandeja de cada miembro → una credencial potente en el BFF.
-- **Recomendación:** aceptarlo **solo** si el spike confirma que Stalwart lo
-  permite con el menor privilegio posible; custodiarla como el resto
-  (cifrada, keyring) y acotar su uso.
+- **RESUELTA por el spike G-0 (2026-08-03): ya NO aplica para la copia.** La
+  copia en runtime la hace **la credencial propia del miembro** (Stalwart expone
+  la cuenta grupal en su sesión vía membresía); el BFF **no** necesita una
+  credencial potente cross-account. La pregunta que sí queda es la del
+  **aprovisionamiento**: crear grupos/miembros exige un token OAuth admin, no la
+  credencial Basic del BFF — decisión trasladada a la fase de aprovisionamiento
+  (manual en el webadmin para el MVP vs. automatizar en el BFF).
+- *(Contexto histórico, superado)* La cascada de borrado (F3/#50) sí escribiría
+  en la bandeja del miembro; con el modelo de membresía eso también recae en la
+  credencial del miembro, no en una super-credencial del BFF.
 - **Tradeoff:** habilita #50 tal cual está escrito, pero concentra en el BFF
   una credencial capaz de tocar todos los buzones (radio de impacto alto). Si
   no se acepta, hay que rediseñar #50 (p. ej. acceso en vez de copia).
