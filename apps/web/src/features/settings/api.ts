@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  activeSessionListSchema,
   filterRuleInputSchema,
   filterRuleSchema,
   profileViewSchema,
@@ -17,6 +18,7 @@ import {
   type SieveGeneratedScript,
   type SieveRawScript,
   type SieveSyncState,
+  type ActiveSession,
   type UpdateProfileInput,
   type VacationSettings,
   type VacationSettingsInput,
@@ -182,4 +184,27 @@ export async function updateProfile(input: UpdateProfileInput): Promise<ProfileV
   const res = await fetch("/api/profile", jsonRequest("PATCH", updateProfileSchema.parse(input)));
   if (!res.ok) return parseError(res);
   return profileViewSchema.parse(await res.json());
+}
+
+/**
+ * The caller's own active sessions/devices (#302). The current one is flagged
+ * by the server; the token itself is never returned (only its opaque `id`).
+ */
+export async function fetchSessions(): Promise<ActiveSession[]> {
+  const res = await fetch("/api/auth/sessions");
+  if (!res.ok) return parseError(res);
+  return activeSessionListSchema.parse(await res.json());
+}
+
+/** Revoke ONE session by id, scoped server-side to the caller (#302). */
+export async function revokeSession(id: string): Promise<void> {
+  const res = await fetch(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) return parseError(res);
+}
+
+/** Close every session but the current one (#302); returns how many were closed. */
+export async function revokeOtherSessions(): Promise<number> {
+  const res = await fetch("/api/auth/sessions/revoke-others", { method: "POST" });
+  if (!res.ok) return parseError(res);
+  return z.object({ revoked: z.number() }).parse(await res.json()).revoked;
 }

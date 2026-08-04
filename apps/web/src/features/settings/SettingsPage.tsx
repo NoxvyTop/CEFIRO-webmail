@@ -5,12 +5,20 @@ import { Link } from "react-router";
 import { ContactsSettings } from "./ContactsSettings";
 import { FilterSettings } from "./FilterSettings";
 import { ProfileSettings } from "./ProfileSettings";
+import { SessionsSettings } from "./SessionsSettings";
 import { SignatureSettings } from "./SignatureSettings";
 import { VacationSettings } from "./VacationSettings";
 import { PushSettings, PUSH_STATUS_QUERY_KEY } from "../notifications/PushSettings";
 import { fetchPushStatus } from "../notifications/pushApi";
 
-type Section = "profile" | "signatures" | "filters" | "vacation" | "contacts" | "notifications";
+type Section =
+  | "profile"
+  | "signatures"
+  | "filters"
+  | "vacation"
+  | "contacts"
+  | "sessions"
+  | "notifications";
 
 const NAV_ITEMS: { id: Section; labelKey: string }[] = [
   { id: "profile", labelKey: "settings.nav.profile" },
@@ -18,6 +26,9 @@ const NAV_ITEMS: { id: Section; labelKey: string }[] = [
   { id: "filters", labelKey: "settings.nav.filters" },
   { id: "vacation", labelKey: "settings.nav.vacation" },
   { id: "contacts", labelKey: "settings.nav.contacts" },
+  // #302: active sessions / devices with individual revocation. Always shown —
+  // every user has at least their current session.
+  { id: "sessions", labelKey: "settings.nav.sessions" },
 ];
 
 export function SettingsPage() {
@@ -104,6 +115,13 @@ export function SettingsPage() {
             <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
               <h2 className="text-lg font-medium">{t("contacts.title")}</h2>
               <ContactsSettings />
+            </section>
+          )}
+
+          {section === "sessions" && (
+            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
+              <h2 className="text-lg font-medium">{t("settings.sessions.title")}</h2>
+              <SessionsSettings />
             </section>
           )}
 

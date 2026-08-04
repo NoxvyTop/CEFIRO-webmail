@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { MailApiError } from "../mailbox/api";
 import { fetchSummary, summarizeThread } from "./aiApi";
+import { readCachedSummary, summaryStorageKey, writeCachedSummary } from "./summaryCache";
 
 interface AiSummaryCardProps {
   messageId: string;
@@ -14,6 +16,13 @@ interface AiSummaryCardProps {
    * last message, quoted trail and all.
    */
   messageCount: number;
+  /**
+   * #308: the thread's email ids in chronological order (oldest→newest). Used
+   * only in thread mode, to key the persistent cache by the id set so a new
+   * reply misses (mirrors the server's thread content key). Optional so a
+   * standalone/message-mode caller need not supply it.
+   */
+  emailIds?: string[];
 }
 
 // Returns the i18n key for the inline error, or null when the card should
@@ -35,20 +44,40 @@ function aiErrorKey(error: unknown): string | null {
   return "mail.errors.generic";
 }
 
-export function AiSummaryCard({ messageId, threadId, messageCount }: AiSummaryCardProps) {
+export function AiSummaryCard({ messageId, threadId, messageCount, emailIds }: AiSummaryCardProps) {
   const { t } = useTranslation();
   const isThread = messageCount > 1;
+
+  // #308: the localStorage key this summary is stored under. Cheap to recompute
+  // per render (a small FNV hash over a few ids), so it stays a plain call rather
+  // than a memo — the caller hands a fresh `emailIds` array each render, which
+  // would defeat a naive memo anyway.
+  const cacheKey = summaryStorageKey({ isThread, messageId, threadId, messageCount, emailIds });
+
+  // #308: read the persisted summary ONCE on mount so a full reload re-shows it
+  // immediately, with no fetch. React Query's own cache dies with the tab; this
+  // is what survives the reload. Seeded as `initialData` below.
+  const [cachedBullets] = useState(() => readCachedSummary(cacheKey));
 
   // Cached under a stable key so the summary persists across re-renders /
   // re-visits of the thread within the session, without being regenerated —
   // enabled:false means it only runs when explicitly triggered via refetch().
   const query = useQuery({
     queryKey: isThread ? ["ai", "summary", "thread", threadId] : ["ai", "summary", messageId],
-    queryFn: () => (isThread ? summarizeThread(threadId) : fetchSummary(messageId)),
+    queryFn: async () => {
+      const bullets = isThread ? await summarizeThread(threadId) : await fetchSummary(messageId);
+      // #308: refresh the persistent cache on every successful (re)generation so
+      // the next reload shows the just-generated bullets without a round-trip.
+      writeCachedSummary(cacheKey, bullets);
+      return bullets;
+    },
     enabled: false,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
+    // #308: a cache hit renders immediately without a fetch (enabled:false +
+    // staleTime:Infinity mean React Query won't refetch over it).
+    initialData: cachedBullets,
   });
 
   if (query.isError) {
@@ -63,8 +92,11 @@ export function AiSummaryCard({ messageId, threadId, messageCount }: AiSummaryCa
     );
   }
 
-  const idle = !query.isFetched && !query.isFetching;
-  const ready = query.isFetched && !query.isFetching;
+  // #308: keyed on `query.data` rather than `isFetched` so a summary restored
+  // from localStorage (seeded via initialData, which is NOT a fetch) shows on
+  // mount. A miss leaves data undefined → the "Resumir" trigger is offered.
+  const idle = query.data === undefined && !query.isFetching;
+  const ready = query.data !== undefined && !query.isFetching;
 
   return (
     <div className="mt-[26px] w-full rounded-xl border border-line bg-soft px-[18px] py-3.5">

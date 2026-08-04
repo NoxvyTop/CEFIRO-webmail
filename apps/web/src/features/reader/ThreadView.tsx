@@ -867,7 +867,15 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                   </div>
                 )}
                 {isNewest && (
-                  <AiSummaryCard messageId={email.id} threadId={threadId} messageCount={emails.length} />
+                  // #308: `emails` is chronological (oldest→newest, the same
+                  // order the server hashes) so its ids key the persistent
+                  // summary cache — a new reply changes the set and misses.
+                  <AiSummaryCard
+                    messageId={email.id}
+                    threadId={threadId}
+                    messageCount={emails.length}
+                    emailIds={emails.map((threadEmail) => threadEmail.id)}
+                  />
                 )}
                 <div className="mt-3 text-[15px] leading-[1.65]">
                   <EmailBody

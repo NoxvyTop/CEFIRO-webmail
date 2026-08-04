@@ -23,6 +23,7 @@ import {
 } from "./oidc";
 import { OIDC_STATE_COOKIE, openState, sealState } from "./oidc-state";
 import type { SessionStore } from "./sessions";
+import type { SetupCompletion } from "../setup/completion";
 
 export type OidcClient = {
   discover(issuer: string): Promise<OidcEndpoints>;
@@ -157,6 +158,15 @@ export type AuthRouterDeps = {
   sessionTtlHours?: number;
   oidcClient?: OidcClient;
   bootstrap?: Bootstrap;
+  /**
+   * First-run setup completion latch (#234), shared with the setup router so
+   * both see the same one-way state. Consulted by the PUBLIC `GET /mode` so the
+   * login screen can learn whether the first-run setup CTA is still worth
+   * showing WITHOUT polling the authenticated `GET /api/setup/status`, which
+   * recorded a `setup.auth_failed` audit row on every unauthenticated hit
+   * (#305). Optional: when absent, `/mode` reports `setupComplete: true`.
+   */
+  completion?: SetupCompletion;
   rateLimiter?: RateLimiter;
   loginRateLimiter?: RateLimiter;
   /**
@@ -222,6 +232,46 @@ export function createAuthRouter(deps: AuthRouterDeps) {
 
   router.get("/me", requireSession(deps.sessions), (c) => c.json(c.get("user")));
 
+  // #302: let a user SEE their active sessions/devices and revoke them one by
+  // one — the middle ground between logging out the current session and the
+  // break-glass "revoke everything" (sessions.revokeAllForUser). Every route is
+  // session-gated and acts ONLY on the caller's own sessions (scoped by
+  // c.get("user").userId), so it can never read or revoke another user's.
+  router.get("/sessions", requireSession(deps.sessions), async (c) => {
+    // requireSession already validated this cookie, so it is present here; the
+    // "" fallback only satisfies the type and would flag no row as current.
+    const currentToken = getCookie(c, SESSION_COOKIE) ?? "";
+    const list = await deps.sessions.list(c.get("user").userId, currentToken);
+    return c.json(list);
+  });
+
+  router.delete("/sessions/:id", requireSession(deps.sessions), async (c) => {
+    const userId = c.get("user").userId;
+    const currentToken = getCookie(c, SESSION_COOKIE) ?? "";
+    const removed = await deps.sessions.revokeById(userId, c.req.param("id"));
+    // A 404 (rather than a silent 200) so a UI acting on a stale list learns the
+    // row was already gone. Scoped to the caller, so another user's id is a 404
+    // too — never a confirmation that it exists.
+    if (!removed) {
+      return errorResponse(c, "not_found", 404);
+    }
+    // If the caller revoked the session they are on, the cookie now points at a
+    // deleted row: clear it and evict its mail cache so this tab logs out
+    // cleanly instead of 401-ing on its next request. Detected by re-resolving
+    // the current token — null means it was the one just removed.
+    if (!(await deps.sessions.findUser(currentToken))) {
+      evictMailSession(userId);
+      deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    }
+    return c.json({ ok: true });
+  });
+
+  router.post("/sessions/revoke-others", requireSession(deps.sessions), async (c) => {
+    const currentToken = getCookie(c, SESSION_COOKIE) ?? "";
+    const revoked = await deps.sessions.revokeOthers(c.get("user").userId, currentToken);
+    return c.json({ revoked });
+  });
+
   router.get("/mode", async (c) => {
     // #290: the login-button provider name is configurable per deployment.
     // Resolve it from the stored SSO config without decrypting any secret; a
@@ -234,7 +284,22 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     } catch {
       // Keep the default; the mode probe must answer regardless.
     }
-    return c.json({ bootstrapMode: deps.bootstrap?.enabled ?? false, providerName });
+    // #305: expose the #234 completion latch so the login screen no longer has
+    // to probe the authenticated setup router (which audited every tokenless
+    // hit as `setup.auth_failed`). Defaults to `true` — "nothing to set up" —
+    // both when no completion latch is wired and if reading it fails, so this
+    // public probe never breaks and never wrongly nags a set-up instance.
+    let setupComplete = true;
+    try {
+      if (deps.completion) setupComplete = await deps.completion.isComplete();
+    } catch {
+      // Keep the safe default; the mode probe must answer regardless.
+    }
+    return c.json({
+      bootstrapMode: deps.bootstrap?.enabled ?? false,
+      providerName,
+      setupComplete,
+    });
   });
 
   router.post("/logout", async (c) => {
@@ -348,7 +413,12 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       if (admin.role !== "admin") await users.setRole(admin.id, "admin");
     }
     const ttl = deps.sessionTtlHours ?? 12;
-    const { token } = await deps.sessions.create(admin.id, ttl);
+    // #302: capture the device metadata for the active-sessions list. `ip` is
+    // the same trusted-proxy attribution the audit row above uses.
+    const { token } = await deps.sessions.create(admin.id, ttl, {
+      userAgent: c.req.header("user-agent") ?? null,
+      ip,
+    });
     setCookie(c, SESSION_COOKIE, token, {
       httpOnly: true,
       path: "/",
@@ -414,7 +484,13 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       }
       stage = "session";
       const ttl = deps.sessionTtlHours ?? 12;
-      const { token } = await deps.sessions.create(user.id, ttl);
+      // #302: capture the device metadata for the active-sessions list. `ip` is
+      // the same trusted-proxy attribution the login.success audit row uses.
+      const ip = clientIp(c, trustedProxyHops);
+      const { token } = await deps.sessions.create(user.id, ttl, {
+        userAgent: c.req.header("user-agent") ?? null,
+        ip,
+      });
       setCookie(c, SESSION_COOKIE, token, {
         httpOnly: true,
         path: "/",
@@ -425,7 +501,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       await audit.record({
         actor: email,
         action: "login.success",
-        ip: clientIp(c, trustedProxyHops),
+        ip,
       });
       return c.redirect("/");
     } catch (error) {

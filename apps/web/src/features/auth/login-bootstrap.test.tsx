@@ -44,9 +44,6 @@ describe("login screen bootstrap form", () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
-      // Latch closed (404): keeps these emergency-form tests free of the setup
-      // CTA, which has its own coverage below (GH #287).
-      "/api/setup/status": () => new Response("{}", { status: 404 }),
     });
     renderAt("/");
 
@@ -167,9 +164,6 @@ describe("login screen bootstrap form", () => {
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
       }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
-      }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
       }
@@ -205,9 +199,6 @@ describe("login screen bootstrap form", () => {
       }
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
-      }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
       }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
@@ -252,9 +243,6 @@ describe("login screen bootstrap form", () => {
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
       }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
-      }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
       }
@@ -285,9 +273,6 @@ describe("login screen bootstrap form", () => {
       }
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
-      }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
       }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
@@ -320,9 +305,6 @@ describe("login screen bootstrap form", () => {
       }
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
-      }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
       }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
@@ -362,9 +344,6 @@ describe("login screen bootstrap form", () => {
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
       }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
-      }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
       }
@@ -403,9 +382,6 @@ describe("login screen bootstrap form", () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
-      // Latch closed (404): keeps these emergency-form tests free of the setup
-      // CTA, which has its own coverage below (GH #287).
-      "/api/setup/status": () => new Response("{}", { status: 404 }),
     });
     renderAt("/");
 
@@ -445,9 +421,6 @@ describe("login screen bootstrap form", () => {
       if (path.includes("/api/auth/mode")) {
         return new Response(JSON.stringify({ bootstrapMode: true }));
       }
-      if (path.includes("/api/setup/status")) {
-        return new Response("{}", { status: 404 });
-      }
       if (path.includes("/api/auth/me")) {
         return new Response("{}", { status: 401 });
       }
@@ -471,9 +444,6 @@ describe("login screen bootstrap form", () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
       "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
-      // Latch closed (404): keeps these emergency-form tests free of the setup
-      // CTA, which has its own coverage below (GH #287).
-      "/api/setup/status": () => new Response("{}", { status: 404 }),
     });
     renderAt("/");
 
@@ -497,11 +467,10 @@ describe("login screen bootstrap form", () => {
   it("shows the setup CTA in bootstrap mode while the setup latch is open", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
-      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
-      // No setup token is sent, so an open latch answers 401 (not 200); only the
-      // non-404 status matters — the wizard is still reachable.
-      "/api/setup/status": () =>
-        new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 }),
+      // #305: the latch state rides on /mode now — setupComplete=false means the
+      // first-run wizard is still reachable, so the CTA shows.
+      "/api/auth/mode": () =>
+        new Response(JSON.stringify({ bootstrapMode: true, setupComplete: false })),
     });
     renderAt("/");
 
@@ -515,9 +484,9 @@ describe("login screen bootstrap form", () => {
   it("hides the setup CTA once the setup latch has closed, even in bootstrap mode", async () => {
     stubFetch({
       "/api/auth/me": () => new Response("{}", { status: 401 }),
-      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: true })),
-      // Latch closed (setup already completed): the router answers 404.
-      "/api/setup/status": () => new Response("{}", { status: 404 }),
+      // #305: latch closed → setupComplete=true (also the schema default).
+      "/api/auth/mode": () =>
+        new Response(JSON.stringify({ bootstrapMode: true, setupComplete: true })),
     });
     renderAt("/");
 
@@ -548,7 +517,32 @@ describe("login screen bootstrap form", () => {
     expect(
       screen.queryByRole("link", { name: i18n.t("auth.bootstrap.setupCta") }),
     ).not.toBeInTheDocument();
-    // The latch query is gated on bootstrap mode, so it must never fire here.
+    // #305: the login screen no longer probes the setup router at all.
+    expect(
+      fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/setup/status")),
+    ).toBe(false);
+  });
+
+  // #305: the whole point — even in bootstrap mode with the latch open, the
+  // login screen reads the latch state from /mode and never touches the audited
+  // /api/setup/status.
+  it("never queries /api/setup/status, even in bootstrap mode with the setup CTA shown", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/auth/mode")) {
+        return new Response(JSON.stringify({ bootstrapMode: true, setupComplete: false }));
+      }
+      if (path.includes("/api/auth/me")) {
+        return new Response("{}", { status: 401 });
+      }
+      throw new Error(`Unhandled fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+
+    // The CTA is driven purely by /mode's setupComplete=false.
+    await screen.findByRole("link", { name: i18n.t("auth.bootstrap.setupCta") });
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/setup/status")),
     ).toBe(false);

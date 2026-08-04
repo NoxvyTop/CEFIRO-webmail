@@ -45,6 +45,26 @@ describe("loadConfig", () => {
     expect(config.sessionTtlHours).toBe(2);
   });
 
+  // #301: idle / sliding session timeout. Optional and default-less — unset
+  // means no idle limit, so a session keeps its full absolute TTL as before.
+  describe("SESSION_IDLE_MINUTES (#301)", () => {
+    it("is absent by default, which means no idle limit", () => {
+      expect(loadConfig(validEnv).sessionIdleMinutes).toBeUndefined();
+    });
+
+    it("reads SESSION_IDLE_MINUTES and treats an empty value as absent", () => {
+      expect(loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: "30" }).sessionIdleMinutes).toBe(30);
+      expect(loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: "" }).sessionIdleMinutes).toBeUndefined();
+    });
+
+    it("rejects a zero, negative, fractional or non-numeric idle window", () => {
+      expect(() => loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: "0" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: "-1" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: "1.5" })).toThrow();
+      expect(() => loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: "soon" })).toThrow();
+    });
+  });
+
   it("accepts BOOTSTRAP_MODE=1 as true", () => {
     expect(
       loadConfig({ ...validEnv, BOOTSTRAP_MODE: "1", BOOTSTRAP_PASSWORD }).bootstrapMode,

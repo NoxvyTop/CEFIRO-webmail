@@ -20,17 +20,6 @@ async function fetchMode(): Promise<AuthMode> {
   return authModeSchema.parse(await res.json());
 }
 
-// Whether the first-run setup wizard is still reachable (GH #287). The setup
-// router closes for good once setup completes — an active admin exists and SSO
-// is configured (GH #234) — and then answers 404, the same as a disabled setup
-// (the way SetupPage reads it). We hold no setup token here, so an OPEN latch
-// replies 401 rather than 200; only its openness matters, so any non-404 status
-// means the wizard is still available and the operator should be pointed at it.
-async function fetchSetupLatchOpen(): Promise<boolean> {
-  const res = await fetch("/api/setup/status");
-  return res.status !== 404;
-}
-
 // Bootstrap mode has no notion of an email address — the field is labeled
 // "Usuario" and the server (bootstrapLoginSchema) only requires a non-empty
 // string; it authenticates purely on the password. Email-format validation
@@ -51,14 +40,12 @@ export function LoginPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: mode } = useQuery({ queryKey: ["auth", "mode"], queryFn: fetchMode });
-  // Only ask about the setup latch in bootstrap mode: outside it the wizard is
-  // irrelevant, and querying an unauthenticated /api/setup/status would only add
-  // a needless request (and a rejected-auth audit row) while the latch is open.
-  const { data: setupLatchOpen } = useQuery({
-    queryKey: ["setup", "latch"],
-    queryFn: fetchSetupLatchOpen,
-    enabled: mode?.bootstrapMode === true,
-  });
+  // #305: the setup-latch state now rides on the public /mode probe, so the
+  // login screen learns whether first-run setup is still reachable WITHOUT
+  // polling the authenticated /api/setup/status — which recorded a
+  // `setup.auth_failed` audit row on every unauthenticated hit (#287). Only
+  // relevant in bootstrap mode; outside it the wizard is irrelevant.
+  const setupLatchOpen = mode?.bootstrapMode === true && mode.setupComplete === false;
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

@@ -26,6 +26,13 @@ export default defineConfig({
     // vitest.workers.ts.
     maxWorkers: TEST_WORKER_COUNT,
     minWorkers: 1,
+    // DB integration tests do real Postgres round-trips; under v8 coverage
+    // instrumentation (and on a loaded self-hosted CI runner) the heavier ones
+    // cross the 5s default and flake as timeouts even though they pass in the
+    // uninstrumented `test` run. Give them headroom — a genuinely hung test still
+    // fails, just later.
+    testTimeout: 20000,
+    hookTimeout: 30000,
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "text"],

@@ -406,7 +406,18 @@
       "filters": "Filtros",
       "vacation": "Ausencia",
       "contacts": "Contactos",
+      "sessions": "Sesiones",
       "notifications": "Notificaciones"
+    },
+    "sessions": {
+      "title": "Sesiones / dispositivos activos",
+      "description": "Estos son los dispositivos donde tu sesión sigue abierta. Si no reconoces alguno, ciérralo.",
+      "current": "Este dispositivo",
+      "unknownDevice": "Dispositivo desconocido",
+      "lastActivity": "Última actividad: {{time}}",
+      "location": "IP aproximada: {{ip}}",
+      "close": "Cerrar",
+      "closeOthers": "Cerrar las demás"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
