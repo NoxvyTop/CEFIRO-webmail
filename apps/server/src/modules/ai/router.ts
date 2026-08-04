@@ -305,10 +305,14 @@ export function createAiRouter(deps: AiDeps) {
     if (!parsed.success) {
       return errorResponse(c, "invalid_body", 400);
     }
-    // GH #299: forward the optional context (the original message body for a
-    // reply) so the model drafts against what it is replying to, not just the
-    // subject. draftReply wraps it in the untrusted fence (GH #298).
-    const draft = await deps.aiClient!.draftReply(parsed.data.subject, parsed.data.context);
+    // GH #304: the draft is written FROM the user's typed intent; the subject
+    // is a weak hint and the context is the original message body on a reply
+    // (GH #299). draftReply wraps every span in the untrusted fence (GH #298).
+    const draft = await deps.aiClient!.draftReply({
+      intent: parsed.data.intent,
+      subject: parsed.data.subject,
+      context: parsed.data.context,
+    });
     return c.json({ body: draft });
   });
 

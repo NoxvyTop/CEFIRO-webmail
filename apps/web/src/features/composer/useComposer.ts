@@ -6,9 +6,9 @@ import { isComposerDraftEmpty } from "./emptiness";
 import { MailApiError, updateMessage } from "../mailbox/api";
 import { errorMessageKey } from "../../app/errorMessages";
 import { composeTextBody, htmlToPlainText } from "./plainText";
-import { splitQuotedTail } from "./quoteSplit";
+import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
 import type { ComposerDraft } from "./reply";
-import { stripSignatureMarkers } from "./signature";
+import { SIGNATURE_MARKER_ATTR, stripSignatureMarkers } from "./signature";
 
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type PendingUpload = { id: string; name: string; size: number; progress: number; error: boolean };
@@ -62,7 +62,7 @@ type Action =
   | { type: "autosaveSaved" }
   | { type: "autosaveError" }
   | { type: "aiDraftStart" }
-  | { type: "aiDraftNeedsSubject" }
+  | { type: "aiDraftNeedsIntent" }
   | { type: "aiDraftSucceeded"; bodyHtml: string }
   | { type: "aiDraftFailed"; error: string | null; unavailable: boolean };
 
@@ -117,8 +117,10 @@ function reducer(state: ComposerState, action: Action): ComposerState {
       return { ...state, autosaveStatus: "error" };
     case "aiDraftStart":
       return { ...state, aiDrafting: true, aiDraftError: null, aiDraftNotice: false };
-    case "aiDraftNeedsSubject":
-      return { ...state, aiDraftError: "composer.aiDraftNeedsSubject" };
+    case "aiDraftNeedsIntent":
+      // GH #304: subject is no longer required — the body IS the intent, so this
+      // fires when the user hasn't typed anything to expand into a draft.
+      return { ...state, aiDraftError: "composer.aiDraftNeedsIntent", aiDraftNotice: false };
     case "aiDraftSucceeded":
       return {
         ...state,
@@ -243,6 +245,19 @@ function extractReplyContext(draft: ComposerDraft): string | undefined {
   const text = htmlToPlainText(quoted).trim();
   if (!text) return undefined;
   return text.slice(0, DRAFT_CONTEXT_MAX_CHARS);
+}
+
+// GH #304: the AI draft is driven by the INTENT the user types in the body, not
+// the subject. The intent is what the user actually authored: the editable
+// region (splitQuotedTail drops the quoted reply tail), minus the auto-applied
+// signature block (machine-inserted, never something the user typed as their
+// intent — same reasoning as isComposerBodyEmpty), flattened to plain text.
+// Empty (nothing typed) means there is no intent to expand, so draftWithAi
+// prompts the user instead of calling the API.
+function extractDraftIntent(editable: string): string {
+  const doc = new DOMParser().parseFromString(editable, "text/html");
+  doc.body.querySelectorAll(`[${SIGNATURE_MARKER_ATTR}]`).forEach((marker) => marker.remove());
+  return htmlToPlainText(doc.body.innerHTML).trim();
 }
 
 export function useComposer(
@@ -600,21 +615,28 @@ export function useComposer(
     }
   }
 
-  // Requires a subject before hitting the endpoint at all — matches the design
-  // spec ("requiere asunto, si no, aviso") and avoids a pointless network call.
+  // GH #304: the body text IS the user's intent. Expand what they typed into a
+  // proper email; the subject is only a weak hint. If nothing was typed there is
+  // no intent to expand, so prompt the user (Gmail-style) instead of drafting
+  // from the subject alone — and skip the pointless network call.
   async function draftWithAi(): Promise<void> {
-    if (!state.draft.subject.trim()) {
-      dispatch({ type: "aiDraftNeedsSubject" });
+    const { editable, quoted } = splitQuotedTail(state.draft.bodyHtml);
+    const intent = extractDraftIntent(editable);
+    if (!intent) {
+      dispatch({ type: "aiDraftNeedsIntent" });
       return;
     }
     dispatch({ type: "aiDraftStart" });
     try {
       // GH #299: on a reply, ground the draft in the original message (the
       // quoted tail of the body); a brand-new compose has none, so this is
-      // undefined and the request is unchanged.
+      // undefined. The subject rides along as an optional hint.
       const context = extractReplyContext(state.draft);
-      const body = await fetchAiDraft(state.draft.subject, context);
-      dispatch({ type: "aiDraftSucceeded", bodyHtml: `<p>${body}</p>` });
+      const subject = state.draft.subject.trim() || undefined;
+      const body = await fetchAiDraft({ intent, subject, context });
+      // Replace the composed body with the generated draft, keeping the quoted
+      // reply tail intact so a reply's original message is not lost.
+      dispatch({ type: "aiDraftSucceeded", bodyHtml: joinQuotedTail(`<p>${body}</p>`, quoted) });
     } catch (err) {
       if (err instanceof MailApiError && err.code === "ai_disabled") {
         // Software-level gate is off — hide the feature rather than showing

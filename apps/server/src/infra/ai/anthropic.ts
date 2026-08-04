@@ -104,8 +104,8 @@ export function createAnthropicAiClient(input: {
       }
     },
 
-    async draftReply(subject: string, context?: string): Promise<string> {
-      const prompt = buildDraftReplyPrompt(subject, context);
+    async draftReply(input: { intent: string; subject?: string; context?: string }): Promise<string> {
+      const prompt = buildDraftReplyPrompt(input.intent, input.subject, input.context);
       try {
         return (await complete(DRAFT_REPLY_SYSTEM_PROMPT, prompt)).trim();
       } catch (error) {

@@ -76,11 +76,11 @@ function stubJmap(bodyText: string | null): { client: JmapClient; calls: JmapMet
 function fakeAiClient(overrides: Partial<AiClient> = {}): AiClient & {
   summarizeCalls: string[];
   summarizeThreadCalls: Array<{ from: string; body: string }[]>;
-  draftCalls: { subject: string; context?: string }[];
+  draftCalls: { intent: string; subject?: string; context?: string }[];
 } {
   const summarizeCalls: string[] = [];
   const summarizeThreadCalls: Array<{ from: string; body: string }[]> = [];
-  const draftCalls: { subject: string; context?: string }[] = [];
+  const draftCalls: { intent: string; subject?: string; context?: string }[] = [];
   return {
     summarizeCalls,
     summarizeThreadCalls,
@@ -93,9 +93,9 @@ function fakeAiClient(overrides: Partial<AiClient> = {}): AiClient & {
       summarizeThreadCalls.push(messages);
       return overrides.summarizeThread ? overrides.summarizeThread(messages) : ["t-one", "t-two"];
     },
-    async draftReply(subject: string, context?: string) {
-      draftCalls.push({ subject, context });
-      return overrides.draftReply ? overrides.draftReply(subject, context) : "Borrador generado.";
+    async draftReply(input: { intent: string; subject?: string; context?: string }) {
+      draftCalls.push(input);
+      return overrides.draftReply ? overrides.draftReply(input) : "Borrador generado.";
     },
   };
 }
@@ -176,7 +176,7 @@ describe("ai router — software-level gate", () => {
 
   it("returns ai_disabled for draft without calling the AI provider when aiClient is null", async () => {
     const app = makeApp(null, null);
-    const res = await post(app, "/api/mail/compose/draft", { subject: "Hola" });
+    const res = await post(app, "/api/mail/compose/draft", { intent: "Hola" });
     expect(res.status).toBe(501);
     const json = (await res.json()) as { code: string };
     expect(json.code).toBe("ai_disabled");
@@ -327,29 +327,52 @@ describe("stripQuotedTrail", () => {
 });
 
 describe("ai router — compose draft", () => {
-  it("drafts a reply body from the subject", async () => {
+  // GH #304: the draft is written FROM the user's typed intent; the subject is
+  // an optional weak hint now, not the primary instruction.
+  it("drafts a body from the intent alone", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
-    const res = await post(app, "/api/mail/compose/draft", { subject: "Reunión de mañana" });
+    const res = await post(app, "/api/mail/compose/draft", { intent: "no voy el 20 de agosto" });
     expect(res.status).toBe(200);
     const json = (await res.json()) as { body: string };
     expect(json.body).toBe("Borrador generado.");
-    expect(ai.draftCalls).toEqual([{ subject: "Reunión de mañana", context: undefined }]);
+    expect(ai.draftCalls).toEqual([
+      { intent: "no voy el 20 de agosto", subject: undefined, context: undefined },
+    ]);
   });
 
-  // GH #299: the draft route used to call draftReply(subject) only, so the
-  // original body the composer sent as `context` was silently dropped and the
-  // draft ignored the email being replied to. Assert the route now forwards it.
-  it("forwards the optional context (the original body) to draftReply (GH #299)", async () => {
+  // GH #304: the subject rides along as an optional hint; the intent stays the
+  // primary instruction.
+  it("forwards the optional subject hint alongside the intent", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
     const res = await post(app, "/api/mail/compose/draft", {
+      intent: "aviso que no voy",
+      subject: "Reunión de mañana",
+    });
+    expect(res.status).toBe(200);
+    expect(ai.draftCalls).toEqual([
+      { intent: "aviso que no voy", subject: "Reunión de mañana", context: undefined },
+    ]);
+  });
+
+  // GH #299: the draft route forwards the original body the composer sent as
+  // `context`, so the draft is grounded in the email being replied to.
+  it("forwards intent, subject and context to draftReply (GH #299 / #304)", async () => {
+    const ai = fakeAiClient();
+    const app = makeApp(ai, null);
+    const res = await post(app, "/api/mail/compose/draft", {
+      intent: "confirmo el total",
       subject: "Re: Presupuesto",
       context: "¿Puedes confirmar el total antes del viernes?",
     });
     expect(res.status).toBe(200);
     expect(ai.draftCalls).toEqual([
-      { subject: "Re: Presupuesto", context: "¿Puedes confirmar el total antes del viernes?" },
+      {
+        intent: "confirmo el total",
+        subject: "Re: Presupuesto",
+        context: "¿Puedes confirmar el total antes del viernes?",
+      },
     ]);
   });
 
@@ -357,7 +380,7 @@ describe("ai router — compose draft", () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
     const res = await post(app, "/api/mail/compose/draft", {
-      subject: "Re: Presupuesto",
+      intent: "confirmo",
       context: "a".repeat(4001),
     });
     expect(res.status).toBe(400);
@@ -366,13 +389,18 @@ describe("ai router — compose draft", () => {
     expect(ai.draftCalls).toHaveLength(0);
   });
 
-  it("rejects an empty subject with invalid_body", async () => {
+  it("rejects a missing/empty intent with invalid_body (GH #304)", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
-    const res = await post(app, "/api/mail/compose/draft", { subject: "" });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { code: string };
-    expect(json.code).toBe("invalid_body");
+    // Empty intent.
+    const emptyRes = await post(app, "/api/mail/compose/draft", { intent: "" });
+    expect(emptyRes.status).toBe(400);
+    expect(((await emptyRes.json()) as { code: string }).code).toBe("invalid_body");
+    // A subject with no intent is no longer a valid draft request.
+    const noIntentRes = await post(app, "/api/mail/compose/draft", { subject: "Reunión" });
+    expect(noIntentRes.status).toBe(400);
+    expect(((await noIntentRes.json()) as { code: string }).code).toBe("invalid_body");
+    expect(ai.draftCalls).toHaveLength(0);
   });
 });
 
@@ -381,10 +409,10 @@ describe("ai router — per-user quota (GH #194)", () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null, createRateLimiter({ limit: 2, windowMs: 60_000 }));
 
-    expect((await post(app, "/api/mail/compose/draft", { subject: "one" })).status).toBe(200);
-    expect((await post(app, "/api/mail/compose/draft", { subject: "two" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "one" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "two" })).status).toBe(200);
 
-    const blocked = await post(app, "/api/mail/compose/draft", { subject: "three" });
+    const blocked = await post(app, "/api/mail/compose/draft", { intent: "three" });
     expect(blocked.status).toBe(429);
     expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(((await blocked.json()) as { code: string }).code).toBe("ai_rate_limited");
@@ -396,8 +424,8 @@ describe("ai router — per-user quota (GH #194)", () => {
     // aiClient is null → ai_disabled fires before the quota, so a disabled
     // server never burns the caller's budget.
     const app = makeApp(null, null, createRateLimiter({ limit: 1, windowMs: 60_000 }));
-    expect((await post(app, "/api/mail/compose/draft", { subject: "a" })).status).toBe(501);
-    expect((await post(app, "/api/mail/compose/draft", { subject: "b" })).status).toBe(501);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "a" })).status).toBe(501);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "b" })).status).toBe(501);
   });
 
   it("shares one budget across the different AI endpoints for the same user", async () => {
@@ -405,7 +433,7 @@ describe("ai router — per-user quota (GH #194)", () => {
     const { client } = stubJmap("hello");
     const app = makeApp(ai, client, createRateLimiter({ limit: 1, windowMs: 60_000 }));
 
-    expect((await post(app, "/api/mail/compose/draft", { subject: "x" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "x" })).status).toBe(200);
     const blocked = await post(app, "/api/mail/messages/e1/summarize", {});
     expect(blocked.status).toBe(429);
     expect(((await blocked.json()) as { code: string }).code).toBe("ai_rate_limited");

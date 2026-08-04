@@ -16,6 +16,10 @@ export type AiClient = {
    * covering who said what, decisions made, and pending/action items.
    */
   summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]>;
-  /** Drafts a reply body (in Spanish) from a subject and optional short context. */
-  draftReply(subject: string, context?: string): Promise<string>;
+  /**
+   * Drafts an email body (in Spanish) by expanding the user's typed `intent`
+   * into a natural, human message. `subject` is an optional weak hint and
+   * `context` is the original message body on a reply (GH #304).
+   */
+  draftReply(input: { intent: string; subject?: string; context?: string }): Promise<string>;
 };

@@ -287,8 +287,13 @@ describe("useComposer", () => {
   });
 
   describe("draftWithAi", () => {
-    it("does not call the endpoint and sets a needs-subject error when subject is blank", async () => {
-      const draft: ComposerDraft = { ...baseDraft(), subject: "  " };
+    // GH #304: subject is no longer required — the body IS the intent. An empty
+    // body means there is nothing to expand, so the hook surfaces guidance
+    // instead of calling the API from the subject alone.
+    it("does not call the endpoint and surfaces needs-intent guidance when the body is empty", async () => {
+      // A subject is present but the body is empty — the old gate would have let
+      // this through; the new one must not.
+      const draft: ComposerDraft = { ...baseDraft(), subject: "Reunión", bodyHtml: "   " };
       const { result } = renderHook(() => useComposer(draft));
 
       await act(async () => {
@@ -296,10 +301,10 @@ describe("useComposer", () => {
       });
 
       expect(fetchAiDraft).not.toHaveBeenCalled();
-      expect(result.current.state.aiDraftError).toBe("composer.aiDraftNeedsSubject");
+      expect(result.current.state.aiDraftError).toBe("composer.aiDraftNeedsIntent");
     });
 
-    it("happy path fills the body and shows the review notice", async () => {
+    it("happy path uses the typed body as the intent, fills the body and shows the review notice", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador.");
       const { result } = renderHook(() => useComposer(baseDraft()));
 
@@ -307,18 +312,37 @@ describe("useComposer", () => {
         await result.current.draftWithAi();
       });
 
-      // GH #299: a brand-new compose (no quoted original) sends no context.
-      expect(fetchAiDraft).toHaveBeenCalledWith("Hi", undefined);
+      // The typed body ("hello") is the intent; the subject is a hint; a
+      // brand-new compose (no quoted original) sends no context.
+      expect(fetchAiDraft).toHaveBeenCalledWith({ intent: "hello", subject: "Hi", context: undefined });
       expect(result.current.state.aiDrafting).toBe(false);
       expect(result.current.state.aiDraftError).toBeNull();
       expect(result.current.state.aiDraftNotice).toBe(true);
       expect(result.current.state.draft.bodyHtml).toContain("Estimado equipo, este es el borrador.");
     });
 
-    // GH #299: on a reply the composer carries the message being replied to as
-    // the quoted tail of the body; draftWithAi must forward it as `context` so
-    // the draft is grounded in the original, not just the subject.
-    it("sends the original message body as context on a reply draft", async () => {
+    it("omits the subject hint when the subject is blank", async () => {
+      fetchAiDraft.mockClear();
+      fetchAiDraft.mockResolvedValueOnce("Borrador.");
+      const draft: ComposerDraft = { ...baseDraft(), subject: "   ", bodyHtml: "<p>quiero avisar que no voy</p>" };
+      const { result } = renderHook(() => useComposer(draft));
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      expect(fetchAiDraft).toHaveBeenCalledWith({
+        intent: "quiero avisar que no voy",
+        subject: undefined,
+        context: undefined,
+      });
+    });
+
+    // GH #299 / #304: on a reply the composer carries the message being replied
+    // to as the quoted tail of the body. The user's typed text (above the quote)
+    // is the intent; the quoted original is forwarded as `context` and kept in
+    // the body after the draft is generated.
+    it("passes the typed text as intent and the quoted original as context on a reply, keeping the quote", async () => {
       // The mock is shared across this file's tests — clear its accumulated call
       // history so the count/args below describe only this test's own call.
       fetchAiDraft.mockClear();
@@ -338,11 +362,50 @@ describe("useComposer", () => {
       });
 
       expect(fetchAiDraft).toHaveBeenCalledTimes(1);
-      const [subject, context] = fetchAiDraft.mock.calls[0] as [string, string | undefined];
-      expect(subject).toBe("Re: Presupuesto");
-      expect(context).toContain("¿Puedes confirmar el total antes del viernes?");
-      // The user's own freshly-typed text is not part of the original-message context.
-      expect(context).not.toContain("Hola equipo");
+      const [input] = fetchAiDraft.mock.calls[0] as [{ intent: string; subject?: string; context?: string }];
+      expect(input.subject).toBe("Re: Presupuesto");
+      // The user's typed text above the quote is the intent…
+      expect(input.intent).toBe("Hola equipo");
+      // …and the quoted original is the context, not the typed text.
+      expect(input.context).toContain("¿Puedes confirmar el total antes del viernes?");
+      expect(input.context).not.toContain("Hola equipo");
+      // The generated draft replaces the editable body but keeps the quoted tail.
+      expect(result.current.state.draft.bodyHtml).toContain("Estimado equipo, respuesta generada.");
+      expect(result.current.state.draft.bodyHtml).toContain("data-cefiro-quote");
+      expect(result.current.state.draft.bodyHtml).toContain("¿Puedes confirmar el total antes del viernes?");
+    });
+
+    // The original bug (GH #304): regenerating appeared to "remember" the first
+    // output because the draft was driven by the subject, not the body. Now each
+    // run reads the current body, so a changed body produces a changed intent.
+    it("reflects the current body on each run instead of remembering the first", async () => {
+      fetchAiDraft.mockClear();
+      fetchAiDraft.mockResolvedValueOnce("Primer borrador.");
+      fetchAiDraft.mockResolvedValueOnce("Segundo borrador.");
+      const { result } = renderHook(() =>
+        useComposer({ ...baseDraft(), subject: "Hi", bodyHtml: "<p>primera idea</p>" }),
+      );
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+      expect(fetchAiDraft).toHaveBeenLastCalledWith({
+        intent: "primera idea",
+        subject: "Hi",
+        context: undefined,
+      });
+
+      act(() => {
+        result.current.setField("bodyHtml", "<p>segunda idea distinta</p>");
+      });
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+      expect(fetchAiDraft).toHaveBeenLastCalledWith({
+        intent: "segunda idea distinta",
+        subject: "Hi",
+        context: undefined,
+      });
     });
 
     it("hides the feature (aiUnavailable) without an inline error when the backend reports ai_disabled", async () => {

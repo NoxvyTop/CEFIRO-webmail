@@ -308,7 +308,9 @@ describe("createOpenAiCompatibleClient", () => {
   });
 
   describe("draftReply", () => {
-    it("asks the model for a Spanish draft from the subject and optional context", async () => {
+    // GH #304: the draft is built from the user's intent; the subject and
+    // context are optional. All three reach the prompt when present.
+    it("asks the model for a Spanish draft from the intent, subject hint and context", async () => {
       const fetchFn = fetchReturning({
         choices: [{ message: { content: "Estimado equipo, adjunto el borrador solicitado." } }],
       });
@@ -319,17 +321,22 @@ describe("createOpenAiCompatibleClient", () => {
         fetchFn,
       });
 
-      const draft = await client.draftReply("Reunión de seguimiento", "Confirmar horario de mañana");
+      const draft = await client.draftReply({
+        intent: "confirmar el horario de mañana",
+        subject: "Reunión de seguimiento",
+        context: "¿A qué hora nos vemos?",
+      });
 
       expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
       const [, init] = calls(fetchFn)[0]!;
       const requestBody = JSON.parse(init.body as string);
       expect(requestBody.messages[0].content).toMatch(/español/i);
+      expect(requestBody.messages[1].content).toContain("confirmar el horario de mañana");
       expect(requestBody.messages[1].content).toContain("Reunión de seguimiento");
-      expect(requestBody.messages[1].content).toContain("Confirmar horario de mañana");
+      expect(requestBody.messages[1].content).toContain("¿A qué hora nos vemos?");
     });
 
-    it("works without an optional context", async () => {
+    it("works from the intent alone, without a subject or context", async () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: "Borrador." } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
@@ -338,12 +345,12 @@ describe("createOpenAiCompatibleClient", () => {
         fetchFn,
       });
 
-      const draft = await client.draftReply("Solo asunto");
+      const draft = await client.draftReply({ intent: "aviso que no voy" });
 
       expect(draft).toBe("Borrador.");
     });
 
-    it("wraps a provider failure in a DomainError without leaking subject content", async () => {
+    it("wraps a provider failure in a DomainError without leaking intent content", async () => {
       const fetchFn = vi.fn(async () => {
         throw new Error("network exploded");
       }) as unknown as typeof fetch;
@@ -355,9 +362,9 @@ describe("createOpenAiCompatibleClient", () => {
       });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(client.draftReply("super secret subject")).rejects.toBeInstanceOf(DomainError);
+      await expect(client.draftReply({ intent: "super secret intent" })).rejects.toBeInstanceOf(DomainError);
       for (const call of logSpy.mock.calls) {
-        expect(JSON.stringify(call)).not.toContain("super secret subject");
+        expect(JSON.stringify(call)).not.toContain("super secret intent");
       }
       logSpy.mockRestore();
     });
@@ -383,7 +390,7 @@ describe("createOpenAiCompatibleClient", () => {
         fetchFn,
       });
 
-      const draft = await client.draftReply("Reunión de seguimiento");
+      const draft = await client.draftReply({ intent: "confirmar el horario de mañana" });
 
       expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
       expect(draft).not.toContain("internal reasoning");
@@ -401,7 +408,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
+      await expect(client.draftReply({ intent: "confirmar el horario de mañana" })).rejects.toBeInstanceOf(DomainError);
       for (const call of logSpy.mock.calls) {
         expect(JSON.stringify(call)).not.toContain("secret internal reasoning");
       }
@@ -418,7 +425,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
+      await expect(client.draftReply({ intent: "confirmar el horario de mañana" })).rejects.toBeInstanceOf(DomainError);
       logSpy.mockRestore();
     });
   });
@@ -475,7 +482,7 @@ describe("createOpenAiCompatibleClient", () => {
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = clientWith(silentFetch());
 
-      const pending = client.draftReply("Asunto");
+      const pending = client.draftReply({ intent: "aviso que no voy" });
       const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
       await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
       await assertion;

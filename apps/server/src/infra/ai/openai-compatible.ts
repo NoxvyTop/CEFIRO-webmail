@@ -131,8 +131,8 @@ export function createOpenAiCompatibleClient(input: {
       }
     },
 
-    async draftReply(subject: string, context?: string): Promise<string> {
-      const prompt = buildDraftReplyPrompt(subject, context);
+    async draftReply(input: { intent: string; subject?: string; context?: string }): Promise<string> {
+      const prompt = buildDraftReplyPrompt(input.intent, input.subject, input.context);
       try {
         const content = await chatComplete([
           { role: "system", content: DRAFT_REPLY_SYSTEM_PROMPT },
