@@ -1,11 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AiSummaryCard } from "./AiSummaryCard";
+import { summaryStorageKey, writeCachedSummary } from "./summaryCache";
 
-function renderCard(props: { messageId?: string; threadId?: string; messageCount?: number } = {}) {
+function renderCard(
+  props: { messageId?: string; threadId?: string; messageCount?: number; emailIds?: string[] } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -13,10 +16,18 @@ function renderCard(props: { messageId?: string; threadId?: string; messageCount
         messageId={props.messageId ?? "e1"}
         threadId={props.threadId ?? "t1"}
         messageCount={props.messageCount ?? 1}
+        emailIds={props.emailIds}
       />
     </QueryClientProvider>,
   );
 }
+
+// The card now persists generated summaries to localStorage (#308), which is
+// shared across every test in this jsdom worker — clear it so a summary written
+// by one test can't make the next one skip its "Resumir" trigger.
+beforeEach(() => {
+  localStorage.clear();
+});
 
 describe("AiSummaryCard", () => {
   it("shows a button initially and requests the summary only when clicked", async () => {
@@ -127,5 +138,103 @@ describe("AiSummaryCard — thread mode", () => {
 
     expect(await screen.findByText("z")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/mail/messages/e1/summarize", { method: "POST" });
+  });
+});
+
+describe("AiSummaryCard — localStorage cache (#308)", () => {
+  it("survives a reload: a generated summary re-shows on a fresh mount with no new fetch", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["r1", "r2"] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // First "session": generate the summary — the click writes it to the cache.
+    const first = renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.summarizeWithAi") }));
+    expect(await screen.findByText("r1")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    // A "reload" is a brand-new QueryClient — React Query's in-session cache is
+    // gone, so only localStorage can re-show the summary.
+    renderCard();
+    expect(await screen.findByText("r1")).toBeInTheDocument();
+    expect(screen.getByText("r2")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: i18n.t("mail.aiSummaryTitle") })).toBeInTheDocument();
+    // Restored from localStorage — no second round-trip, and no "Resumir" click.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("mail.summarizeWithAi") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a cached message summary immediately without calling the API", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    writeCachedSummary(
+      summaryStorageKey({ isThread: false, messageId: "e1", threadId: "t1", messageCount: 1 }),
+      ["seeded-1", "seeded-2"],
+    );
+
+    renderCard();
+
+    expect(await screen.findByText("seeded-1")).toBeInTheDocument();
+    expect(screen.getByText("seeded-2")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("re-shows a thread summary when the message set is unchanged", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    writeCachedSummary(
+      summaryStorageKey({
+        isThread: true, threadId: "t1", messageId: "e2", messageCount: 2, emailIds: ["e1", "e2"],
+      }),
+      ["thread-cached"],
+    );
+
+    renderCard({ threadId: "t1", messageCount: 2, emailIds: ["e1", "e2"], messageId: "e2" });
+
+    expect(await screen.findByText("thread-cached")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("misses and re-offers Resumir when the thread's message set has changed", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["fresh"] })));
+    vi.stubGlobal("fetch", fetchMock);
+    // A summary persisted for the OLD id set...
+    writeCachedSummary(
+      summaryStorageKey({
+        isThread: true, threadId: "t1", messageId: "e2", messageCount: 2, emailIds: ["e1", "e2"],
+      }),
+      ["old-summary"],
+    );
+
+    // ...but the thread has since grown a reply (e3): a different id set → miss.
+    renderCard({ threadId: "t1", messageCount: 3, emailIds: ["e1", "e2", "e3"], messageId: "e3" });
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("old-summary")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the cache when regenerating under a new thread key", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["regenerated"] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The grown thread (e1,e2,e3) misses the old cache and offers Resumir.
+    const grown = renderCard({
+      threadId: "t1", messageCount: 3, emailIds: ["e1", "e2", "e3"], messageId: "e3",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.summarizeConversation") }));
+    expect(await screen.findByText("regenerated")).toBeInTheDocument();
+    grown.unmount();
+
+    // A reload of the same (grown) thread now re-shows the regenerated summary
+    // from localStorage, with no further fetch.
+    fetchMock.mockClear();
+    renderCard({ threadId: "t1", messageCount: 3, emailIds: ["e1", "e2", "e3"], messageId: "e3" });
+    expect(await screen.findByText("regenerated")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
