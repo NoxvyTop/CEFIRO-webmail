@@ -403,7 +403,8 @@
       "signatures": "Signatures",
       "filters": "Filters",
       "vacation": "Vacation",
-      "contacts": "Contacts"
+      "contacts": "Contacts",
+      "notifications": "Notifications"
     },
     "newSignature": "New signature",
     "name": "Name",
@@ -520,6 +521,20 @@
     "confirmDeleteQuestion": "Delete \"{{name}}\"? This can't be undone.",
     "confirmDeleteAction": "Delete permanently",
     "cancelDelete": "Cancel"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "description": "Get an alert on this device when new mail arrives, even with Céfiro closed.",
+    "enable": "Enable notifications",
+    "disable": "Disable notifications",
+    "enabledOnThisDevice": "Notifications enabled on this device",
+    "working": "One moment…",
+    "unsupported": "Your browser does not support push notifications.",
+    "errors": {
+      "permissionDenied": "Notification permission was not granted. Enable it in your browser settings.",
+      "unavailable": "Notifications are not available right now. Try again.",
+      "generic": "Could not change your notification settings."
+    }
   },
   "shortcuts": {
     "title": "Shortcuts",

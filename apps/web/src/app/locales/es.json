@@ -403,7 +403,8 @@
       "signatures": "Firmas",
       "filters": "Filtros",
       "vacation": "Ausencia",
-      "contacts": "Contactos"
+      "contacts": "Contactos",
+      "notifications": "Notificaciones"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
@@ -520,6 +521,20 @@
     "confirmDeleteQuestion": "¿Eliminar a «{{name}}»? No podrás deshacerlo.",
     "confirmDeleteAction": "Eliminar definitivamente",
     "cancelDelete": "Cancelar"
+  },
+  "notifications": {
+    "title": "Notificaciones",
+    "description": "Recibe un aviso en este dispositivo cuando llegue correo nuevo, aunque tengas Céfiro cerrado.",
+    "enable": "Activar notificaciones",
+    "disable": "Desactivar notificaciones",
+    "enabledOnThisDevice": "Notificaciones activadas en este dispositivo",
+    "working": "Un momento…",
+    "unsupported": "Tu navegador no admite notificaciones push.",
+    "errors": {
+      "permissionDenied": "No se concedió el permiso de notificaciones. Actívalo en los ajustes del navegador.",
+      "unavailable": "Las notificaciones no están disponibles ahora mismo. Inténtalo de nuevo.",
+      "generic": "No se pudo cambiar la configuración de notificaciones."
+    }
   },
   "shortcuts": {
     "title": "Atajos",

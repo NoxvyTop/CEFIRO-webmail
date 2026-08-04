@@ -147,6 +147,22 @@ const configSchema = z.object({
   // provider requires (OpenAI-SDK convention). Only consulted when
   // aiProvider is "openai-compat" — see infra/ai/openai-compatible.ts.
   aiBaseUrl: z.string().min(1).optional(),
+  // Web Push / VAPID keys (#294, delivery slice). Push notifications are
+  // opt-in and INERT until all three are set — same posture as the AI feature
+  // and MASTER_KEY: absent → buildPushClient returns null, the SPA hides the
+  // opt-in, and nothing is ever sent. Self-generated (no account, no Firebase)
+  // with `bunx web-push generate-vapid-keys`. All three optional here and
+  // required together only by buildPushClient in index.ts — a half-set trio is
+  // treated as "off" rather than refusing the boot, because push is a
+  // non-critical extra, unlike MASTER_KEY. The public key is handed to the SPA;
+  // the private key signs the VAPID JWT and never leaves the server.
+  vapidPublicKey: z.string().min(1).optional(),
+  vapidPrivateKey: z.string().min(1).optional(),
+  // The VAPID `sub` claim: a `mailto:` or an https URL the push service can
+  // reach the operator at. Kept as a plain non-empty string rather than
+  // z.string().url() because a `mailto:` is the common, recommended value and
+  // is not what that validator accepts.
+  vapidSubject: z.string().min(1).optional(),
   // Global request-body ceiling in bytes (GH #195). A zero/negative/fractional
   // limit is a misconfiguration, not tuning — same shape as the pool sizes.
   maxBodyBytes: positiveIntSchema.default(DEFAULT_MAX_BODY_BYTES),
@@ -426,6 +442,11 @@ export function loadConfig(
     aiApiKey: env.AI_API_KEY || undefined,
     aiModel: env.AI_MODEL || undefined,
     aiBaseUrl: env.AI_BASE_URL || undefined,
+    // Trimmed like the other secrets above: a stray space in a compose file
+    // must not count as a configured key and half-enable the feature.
+    vapidPublicKey: env.VAPID_PUBLIC_KEY?.trim() || undefined,
+    vapidPrivateKey: env.VAPID_PRIVATE_KEY?.trim() || undefined,
+    vapidSubject: env.VAPID_SUBJECT?.trim() || undefined,
     maxBodyBytes: env.MAX_BODY_BYTES || undefined,
     shutdownGraceMs: env.SHUTDOWN_GRACE_MS || undefined,
     shutdownDbTimeoutMs: env.SHUTDOWN_DB_TIMEOUT_MS || undefined,
