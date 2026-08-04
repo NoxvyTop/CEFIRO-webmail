@@ -99,6 +99,10 @@ export const adminSsoViewSchema = z.object({
   issuer: z.string().nullable(),
   clientId: z.string().nullable(),
   scopes: z.string().nullable(),
+  // #290: the login-button display name, surfaced so the admin console can show
+  // and re-save it (a save that omitted it used to null the stored name).
+  // `null` when unset; optional so payloads/fixtures that predate it still parse.
+  providerName: z.string().nullable().optional(),
 });
 export type AdminSsoView = z.infer<typeof adminSsoViewSchema>;
 

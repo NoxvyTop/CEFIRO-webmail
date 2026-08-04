@@ -131,4 +131,55 @@ describe("admin sso config api", () => {
     });
     expect(malformed.status).toBe(400);
   });
+
+  // #290 / audit FIX 1: the login-button provider name is now exposed on the
+  // admin read path and carried on the PUT, so an admin can set it.
+  it("PUT /sso: persists an optional providerName and GET reflects it", async () => {
+    const admin = await createAdmin();
+    const put = await app.request("/api/admin/sso", {
+      method: "PUT",
+      headers: { cookie: `session=${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        issuer: "https://auth.test",
+        clientId: "webmail",
+        clientSecret: "s",
+        scopes: "openid email",
+        providerName: "Authentik",
+      }),
+    });
+    expect(put.status).toBe(200);
+
+    const get = await app.request("/api/admin/sso", {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    expect((await get.json() as { providerName: string | null }).providerName).toBe("Authentik");
+  });
+
+  // #290 / audit FIX 1 (regression): saving the panel again — as the fixed form
+  // does, always carrying providerName — round-trips the name instead of nulling
+  // it. Before the fix the admin surface never sent the field, so any save (e.g.
+  // rotating the secret) reset the login button back to "SSO".
+  it("PUT /sso: a subsequent admin save carrying providerName round-trips it, not nulls it", async () => {
+    const admin = await createAdmin();
+    const save = (clientSecret: string) =>
+      app.request("/api/admin/sso", {
+        method: "PUT",
+        headers: { cookie: `session=${admin.token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          issuer: "https://auth.test",
+          clientId: "webmail",
+          clientSecret,
+          scopes: "openid email",
+          providerName: "Authentik",
+        }),
+      });
+    expect((await save("first")).status).toBe(200);
+    // Second save (e.g. rotating the secret) still includes the provider name.
+    expect((await save("rotated")).status).toBe(200);
+
+    const get = await app.request("/api/admin/sso", {
+      headers: { cookie: `session=${admin.token}` },
+    });
+    expect((await get.json() as { providerName: string | null }).providerName).toBe("Authentik");
+  });
 });

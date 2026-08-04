@@ -418,17 +418,9 @@ describe("loadConfig", () => {
     });
   });
 
-  describe("NODE_ENV / isProduction (GH #196)", () => {
-    it("defaults nodeEnv to development and isProduction to false", () => {
-      const config = loadConfig(validEnv);
-      expect(config.nodeEnv).toBe("development");
-      expect(config.isProduction).toBe(false);
-    });
-
-    it("marks isProduction true only when NODE_ENV is exactly production", () => {
-      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "production" }).isProduction).toBe(true);
-      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "staging" }).isProduction).toBe(false);
-      expect(loadConfig({ ...validEnv, NODE_ENV: "test" }).isProduction).toBe(false);
+  describe("NODE_ENV (GH #196)", () => {
+    it("defaults nodeEnv to development", () => {
+      expect(loadConfig(validEnv).nodeEnv).toBe("development");
     });
 
     it("carries the raw NODE_ENV value through", () => {

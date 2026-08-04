@@ -287,10 +287,7 @@ const configSchema = z.object({
  */
 export type ConfigDeprecation = { variable: string; message: string };
 
-// `isProduction` is derived once here rather than re-deriving `nodeEnv ===
-// "production"` at each call site, so the production signal has a single source.
 export type AppConfig = z.infer<typeof configSchema> & {
-  isProduction: boolean;
   deprecations: ConfigDeprecation[];
 };
 
@@ -457,5 +454,5 @@ export function loadConfig(
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
     trustedProxyHops: env.TRUSTED_PROXY_HOPS || undefined,
   });
-  return { ...parsed, isProduction: parsed.nodeEnv === "production", deprecations };
+  return { ...parsed, deprecations };
 }

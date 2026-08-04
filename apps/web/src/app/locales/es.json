@@ -103,7 +103,8 @@
         "issuer": "Issuer",
         "clientId": "Client ID",
         "clientSecret": "Client Secret",
-        "scopes": "Scopes"
+        "scopes": "Scopes",
+        "providerName": "Nombre del proveedor"
       },
       "errors": {
         "issuerInvalid": "Introduce un issuer válido: una URL completa, p. ej. https://id.tu-empresa.com."
@@ -526,7 +527,7 @@
   "notifications": {
     "title": "Notificaciones",
     "description": "Recibe un aviso en este dispositivo cuando llegue correo nuevo, aunque tengas Céfiro cerrado.",
-    "enable": "Activar notificaciones",
+    "enable": "Activar notificaciones en segundo plano",
     "disable": "Desactivar notificaciones",
     "enabledOnThisDevice": "Notificaciones activadas en este dispositivo",
     "working": "Un momento…",

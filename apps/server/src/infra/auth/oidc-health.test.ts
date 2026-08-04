@@ -74,7 +74,7 @@ describe("checkOidcReachable", () => {
 describe("createOidcReadinessCheck", () => {
   const configured = {
     async getPublic() {
-      return { issuer: "https://idp.test", clientId: "c", scopes: "openid" };
+      return { issuer: "https://idp.test", clientId: "c", scopes: "openid", providerName: null };
     },
   };
   const notConfigured = {
