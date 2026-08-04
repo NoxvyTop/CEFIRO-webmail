@@ -85,7 +85,8 @@ al desplegar, no a mitad de la jornada.
 | `NODE_ENV` | `development` | `production` sirve la SPA estática y **fuerza cookies `Secure`** aunque `APP_URL` sea `http://`. En producción va siempre a `production`. |
 | `BOOTSTRAP_MODE` | `false` | Modo de primer arranque/recuperación. Ver el checklist. **En operación normal, `false`.** |
 | `BOOTSTRAP_PASSWORD` | — | Credencial de emergencia. **Obligatoria si `BOOTSTRAP_MODE=true`** (el proceso no arranca sin ella) e ignorada si no. Mínimo 24 caracteres; se genera con `openssl rand -base64 24`. Es contraseña del login de emergencia **y** token de `/setup`: va en el mismo gestor de secretos que `MASTER_KEY` y se retira al volver a `false`. |
-| `SESSION_TTL_HOURS` | `12` | Vida de la sesión. |
+| `SESSION_TTL_HOURS` | `12` | Vida absoluta de la sesión (tope no extensible). |
+| `SESSION_IDLE_MINUTES` | — | Timeout por inactividad (sliding, #301). Sin definir = sin límite de inactividad. Si se define, una sesión sin uso durante más de estos minutos caduca antes del tope absoluto. |
 | `STATIC_DIR` | `/app/apps/web/dist` | Ya viene fijado en la imagen. |
 | `SHUTDOWN_GRACE_MS` | `15000` | Plazo para que terminen las peticiones en vuelo al recibir SIGTERM. |
 | `SHUTDOWN_DB_TIMEOUT_MS` | `5000` | Plazo para cerrar el pool de Postgres. |

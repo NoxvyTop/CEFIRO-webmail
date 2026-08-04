@@ -83,4 +83,40 @@ describe("GET /api/auth/mode", () => {
       ),
     ).toBe("SSO");
   });
+
+  // #305: the first-run setup latch now rides on this public probe, so the
+  // login screen no longer has to poll the audited /api/setup/status.
+  function completionAppWith(isComplete: (() => Promise<boolean>) | null) {
+    return createApp({
+      authRouter: createAuthRouter({
+        sessions,
+        bootstrap: createBootstrap(true, BOOTSTRAP_PASSWORD),
+        ...(isComplete ? { completion: { isComplete } } : {}),
+      }),
+    });
+  }
+
+  async function setupCompleteOf(app: ReturnType<typeof createApp>): Promise<boolean> {
+    return ((await (await app.request("/api/auth/mode")).json()) as { setupComplete: boolean })
+      .setupComplete;
+  }
+
+  it("reports setupComplete from the completion latch", async () => {
+    expect(await setupCompleteOf(completionAppWith(async () => false))).toBe(false);
+    expect(await setupCompleteOf(completionAppWith(async () => true))).toBe(true);
+  });
+
+  it("defaults setupComplete to true when no completion latch is wired", async () => {
+    expect(await setupCompleteOf(completionAppWith(null))).toBe(true);
+  });
+
+  it("falls back to setupComplete=true when the latch read throws", async () => {
+    expect(
+      await setupCompleteOf(
+        completionAppWith(async () => {
+          throw new Error("db down");
+        }),
+      ),
+    ).toBe(true);
+  });
 });

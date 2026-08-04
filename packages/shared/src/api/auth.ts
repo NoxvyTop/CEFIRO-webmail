@@ -14,6 +14,15 @@ export const authModeSchema = z.object({
   // #290: the configured SSO provider name for the login button. Defaults to
   // "SSO", so a response (or test stub) that omits it still parses.
   providerName: z.string().default("SSO"),
+  // #305: whether first-run setup has finished (an active admin exists and SSO
+  // is configured — the #234 completion latch). The login screen reads it from
+  // this PUBLIC probe to decide whether to surface the first-run setup CTA, so
+  // it no longer has to poll the authenticated `GET /api/setup/status`, which
+  // recorded a `setup.auth_failed` audit row on every unauthenticated hit
+  // (#287). Defaults to `true` — "no wizard to point at" is the safe default
+  // for any response (or test stub) that omits it, matching a normal
+  // already-set-up instance.
+  setupComplete: z.boolean().default(true),
 });
 export type AuthMode = z.infer<typeof authModeSchema>;
 

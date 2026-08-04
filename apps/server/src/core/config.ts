@@ -87,6 +87,14 @@ const configSchema = z.object({
   // modules/setup/bootstrap.ts for why the process no longer mints its own.
   bootstrapPassword: z.string().optional(),
   sessionTtlHours: z.coerce.number().int().positive().default(12),
+  // #301: idle / sliding session timeout, in minutes. Optional and default-less
+  // ON PURPOSE — unset means "no idle limit", so a session lives its full
+  // `sessionTtlHours` absolute window exactly as before this knob existed, and
+  // no deployment is forced to set it. When set, a session unused for longer
+  // than this is treated as expired even though `expires_at` (the absolute,
+  // non-extensible ceiling) has not passed. Same shape as the other numeric
+  // knobs: zero, negative or fractional is a misconfiguration, not tuning.
+  sessionIdleMinutes: z.coerce.number().int().positive().optional(),
   // Base URL of the JMAP provider — Stalwart in our own deployments, but the
   // protocol is RFC 8620 and so is this client, so the name is the ROLE (GH
   // #33). `STALWART_URL` is still accepted; see RENAMED_ENV_VARS.
@@ -421,6 +429,7 @@ export function loadConfig(
     // configured would make it fail to verify with nothing to look at.
     bootstrapPassword: env.BOOTSTRAP_PASSWORD || undefined,
     sessionTtlHours: env.SESSION_TTL_HOURS ?? undefined,
+    sessionIdleMinutes: env.SESSION_IDLE_MINUTES || undefined,
     jmapUrl: renamed.get("JMAP_URL"),
     // Lower-cased before the enum so `JMAP_URL_MODE=Rewrite` is the mode the
     // operator plainly meant. An unknown word is NOT normalised away: it fails

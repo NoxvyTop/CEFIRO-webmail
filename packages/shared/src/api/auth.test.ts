@@ -6,6 +6,16 @@ describe("auth mode + bootstrap login contracts", () => {
     expect(authModeSchema.parse({ bootstrapMode: true }).bootstrapMode).toBe(true);
     expect(() => authModeSchema.parse({ bootstrapMode: "yes" })).toThrow();
   });
+  // #305: the setup-latch state rides on this public probe now.
+  it("authModeSchema defaults setupComplete to true and reads it when present", () => {
+    expect(authModeSchema.parse({ bootstrapMode: true }).setupComplete).toBe(true);
+    expect(
+      authModeSchema.parse({ bootstrapMode: true, setupComplete: false }).setupComplete,
+    ).toBe(false);
+    expect(() =>
+      authModeSchema.parse({ bootstrapMode: true, setupComplete: "no" }),
+    ).toThrow();
+  });
   it("bootstrapLoginSchema requires non-empty email and password", () => {
     expect(bootstrapLoginSchema.parse({ email: "bootstrap-admin", password: "p" }).email).toBe(
       "bootstrap-admin",

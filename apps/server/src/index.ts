@@ -51,6 +51,7 @@ import { createProfileRouter } from "./modules/profile/router";
 import { createContactsRouter } from "./modules/contacts/router";
 import { createBootstrap } from "./modules/setup/bootstrap";
 import { createSetupRouter } from "./modules/setup/router";
+import { createSetupCompletion } from "./modules/setup/completion";
 import { createAiRouter } from "./modules/ai/router";
 import { createAnthropicAiClient } from "./infra/ai/anthropic";
 import { createOpenAiCompatibleClient } from "./infra/ai/openai-compatible";
@@ -179,7 +180,9 @@ if (uncoveredKeyVersions.length > 0) {
 
 const users = createUsersRepo(db);
 const audit = createAuditRepo(db);
-const sessions = createSessionStore(db);
+// #301: the idle / sliding-timeout window rides on the store; unset means no
+// idle limit (only the absolute expires_at), exactly as before this knob.
+const sessions = createSessionStore(db, { idleMinutes: config.sessionIdleMinutes ?? null });
 const ssoConfig = createSsoConfigRepo(db, keyring);
 const instanceSettings = createInstanceSettingsRepo(db);
 const mailCredentials = createMailCredentialsRepo(db, keyring);
@@ -193,6 +196,11 @@ const contacts = createContactsRepo(db);
 const pushSubscriptions = createPushSubscriptionsRepo(db);
 const aiSummaries = createAiSummariesRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode, config.bootstrapPassword);
+// #234 completion latch, built once and shared by BOTH the setup router (which
+// closes itself once it reads true) and the auth router's public `/mode` (#305,
+// so the login screen can learn the latch state without probing the audited
+// setup endpoint). One instance so its in-memory one-way latch is consistent.
+const setupCompletion = createSetupCompletion({ users, ssoConfig });
 const jmap = config.jmapUrl
   ? createJmapClient({
       baseUrl: config.jmapUrl,
@@ -380,6 +388,7 @@ const app = createApp({
     sessionTtlHours: config.sessionTtlHours,
     bootstrap,
     oidcClient,
+    completion: setupCompletion,
     trustedProxyHops: config.trustedProxyHops,
   }),
   setupRouter: createSetupRouter({
@@ -388,6 +397,7 @@ const app = createApp({
     mailCredentials,
     ssoConfig,
     audit,
+    completion: setupCompletion,
     trustedProxyHops: config.trustedProxyHops,
   }),
   mailRouter: createMailRouter({
