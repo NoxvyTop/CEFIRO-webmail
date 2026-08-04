@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
+import { MailApiError, copyMessageToInbox, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
@@ -359,6 +359,28 @@ export function ThreadView({
     setDestroyError(null);
   }
 
+  // GH #13/#50 (G-2): copies the last email of a SHARED mailbox into the
+  // member's own personal inbox. Only ever reachable when `accountId` is set —
+  // i.e. a shared mailbox is active (the button below is hidden otherwise), so
+  // the guard is defense-in-depth, mirroring archive/unarchive's own guards.
+  // The copy lands in a different account (personal), so nothing in the
+  // currently-viewed shared account changes — success is just a toast.
+  const copyToInboxMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!accountId) throw new Error("no shared account");
+      return copyMessageToInbox(email.id, accountId);
+    },
+    onSuccess: () => {
+      showToast(t("mail.copiedToInbox"));
+    },
+    onError: (err) => {
+      // Same mapped-key treatment the destroy path uses (GH #215): an unmapped
+      // server code resolves to the namespace's generic message rather than
+      // being shown to the user as a literal i18n key.
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+    },
+  });
+
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
       updateMessage(email.id, { keywords: { $flagged: starred } }, accountId),
@@ -632,6 +654,21 @@ export function ThreadView({
           >
             <TrashIcon size={15} />
             {t("mail.deletePermanently")}
+          </button>
+        )}
+        {/* GH #13/#50 (G-2): copy-to-my-inbox is offered ONLY while a shared
+            mailbox is active (accountId set). On the personal mailbox it is
+            hidden — copying a message to the same inbox it already lives in is
+            meaningless, and the server refuses it anyway. */}
+        {accountId && (
+          <button
+            type="button"
+            onClick={() => copyToInboxMutation.mutate(lastEmail)}
+            disabled={copyToInboxMutation.isPending}
+            className={actionButtonClass}
+          >
+            <InboxIcon size={15} />
+            {t("mail.copyToInbox")}
           </button>
         )}
         <button

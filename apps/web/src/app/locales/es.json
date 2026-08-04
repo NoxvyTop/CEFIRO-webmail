@@ -223,6 +223,8 @@
       "not_in_trash": "El mensaje ya no está en la papelera",
       "destroy_failed": "No se pudo eliminar el mensaje",
       "account_forbidden": "No tienes acceso a ese buzón",
+      "invalid_account": "Ese buzón no admite copiar a tu bandeja",
+      "copy_failed": "No se pudo copiar el mensaje a tu bandeja",
       "generic": "No se pudo cargar el correo"
     },
     "unlinked": {
@@ -248,6 +250,8 @@
     "deleted": "Movido a la papelera",
     "deletePermanently": "Eliminar definitivamente",
     "deletedPermanently": "Mensaje eliminado definitivamente",
+    "copyToInbox": "Copiar a mi bandeja",
+    "copiedToInbox": "Copiado a tu bandeja",
     "deletePermanentlyConfirm": {
       "title": "¿Eliminar este mensaje definitivamente?",
       "description": "«{{subject}}» se eliminará definitivamente. Esta acción no se puede deshacer.",

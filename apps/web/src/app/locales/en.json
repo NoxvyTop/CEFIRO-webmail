@@ -223,6 +223,8 @@
       "not_in_trash": "The message is no longer in Trash",
       "destroy_failed": "Could not delete the message",
       "account_forbidden": "You don't have access to that mailbox",
+      "invalid_account": "That mailbox can't be copied to your inbox",
+      "copy_failed": "Could not copy the message to your inbox",
       "generic": "Mail could not be loaded"
     },
     "unlinked": {
@@ -248,6 +250,8 @@
     "deleted": "Moved to Trash",
     "deletePermanently": "Delete permanently",
     "deletedPermanently": "Message permanently deleted",
+    "copyToInbox": "Copy to my inbox",
+    "copiedToInbox": "Copied to your inbox",
     "deletePermanentlyConfirm": {
       "title": "Delete this message permanently?",
       "description": "\"{{subject}}\" will be permanently deleted. This can't be undone.",

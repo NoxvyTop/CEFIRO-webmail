@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  MailApiError, destroyMessage, fetchInstanceSettings, fetchMailboxes, fetchMessages,
-  fetchSharedAccounts, fetchThread, updateMessage,
+  MailApiError, copyMessageToInbox, destroyMessage, fetchInstanceSettings, fetchMailboxes,
+  fetchMessages, fetchSharedAccounts, fetchThread, updateMessage,
 } from "./api";
 
 const mailbox = {
@@ -116,5 +116,30 @@ describe("shared-mailbox account scoping", () => {
     const [url, init] = (destroyMock as any).mock.calls[0] as [string, RequestInit];
     expect(String(url)).toBe("/api/mail/messages/e1?accountId=acc-shared");
     expect(init?.method).toBe("DELETE");
+  });
+
+  // GH #13/#50 (G-2): copy-to-my-inbox POSTs to the copy endpoint with the
+  // shared account it is being read from.
+  it("POSTs to the copy-to-inbox endpoint with the shared accountId", async () => {
+    const copyMock = stubFetch({ ok: true });
+    await copyMessageToInbox("e1", "acc-shared");
+    const [url, init] = (copyMock as any).mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("/api/mail/messages/e1/copy-to-inbox?accountId=acc-shared");
+    expect(init?.method).toBe("POST");
+  });
+
+  it("surfaces the envelope code when the copy request fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ code: "copy_failed", message: "x", traceId: "t" }), {
+          status: 502,
+        }),
+      ),
+    );
+    await expect(copyMessageToInbox("e1", "acc-shared")).rejects.toMatchObject({
+      status: 502,
+      code: "copy_failed",
+    });
   });
 });

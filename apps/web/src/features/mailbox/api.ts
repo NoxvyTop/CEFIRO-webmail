@@ -97,6 +97,20 @@ export async function destroyMessage(id: string, accountId?: string): Promise<vo
   if (!res.ok) return parseError(res);
 }
 
+// GH #13/#50 (G-2): copies a message from a shared mailbox into the member's
+// OWN personal inbox (POST /api/mail/messages/:id/copy-to-inbox on the server,
+// a single JMAP Email/copy with the member's own credential). `accountId` is
+// REQUIRED and must be the shared account the message is being read from — the
+// server refuses a personal/own account with 400 invalid_account. The original
+// stays put in the shared mailbox.
+export async function copyMessageToInbox(id: string, accountId: string): Promise<void> {
+  const res = await fetch(
+    `/api/mail/messages/${encodeURIComponent(id)}/copy-to-inbox${accountQuery(accountId)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) return parseError(res);
+}
+
 // Public, unauthenticated instance branding flag (see apps/server/src/app.ts
 // GET /api/instance) — read by the reader footer, not admin-gated.
 export async function fetchInstanceSettings(): Promise<InstanceSettingsView> {
