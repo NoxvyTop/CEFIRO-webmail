@@ -256,7 +256,9 @@ function extractReplyContext(draft: ComposerDraft): string | undefined {
 // prompts the user instead of calling the API.
 function extractDraftIntent(editable: string): string {
   const doc = new DOMParser().parseFromString(editable, "text/html");
-  doc.body.querySelectorAll(`[${SIGNATURE_MARKER_ATTR}]`).forEach((marker) => marker.remove());
+  doc.body.querySelectorAll(`[${SIGNATURE_MARKER_ATTR}]`).forEach((marker) => {
+    marker.remove();
+  });
   return htmlToPlainText(doc.body.innerHTML).trim();
 }
 
