@@ -188,6 +188,9 @@ describe("system prompts carry the anti-injection guidance (GH #298)", () => {
     expect(DRAFT_REPLY_SYSTEM_PROMPT.toLowerCase()).toContain("natural");
     expect(DRAFT_REPLY_SYSTEM_PROMPT.toLowerCase()).toContain("robótico");
     expect(DRAFT_REPLY_SYSTEM_PROMPT).not.toContain("breve y profesional");
+    // GH #304 refinement: deduce the message from a doubt (never echo it) and greet.
+    expect(DRAFT_REPLY_SYSTEM_PROMPT.toLowerCase()).toContain("duda");
+    expect(DRAFT_REPLY_SYSTEM_PROMPT.toLowerCase()).toContain("saludo");
   });
 });
 

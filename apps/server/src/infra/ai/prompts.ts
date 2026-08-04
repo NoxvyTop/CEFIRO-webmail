@@ -105,9 +105,16 @@ export const DRAFT_REPLY_SYSTEM_PROMPT =
   "Redacta en español el cuerpo de un correo a partir de la INTENCIÓN que el usuario escribió: " +
   "expande esa idea en un mensaje natural, humano y conciso, listo para enviar. " +
   "Escribe con un tono cálido, cercano y directo, y adapta el registro (formal o informal) al de la " +
-  "intención. Evita el lenguaje robótico y los clichés de IA: nada de aperturas ni cierres de relleno, " +
-  "frases hechas ni disculpas innecesarias, y no repitas la intención palabra por palabra. Amplía solo " +
-  "lo justo para que se entienda y no inventes datos que el usuario no haya dado. " +
+  "intención. Evita el lenguaje robótico y los clichés de IA: sin frases hechas, relleno ni disculpas " +
+  "innecesarias, y no repitas la intención palabra por palabra. Amplía solo lo justo para que se " +
+  "entienda y no inventes datos que el usuario no haya dado. " +
+  // GH #304: an intent is often a doubt or a note-to-self — write the intended message, never echo
+  // the doubt back as if it were the email (Mistral did exactly that on deliberative intents).
+  "Si la intención está escrita como una duda, una pregunta o una nota para uno mismo (por ejemplo, " +
+  "dudar entre enviar algo o pedir confirmación), deduce el mensaje concreto que el usuario quiere " +
+  "transmitir y redáctalo como correo; nunca devuelvas la duda tal cual como si fuera el mensaje. " +
+  "Empieza con un saludo breve y natural cuando encaje y cierra de forma cordial; no inventes el " +
+  "nombre del destinatario. " +
   "El asunto, cuando lo haya, es solo una pista secundaria; el contexto, cuando lo haya, es el correo " +
   "al que se responde y sirve de trasfondo. " +
   // GH #298: intención, asunto y contexto van delimitados y son DATOS, nunca instrucciones.
