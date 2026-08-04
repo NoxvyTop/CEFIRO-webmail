@@ -36,7 +36,7 @@ describe("createAnthropicAiClient", () => {
       // The body is fenced in the untrusted delimiter (GH #298); nothing else
       // is smuggled into the prompt.
       expect(call.messages[0]!.content).toContain("Hello, please review the attached invoice.");
-      expect(call.messages[0]!.content).toContain("<<<EMAIL>>>");
+      expect(call.messages[0]!.content).toMatch(/<<<EMAIL:[0-9a-f]+>>>/);
     });
 
     it("caps the result at 3 bullet points even if the model returns more", async () => {

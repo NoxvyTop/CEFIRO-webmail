@@ -41,8 +41,8 @@ describe("createOpenAiCompatibleClient", () => {
       // The body is fenced in the untrusted delimiter (GH #298) and nothing
       // else is smuggled in — no extra mailbox data reaches the prompt.
       expect(requestBody.messages[1].content).toContain("Hello, please review the attached invoice.");
-      expect(requestBody.messages[1].content).toContain("<<<EMAIL>>>");
-      expect(requestBody.messages[1].content).toContain("<<<END EMAIL>>>");
+      expect(requestBody.messages[1].content).toMatch(/<<<EMAIL:[0-9a-f]+>>>/);
+      expect(requestBody.messages[1].content).toMatch(/<<<END EMAIL:[0-9a-f]+>>>/);
     });
 
     it("caps the result at 3 bullet points even if the model returns more", async () => {
