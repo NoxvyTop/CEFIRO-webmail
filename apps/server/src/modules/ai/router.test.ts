@@ -337,6 +337,35 @@ describe("ai router — compose draft", () => {
     expect(ai.draftCalls).toEqual([{ subject: "Reunión de mañana", context: undefined }]);
   });
 
+  // GH #299: the draft route used to call draftReply(subject) only, so the
+  // original body the composer sent as `context` was silently dropped and the
+  // draft ignored the email being replied to. Assert the route now forwards it.
+  it("forwards the optional context (the original body) to draftReply (GH #299)", async () => {
+    const ai = fakeAiClient();
+    const app = makeApp(ai, null);
+    const res = await post(app, "/api/mail/compose/draft", {
+      subject: "Re: Presupuesto",
+      context: "¿Puedes confirmar el total antes del viernes?",
+    });
+    expect(res.status).toBe(200);
+    expect(ai.draftCalls).toEqual([
+      { subject: "Re: Presupuesto", context: "¿Puedes confirmar el total antes del viernes?" },
+    ]);
+  });
+
+  it("rejects a context over the length cap with invalid_body (GH #299)", async () => {
+    const ai = fakeAiClient();
+    const app = makeApp(ai, null);
+    const res = await post(app, "/api/mail/compose/draft", {
+      subject: "Re: Presupuesto",
+      context: "a".repeat(4001),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+    // Rejected before the paid provider is ever reached.
+    expect(ai.draftCalls).toHaveLength(0);
+  });
+
   it("rejects an empty subject with invalid_body", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);

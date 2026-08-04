@@ -305,7 +305,10 @@ export function createAiRouter(deps: AiDeps) {
     if (!parsed.success) {
       return errorResponse(c, "invalid_body", 400);
     }
-    const draft = await deps.aiClient!.draftReply(parsed.data.subject);
+    // GH #299: forward the optional context (the original message body for a
+    // reply) so the model drafts against what it is replying to, not just the
+    // subject. draftReply wraps it in the untrusted fence (GH #298).
+    const draft = await deps.aiClient!.draftReply(parsed.data.subject, parsed.data.context);
     return c.json({ body: draft });
   });
 

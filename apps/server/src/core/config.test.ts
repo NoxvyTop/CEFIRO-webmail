@@ -334,6 +334,47 @@ describe("loadConfig", () => {
     });
   });
 
+  // #294 (delivery slice): Web Push is opt-in and inert until all three VAPID
+  // variables are set. Absent → undefined, which buildPushClient reads as "off".
+  describe("VAPID push keys (off by default)", () => {
+    it("leaves every VAPID field undefined when none are set", () => {
+      const config = loadConfig(validEnv);
+      expect(config.vapidPublicKey).toBeUndefined();
+      expect(config.vapidPrivateKey).toBeUndefined();
+      expect(config.vapidSubject).toBeUndefined();
+    });
+
+    it("reads the VAPID public/private key and subject from env", () => {
+      const config = loadConfig({
+        ...validEnv,
+        VAPID_PUBLIC_KEY: "BPublicKey",
+        VAPID_PRIVATE_KEY: "PrivateKey",
+        VAPID_SUBJECT: "mailto:ops@noxvytop.com",
+      });
+      expect(config.vapidPublicKey).toBe("BPublicKey");
+      expect(config.vapidPrivateKey).toBe("PrivateKey");
+      expect(config.vapidSubject).toBe("mailto:ops@noxvytop.com");
+    });
+
+    it("treats empty or whitespace-only VAPID values as absent", () => {
+      const config = loadConfig({
+        ...validEnv,
+        VAPID_PUBLIC_KEY: "",
+        VAPID_PRIVATE_KEY: "   ",
+        VAPID_SUBJECT: "",
+      });
+      expect(config.vapidPublicKey).toBeUndefined();
+      expect(config.vapidPrivateKey).toBeUndefined();
+      expect(config.vapidSubject).toBeUndefined();
+    });
+
+    it("trims a VAPID value that picked up whitespace from a compose file", () => {
+      expect(
+        loadConfig({ ...validEnv, VAPID_SUBJECT: "  mailto:ops@noxvytop.com  " }).vapidSubject,
+      ).toBe("mailto:ops@noxvytop.com");
+    });
+  });
+
   describe("outbound deadlines (GH #165)", () => {
     it("defaults every upstream deadline so no deployment has to set one", () => {
       const config = loadConfig(validEnv);
@@ -377,17 +418,9 @@ describe("loadConfig", () => {
     });
   });
 
-  describe("NODE_ENV / isProduction (GH #196)", () => {
-    it("defaults nodeEnv to development and isProduction to false", () => {
-      const config = loadConfig(validEnv);
-      expect(config.nodeEnv).toBe("development");
-      expect(config.isProduction).toBe(false);
-    });
-
-    it("marks isProduction true only when NODE_ENV is exactly production", () => {
-      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "production" }).isProduction).toBe(true);
-      expect(loadConfig({ ...generatedKeyEnv, NODE_ENV: "staging" }).isProduction).toBe(false);
-      expect(loadConfig({ ...validEnv, NODE_ENV: "test" }).isProduction).toBe(false);
+  describe("NODE_ENV (GH #196)", () => {
+    it("defaults nodeEnv to development", () => {
+      expect(loadConfig(validEnv).nodeEnv).toBe("development");
     });
 
     it("carries the raw NODE_ENV value through", () => {

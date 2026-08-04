@@ -597,7 +597,8 @@ describe("Composer", () => {
       fireEvent.click(draftButton);
 
       expect(await screen.findByText(i18n.t("composer.aiDraftNotice"))).toBeInTheDocument();
-      expect(fetchAiDraft).toHaveBeenCalledWith("Reunión de mañana");
+      // GH #299: no quoted original in this draft, so no context is sent.
+      expect(fetchAiDraft).toHaveBeenCalledWith("Reunión de mañana", undefined);
     });
 
     it("shows an inline error without calling the endpoint when subject is empty", async () => {

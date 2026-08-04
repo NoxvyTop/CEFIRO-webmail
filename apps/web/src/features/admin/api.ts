@@ -75,7 +75,7 @@ export async function fetchAdminSso(): Promise<AdminSsoView> {
 }
 
 export async function updateAdminSso(input: {
-  issuer: string; clientId: string; clientSecret: string; scopes: string;
+  issuer: string; clientId: string; clientSecret: string; scopes: string; providerName?: string;
 }): Promise<void> {
   const res = await fetch("/api/admin/sso", jsonRequest("PUT", input));
   if (!res.ok) return parseError(res);

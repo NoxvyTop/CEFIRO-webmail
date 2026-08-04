@@ -284,7 +284,7 @@ export function createAdminRouter(deps: AdminDeps) {
     const pub = await deps.ssoConfig.getPublic();
     const body: AdminSsoView = pub
       ? { configured: true, ...pub }
-      : { configured: false, issuer: null, clientId: null, scopes: null };
+      : { configured: false, issuer: null, clientId: null, scopes: null, providerName: null };
     return c.json(body);
   });
 

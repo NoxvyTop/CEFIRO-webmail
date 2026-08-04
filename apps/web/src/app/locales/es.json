@@ -103,7 +103,8 @@
         "issuer": "Issuer",
         "clientId": "Client ID",
         "clientSecret": "Client Secret",
-        "scopes": "Scopes"
+        "scopes": "Scopes",
+        "providerName": "Nombre del proveedor"
       },
       "errors": {
         "issuerInvalid": "Introduce un issuer válido: una URL completa, p. ej. https://id.tu-empresa.com."
@@ -114,7 +115,7 @@
     "degraded": "Servicio degradado"
   },
   "auth": {
-    "signIn": "Iniciar sesión con SSO",
+    "signIn": "Iniciar sesión con {{provider}}",
     "connecting": "Conectando…",
     "redirecting": "Redirigiendo a tu proveedor de identidad…",
     "signOut": "Cerrar sesión",
@@ -135,6 +136,7 @@
       "submitting": "Entrando…",
       "error": "Credencial inválida",
       "hint": "Solo disponible en modo de configuración o recuperación",
+      "setupCta": "Configuración inicial",
       "errors": {
         "emptyUser": "Introduce tu usuario.",
         "emptyPassword": "Introduce tu contraseña.",
@@ -163,6 +165,7 @@
       "generic": "No se pudo completar la operación. Revisa los datos e inténtalo de nuevo.",
       "invalid_body": "Revisa los datos: hay campos incompletos o con un formato inválido.",
       "network_error": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "not_found": "La configuración inicial ya se completó. Inicia sesión por SSO.",
       "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo.",
       "unauthorized": "La contraseña temporal de consola es incorrecta.",
       "user_exists": "Ya existe un usuario con ese correo."
@@ -172,6 +175,7 @@
       "clientId": "Client ID",
       "clientSecret": "Client Secret",
       "scopes": "Scopes",
+      "providerName": "Nombre del proveedor",
       "email": "Correo",
       "displayName": "Nombre",
       "role": "Rol",
@@ -401,7 +405,8 @@
       "signatures": "Firmas",
       "filters": "Filtros",
       "vacation": "Ausencia",
-      "contacts": "Contactos"
+      "contacts": "Contactos",
+      "notifications": "Notificaciones"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
@@ -518,6 +523,20 @@
     "confirmDeleteQuestion": "¿Eliminar a «{{name}}»? No podrás deshacerlo.",
     "confirmDeleteAction": "Eliminar definitivamente",
     "cancelDelete": "Cancelar"
+  },
+  "notifications": {
+    "title": "Notificaciones",
+    "description": "Recibe un aviso en este dispositivo cuando llegue correo nuevo, aunque tengas Céfiro cerrado.",
+    "enable": "Activar notificaciones en segundo plano",
+    "disable": "Desactivar notificaciones",
+    "enabledOnThisDevice": "Notificaciones activadas en este dispositivo",
+    "working": "Un momento…",
+    "unsupported": "Tu navegador no admite notificaciones push.",
+    "errors": {
+      "permissionDenied": "No se concedió el permiso de notificaciones. Actívalo en los ajustes del navegador.",
+      "unavailable": "Las notificaciones no están disponibles ahora mismo. Inténtalo de nuevo.",
+      "generic": "No se pudo cambiar la configuración de notificaciones."
+    }
   },
   "shortcuts": {
     "title": "Atajos",

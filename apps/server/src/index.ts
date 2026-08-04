@@ -1,4 +1,6 @@
 import { serveStatic } from "hono/bun";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, type HealthCheck } from "./app";
 import { loadConfig, type AppConfig } from "./core/config";
@@ -24,6 +26,7 @@ import { createSieveRawScriptRepo } from "./infra/repos/sieve-raw-script";
 import { createSieveSyncStateRepo } from "./infra/repos/sieve-sync-state";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { createContactsRepo } from "./infra/repos/contacts";
+import { createPushSubscriptionsRepo } from "./infra/repos/push-subscriptions";
 import { findUncoveredKeyVersions } from "./infra/db/key-versions";
 import {
   createKeyring,
@@ -51,6 +54,9 @@ import { createAiRouter } from "./modules/ai/router";
 import { createAnthropicAiClient } from "./infra/ai/anthropic";
 import { createOpenAiCompatibleClient } from "./infra/ai/openai-compatible";
 import type { AiClient } from "./core/ai";
+import { createPushRouter } from "./modules/push/router";
+import { createWebPushSender } from "./infra/push/web-push";
+import type { PushSender } from "./core/push";
 
 let config: AppConfig;
 try {
@@ -183,6 +189,7 @@ const sieveSyncState = createSieveSyncStateRepo(db);
 const sieveRawScript = createSieveRawScriptRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
+const pushSubscriptions = createPushSubscriptionsRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode, config.bootstrapPassword);
 const jmap = config.jmapUrl
   ? createJmapClient({
@@ -265,6 +272,29 @@ const aiClient: AiClient | null = buildAiClient();
 
 log("info", "ai features", { enabled: aiClient !== null, provider: config.aiProvider });
 
+// #294 (delivery slice): Web Push is inert until the full VAPID trio is set —
+// same default-safe gate as buildAiClient above. A partially configured trio is
+// treated as "off" (and warned about, since it is almost certainly a mistake)
+// rather than refusing the boot: push is a non-critical extra, so a missing key
+// must not take the whole server down the way a missing MASTER_KEY does.
+function buildPushClient(): PushSender | null {
+  const { vapidPublicKey, vapidPrivateKey, vapidSubject } = config;
+  if (!vapidPublicKey && !vapidPrivateKey && !vapidSubject) return null;
+  if (!vapidPublicKey || !vapidPrivateKey || !vapidSubject) {
+    log("warn", "push features need VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT together; push disabled", {});
+    return null;
+  }
+  return createWebPushSender({
+    publicKey: vapidPublicKey,
+    privateKey: vapidPrivateKey,
+    subject: vapidSubject,
+  });
+}
+
+const pushClient: PushSender | null = buildPushClient();
+
+log("info", "push features", { enabled: pushClient !== null });
+
 // Same OIDC client the auth router falls back to, built here so the configured
 // outbound deadline reaches it (GH #165). The JWKS fetch behind createVerifier
 // carries jose's own 5s `timeoutDuration` default and needs nothing from us.
@@ -334,7 +364,6 @@ const app = createApp({
     sessionTtlHours: config.sessionTtlHours,
     bootstrap,
     oidcClient,
-    isProduction: config.isProduction,
     trustedProxyHops: config.trustedProxyHops,
   }),
   setupRouter: createSetupRouter({
@@ -372,16 +401,27 @@ const app = createApp({
   }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
   aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
+  pushRouter: createPushRouter({
+    sessions,
+    pushSubscriptions,
+    pushClient,
+    vapidPublicKey: config.vapidPublicKey ?? null,
+  }),
   profileRouter: createProfileRouter({ sessions, users, audit }),
   contactsRouter: createContactsRouter({ sessions, contacts }),
 });
 
-// Both signals come from the validated config rather than a second read of the
-// environment (GH #218): NODE_ENV has exactly one interpretation in this
-// process — `config.isProduction`, the same one that forces Secure cookies —
-// and STATIC_DIR is checked for being non-empty before we mount anything on it.
-if (config.isProduction) {
-  const root = config.staticDir;
+// Mount the SPA whenever a built one is actually present, not on NODE_ENV
+// (GH #288). `config.staticDir` is resolved the way hono/bun's serveStatic
+// resolves `root` — relative to the process cwd, or the absolute path the
+// Docker image sets via STATIC_DIR — so probing `<staticDir>/index.html` on the
+// same base answers the only question that matters: is there a build to serve?
+// A dev source checkout has none (Vite serves the SPA on its own port), so this
+// stays unmounted there regardless of NODE_ENV; the Docker image points
+// STATIC_DIR at the build, so it mounts in every environment. STATIC_DIR being
+// non-empty is still guaranteed by the config schema (GH #218).
+const root = config.staticDir;
+if (existsSync(join(root, "index.html"))) {
   app.use("*", serveStatic({ root }));
   app.use("*", serveStatic({ root, path: "index.html" }));
 }

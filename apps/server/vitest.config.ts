@@ -45,7 +45,9 @@ export default defineConfig({
         // a real floor instead of being pinned at zero by files that contain
         // nothing to execute.
         "src/core/ai.ts",
+        "src/core/push.ts",
         "src/modules/ai/context.ts",
+        "src/modules/push/context.ts",
         "src/modules/contacts/context.ts",
         // Test harness, not a unit under test: this is the accessor the suite
         // uses to reach the throwaway database vitest.global-setup.ts

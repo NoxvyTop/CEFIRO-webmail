@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { authModeSchema, type AuthMode } from "@webmail/shared";
 import { bootstrapLogin } from "./useAuth";
 import { errorMessageKey } from "../../app/errorMessages";
@@ -18,6 +18,17 @@ const SSO_REDIRECT_DELAY_MS = 1400;
 async function fetchMode(): Promise<AuthMode> {
   const res = await fetch("/api/auth/mode");
   return authModeSchema.parse(await res.json());
+}
+
+// Whether the first-run setup wizard is still reachable (GH #287). The setup
+// router closes for good once setup completes — an active admin exists and SSO
+// is configured (GH #234) — and then answers 404, the same as a disabled setup
+// (the way SetupPage reads it). We hold no setup token here, so an OPEN latch
+// replies 401 rather than 200; only its openness matters, so any non-404 status
+// means the wizard is still available and the operator should be pointed at it.
+async function fetchSetupLatchOpen(): Promise<boolean> {
+  const res = await fetch("/api/setup/status");
+  return res.status !== 404;
 }
 
 // Bootstrap mode has no notion of an email address — the field is labeled
@@ -40,6 +51,14 @@ export function LoginPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: mode } = useQuery({ queryKey: ["auth", "mode"], queryFn: fetchMode });
+  // Only ask about the setup latch in bootstrap mode: outside it the wizard is
+  // irrelevant, and querying an unauthenticated /api/setup/status would only add
+  // a needless request (and a rejected-auth audit row) while the latch is open.
+  const { data: setupLatchOpen } = useQuery({
+    queryKey: ["setup", "latch"],
+    queryFn: fetchSetupLatchOpen,
+    enabled: mode?.bootstrapMode === true,
+  });
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -121,7 +140,9 @@ export function LoginPage() {
                 <rect x="4" y="10" width="16" height="10" rx="2" />
                 <path d="M8 10V7a4 4 0 0 1 8 0v3" />
               </svg>
-              {ssoConnecting ? t("auth.connecting") : t("auth.signIn")}
+              {ssoConnecting
+                ? t("auth.connecting")
+                : t("auth.signIn", { provider: mode?.providerName ?? "SSO" })}
             </a>
             {ssoConnecting && (
               <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent-text">
@@ -132,6 +153,17 @@ export function LoginPage() {
         )}
         {mode?.bootstrapMode === true && (
           <>
+            {/* GH #287: while the setup latch is still open, first-run setup is
+                the intended path — surface it as the primary CTA, and keep the
+                break-glass emergency login below as the fallback. */}
+            {setupLatchOpen === true && (
+              <Link
+                to="/setup"
+                className="mb-5 flex h-[46px] items-center justify-center gap-2.5 rounded-[11px] bg-accent px-4 text-[14.5px] font-bold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]"
+              >
+                {t("auth.bootstrap.setupCta")}
+              </Link>
+            )}
             <h2 className="text-center text-sm font-semibold text-ink">
               {t("auth.bootstrap.title")}
             </h2>

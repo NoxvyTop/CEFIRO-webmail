@@ -13,6 +13,10 @@ describe("setupErrorKey", () => {
     expect(setupErrorKey("user_exists")).toBe("setup.errors.user_exists");
     expect(setupErrorKey("unauthorized")).toBe("setup.errors.unauthorized");
     expect(setupErrorKey("network_error")).toBe("setup.errors.network_error");
+    // GH #285: once the completion latch closes, a mid-wizard action gets 404
+    // not_found, which now maps to its own "already completed" message instead
+    // of the generic fallback.
+    expect(setupErrorKey("not_found")).toBe("setup.errors.not_found");
   });
 
   it("falls back to the setup generic message for an unmapped code", () => {
@@ -34,6 +38,7 @@ describe("setupErrorKey", () => {
       "generic",
       "invalid_body",
       "network_error",
+      "not_found",
       "too_many_requests",
       "unauthorized",
       "user_exists",

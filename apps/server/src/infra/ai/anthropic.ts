@@ -10,6 +10,7 @@ import {
   THREAD_SUMMARY_BULLET_COUNT,
   THREAD_SUMMARY_SYSTEM_PROMPT,
   buildDraftReplyPrompt,
+  buildSummarizeUserPrompt,
   buildThreadSummaryPrompt,
   parseBullets,
 } from "./prompts";
@@ -82,7 +83,10 @@ export function createAnthropicAiClient(input: {
   return {
     async summarize(body: string): Promise<string[]> {
       try {
-        return parseBullets(await complete(SUMMARIZE_SYSTEM_PROMPT, body), SUMMARY_BULLET_COUNT);
+        return parseBullets(
+          await complete(SUMMARIZE_SYSTEM_PROMPT, buildSummarizeUserPrompt(body)),
+          SUMMARY_BULLET_COUNT,
+        );
       } catch (error) {
         throw toAiError(error, "summarize");
       }

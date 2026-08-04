@@ -73,7 +73,7 @@ describe("AdminPage SSO config panel", () => {
     expect(await screen.findByText(i18n.t("admin.sso.notConfigured"))).toBeInTheDocument();
   });
 
-  it("submits the form and PUTs the entered values including clientSecret, showing saved on success", async () => {
+  it("submits the form and PUTs the entered values including clientSecret and providerName, showing saved on success", async () => {
     fetchAdminUsers.mockResolvedValue([]);
     fetchAdminSso.mockResolvedValue(configuredSso);
     updateAdminSso.mockResolvedValue(undefined);
@@ -85,6 +85,11 @@ describe("AdminPage SSO config panel", () => {
     fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "new-client" } });
     fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "s3cr3t" } });
     fireEvent.change(screen.getByLabelText("Scopes"), { target: { value: "openid profile" } });
+    // #290 / audit FIX 1: the provider name rides on the same save, so an edit
+    // no longer drops it (the PUT used to omit the field and null it server-side).
+    fireEvent.change(screen.getByLabelText(i18n.t("admin.sso.fields.providerName")), {
+      target: { value: "Authentik" },
+    });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.sso.save") }));
 
     await waitFor(() => expect(updateAdminSso).toHaveBeenCalledWith({
@@ -92,6 +97,7 @@ describe("AdminPage SSO config panel", () => {
       clientId: "new-client",
       clientSecret: "s3cr3t",
       scopes: "openid profile",
+      providerName: "Authentik",
     }));
 
     expect(await screen.findByText(i18n.t("admin.sso.saved"))).toBeInTheDocument();

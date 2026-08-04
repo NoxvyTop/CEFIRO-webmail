@@ -8,9 +8,12 @@ import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UserRecord, UsersRepo } from "../../infra/repos/users";
 import type { SessionStore } from "./sessions";
 
-// In-memory doubles (no DB): GH #196 is a pure cookie-attribute concern, so
-// this suite drives the login state cookie and the bootstrap session cookie
-// through the router with fakes and reads back the Set-Cookie attributes.
+// In-memory doubles (no DB): the cookie `Secure` attribute (GH #288) is a pure
+// per-request concern, so this suite drives the login state cookie and the
+// bootstrap session cookie through the router with fakes and reads back the
+// Set-Cookie attributes. `Secure` is now derived from the scheme the client
+// used to reach the edge — X-Forwarded-Proto behind a trusted proxy, or the
+// direct request scheme — not from NODE_ENV.
 
 const stubOidc: OidcClient = {
   discover: async () => ({
@@ -60,7 +63,7 @@ function fakeAudit(): AuditRepo {
   return { record: vi.fn(async () => {}) } as unknown as AuditRepo;
 }
 
-async function makeApp(opts: { isProduction: boolean; appUrl: string }) {
+async function makeApp(opts: { trustedProxyHops?: number; appUrl?: string } = {}) {
   const masterKey = await importMasterKey(
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
@@ -74,11 +77,11 @@ async function makeApp(opts: { isProduction: boolean; appUrl: string }) {
       audit: fakeAudit(),
       ssoConfig: fakeSsoConfig(),
       masterKey,
-      appUrl: opts.appUrl,
+      appUrl: opts.appUrl ?? "https://mail.noxvytop.com",
       sessionTtlHours: 1,
       bootstrap: boot,
       oidcClient: stubOidc,
-      isProduction: opts.isProduction,
+      trustedProxyHops: opts.trustedProxyHops,
     }),
   });
   return { app, boot };
@@ -88,20 +91,36 @@ function setCookieLine(res: Response, name: string): string | undefined {
   return res.headers.getSetCookie().find((line) => line.startsWith(`${name}=`));
 }
 
-describe("Secure cookies in production (GH #196)", () => {
-  it("forces Secure on the OIDC-state cookie in production even when APP_URL is http", async () => {
-    const { app } = await makeApp({ isProduction: true, appUrl: "http://localhost:5173" });
-    const res = await app.request("/api/auth/login");
-    const line = setCookieLine(res, "oidc_state");
-    expect(line).toBeDefined();
-    expect(line!).toMatch(/;\s*Secure/i);
+async function loginStateCookie(res: Response): Promise<string> {
+  const line = setCookieLine(res, "oidc_state");
+  expect(line).toBeDefined();
+  return line!;
+}
+
+describe("Secure cookies from the effective request scheme (GH #288)", () => {
+  it("marks the OIDC-state cookie Secure behind a trusted X-Forwarded-Proto: https edge", async () => {
+    const { app } = await makeApp({ trustedProxyHops: 1 });
+    const res = await app.request("/api/auth/login", {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    expect(await loginStateCookie(res)).toMatch(/;\s*Secure/i);
   });
 
-  it("forces Secure on the session cookie in production even when APP_URL is http", async () => {
-    const { app, boot } = await makeApp({ isProduction: true, appUrl: "http://localhost:5173" });
+  it("does not mark the OIDC-state cookie Secure behind a trusted X-Forwarded-Proto: http edge", async () => {
+    // The fix this issue is about: a plain-HTTP edge must NOT get a Secure state
+    // cookie, or the browser drops it and OIDC login can never complete.
+    const { app } = await makeApp({ trustedProxyHops: 1 });
+    const res = await app.request("/api/auth/login", {
+      headers: { "x-forwarded-proto": "http" },
+    });
+    expect(await loginStateCookie(res)).not.toMatch(/;\s*Secure/i);
+  });
+
+  it("marks the session cookie Secure behind a trusted X-Forwarded-Proto: https edge", async () => {
+    const { app, boot } = await makeApp({ trustedProxyHops: 1 });
     const res = await app.request("/api/auth/bootstrap", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-forwarded-proto": "https" },
       body: JSON.stringify({ email: "bootstrap-admin", password: boot.password }),
     });
     const line = setCookieLine(res, "session");
@@ -109,19 +128,50 @@ describe("Secure cookies in production (GH #196)", () => {
     expect(line!).toMatch(/;\s*Secure/i);
   });
 
-  it("does not force Secure over http outside production (local dev keeps working)", async () => {
-    const { app } = await makeApp({ isProduction: false, appUrl: "http://localhost:5173" });
-    const res = await app.request("/api/auth/login");
-    const line = setCookieLine(res, "oidc_state");
+  it("does not mark the session cookie Secure behind a trusted X-Forwarded-Proto: http edge", async () => {
+    const { app, boot } = await makeApp({ trustedProxyHops: 1 });
+    const res = await app.request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-proto": "http" },
+      body: JSON.stringify({ email: "bootstrap-admin", password: boot.password }),
+    });
+    const line = setCookieLine(res, "session");
     expect(line).toBeDefined();
     expect(line!).not.toMatch(/;\s*Secure/i);
   });
 
-  it("still honors an https APP_URL outside production", async () => {
-    const { app } = await makeApp({ isProduction: false, appUrl: "https://mail.noxvytop.com" });
-    const res = await app.request("/api/auth/login");
-    const line = setCookieLine(res, "oidc_state");
-    expect(line).toBeDefined();
-    expect(line!).toMatch(/;\s*Secure/i);
+  it("reads the edge hop of an X-Forwarded-Proto chain, not the inner one", async () => {
+    // Two trusted proxies, so the leftmost trusted entry is what the browser
+    // sent to the edge (https), even though the inner hop was plain http. Same
+    // right-to-left attribution rule core/client-ip.ts uses for the client IP.
+    const { app } = await makeApp({ trustedProxyHops: 2 });
+    const res = await app.request("/api/auth/login", {
+      headers: { "x-forwarded-proto": "https, http" },
+    });
+    expect(await loginStateCookie(res)).toMatch(/;\s*Secure/i);
+  });
+
+  it("falls back to the direct scheme and marks Secure on a direct https request", async () => {
+    // No trusted proxy, so X-Forwarded-Proto is ignored and the socket scheme
+    // this process terminates on is authoritative.
+    const { app } = await makeApp({ trustedProxyHops: 0 });
+    const res = await app.request("https://mail.noxvytop.com/api/auth/login");
+    expect(await loginStateCookie(res)).toMatch(/;\s*Secure/i);
+  });
+
+  it("falls back to the direct scheme and does not mark Secure on a direct http request", async () => {
+    const { app } = await makeApp({ trustedProxyHops: 0, appUrl: "http://localhost:5173" });
+    const res = await app.request("http://localhost:5173/api/auth/login");
+    expect(await loginStateCookie(res)).not.toMatch(/;\s*Secure/i);
+  });
+
+  it("ignores X-Forwarded-Proto when no proxy hop is trusted", async () => {
+    // A spoofed header must not flip Secure on when the operator declared no
+    // trusted proxy: the direct http scheme wins.
+    const { app } = await makeApp({ trustedProxyHops: 0, appUrl: "http://localhost:5173" });
+    const res = await app.request("http://localhost:5173/api/auth/login", {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    expect(await loginStateCookie(res)).not.toMatch(/;\s*Secure/i);
   });
 });

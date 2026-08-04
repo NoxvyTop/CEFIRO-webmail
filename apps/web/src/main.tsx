@@ -8,9 +8,16 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { routes } from "./app/routes";
+import { registerPushServiceWorker } from "./features/notifications/push";
 
 const client = new QueryClient();
 const router = createBrowserRouter(routes);
+
+// #294 (delivery slice): register the Web Push service worker at boot (idempotent
+// and failure-tolerant). This only installs the notification receiver — it
+// requests no permission and creates no subscription; that happens only on the
+// explicit opt-in in Settings.
+void registerPushServiceWorker();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

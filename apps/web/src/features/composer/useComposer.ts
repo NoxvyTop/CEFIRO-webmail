@@ -1,11 +1,12 @@
-import type { SaveDraftInput, SendEmailInput } from "@webmail/shared";
+import { DRAFT_CONTEXT_MAX_CHARS, type SaveDraftInput, type SendEmailInput } from "@webmail/shared";
 import { useEffect, useReducer, useRef } from "react";
 import { saveDraft as saveDraftRequest, sendEmail, uploadAttachment } from "./api";
 import { fetchAiDraft } from "./aiApi";
 import { isComposerDraftEmpty } from "./emptiness";
 import { MailApiError, updateMessage } from "../mailbox/api";
 import { errorMessageKey } from "../../app/errorMessages";
-import { composeTextBody } from "./plainText";
+import { composeTextBody, htmlToPlainText } from "./plainText";
+import { splitQuotedTail } from "./quoteSplit";
 import type { ComposerDraft } from "./reply";
 import { stripSignatureMarkers } from "./signature";
 
@@ -226,6 +227,22 @@ function serializeDraftPayload(draft: ComposerDraft, attachments: Attachment[]):
     inReplyTo: draft.inReplyTo,
     references: draft.references,
   });
+}
+
+// GH #299: the original message body for an AI reply draft. The composer keeps
+// the message being replied to as the quoted tail of the body (see reply.ts's
+// quotedBody, marked with QUOTE_MARKER_ATTR), so the original text is recovered
+// by splitting that tail off and flattening it to plain text. A brand-new
+// compose has no quoted tail, so this returns undefined and the draft request
+// carries no context — the previous behavior. Capped to the same bound the
+// server enforces (DRAFT_CONTEXT_MAX_CHARS) so an over-long thread never blows
+// past the schema and gets the whole request rejected.
+function extractReplyContext(draft: ComposerDraft): string | undefined {
+  const { quoted } = splitQuotedTail(draft.bodyHtml);
+  if (!quoted) return undefined;
+  const text = htmlToPlainText(quoted).trim();
+  if (!text) return undefined;
+  return text.slice(0, DRAFT_CONTEXT_MAX_CHARS);
 }
 
 export function useComposer(
@@ -592,7 +609,11 @@ export function useComposer(
     }
     dispatch({ type: "aiDraftStart" });
     try {
-      const body = await fetchAiDraft(state.draft.subject);
+      // GH #299: on a reply, ground the draft in the original message (the
+      // quoted tail of the body); a brand-new compose has none, so this is
+      // undefined and the request is unchanged.
+      const context = extractReplyContext(state.draft);
+      const body = await fetchAiDraft(state.draft.subject, context);
       dispatch({ type: "aiDraftSucceeded", bodyHtml: `<p>${body}</p>` });
     } catch (err) {
       if (err instanceof MailApiError && err.code === "ai_disabled") {

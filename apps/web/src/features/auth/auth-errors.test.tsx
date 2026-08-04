@@ -97,7 +97,7 @@ describe("the login screen's auth_error banner", () => {
   it("shows no banner at all when there is no auth_error", async () => {
     renderAt("/");
 
-    expect(await screen.findByText(i18n.t("auth.signIn"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("auth.signIn", { provider: "SSO" }))).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

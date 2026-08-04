@@ -38,8 +38,11 @@ describe("createOpenAiCompatibleClient", () => {
       expect(requestBody.model).toBe("moonshot-v1-8k");
       expect(requestBody.messages[0].role).toBe("system");
       expect(requestBody.messages[1].role).toBe("user");
-      // Only the body is sent — no extra mailbox data smuggled into the prompt.
-      expect(requestBody.messages[1].content).toBe("Hello, please review the attached invoice.");
+      // The body is fenced in the untrusted delimiter (GH #298) and nothing
+      // else is smuggled in — no extra mailbox data reaches the prompt.
+      expect(requestBody.messages[1].content).toContain("Hello, please review the attached invoice.");
+      expect(requestBody.messages[1].content).toMatch(/<<<EMAIL:[0-9a-f]+>>>/);
+      expect(requestBody.messages[1].content).toMatch(/<<<END EMAIL:[0-9a-f]+>>>/);
     });
 
     it("caps the result at 3 bullet points even if the model returns more", async () => {

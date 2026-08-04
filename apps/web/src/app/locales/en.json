@@ -103,7 +103,8 @@
         "issuer": "Issuer",
         "clientId": "Client ID",
         "clientSecret": "Client Secret",
-        "scopes": "Scopes"
+        "scopes": "Scopes",
+        "providerName": "Provider name"
       },
       "errors": {
         "issuerInvalid": "Enter a valid issuer: a full URL, e.g. https://id.your-company.com."
@@ -114,7 +115,7 @@
     "degraded": "Service degraded"
   },
   "auth": {
-    "signIn": "Sign in with SSO",
+    "signIn": "Sign in with {{provider}}",
     "connecting": "Connecting…",
     "redirecting": "Redirecting to your identity provider…",
     "signOut": "Sign out",
@@ -135,6 +136,7 @@
       "submitting": "Signing in…",
       "error": "Invalid credential",
       "hint": "Only available in setup or recovery mode",
+      "setupCta": "Initial setup",
       "errors": {
         "emptyUser": "Enter your username.",
         "emptyPassword": "Enter your password.",
@@ -163,6 +165,7 @@
       "generic": "The operation could not be completed. Check the fields and try again.",
       "invalid_body": "Check the fields: some are missing or have an invalid format.",
       "network_error": "Could not reach the server. Check your connection and try again.",
+      "not_found": "Initial setup is already complete. Sign in with SSO.",
       "too_many_requests": "Too many attempts. Wait a moment and try again.",
       "unauthorized": "The temporary console password is incorrect.",
       "user_exists": "A user with that email already exists."
@@ -172,6 +175,7 @@
       "clientId": "Client ID",
       "clientSecret": "Client Secret",
       "scopes": "Scopes",
+      "providerName": "Provider name",
       "email": "Email",
       "displayName": "Name",
       "role": "Role",
@@ -401,7 +405,8 @@
       "signatures": "Signatures",
       "filters": "Filters",
       "vacation": "Vacation",
-      "contacts": "Contacts"
+      "contacts": "Contacts",
+      "notifications": "Notifications"
     },
     "newSignature": "New signature",
     "name": "Name",
@@ -518,6 +523,20 @@
     "confirmDeleteQuestion": "Delete \"{{name}}\"? This can't be undone.",
     "confirmDeleteAction": "Delete permanently",
     "cancelDelete": "Cancel"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "description": "Get an alert on this device when new mail arrives, even with Céfiro closed.",
+    "enable": "Enable background notifications",
+    "disable": "Disable notifications",
+    "enabledOnThisDevice": "Notifications enabled on this device",
+    "working": "One moment…",
+    "unsupported": "Your browser does not support push notifications.",
+    "errors": {
+      "permissionDenied": "Notification permission was not granted. Enable it in your browser settings.",
+      "unavailable": "Notifications are not available right now. Try again.",
+      "generic": "Could not change your notification settings."
+    }
   },
   "shortcuts": {
     "title": "Shortcuts",

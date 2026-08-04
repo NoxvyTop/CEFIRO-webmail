@@ -51,9 +51,21 @@ type NewUserForm = { email: string; displayName: string; role: "employee" | "adm
 
 const EMPTY_NEW_USER: NewUserForm = { email: "", displayName: "", role: "employee", mailPassword: "" };
 
-type SsoForm = { issuer: string; clientId: string; clientSecret: string; scopes: string };
+type SsoForm = {
+  issuer: string;
+  clientId: string;
+  clientSecret: string;
+  scopes: string;
+  providerName: string;
+};
 
-const EMPTY_SSO_FORM: SsoForm = { issuer: "", clientId: "", clientSecret: "", scopes: "" };
+const EMPTY_SSO_FORM: SsoForm = {
+  issuer: "",
+  clientId: "",
+  clientSecret: "",
+  scopes: "",
+  providerName: "",
+};
 
 // GH #282: mirrors the server's `setupSsoSchema` issuer rule (`z.string().url()`)
 // so the commonest mistake — an empty or non-URL issuer — is caught at the field
@@ -501,6 +513,20 @@ export function AdminPage() {
                   <input
                     value={ssoForm.scopes}
                     onChange={(event) => setSsoForm({ ...ssoForm, scopes: event.target.value })}
+                    className={inputClass}
+                  />
+                </label>
+                {/* #290 / audit FIX 1: the login-button display name. Optional —
+                    blank falls back to "SSO" — but carried on every save so an
+                    edit (e.g. rotating the secret) no longer nulls it server-side. */}
+                <label className="flex flex-col gap-1 text-sm">
+                  {t("admin.sso.fields.providerName")}
+                  <input
+                    value={ssoForm.providerName}
+                    placeholder="SSO"
+                    onChange={(event) =>
+                      setSsoForm({ ...ssoForm, providerName: event.target.value })
+                    }
                     className={inputClass}
                   />
                 </label>

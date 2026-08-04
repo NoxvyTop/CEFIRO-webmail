@@ -60,7 +60,14 @@
      night's --line-strong comment above; light's plain --line already
      measured the same ~1.25:1 failure against #ffffff before this). */
   --line-strong: #7c939c;
-  --accent: #0fa383;
+  /* #283: the SOLID CTA (bg-accent + white text-accent-ink — Button primary,
+     LoginPage, SetupPage) is a 14px semibold label, i.e. normal-size text, so
+     it needs WCAG AA 4.5:1. The original #0fa383 measured only 3.19:1 on white.
+     Same brand hue/sat as before (167°, 83%), darkened just enough to clear the
+     bar: 4.64:1 on #ffffff — the least-dark value in the target band, so the
+     fill stays as vibrant as possible. --accent-text below remains the darker,
+     text-only variant; --ring is color-mixed from this token and follows. */
+  --accent: #0c846a;
   --accent-ink: #ffffff;
   /* CLARO-02: same hue/sat as --accent (167°, 83%), darkened to L=24.4% —
      retuned against the DARKEST surface this token sits on in practice,

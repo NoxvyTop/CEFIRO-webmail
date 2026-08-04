@@ -5,6 +5,9 @@ export const setupSsoSchema = z.object({
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
   scopes: z.string().min(1).default("openid profile email"),
+  // #290: optional login-button display name (e.g. "Authentik", "Google").
+  // Empty/unset is treated as "SSO" by the login screen.
+  providerName: z.string().max(64).optional(),
 });
 export type SetupSsoInput = z.infer<typeof setupSsoSchema>;
 

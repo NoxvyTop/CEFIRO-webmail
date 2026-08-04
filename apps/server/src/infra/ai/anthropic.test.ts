@@ -33,8 +33,10 @@ describe("createAnthropicAiClient", () => {
       const call = api.calls[0] as { model: string; max_tokens: number; messages: { content: string }[] };
       expect(call.model).toBe("claude-opus-4-8");
       expect(call.max_tokens).toBeLessThanOrEqual(1024);
-      // Only the body is sent — no extra mailbox data smuggled into the prompt.
+      // The body is fenced in the untrusted delimiter (GH #298); nothing else
+      // is smuggled into the prompt.
       expect(call.messages[0]!.content).toContain("Hello, please review the attached invoice.");
+      expect(call.messages[0]!.content).toMatch(/<<<EMAIL:[0-9a-f]+>>>/);
     });
 
     it("caps the result at 3 bullet points even if the model returns more", async () => {
