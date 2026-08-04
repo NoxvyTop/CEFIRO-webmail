@@ -5,10 +5,11 @@ import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
+import { createAiSummariesRepo } from "../../infra/repos/ai-summaries";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
-import { capThreadMessages, createAiRouter, stripQuotedTrail } from "./router";
+import { capThreadMessages, createAiRouter, stripQuotedTrail, threadContentKey } from "./router";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import type { AiClient } from "../../core/ai";
 import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";
@@ -17,6 +18,7 @@ const sql = createDb(testDatabaseUrl());
 
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
+let aiSummaries: ReturnType<typeof createAiSummariesRepo>;
 let token: string;
 
 beforeAll(async () => {
@@ -26,6 +28,7 @@ beforeAll(async () => {
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
   mailCredentials = createMailCredentialsRepo(sql, key);
+  aiSummaries = createAiSummariesRepo(sql);
   sessions = createSessionStore(sql);
 
   const user = await users.create({
@@ -76,11 +79,11 @@ function stubJmap(bodyText: string | null): { client: JmapClient; calls: JmapMet
 function fakeAiClient(overrides: Partial<AiClient> = {}): AiClient & {
   summarizeCalls: string[];
   summarizeThreadCalls: Array<{ from: string; body: string }[]>;
-  draftCalls: { subject: string; context?: string }[];
+  draftCalls: { intent: string; subject?: string; context?: string }[];
 } {
   const summarizeCalls: string[] = [];
   const summarizeThreadCalls: Array<{ from: string; body: string }[]> = [];
-  const draftCalls: { subject: string; context?: string }[] = [];
+  const draftCalls: { intent: string; subject?: string; context?: string }[] = [];
   return {
     summarizeCalls,
     summarizeThreadCalls,
@@ -93,9 +96,9 @@ function fakeAiClient(overrides: Partial<AiClient> = {}): AiClient & {
       summarizeThreadCalls.push(messages);
       return overrides.summarizeThread ? overrides.summarizeThread(messages) : ["t-one", "t-two"];
     },
-    async draftReply(subject: string, context?: string) {
-      draftCalls.push({ subject, context });
-      return overrides.draftReply ? overrides.draftReply(subject, context) : "Borrador generado.";
+    async draftReply(input: { intent: string; subject?: string; context?: string }) {
+      draftCalls.push(input);
+      return overrides.draftReply ? overrides.draftReply(input) : "Borrador generado.";
     },
   };
 }
@@ -151,7 +154,7 @@ function stubThreadJmap(
 
 function makeApp(aiClient: AiClient | null, jmap: JmapClient | null, aiRateLimiter?: RateLimiter) {
   return createApp({
-    aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient, aiRateLimiter }),
+    aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient, aiSummaries, aiRateLimiter }),
   });
 }
 
@@ -176,7 +179,7 @@ describe("ai router — software-level gate", () => {
 
   it("returns ai_disabled for draft without calling the AI provider when aiClient is null", async () => {
     const app = makeApp(null, null);
-    const res = await post(app, "/api/mail/compose/draft", { subject: "Hola" });
+    const res = await post(app, "/api/mail/compose/draft", { intent: "Hola" });
     expect(res.status).toBe(501);
     const json = (await res.json()) as { code: string };
     expect(json.code).toBe("ai_disabled");
@@ -327,29 +330,52 @@ describe("stripQuotedTrail", () => {
 });
 
 describe("ai router — compose draft", () => {
-  it("drafts a reply body from the subject", async () => {
+  // GH #304: the draft is written FROM the user's typed intent; the subject is
+  // an optional weak hint now, not the primary instruction.
+  it("drafts a body from the intent alone", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
-    const res = await post(app, "/api/mail/compose/draft", { subject: "Reunión de mañana" });
+    const res = await post(app, "/api/mail/compose/draft", { intent: "no voy el 20 de agosto" });
     expect(res.status).toBe(200);
     const json = (await res.json()) as { body: string };
     expect(json.body).toBe("Borrador generado.");
-    expect(ai.draftCalls).toEqual([{ subject: "Reunión de mañana", context: undefined }]);
+    expect(ai.draftCalls).toEqual([
+      { intent: "no voy el 20 de agosto", subject: undefined, context: undefined },
+    ]);
   });
 
-  // GH #299: the draft route used to call draftReply(subject) only, so the
-  // original body the composer sent as `context` was silently dropped and the
-  // draft ignored the email being replied to. Assert the route now forwards it.
-  it("forwards the optional context (the original body) to draftReply (GH #299)", async () => {
+  // GH #304: the subject rides along as an optional hint; the intent stays the
+  // primary instruction.
+  it("forwards the optional subject hint alongside the intent", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
     const res = await post(app, "/api/mail/compose/draft", {
+      intent: "aviso que no voy",
+      subject: "Reunión de mañana",
+    });
+    expect(res.status).toBe(200);
+    expect(ai.draftCalls).toEqual([
+      { intent: "aviso que no voy", subject: "Reunión de mañana", context: undefined },
+    ]);
+  });
+
+  // GH #299: the draft route forwards the original body the composer sent as
+  // `context`, so the draft is grounded in the email being replied to.
+  it("forwards intent, subject and context to draftReply (GH #299 / #304)", async () => {
+    const ai = fakeAiClient();
+    const app = makeApp(ai, null);
+    const res = await post(app, "/api/mail/compose/draft", {
+      intent: "confirmo el total",
       subject: "Re: Presupuesto",
       context: "¿Puedes confirmar el total antes del viernes?",
     });
     expect(res.status).toBe(200);
     expect(ai.draftCalls).toEqual([
-      { subject: "Re: Presupuesto", context: "¿Puedes confirmar el total antes del viernes?" },
+      {
+        intent: "confirmo el total",
+        subject: "Re: Presupuesto",
+        context: "¿Puedes confirmar el total antes del viernes?",
+      },
     ]);
   });
 
@@ -357,7 +383,7 @@ describe("ai router — compose draft", () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
     const res = await post(app, "/api/mail/compose/draft", {
-      subject: "Re: Presupuesto",
+      intent: "confirmo",
       context: "a".repeat(4001),
     });
     expect(res.status).toBe(400);
@@ -366,13 +392,18 @@ describe("ai router — compose draft", () => {
     expect(ai.draftCalls).toHaveLength(0);
   });
 
-  it("rejects an empty subject with invalid_body", async () => {
+  it("rejects a missing/empty intent with invalid_body (GH #304)", async () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null);
-    const res = await post(app, "/api/mail/compose/draft", { subject: "" });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { code: string };
-    expect(json.code).toBe("invalid_body");
+    // Empty intent.
+    const emptyRes = await post(app, "/api/mail/compose/draft", { intent: "" });
+    expect(emptyRes.status).toBe(400);
+    expect(((await emptyRes.json()) as { code: string }).code).toBe("invalid_body");
+    // A subject with no intent is no longer a valid draft request.
+    const noIntentRes = await post(app, "/api/mail/compose/draft", { subject: "Reunión" });
+    expect(noIntentRes.status).toBe(400);
+    expect(((await noIntentRes.json()) as { code: string }).code).toBe("invalid_body");
+    expect(ai.draftCalls).toHaveLength(0);
   });
 });
 
@@ -381,10 +412,10 @@ describe("ai router — per-user quota (GH #194)", () => {
     const ai = fakeAiClient();
     const app = makeApp(ai, null, createRateLimiter({ limit: 2, windowMs: 60_000 }));
 
-    expect((await post(app, "/api/mail/compose/draft", { subject: "one" })).status).toBe(200);
-    expect((await post(app, "/api/mail/compose/draft", { subject: "two" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "one" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "two" })).status).toBe(200);
 
-    const blocked = await post(app, "/api/mail/compose/draft", { subject: "three" });
+    const blocked = await post(app, "/api/mail/compose/draft", { intent: "three" });
     expect(blocked.status).toBe(429);
     expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(((await blocked.json()) as { code: string }).code).toBe("ai_rate_limited");
@@ -396,8 +427,8 @@ describe("ai router — per-user quota (GH #194)", () => {
     // aiClient is null → ai_disabled fires before the quota, so a disabled
     // server never burns the caller's budget.
     const app = makeApp(null, null, createRateLimiter({ limit: 1, windowMs: 60_000 }));
-    expect((await post(app, "/api/mail/compose/draft", { subject: "a" })).status).toBe(501);
-    expect((await post(app, "/api/mail/compose/draft", { subject: "b" })).status).toBe(501);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "a" })).status).toBe(501);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "b" })).status).toBe(501);
   });
 
   it("shares one budget across the different AI endpoints for the same user", async () => {
@@ -405,7 +436,7 @@ describe("ai router — per-user quota (GH #194)", () => {
     const { client } = stubJmap("hello");
     const app = makeApp(ai, client, createRateLimiter({ limit: 1, windowMs: 60_000 }));
 
-    expect((await post(app, "/api/mail/compose/draft", { subject: "x" })).status).toBe(200);
+    expect((await post(app, "/api/mail/compose/draft", { intent: "x" })).status).toBe(200);
     const blocked = await post(app, "/api/mail/messages/e1/summarize", {});
     expect(blocked.status).toBe(429);
     expect(((await blocked.json()) as { code: string }).code).toBe("ai_rate_limited");
@@ -440,5 +471,96 @@ describe("capThreadMessages (GH #195)", () => {
     const totalChars = result.messages.reduce((n, m) => n + m.body.length, 0);
     expect(totalChars).toBeLessThanOrEqual(12);
     expect(result.messages.at(-1)).toEqual(msg("c", "CCCCC"));
+  });
+});
+
+describe("threadContentKey (#307)", () => {
+  it("is deterministic for the same ordered id set", () => {
+    expect(threadContentKey(["a", "b", "c"])).toBe(threadContentKey(["a", "b", "c"]));
+  });
+
+  it("changes when a new message is added (a grown thread)", () => {
+    // A new reply changes the id set → a new key → a cache miss, never stale.
+    expect(threadContentKey(["a", "b"])).not.toBe(threadContentKey(["a", "b", "c"]));
+  });
+
+  it("is order-sensitive", () => {
+    expect(threadContentKey(["a", "b"])).not.toBe(threadContentKey(["b", "a"]));
+  });
+});
+
+describe("ai router — summary cache (#307)", () => {
+  it("caches a message summary: a repeat request returns the same bullets without a second provider call", async () => {
+    const { client } = stubJmap("Please review the invoice attached.");
+    const ai = fakeAiClient();
+    const app = makeApp(ai, client);
+
+    const first = await post(app, "/api/mail/messages/cache-msg-1/summarize", {});
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { bullets: string[] }).bullets).toEqual(["one", "two", "three"]);
+
+    const second = await post(app, "/api/mail/messages/cache-msg-1/summarize", {});
+    expect(second.status).toBe(200);
+    const secondJson = (await second.json()) as { bullets: string[]; cached?: boolean };
+    // Same bullets, and flagged as served from cache.
+    expect(secondJson.bullets).toEqual(["one", "two", "three"]);
+    expect(secondJson.cached).toBe(true);
+
+    // The paid provider was called exactly once across both requests.
+    expect(ai.summarizeCalls).toHaveLength(1);
+  });
+
+  it("caches a thread summary: an identical repeat request is a cache hit with no provider call", async () => {
+    const { client } = stubThreadJmap({
+      id: "cache-th-1",
+      messages: [
+        { id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "Hola equipo." },
+        { id: "e2", receivedAt: "2026-07-21T09:00:00Z", bodyText: "Confirmo." },
+      ],
+    });
+    const ai = fakeAiClient();
+    const app = makeApp(ai, client);
+
+    const first = await post(app, "/api/mail/threads/cache-th-1/summarize", {});
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { bullets: string[] }).bullets).toEqual(["t-one", "t-two"]);
+
+    const second = await post(app, "/api/mail/threads/cache-th-1/summarize", {});
+    expect(second.status).toBe(200);
+    const secondJson = (await second.json()) as { bullets: string[]; cached?: boolean };
+    expect(secondJson.bullets).toEqual(["t-one", "t-two"]);
+    expect(secondJson.cached).toBe(true);
+
+    expect(ai.summarizeThreadCalls).toHaveLength(1);
+  });
+
+  it("regenerates a thread summary when a new message changes the id set (cache miss)", async () => {
+    const ai = fakeAiClient();
+
+    const twoMessages = stubThreadJmap({
+      id: "cache-th-2",
+      messages: [
+        { id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "Hola equipo." },
+        { id: "e2", receivedAt: "2026-07-21T09:00:00Z", bodyText: "Confirmo." },
+      ],
+    });
+    const appBefore = makeApp(ai, twoMessages.client);
+    expect((await post(appBefore, "/api/mail/threads/cache-th-2/summarize", {})).status).toBe(200);
+
+    // A new reply arrives → the ordered id set grows → a different content key.
+    const threeMessages = stubThreadJmap({
+      id: "cache-th-2",
+      messages: [
+        { id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "Hola equipo." },
+        { id: "e2", receivedAt: "2026-07-21T09:00:00Z", bodyText: "Confirmo." },
+        { id: "e3", receivedAt: "2026-07-22T08:00:00Z", bodyText: "Una cosa más." },
+      ],
+    });
+    const appAfter = makeApp(ai, threeMessages.client);
+    expect((await post(appAfter, "/api/mail/threads/cache-th-2/summarize", {})).status).toBe(200);
+
+    // Two distinct id sets → two provider calls: the grown thread never returns
+    // the stale first summary.
+    expect(ai.summarizeThreadCalls).toHaveLength(2);
   });
 });

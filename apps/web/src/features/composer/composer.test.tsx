@@ -589,31 +589,49 @@ describe("Composer", () => {
   });
 
   describe("Redactar con IA", () => {
+    // GH #304: the draft is driven by the body the user types (the intent); the
+    // subject is only a hint.
     it("fills the body and shows the review notice on success", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador solicitado.");
-      renderComposer(vi.fn(), { ...baseDraft(), subject: "Reunión de mañana" });
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        subject: "Reunión de mañana",
+        bodyHtml: "<p>no voy el 20 de agosto</p>",
+      });
 
       const draftButton = await screen.findByRole("button", { name: i18n.t("composer.draftWithAi") });
       fireEvent.click(draftButton);
 
       expect(await screen.findByText(i18n.t("composer.aiDraftNotice"))).toBeInTheDocument();
-      // GH #299: no quoted original in this draft, so no context is sent.
-      expect(fetchAiDraft).toHaveBeenCalledWith("Reunión de mañana", undefined);
+      // The typed body is the intent; the subject is a hint; no quoted original
+      // here, so no context is sent (GH #299).
+      expect(fetchAiDraft).toHaveBeenCalledWith({
+        intent: "no voy el 20 de agosto",
+        subject: "Reunión de mañana",
+        context: undefined,
+      });
     });
 
-    it("shows an inline error without calling the endpoint when subject is empty", async () => {
-      renderComposer();
+    // GH #304: subject is no longer the gate — the body is. An empty body (even
+    // with a subject and the auto-applied signature) surfaces guidance instead
+    // of calling the endpoint.
+    it("shows needs-intent guidance without calling the endpoint when the body is empty", async () => {
+      renderComposer(vi.fn(), { ...baseDraft(), subject: "Reunión de mañana" });
 
       const draftButton = await screen.findByRole("button", { name: i18n.t("composer.draftWithAi") });
       fireEvent.click(draftButton);
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("composer.aiDraftNeedsSubject"));
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("composer.aiDraftNeedsIntent"));
       expect(fetchAiDraft).not.toHaveBeenCalled();
     });
 
     it("hides the button entirely once the backend reports ai_disabled", async () => {
       fetchAiDraft.mockRejectedValueOnce(new MailApiError(501, "ai_disabled"));
-      renderComposer(vi.fn(), { ...baseDraft(), subject: "Reunión de mañana" });
+      renderComposer(vi.fn(), {
+        ...baseDraft(),
+        subject: "Reunión de mañana",
+        bodyHtml: "<p>no voy el 20 de agosto</p>",
+      });
 
       const draftButton = await screen.findByRole("button", { name: i18n.t("composer.draftWithAi") });
       fireEvent.click(draftButton);

@@ -52,7 +52,7 @@ function toAiError(error: unknown, task: string): DomainError {
 
 export function createAnthropicAiClient(input: {
   apiKey: string;
-  model: string;
+  models: { summarize: string; draft: string };
   client?: AnthropicMessagesApi;
   /** Outbound deadline per completion — see core/deadline.ts (GH #165). */
   timeoutMs?: number;
@@ -64,12 +64,18 @@ export function createAnthropicAiClient(input: {
   // wall time the caller waits, retries included.
   const messagesApi: AnthropicMessagesApi =
     input.client ?? new Anthropic({ apiKey: input.apiKey, timeout: timeoutMs }).messages;
+  // Per-task model selection (GH #310): summarize/summarizeThread use
+  // `models.summarize`, draftReply uses `models.draft`. buildAiClient resolves
+  // each from AI_MODEL_SUMMARIZE / AI_MODEL_DRAFT, falling back to AI_MODEL.
+  // Captured here so the `input` shadowing inside draftReply cannot reach them.
+  const summarizeModel = input.models.summarize;
+  const draftModel = input.models.draft;
 
-  function complete(system: string, content: string): Promise<string> {
+  function complete(model: string, system: string, content: string): Promise<string> {
     return withDeadline("ai", timeoutMs, async (signal) => {
       const response = await messagesApi.create(
         {
-          model: input.model,
+          model,
           max_tokens: MAX_TOKENS,
           system,
           messages: [{ role: "user", content }],
@@ -84,7 +90,7 @@ export function createAnthropicAiClient(input: {
     async summarize(body: string): Promise<string[]> {
       try {
         return parseBullets(
-          await complete(SUMMARIZE_SYSTEM_PROMPT, buildSummarizeUserPrompt(body)),
+          await complete(summarizeModel, SUMMARIZE_SYSTEM_PROMPT, buildSummarizeUserPrompt(body)),
           SUMMARY_BULLET_COUNT,
         );
       } catch (error) {
@@ -95,6 +101,7 @@ export function createAnthropicAiClient(input: {
     async summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]> {
       try {
         const text = await complete(
+          summarizeModel,
           THREAD_SUMMARY_SYSTEM_PROMPT,
           buildThreadSummaryPrompt(messages),
         );
@@ -104,10 +111,10 @@ export function createAnthropicAiClient(input: {
       }
     },
 
-    async draftReply(subject: string, context?: string): Promise<string> {
-      const prompt = buildDraftReplyPrompt(subject, context);
+    async draftReply(input: { intent: string; subject?: string; context?: string }): Promise<string> {
+      const prompt = buildDraftReplyPrompt(input.intent, input.subject, input.context);
       try {
-        return (await complete(DRAFT_REPLY_SYSTEM_PROMPT, prompt)).trim();
+        return (await complete(draftModel, DRAFT_REPLY_SYSTEM_PROMPT, prompt)).trim();
       } catch (error) {
         throw toAiError(error, "draft");
       }

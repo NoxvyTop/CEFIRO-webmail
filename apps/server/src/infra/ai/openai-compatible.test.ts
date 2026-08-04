@@ -19,7 +19,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "moonshot-v1-8k",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -35,7 +35,7 @@ describe("createOpenAiCompatibleClient", () => {
       expect(headers.Authorization).toBe("Bearer sk-test");
       expect(headers["Content-Type"]).toBe("application/json");
       const requestBody = JSON.parse(init.body as string);
-      expect(requestBody.model).toBe("moonshot-v1-8k");
+      expect(requestBody.model).toBe("sum-model");
       expect(requestBody.messages[0].role).toBe("system");
       expect(requestBody.messages[1].role).toBe("user");
       // The body is fenced in the untrusted delimiter (GH #298) and nothing
@@ -51,7 +51,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "moonshot-v1-8k",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -65,7 +65,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: "- A\n- B\n- C" } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1/",
         fetchFn,
       });
@@ -80,7 +80,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ error: "boom" }, 500);
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -97,7 +97,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({});
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -128,7 +128,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -154,7 +154,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -170,7 +170,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -187,7 +187,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: [] } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -209,7 +209,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -223,7 +223,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: 42 } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -241,7 +241,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "moonshot-v1-8k",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -254,6 +254,8 @@ describe("createOpenAiCompatibleClient", () => {
       expect(result).toEqual(["Ana propuso empezar el lunes", "Beto confirmó"]);
       const [, init] = calls(fetchFn)[0]!;
       const requestBody = JSON.parse(init.body as string);
+      // summarizeThread runs on the summarize model (#310).
+      expect(requestBody.model).toBe("sum-model");
       expect(requestBody.messages[0].role).toBe("system");
       expect(requestBody.messages[1].role).toBe("user");
       const content = requestBody.messages[1].content as string;
@@ -266,7 +268,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ error: "boom" }, 500);
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -296,7 +298,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -308,56 +310,65 @@ describe("createOpenAiCompatibleClient", () => {
   });
 
   describe("draftReply", () => {
-    it("asks the model for a Spanish draft from the subject and optional context", async () => {
+    // GH #304: the draft is built from the user's intent; the subject and
+    // context are optional. All three reach the prompt when present.
+    it("asks the model for a Spanish draft from the intent, subject hint and context", async () => {
       const fetchFn = fetchReturning({
         choices: [{ message: { content: "Estimado equipo, adjunto el borrador solicitado." } }],
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
 
-      const draft = await client.draftReply("Reunión de seguimiento", "Confirmar horario de mañana");
+      const draft = await client.draftReply({
+        intent: "confirmar el horario de mañana",
+        subject: "Reunión de seguimiento",
+        context: "¿A qué hora nos vemos?",
+      });
 
       expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
       const [, init] = calls(fetchFn)[0]!;
       const requestBody = JSON.parse(init.body as string);
+      // draftReply runs on the (stronger) draft model (#310).
+      expect(requestBody.model).toBe("draft-model");
       expect(requestBody.messages[0].content).toMatch(/español/i);
+      expect(requestBody.messages[1].content).toContain("confirmar el horario de mañana");
       expect(requestBody.messages[1].content).toContain("Reunión de seguimiento");
-      expect(requestBody.messages[1].content).toContain("Confirmar horario de mañana");
+      expect(requestBody.messages[1].content).toContain("¿A qué hora nos vemos?");
     });
 
-    it("works without an optional context", async () => {
+    it("works from the intent alone, without a subject or context", async () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: "Borrador." } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
 
-      const draft = await client.draftReply("Solo asunto");
+      const draft = await client.draftReply({ intent: "aviso que no voy" });
 
       expect(draft).toBe("Borrador.");
     });
 
-    it("wraps a provider failure in a DomainError without leaking subject content", async () => {
+    it("wraps a provider failure in a DomainError without leaking intent content", async () => {
       const fetchFn = vi.fn(async () => {
         throw new Error("network exploded");
       }) as unknown as typeof fetch;
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(client.draftReply("super secret subject")).rejects.toBeInstanceOf(DomainError);
+      await expect(client.draftReply({ intent: "super secret intent" })).rejects.toBeInstanceOf(DomainError);
       for (const call of logSpy.mock.calls) {
-        expect(JSON.stringify(call)).not.toContain("super secret subject");
+        expect(JSON.stringify(call)).not.toContain("super secret intent");
       }
       logSpy.mockRestore();
     });
@@ -378,12 +389,12 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
 
-      const draft = await client.draftReply("Reunión de seguimiento");
+      const draft = await client.draftReply({ intent: "confirmar el horario de mañana" });
 
       expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
       expect(draft).not.toContain("internal reasoning");
@@ -395,13 +406,13 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
+      await expect(client.draftReply({ intent: "confirmar el horario de mañana" })).rejects.toBeInstanceOf(DomainError);
       for (const call of logSpy.mock.calls) {
         expect(JSON.stringify(call)).not.toContain("secret internal reasoning");
       }
@@ -412,13 +423,13 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: null } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(client.draftReply("Reunión de seguimiento")).rejects.toBeInstanceOf(DomainError);
+      await expect(client.draftReply({ intent: "confirmar el horario de mañana" })).rejects.toBeInstanceOf(DomainError);
       logSpy.mockRestore();
     });
   });
@@ -432,7 +443,7 @@ describe("createOpenAiCompatibleClient", () => {
     function clientWith(fetchFn: typeof fetch, timeoutMs?: number) {
       return createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
         timeoutMs,
@@ -475,7 +486,7 @@ describe("createOpenAiCompatibleClient", () => {
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = clientWith(silentFetch());
 
-      const pending = client.draftReply("Asunto");
+      const pending = client.draftReply({ intent: "aviso que no voy" });
       const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
       await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
       await assertion;

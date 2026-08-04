@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Hono, type MiddlewareHandler } from "hono";
 import { draftInputSchema, isQuoteSeparatorLine } from "@webmail/shared";
 import { errorResponse } from "../../core/error-response";
@@ -170,6 +171,21 @@ type JmapThreadEmail = JmapEmailBody & {
 
 type JmapThread = { id: string; emailIds: string[] };
 
+/**
+ * Stable cache key for a thread summary (#307): a hash of the thread's ordered
+ * email ids. A message body is immutable so the single-message cache keys on the
+ * message id directly, but a thread can GROW — a new reply adds an id — so the
+ * key must change with the id set. Hashing the joined ids means a grown thread
+ * asks under a different key, misses, and regenerates rather than returning a
+ * stale summary. `sha256` is used only for a deterministic fixed-width key, not
+ * for any security property. The ids are already sorted by the caller
+ * (chronological, same order handed to the provider), so the key is stable
+ * across requests for the same message set.
+ */
+export function threadContentKey(orderedEmailIds: string[]): string {
+  return createHash("sha256").update(orderedEmailIds.join("\n")).digest("hex");
+}
+
 /** "Name <email>" when a display name is present, otherwise just the email. */
 function formatSender(from: JmapThreadEmailAddress[] | undefined): string {
   const first = from?.[0];
@@ -203,6 +219,15 @@ export function createAiRouter(deps: AiDeps) {
 
   router.post("/messages/:id/summarize", requireAiEnabled(deps), quota, requireMail(deps), async (c) => {
     const id = c.req.param("id");
+    const userId = c.get("user").userId;
+    // #307: a message body is immutable, so the message id IS the content key.
+    // Check the cache before touching JMAP — a hit avoids both the JMAP fetch and
+    // the paid provider call. (The quota gate above still ran: a cache hit counts
+    // the same as any request, which also keeps the endpoint itself bounded.)
+    const cached = await deps.aiSummaries.get(userId, "message", id, id);
+    if (cached) {
+      return c.json({ bullets: cached, cached: true });
+    }
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
@@ -224,6 +249,9 @@ export function createAiRouter(deps: AiDeps) {
       return errorResponse(c, "not_found", 404);
     }
     const bullets = await deps.aiClient!.summarize(extractBodyText(email));
+    // Only successful generations are cached; a thrown provider error never
+    // reaches here, so a failed call is retried next time rather than cached.
+    await deps.aiSummaries.put(userId, "message", id, id, bullets);
     return c.json({ bullets });
   });
 
@@ -240,6 +268,7 @@ export function createAiRouter(deps: AiDeps) {
   // threads become a cost/latency problem in practice.
   router.post("/threads/:threadId/summarize", requireAiEnabled(deps), quota, requireMail(deps), async (c) => {
     const threadId = c.req.param("threadId");
+    const userId = c.get("user").userId;
     const session = c.get("jmapSession");
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       ["Thread/get", { accountId: session.accountId, ids: [threadId] }, "t"],
@@ -267,6 +296,17 @@ export function createAiRouter(deps: AiDeps) {
     const ordered = [...emails].sort(
       (a, b) => Date.parse(a.receivedAt ?? "") - Date.parse(b.receivedAt ?? ""),
     );
+
+    // #307: cache keyed by the ordered email-id set — a new reply changes the
+    // set → a new key → a miss → a fresh summary (never a stale one). Unlike the
+    // message route the JMAP fetch is unavoidable here (the key is derived from
+    // the ids), but a hit still skips the paid provider call.
+    const contentKey = threadContentKey(ordered.map((email) => email.id));
+    const cachedThread = await deps.aiSummaries.get(userId, "thread", threadId, contentKey);
+    if (cachedThread) {
+      return c.json({ bullets: cachedThread, cached: true });
+    }
+
     const messages = ordered.map((email) => ({
       from: formatSender(email.from),
       body: stripQuotedTrail(extractBodyText(email)),
@@ -291,6 +331,9 @@ export function createAiRouter(deps: AiDeps) {
     }
 
     const bullets = await deps.aiClient!.summarizeThread(capped.messages);
+    // Cache only after a successful generation, under the id-set key computed
+    // above — a later reply lands on a different key and regenerates.
+    await deps.aiSummaries.put(userId, "thread", threadId, contentKey, bullets);
     return c.json({ bullets });
   });
 
@@ -305,10 +348,14 @@ export function createAiRouter(deps: AiDeps) {
     if (!parsed.success) {
       return errorResponse(c, "invalid_body", 400);
     }
-    // GH #299: forward the optional context (the original message body for a
-    // reply) so the model drafts against what it is replying to, not just the
-    // subject. draftReply wraps it in the untrusted fence (GH #298).
-    const draft = await deps.aiClient!.draftReply(parsed.data.subject, parsed.data.context);
+    // GH #304: the draft is written FROM the user's typed intent; the subject
+    // is a weak hint and the context is the original message body on a reply
+    // (GH #299). draftReply wraps every span in the untrusted fence (GH #298).
+    const draft = await deps.aiClient!.draftReply({
+      intent: parsed.data.intent,
+      subject: parsed.data.subject,
+      context: parsed.data.context,
+    });
     return c.json({ body: draft });
   });
 

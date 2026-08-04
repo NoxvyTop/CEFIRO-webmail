@@ -310,6 +310,44 @@ describe("loadConfig", () => {
       expect(config.aiModel).toBe("claude-custom-model");
     });
 
+    // Per-task model overrides (#310): both optional, both fall back to AI_MODEL
+    // in buildAiClient when unset — so the config layer leaves them undefined.
+    it("leaves aiModelSummarize and aiModelDraft undefined when their vars are absent", () => {
+      const config = loadConfig(validEnv);
+      expect(config.aiModelSummarize).toBeUndefined();
+      expect(config.aiModelDraft).toBeUndefined();
+    });
+
+    it("reads AI_MODEL_SUMMARIZE and AI_MODEL_DRAFT into per-task model overrides", () => {
+      const config = loadConfig({
+        ...validEnv,
+        AI_MODEL_SUMMARIZE: "claude-haiku-4",
+        AI_MODEL_DRAFT: "claude-opus-4-8",
+      });
+      expect(config.aiModelSummarize).toBe("claude-haiku-4");
+      expect(config.aiModelDraft).toBe("claude-opus-4-8");
+    });
+
+    it("treats empty or whitespace-only AI_MODEL_SUMMARIZE / AI_MODEL_DRAFT as undefined", () => {
+      const config = loadConfig({
+        ...validEnv,
+        AI_MODEL_SUMMARIZE: "",
+        AI_MODEL_DRAFT: "   ",
+      });
+      expect(config.aiModelSummarize).toBeUndefined();
+      expect(config.aiModelDraft).toBeUndefined();
+    });
+
+    it("trims a per-task model that picked up whitespace from a compose file", () => {
+      const config = loadConfig({
+        ...validEnv,
+        AI_MODEL_SUMMARIZE: "  claude-haiku-4  ",
+        AI_MODEL_DRAFT: "  claude-opus-4-8  ",
+      });
+      expect(config.aiModelSummarize).toBe("claude-haiku-4");
+      expect(config.aiModelDraft).toBe("claude-opus-4-8");
+    });
+
     it("leaves aiBaseUrl undefined when AI_BASE_URL is absent", () => {
       expect(loadConfig(validEnv).aiBaseUrl).toBeUndefined();
     });

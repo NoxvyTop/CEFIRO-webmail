@@ -79,7 +79,9 @@ test("the first run configures SSO, mints the first admin, and closes the wizard
   // role select is what decides whether the account it creates can reach
   // /admin, and creating it is what arms the latch.
   await page.getByLabel("Correo").fill(ADMIN_EMAIL);
-  await page.getByLabel("Nombre").fill("Primera Administradora");
+  // GH #290 added a "Nombre del proveedor" SSO field, so "Nombre" is no longer
+  // unique — pin the account name field exactly.
+  await page.getByLabel("Nombre", { exact: true }).fill("Primera Administradora");
   await page.getByLabel("Rol").selectOption("admin");
   await page.getByLabel("Contraseña del buzón").fill("buzon-primera-admin");
   await page.getByRole("button", { name: "Crear" }).click();

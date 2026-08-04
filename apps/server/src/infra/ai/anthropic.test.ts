@@ -24,14 +24,14 @@ describe("createAnthropicAiClient", () => {
       const api = fakeMessagesApi(() => ({
         content: [{ type: "text", text: "- First point\n- Second point\n- Third point" }],
       }));
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
       const result = await client.summarize("Hello, please review the attached invoice.");
 
       expect(result).toEqual(["First point", "Second point", "Third point"]);
       expect(api.calls).toHaveLength(1);
       const call = api.calls[0] as { model: string; max_tokens: number; messages: { content: string }[] };
-      expect(call.model).toBe("claude-opus-4-8");
+      expect(call.model).toBe("sum-model");
       expect(call.max_tokens).toBeLessThanOrEqual(1024);
       // The body is fenced in the untrusted delimiter (GH #298); nothing else
       // is smuggled into the prompt.
@@ -43,7 +43,7 @@ describe("createAnthropicAiClient", () => {
       const api = fakeMessagesApi(() => ({
         content: [{ type: "text", text: "- One\n- Two\n- Three\n- Four" }],
       }));
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
       const result = await client.summarize("body");
 
@@ -56,7 +56,7 @@ describe("createAnthropicAiClient", () => {
           throw new Error("network exploded");
         },
       };
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await expect(client.summarize("super secret body content")).rejects.toBeInstanceOf(DomainError);
@@ -77,7 +77,7 @@ describe("createAnthropicAiClient", () => {
           },
         ],
       }));
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
       const result = await client.summarizeThread([
         { from: "Ana <ana@x.com>", body: "Propongo arrancar el lunes." },
@@ -90,7 +90,9 @@ describe("createAnthropicAiClient", () => {
         "Pendiente: enviar el cronograma",
       ]);
       expect(api.calls).toHaveLength(1);
-      const call = api.calls[0] as { messages: { content: string }[] };
+      const call = api.calls[0] as { model: string; messages: { content: string }[] };
+      // summarizeThread runs on the summarize model (#310).
+      expect(call.model).toBe("sum-model");
       // Both messages, in order, land in the single user turn.
       const content = call.messages[0]!.content;
       expect(content.indexOf("Ana <ana@x.com>")).toBeLessThan(content.indexOf("Beto <beto@x.com>"));
@@ -104,7 +106,7 @@ describe("createAnthropicAiClient", () => {
           throw new Error("network exploded");
         },
       };
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await expect(
@@ -118,26 +120,35 @@ describe("createAnthropicAiClient", () => {
   });
 
   describe("draftReply", () => {
-    it("asks the model for a Spanish draft from the subject and optional context", async () => {
+    // GH #304: the draft is built from the user's intent; the subject and
+    // context are optional. All three reach the prompt when present.
+    it("asks the model for a Spanish draft from the intent, subject hint and context", async () => {
       const api = fakeMessagesApi(() => ({
         content: [{ type: "text", text: "Estimado equipo, adjunto el borrador solicitado." }],
       }));
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
-      const draft = await client.draftReply("Reunión de seguimiento", "Confirmar horario de mañana");
+      const draft = await client.draftReply({
+        intent: "confirmar el horario de mañana",
+        subject: "Reunión de seguimiento",
+        context: "¿A qué hora nos vemos?",
+      });
 
       expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
-      const call = api.calls[0] as { system?: string; messages: { content: string }[] };
+      const call = api.calls[0] as { model: string; system?: string; messages: { content: string }[] };
+      // draftReply runs on the (stronger) draft model (#310).
+      expect(call.model).toBe("draft-model");
       expect(call.system ?? call.messages[0]!.content).toMatch(/español/i);
+      expect(call.messages[0]!.content).toContain("confirmar el horario de mañana");
       expect(call.messages[0]!.content).toContain("Reunión de seguimiento");
-      expect(call.messages[0]!.content).toContain("Confirmar horario de mañana");
+      expect(call.messages[0]!.content).toContain("¿A qué hora nos vemos?");
     });
 
-    it("works without an optional context", async () => {
+    it("works from the intent alone, without a subject or context", async () => {
       const api = fakeMessagesApi(() => ({ content: [{ type: "text", text: "Borrador." }] }));
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
-      const draft = await client.draftReply("Solo asunto");
+      const draft = await client.draftReply({ intent: "aviso que no voy" });
 
       expect(draft).toBe("Borrador.");
     });
@@ -165,7 +176,7 @@ describe("createAnthropicAiClient", () => {
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = createAnthropicAiClient({
         apiKey: "sk-test",
-        model: "claude-opus-4-8",
+        models: { summarize: "sum-model", draft: "draft-model" },
         client: silentMessagesApi(),
       });
 
@@ -184,7 +195,7 @@ describe("createAnthropicAiClient", () => {
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = createAnthropicAiClient({
         apiKey: "sk-test",
-        model: "claude-opus-4-8",
+        models: { summarize: "sum-model", draft: "draft-model" },
         client: silentMessagesApi(),
       });
 
@@ -200,11 +211,11 @@ describe("createAnthropicAiClient", () => {
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = createAnthropicAiClient({
         apiKey: "sk-test",
-        model: "claude-opus-4-8",
+        models: { summarize: "sum-model", draft: "draft-model" },
         client: silentMessagesApi(),
       });
 
-      const pending = client.draftReply("Asunto");
+      const pending = client.draftReply({ intent: "aviso que no voy" });
       const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
       await vi.advanceTimersByTimeAsync(DEFAULT_AI_TIMEOUT_MS);
       await assertion;
@@ -217,7 +228,7 @@ describe("createAnthropicAiClient", () => {
       const api = silentMessagesApi();
       const client = createAnthropicAiClient({
         apiKey: "sk-test",
-        model: "claude-opus-4-8",
+        models: { summarize: "sum-model", draft: "draft-model" },
         client: api,
       });
 
@@ -236,7 +247,7 @@ describe("createAnthropicAiClient", () => {
           throw new Error("network exploded");
         },
       };
-      const client = createAnthropicAiClient({ apiKey: "sk-test", model: "claude-opus-4-8", client: api });
+      const client = createAnthropicAiClient({ apiKey: "sk-test", models: { summarize: "sum-model", draft: "draft-model" }, client: api });
 
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await expect(client.summarize("body")).rejects.toMatchObject({
@@ -251,7 +262,7 @@ describe("createAnthropicAiClient", () => {
       const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = createAnthropicAiClient({
         apiKey: "sk-test",
-        model: "claude-opus-4-8",
+        models: { summarize: "sum-model", draft: "draft-model" },
         client: silentMessagesApi(),
         timeoutMs: 5_000,
       });

@@ -24,14 +24,20 @@ export async function fetchAiStatus(): Promise<boolean> {
   }
 }
 
-// GH #299: `context` is the original message body on a reply draft, so the
-// server can ground the draft in what it is replying to. Omitted for a brand-
-// new compose (no original message), which keeps the request shape unchanged.
-export async function fetchAiDraft(subject: string, context?: string): Promise<string> {
+// GH #304: the draft is driven by the `intent` the user typed in the body; the
+// `subject` is an optional weak hint and `context` is the original message body
+// on a reply (GH #299), so the server can ground the draft in what it replies
+// to. Undefined optional fields are dropped by JSON.stringify, so a brand-new
+// compose sends just `{ intent }`.
+export async function fetchAiDraft(input: {
+  intent: string;
+  subject?: string;
+  context?: string;
+}): Promise<string> {
   const res = await fetch("/api/mail/compose/draft", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(draftInputSchema.parse(context ? { subject, context } : { subject })),
+    body: JSON.stringify(draftInputSchema.parse(input)),
   });
   if (!res.ok) return parseError(res);
   return draftResultSchema.parse(await res.json()).body;
