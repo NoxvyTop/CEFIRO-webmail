@@ -140,7 +140,9 @@ export function LoginPage() {
                 <rect x="4" y="10" width="16" height="10" rx="2" />
                 <path d="M8 10V7a4 4 0 0 1 8 0v3" />
               </svg>
-              {ssoConnecting ? t("auth.connecting") : t("auth.signIn")}
+              {ssoConnecting
+                ? t("auth.connecting")
+                : t("auth.signIn", { provider: mode?.providerName ?? "SSO" })}
             </a>
             {ssoConnecting && (
               <p className="mt-3 animate-pulse text-center text-[12.5px] text-accent-text">

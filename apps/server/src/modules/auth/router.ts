@@ -222,7 +222,20 @@ export function createAuthRouter(deps: AuthRouterDeps) {
 
   router.get("/me", requireSession(deps.sessions), (c) => c.json(c.get("user")));
 
-  router.get("/mode", (c) => c.json({ bootstrapMode: deps.bootstrap?.enabled ?? false }));
+  router.get("/mode", async (c) => {
+    // #290: the login-button provider name is configurable per deployment.
+    // Resolve it from the stored SSO config without decrypting any secret; a
+    // blank value, no config, or a read failure all fall back to "SSO" so this
+    // public probe never breaks on the SSO side.
+    let providerName = "SSO";
+    try {
+      const stored = (await deps.ssoConfig?.getProviderName())?.trim();
+      if (stored) providerName = stored;
+    } catch {
+      // Keep the default; the mode probe must answer regardless.
+    }
+    return c.json({ bootstrapMode: deps.bootstrap?.enabled ?? false, providerName });
+  });
 
   router.post("/logout", async (c) => {
     const token = getCookie(c, SESSION_COOKIE);

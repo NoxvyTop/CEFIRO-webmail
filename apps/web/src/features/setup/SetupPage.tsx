@@ -21,7 +21,13 @@ type StepState =
 
 const IDLE: StepState = { status: "idle" };
 
-const DEFAULT_SSO = { issuer: "", clientId: "", clientSecret: "", scopes: "openid profile email" };
+const DEFAULT_SSO = {
+  issuer: "",
+  clientId: "",
+  clientSecret: "",
+  scopes: "openid profile email",
+  providerName: "",
+};
 const DEFAULT_USER = {
   email: "",
   displayName: "",
@@ -223,6 +229,17 @@ export function SetupPage() {
               type="text"
               value={sso.scopes}
               onChange={(event) => setSso({ ...sso, scopes: event.target.value })}
+              className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
+            />
+
+            {/* #290: optional display name for the login button; blank -> "SSO". */}
+            <label htmlFor="sso-provider-name">{t("setup.fields.providerName")}</label>
+            <input
+              id="sso-provider-name"
+              type="text"
+              value={sso.providerName}
+              onChange={(event) => setSso({ ...sso, providerName: event.target.value })}
+              placeholder="SSO"
               className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
             />
 

@@ -43,4 +43,33 @@ describe("sso config repo", () => {
     const rawText = new TextDecoder().decode(new Uint8Array(row!.client_secret_ciphertext));
     expect(rawText).not.toContain("super-secret-2");
   });
+
+  // #290: the optional login-button provider name round-trips through set/get.
+  it("stores and reads back the provider name, defaulting to null when unset", async () => {
+    const key = await importMasterKey(
+      btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
+    );
+    const repo = createSsoConfigRepo(sql, key);
+
+    // Unset on write: get() reports null and getProviderName() agrees.
+    await repo.set({
+      issuer: "https://auth.noxvytop.com/application/o/webmail/",
+      clientId: "webmail",
+      clientSecret: "cs",
+      scopes: "openid profile email",
+    });
+    expect((await repo.get())?.providerName).toBeNull();
+    expect(await repo.getProviderName()).toBeNull();
+
+    // Set on write: both reads return it.
+    await repo.set({
+      issuer: "https://auth.noxvytop.com/application/o/webmail/",
+      clientId: "webmail",
+      clientSecret: "cs",
+      scopes: "openid profile email",
+      providerName: "Authentik",
+    });
+    expect((await repo.get())?.providerName).toBe("Authentik");
+    expect(await repo.getProviderName()).toBe("Authentik");
+  });
 });

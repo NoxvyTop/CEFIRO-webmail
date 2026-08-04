@@ -12,6 +12,8 @@ export type SsoConfig = {
   clientId: string;
   clientSecret: string;
   scopes: string;
+  /** Login-button display name (#290); null/absent is treated as "SSO". */
+  providerName?: string | null;
 };
 
 type SsoRow = {
@@ -21,6 +23,7 @@ type SsoRow = {
   client_secret_iv: Uint8Array;
   key_version: number;
   scopes: string;
+  provider_name: string | null;
 };
 
 export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
@@ -57,7 +60,7 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
     async get(): Promise<SsoConfig | null> {
       const rows = await sql<SsoRow[]>`
         select issuer, client_id, client_secret_ciphertext, client_secret_iv,
-               key_version, scopes
+               key_version, scopes, provider_name
         from sso_config where id = 1
       `;
       const row = rows[0];
@@ -75,7 +78,17 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
         clientId: row.client_id,
         clientSecret,
         scopes: row.scopes,
+        providerName: row.provider_name,
       };
+    },
+    // The login-button provider name only (#290). A dedicated lightweight read
+    // for the UNAUTHENTICATED GET /api/auth/mode: unlike get() it decrypts
+    // nothing, so it needs no master key and never touches the client secret.
+    async getProviderName(): Promise<string | null> {
+      const rows = await sql<{ provider_name: string | null }[]>`
+        select provider_name from sso_config where id = 1
+      `;
+      return rows[0]?.provider_name ?? null;
     },
     async getPublic(): Promise<{ issuer: string; clientId: string; scopes: string } | null> {
       const rows = await sql<{ issuer: string; client_id: string; scopes: string }[]>`
@@ -91,8 +104,8 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
       );
       await sql`
         insert into sso_config
-          (id, issuer, client_id, client_secret_ciphertext, client_secret_iv, key_version, scopes)
-        values (1, ${config.issuer}, ${config.clientId}, ${ciphertext}, ${iv}, ${keyVersion}, ${config.scopes})
+          (id, issuer, client_id, client_secret_ciphertext, client_secret_iv, key_version, scopes, provider_name)
+        values (1, ${config.issuer}, ${config.clientId}, ${ciphertext}, ${iv}, ${keyVersion}, ${config.scopes}, ${config.providerName ?? null})
         on conflict (id) do update set
           issuer = excluded.issuer,
           client_id = excluded.client_id,
@@ -100,6 +113,7 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
           client_secret_iv = excluded.client_secret_iv,
           key_version = excluded.key_version,
           scopes = excluded.scopes,
+          provider_name = excluded.provider_name,
           updated_at = now()
       `;
     },

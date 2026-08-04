@@ -9,7 +9,12 @@ export const sessionUserSchema = z.object({
 });
 export type SessionUser = z.infer<typeof sessionUserSchema>;
 
-export const authModeSchema = z.object({ bootstrapMode: z.boolean() });
+export const authModeSchema = z.object({
+  bootstrapMode: z.boolean(),
+  // #290: the configured SSO provider name for the login button. Defaults to
+  // "SSO", so a response (or test stub) that omits it still parses.
+  providerName: z.string().default("SSO"),
+});
 export type AuthMode = z.infer<typeof authModeSchema>;
 
 export const bootstrapLoginSchema = z.object({

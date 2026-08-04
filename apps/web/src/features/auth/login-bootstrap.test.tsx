@@ -71,6 +71,30 @@ describe("login screen bootstrap form", () => {
     expect(screen.queryByText(i18n.t("auth.credentialsDisabled"))).not.toBeInTheDocument();
   });
 
+  // #290: the SSO button label reflects the deployment's configured provider.
+  it("shows the configured provider name on the SSO button", async () => {
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+      "/api/auth/mode": () =>
+        new Response(JSON.stringify({ bootstrapMode: false, providerName: "Authentik" })),
+    });
+    renderAt("/");
+
+    expect(await screen.findByText("Iniciar sesión con Authentik")).toBeInTheDocument();
+    expect(screen.queryByText("Iniciar sesión con SSO")).not.toBeInTheDocument();
+  });
+
+  // #290: a mode response with no providerName falls back to "SSO".
+  it("falls back to the SSO label when no provider name is configured", async () => {
+    stubFetch({
+      "/api/auth/me": () => new Response("{}", { status: 401 }),
+      "/api/auth/mode": () => new Response(JSON.stringify({ bootstrapMode: false })),
+    });
+    renderAt("/");
+
+    expect(await screen.findByText("Iniciar sesión con SSO")).toBeInTheDocument();
+  });
+
   it("never shows a disabled-credentials notice, even after the mode resolves to false (GH #289)", async () => {
     let resolveMode: (response: Response) => void = () => {};
     stubFetch({

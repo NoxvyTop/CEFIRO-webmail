@@ -98,6 +98,39 @@ describe("setup page", () => {
     expect(await screen.findByText("Guardado")).toBeInTheDocument();
   });
 
+  // #290: the optional provider-name field is sent in the SSO save body.
+  it("submits the configured provider name with the sso form", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/api/setup/status")) return new Response(CONNECTED_STATUS);
+      if (path.includes("/api/setup/sso")) return new Response(JSON.stringify({ ok: true }));
+      return new Response("{}", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderSetup();
+    fireEvent.change(await screen.findByLabelText(TOKEN_LABEL), {
+      target: { value: "console-token" },
+    });
+    fireEvent.click(screen.getByText("Conectar"));
+    await screen.findByText("Proveedor SSO (OIDC)");
+
+    fireEvent.change(screen.getByLabelText("Issuer"), {
+      target: { value: "https://auth.noxvytop.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "webmail" } });
+    fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "secret-1" } });
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor"), {
+      target: { value: "Authentik" },
+    });
+    fireEvent.click(screen.getByText("Guardar"));
+
+    await waitFor(() => {
+      const ssoCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/api/setup/sso"));
+      expect(ssoCall).toBeTruthy();
+      expect(JSON.parse((ssoCall![1] as RequestInit).body as string).providerName).toBe("Authentik");
+    });
+  });
+
   // GH #271: the mute entry point. A rejected token used to drop the operator
   // back onto the same form with no explanation at all.
   it("shows a clear error and marks the token field invalid when the token is rejected", async () => {
