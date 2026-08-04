@@ -24,13 +24,12 @@ const PAIRS: Pair[] = [
   { name: "ink on canvas", fg: "--ink", bg: "--bg", min: 4.5 },
   { name: "ink on panel", fg: "--ink", bg: "--panel", min: 4.5 },
   { name: "muted on panel", fg: "--muted", bg: "--panel", min: 4.5 },
-  // NOTE — the solid CTA pair (--accent-ink on --accent) is deliberately NOT
-  // asserted here. theme.css makes no contrast claim for it: light's --accent
-  // (#0fa383) with white --accent-ink measures ~3.19:1, which is why the design
-  // ships a SEPARATE text-safe token, --accent-text (#0a725c, CLARO-02),
-  // asserted below. Whether the solid mint CTA fill itself needs a darker ink
-  // is a design-token question outside GH #280 (which is about the annotated
-  // ratios going unverified) and outside this spec's ownership.
+  // #283: the SOLID CTA pair (--accent-ink on --accent — Button primary,
+  // LoginPage, SetupPage) is normal-size text and must clear AA 4.5:1. Light's
+  // --accent was darkened (#0fa383 → #0c846a, ~3.19:1 → ~4.64:1) so it does;
+  // night already passes (dark ink on a light accent). Asserted in BOTH themes
+  // so a re-tune that drops either back below the bar turns this red.
+  { name: "accent-ink on accent", fg: "--accent-ink", bg: "--accent", min: 4.5 },
   // CLARO-02: accent used AS TEXT, over every surface it lands on. Light's
   // --accent-text was tuned against --sel (the darkest of the three), so all
   // three are asserted.
