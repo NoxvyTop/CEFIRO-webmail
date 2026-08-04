@@ -6,6 +6,8 @@ import {
   saveDraftResultSchema,
   saveDraftSchema,
   sendEmailSchema,
+  sharedAccountCopyPreferenceSchema,
+  sharedAccountSchema,
   sharedAccountsSchema,
   signatureInputSchema,
   userPreferencesUpdateSchema,
@@ -517,16 +519,70 @@ export function createMailRouter(deps: MailDeps) {
 
   // GH #13/#50: the shared mailboxes this member can browse — the NON-personal
   // accounts Stalwart lists in their JMAP session via group membership. Read
-  // from the CACHED session (requireMail already fetched it), so this adds no
-  // JMAP round trip. The member opens one by passing its id as `?accountId=` to
-  // the mail routes below; membership changes are picked up on the next session
-  // refresh (SESSION_CACHE_TTL_MS, see ./context.ts).
-  router.get("/shared-accounts", requireMail(deps), (c) => {
+  // from the CACHED session (requireMail already fetched it), so the only extra
+  // work is one user_preferences read to tag each with the member's copy opt-in
+  // (G-3). The member opens one by passing its id as `?accountId=` to the mail
+  // routes below; membership changes are picked up on the next session refresh
+  // (SESSION_CACHE_TTL_MS, see ./context.ts).
+  router.get("/shared-accounts", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
+    const user = c.get("user");
+    const optedIn = new Set((await deps.userPreferences.get(user.userId)).sharedMailboxCopyOptIn);
     const shared = (session.accounts ?? [])
       .filter((account) => !account.isPersonal)
-      .map((account) => ({ id: account.id, name: account.name }));
+      .map((account) => ({ id: account.id, name: account.name, copyOptIn: optedIn.has(account.id) }));
     return c.json(sharedAccountsSchema.parse(shared));
+  });
+
+  // GH #13/#50 (G-3): record whether this member wants a copy of new mail from a
+  // shared mailbox delivered to their own inbox. This ONLY persists intent — no
+  // copy is made here and nothing consumes the preference yet (deferred, see
+  // docs/design/shared-mailboxes.md); the member still pulls copies manually via
+  // copy-to-inbox above. The `:id` names the shared account: resolveAccountId
+  // authorizes it against the member's session (403 account_forbidden if
+  // unreachable), and it MUST be a shared, non-personal account — a personal id
+  // is refused with 400 invalid_account, mirroring copy-to-inbox, since opting
+  // one's own inbox into copies of itself is meaningless. The opt-in is stored
+  // as a set of account ids merged into user_preferences.
+  router.put("/shared-accounts/:id/copy-preference", requireMail(deps), async (c) => {
+    const user = c.get("user");
+    const session = c.get("jmapSession");
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return errorResponse(c, "invalid_body", 400);
+    }
+    const parsed = sharedAccountCopyPreferenceSchema.safeParse(body);
+    if (!parsed.success) {
+      return errorResponse(c, "invalid_body", 400);
+    }
+
+    const accountId = resolveAccountId(session, c.req.param("id"));
+    if (accountId === session.accountId) {
+      return errorResponse(c, "invalid_account", 400);
+    }
+
+    const current = await deps.userPreferences.get(user.userId);
+    const optedIn = new Set(current.sharedMailboxCopyOptIn);
+    if (parsed.data.copyOptIn) {
+      optedIn.add(accountId);
+    } else {
+      optedIn.delete(accountId);
+    }
+    const updated = await deps.userPreferences.merge(user.userId, {
+      sharedMailboxCopyOptIn: [...optedIn],
+    });
+
+    const name = (session.accounts ?? []).find((account) => account.id === accountId)?.name ?? "";
+    return c.json(
+      sharedAccountSchema.parse({
+        id: accountId,
+        name,
+        copyOptIn: updated.sharedMailboxCopyOptIn.includes(accountId),
+      }),
+    );
   });
 
   router.get("/mailboxes", requireMail(deps), async (c) => {

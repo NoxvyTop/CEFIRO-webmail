@@ -7,6 +7,7 @@ import {
   emailUpdateSchema,
   mailboxSchema,
   senderAuthVerdictSchema,
+  sharedAccountCopyPreferenceSchema,
   sharedAccountSchema,
   sharedAccountsSchema,
   threadDetailSchema,
@@ -113,9 +114,14 @@ describe("mail contracts", () => {
 });
 
 describe("sharedAccountSchema (GH #13/#50)", () => {
-  it("accepts a shared account", () => {
+  it("defaults copyOptIn to false when absent (backward compatible with the account selector)", () => {
     const parsed = sharedAccountSchema.parse({ id: "acc-shared", name: "Ventas" });
-    expect(parsed).toEqual({ id: "acc-shared", name: "Ventas" });
+    expect(parsed).toEqual({ id: "acc-shared", name: "Ventas", copyOptIn: false });
+  });
+
+  it("keeps an explicit copyOptIn value", () => {
+    const parsed = sharedAccountSchema.parse({ id: "acc-shared", name: "Ventas", copyOptIn: true });
+    expect(parsed.copyOptIn).toBe(true);
   });
 
   it("rejects a shared account missing its id", () => {
@@ -127,9 +133,21 @@ describe("sharedAccountSchema (GH #13/#50)", () => {
     expect(
       sharedAccountsSchema.parse([
         { id: "a", name: "Ventas" },
-        { id: "b", name: "Soporte" },
+        { id: "b", name: "Soporte", copyOptIn: true },
       ]),
     ).toHaveLength(2);
+  });
+});
+
+describe("sharedAccountCopyPreferenceSchema (GH #13/#50 G-3)", () => {
+  it("accepts a boolean copyOptIn", () => {
+    expect(sharedAccountCopyPreferenceSchema.parse({ copyOptIn: true })).toEqual({ copyOptIn: true });
+    expect(sharedAccountCopyPreferenceSchema.parse({ copyOptIn: false })).toEqual({ copyOptIn: false });
+  });
+
+  it("rejects a missing or non-boolean copyOptIn", () => {
+    expect(() => sharedAccountCopyPreferenceSchema.parse({})).toThrow();
+    expect(() => sharedAccountCopyPreferenceSchema.parse({ copyOptIn: "yes" })).toThrow();
   });
 });
 
@@ -272,6 +290,19 @@ describe("userPreferencesSchema", () => {
   it("defaults customLabels to an empty array when absent (backward compatible)", () => {
     const parsed = userPreferencesSchema.parse({ groupMailInMainInbox: true });
     expect(parsed.customLabels).toEqual([]);
+  });
+
+  it("defaults sharedMailboxCopyOptIn to an empty array when absent (backward compatible)", () => {
+    const parsed = userPreferencesSchema.parse({ groupMailInMainInbox: true });
+    expect(parsed.sharedMailboxCopyOptIn).toEqual([]);
+  });
+
+  it("keeps an explicit sharedMailboxCopyOptIn list of account ids", () => {
+    const parsed = userPreferencesSchema.parse({
+      groupMailInMainInbox: true,
+      sharedMailboxCopyOptIn: ["acc-shared", "acc-soporte"],
+    });
+    expect(parsed.sharedMailboxCopyOptIn).toEqual(["acc-shared", "acc-soporte"]);
   });
 
   it("accepts a preferences payload with custom labels", () => {

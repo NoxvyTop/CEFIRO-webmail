@@ -20,11 +20,25 @@ export type Mailbox = z.infer<typeof mailboxSchema>;
 export const sharedAccountSchema = z.object({
   id: z.string(),
   name: z.string(),
+  // GH #13/#50 (G-3): whether this member has opted into receiving a copy of
+  // new mail from this shared mailbox in their own inbox (see
+  // userPreferencesSchema.sharedMailboxCopyOptIn). Defaults to false so a
+  // response from a server that predates the field — and the account selector,
+  // which reads only id/name — still parses. Persisted intent only: no copy is
+  // delivered from this yet (deferred, see docs/design/shared-mailboxes.md).
+  copyOptIn: z.boolean().default(false),
 });
 export type SharedAccount = z.infer<typeof sharedAccountSchema>;
 
 export const sharedAccountsSchema = z.array(sharedAccountSchema);
 export type SharedAccounts = z.infer<typeof sharedAccountsSchema>;
+
+// GH #13/#50 (G-3): the body of PUT /api/mail/shared-accounts/:id/copy-preference
+// — the member toggling whether they want copies from that shared mailbox.
+export const sharedAccountCopyPreferenceSchema = z.object({
+  copyOptIn: z.boolean(),
+});
+export type SharedAccountCopyPreference = z.infer<typeof sharedAccountCopyPreferenceSchema>;
 
 export const emailAddressSchema = z.object({
   name: z.string().nullable(),
@@ -175,6 +189,16 @@ export const userPreferencesSchema = z.object({
   // Defaults to [] so responses from a server that predates this field (or
   // hand-written test fixtures) still parse instead of throwing.
   customLabels: customLabelsListSchema.default([]),
+  // GH #13/#50 (G-3): the JMAP accountIds of the shared mailboxes this member
+  // has opted into receiving copies from. Persisted intent ONLY — nothing reads
+  // it to actually deliver a copy yet (deferred, see
+  // docs/design/shared-mailboxes.md); the member still pulls copies manually.
+  // Written exclusively through the authorized PUT
+  // /api/mail/shared-accounts/:id/copy-preference route (which validates each id
+  // against the member's session), not the generic preferences PATCH — so it is
+  // deliberately absent from userPreferencesUpdateSchema below. Defaults to []
+  // for the same backward-compatibility reason as customLabels.
+  sharedMailboxCopyOptIn: z.array(z.string()).default([]),
 });
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
@@ -70,6 +70,12 @@ afterAll(() => {
   return sql.end();
 });
 
+// The copy opt-in lives in user_preferences (G-3), which persists across tests
+// in this file; clear the row so each test starts from the default (opted out).
+afterEach(async () => {
+  await sql`delete from user_preferences where user_id = ${userId}`;
+});
+
 function makeApp(jmap: JmapClient | null) {
   return createApp({
     mailRouter: createMailRouter({
@@ -88,13 +94,84 @@ describe("GET /api/mail/shared-accounts", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns only the non-personal accounts from the cached session", async () => {
+  it("returns only the non-personal accounts from the cached session, opted out by default", async () => {
     const res = await makeApp(stubJmap).request("/api/mail/shared-accounts", {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ id: string; name: string }>;
-    expect(body).toEqual([{ id: "acc-shared", name: "Ventas" }]);
+    const body = (await res.json()) as Array<{ id: string; name: string; copyOptIn: boolean }>;
+    expect(body).toEqual([{ id: "acc-shared", name: "Ventas", copyOptIn: false }]);
+  });
+
+  it("reflects copyOptIn=true after the member opts that shared account in (G-3)", async () => {
+    const app = makeApp(stubJmap);
+    const put = await app.request("/api/mail/shared-accounts/acc-shared/copy-preference", {
+      method: "PUT",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ copyOptIn: true }),
+    });
+    expect(put.status).toBe(200);
+
+    const res = await app.request("/api/mail/shared-accounts", {
+      headers: { cookie: `session=${token}` },
+    });
+    const body = (await res.json()) as Array<{ id: string; copyOptIn: boolean }>;
+    expect(body).toEqual([{ id: "acc-shared", name: "Ventas", copyOptIn: true }]);
+  });
+});
+
+describe("PUT /api/mail/shared-accounts/:id/copy-preference (G-3)", () => {
+  function setCopyPreference(id: string, copyOptIn: unknown, withSession = true) {
+    return makeApp(stubJmap).request(`/api/mail/shared-accounts/${id}/copy-preference`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        ...(withSession ? { cookie: `session=${token}` } : {}),
+      },
+      body: JSON.stringify({ copyOptIn }),
+    });
+  }
+
+  it("requires a session", async () => {
+    const res = await setCopyPreference("acc-shared", true, false);
+    expect(res.status).toBe(401);
+  });
+
+  it("opts a shared account in and returns the updated state", async () => {
+    const res = await setCopyPreference("acc-shared", true);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: "acc-shared", name: "Ventas", copyOptIn: true });
+  });
+
+  it("opts a shared account back out and returns the updated state", async () => {
+    await setCopyPreference("acc-shared", true);
+    const res = await setCopyPreference("acc-shared", false);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: "acc-shared", name: "Ventas", copyOptIn: false });
+  });
+
+  it("persists the opt-in across requests", async () => {
+    await setCopyPreference("acc-shared", true);
+    const prefs = await createUserPreferencesRepo(sql).get(userId);
+    expect(prefs.sharedMailboxCopyOptIn).toEqual(["acc-shared"]);
+  });
+
+  it("rejects a personal/own accountId with 400 invalid_account", async () => {
+    const res = await setCopyPreference("acc-personal", true);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_account");
+  });
+
+  it("rejects an accountId the session cannot reach with 403 account_forbidden", async () => {
+    const res = await setCopyPreference("acc-other", true);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe("account_forbidden");
+  });
+
+  it("rejects a body without a boolean copyOptIn with 400 invalid_body", async () => {
+    const res = await setCopyPreference("acc-shared", "yes");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
   });
 });
 

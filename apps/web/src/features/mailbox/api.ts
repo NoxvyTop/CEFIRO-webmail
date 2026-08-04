@@ -1,5 +1,6 @@
 import {
-  instanceSettingsViewSchema, mailboxSchema, messagesPageSchema, sharedAccountsSchema, threadDetailSchema,
+  instanceSettingsViewSchema, mailboxSchema, messagesPageSchema, sharedAccountSchema, sharedAccountsSchema,
+  threadDetailSchema,
   type EmailUpdate, type InstanceSettingsView, type Mailbox, type MessagesPage, type SharedAccount, type ThreadDetail,
 } from "@webmail/shared";
 import { z } from "zod";
@@ -42,6 +43,25 @@ export async function fetchSharedAccounts(): Promise<SharedAccount[]> {
   const res = await fetch("/api/mail/shared-accounts");
   if (!res.ok) return parseError(res);
   return sharedAccountsSchema.parse(await res.json());
+}
+
+// GH #13/#50 (G-3): sets whether the member wants copies of new mail from a
+// shared mailbox delivered to their own inbox (PUT
+// /api/mail/shared-accounts/:id/copy-preference). The server persists the
+// intent only — no copy is delivered from this yet — and returns the updated
+// shared account. `id` must be a shared, non-personal account the member can
+// reach (the server refuses a personal/unreachable id).
+export async function setSharedAccountCopyPreference(
+  id: string,
+  copyOptIn: boolean,
+): Promise<SharedAccount> {
+  const res = await fetch(`/api/mail/shared-accounts/${encodeURIComponent(id)}/copy-preference`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ copyOptIn }),
+  });
+  if (!res.ok) return parseError(res);
+  return sharedAccountSchema.parse(await res.json());
 }
 
 export async function fetchMailboxes(accountId?: string): Promise<Mailbox[]> {

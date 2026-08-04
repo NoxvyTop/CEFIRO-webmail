@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MailApiError, copyMessageToInbox, destroyMessage, fetchInstanceSettings, fetchMailboxes,
-  fetchMessages, fetchSharedAccounts, fetchThread, updateMessage,
+  fetchMessages, fetchSharedAccounts, fetchThread, setSharedAccountCopyPreference, updateMessage,
 } from "./api";
 
 const mailbox = {
@@ -76,10 +76,44 @@ describe("shared-mailbox account scoping", () => {
   }
 
   it("fetches the shared accounts from /api/mail/shared-accounts", async () => {
-    const fetchMock = stubFetch([{ id: "acc-shared", name: "Ventas" }]);
+    const fetchMock = stubFetch([{ id: "acc-shared", name: "Ventas", copyOptIn: true }]);
     const accounts = await fetchSharedAccounts();
-    expect(accounts).toEqual([{ id: "acc-shared", name: "Ventas" }]);
+    expect(accounts).toEqual([{ id: "acc-shared", name: "Ventas", copyOptIn: true }]);
     expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/mail/shared-accounts");
+  });
+
+  // GH #13/#50 (G-3): the copy opt-in defaults to false when a server that
+  // predates the field omits it, so the toggle reads as off rather than throwing.
+  it("defaults copyOptIn to false when the server omits it", async () => {
+    stubFetch([{ id: "acc-shared", name: "Ventas" }]);
+    const accounts = await fetchSharedAccounts();
+    expect(accounts[0]?.copyOptIn).toBe(false);
+  });
+
+  // GH #13/#50 (G-3): PUTs the copy opt-in for one shared mailbox.
+  it("PUTs the copy preference and validates the updated shared account", async () => {
+    const fetchMock = stubFetch({ id: "acc-shared", name: "Ventas", copyOptIn: true });
+    const updated = await setSharedAccountCopyPreference("acc-shared", true);
+    expect(updated).toEqual({ id: "acc-shared", name: "Ventas", copyOptIn: true });
+    const [url, init] = (fetchMock as any).mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("/api/mail/shared-accounts/acc-shared/copy-preference");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ copyOptIn: true });
+  });
+
+  it("surfaces the envelope code when the copy-preference request fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ code: "account_forbidden", message: "x", traceId: "t" }), {
+          status: 403,
+        }),
+      ),
+    );
+    await expect(setSharedAccountCopyPreference("acc-x", true)).rejects.toMatchObject({
+      status: 403,
+      code: "account_forbidden",
+    });
   });
 
   it("appends accountId to the mailboxes request", async () => {

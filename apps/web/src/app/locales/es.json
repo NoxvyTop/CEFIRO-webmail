@@ -306,6 +306,16 @@
     "personal": "Mi buzón",
     "sharedHeading": "Buzones compartidos"
   },
+  "sharedMailboxes": {
+    "title": "Buzones compartidos",
+    "description": "Los buzones compartidos a los que tenés acceso. Entrá a cualquiera o pedí que sus correos también lleguen a tu bandeja.",
+    "empty": "Todavía no tenés buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
+    "enter": "Entrar",
+    "copyLabel": "Recibir copia en mi bandeja",
+    "copyToggle": "Recibir copia de {{name}} en mi bandeja",
+    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja. La entrega automática se activa en una próxima actualización; por ahora podés copiar correos manualmente desde el buzón.",
+    "copyError": "No se pudo cambiar la preferencia. Inténtalo de nuevo."
+  },
   "composer": {
     "showQuoted": "Mostrar mensaje citado",
     "hideQuoted": "Ocultar mensaje citado",
@@ -416,6 +426,7 @@
       "filters": "Filtros",
       "vacation": "Ausencia",
       "contacts": "Contactos",
+      "sharedMailboxes": "Buzones compartidos",
       "sessions": "Sesiones",
       "notifications": "Notificaciones"
     },

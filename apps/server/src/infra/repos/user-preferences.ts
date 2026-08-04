@@ -2,7 +2,17 @@ import type postgres from "postgres";
 import { customLabelSchema, type CustomLabel } from "@webmail/shared";
 import type { Db } from "../db/client";
 
-const DEFAULTS = { groupMailInMainInbox: true, customLabels: [] as CustomLabel[] };
+const DEFAULTS = {
+  groupMailInMainInbox: true,
+  customLabels: [] as CustomLabel[],
+  sharedMailboxCopyOptIn: [] as string[],
+};
+
+type StoredPreferences = {
+  groupMailInMainInbox: boolean;
+  customLabels: CustomLabel[];
+  sharedMailboxCopyOptIn: string[];
+};
 
 // Defensive parse for whatever is stored in the jsonb column: the PUT route
 // already validates shape via userPreferencesUpdateSchema (zod), so this only
@@ -24,9 +34,27 @@ function parseCustomLabels(value: unknown): CustomLabel[] {
   return result;
 }
 
+// GH #13/#50 (G-3): defensive parse of the opted-in shared-account id list.
+// The authorized PUT route always writes a clean, de-duplicated list, so this
+// only guards rows written before the field existed or corrupted by hand:
+// non-string and empty entries are dropped and duplicates collapsed, rather
+// than failing the whole GET (same rationale as parseCustomLabels above).
+function parseSharedMailboxCopyOptIn(value: unknown): string[] {
+  if (!Array.isArray(value)) return DEFAULTS.sharedMailboxCopyOptIn;
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry === "") continue;
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    result.push(entry);
+  }
+  return result;
+}
+
 export function createUserPreferencesRepo(sql: Db) {
   return {
-    async get(userId: string): Promise<{ groupMailInMainInbox: boolean; customLabels: CustomLabel[] }> {
+    async get(userId: string): Promise<StoredPreferences> {
       const rows = await sql<{ preferences: Record<string, unknown> }[]>`
         select preferences from user_preferences where user_id = ${userId}
       `;
@@ -37,12 +65,10 @@ export function createUserPreferencesRepo(sql: Db) {
             ? stored.groupMailInMainInbox
             : DEFAULTS.groupMailInMainInbox,
         customLabels: parseCustomLabels(stored.customLabels),
+        sharedMailboxCopyOptIn: parseSharedMailboxCopyOptIn(stored.sharedMailboxCopyOptIn),
       };
     },
-    async merge(
-      userId: string,
-      patch: Record<string, unknown>,
-    ): Promise<{ groupMailInMainInbox: boolean; customLabels: CustomLabel[] }> {
+    async merge(userId: string, patch: Record<string, unknown>): Promise<StoredPreferences> {
       await sql`
         insert into user_preferences (user_id, preferences)
         values (${userId}, ${sql.json(patch as postgres.JSONValue)})
