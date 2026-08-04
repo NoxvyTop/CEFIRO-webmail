@@ -135,6 +135,7 @@
       "submitting": "Entrando…",
       "error": "Credencial inválida",
       "hint": "Solo disponible en modo de configuración o recuperación",
+      "setupCta": "Configuración inicial",
       "errors": {
         "emptyUser": "Introduce tu usuario.",
         "emptyPassword": "Introduce tu contraseña.",
@@ -163,6 +164,7 @@
       "generic": "No se pudo completar la operación. Revisa los datos e inténtalo de nuevo.",
       "invalid_body": "Revisa los datos: hay campos incompletos o con un formato inválido.",
       "network_error": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "not_found": "La configuración inicial ya se completó. Inicia sesión por SSO.",
       "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo.",
       "unauthorized": "La contraseña temporal de consola es incorrecta.",
       "user_exists": "Ya existe un usuario con ese correo."

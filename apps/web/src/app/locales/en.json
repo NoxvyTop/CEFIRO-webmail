@@ -135,6 +135,7 @@
       "submitting": "Signing in…",
       "error": "Invalid credential",
       "hint": "Only available in setup or recovery mode",
+      "setupCta": "Initial setup",
       "errors": {
         "emptyUser": "Enter your username.",
         "emptyPassword": "Enter your password.",
@@ -163,6 +164,7 @@
       "generic": "The operation could not be completed. Check the fields and try again.",
       "invalid_body": "Check the fields: some are missing or have an invalid format.",
       "network_error": "Could not reach the server. Check your connection and try again.",
+      "not_found": "Initial setup is already complete. Sign in with SSO.",
       "too_many_requests": "Too many attempts. Wait a moment and try again.",
       "unauthorized": "The temporary console password is incorrect.",
       "user_exists": "A user with that email already exists."
