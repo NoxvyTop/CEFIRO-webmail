@@ -6,9 +6,12 @@ import {
   fetchFilterRules,
   fetchGeneratedSieveScript,
   fetchProfile,
+  fetchSessions,
   fetchSieveRawScript,
   fetchVacationSettings,
   reorderFilterRules,
+  revokeOtherSessions,
+  revokeSession,
   saveSieveRawScript,
   switchToRuleBuilder,
   syncFilters,
@@ -316,6 +319,56 @@ describe("sieve advanced mode api (GH #23)", () => {
     expect(url).toBe("/api/mail/filters/raw/rules");
     expect(init.method).toBe("POST");
     expect(init.body).toBeUndefined();
+  });
+});
+
+describe("active sessions (#302)", () => {
+  const session = {
+    id: "sess-1",
+    current: true,
+    userAgent: "Mozilla/5.0",
+    ip: "203.0.113.7",
+    createdAt: "2026-08-04T10:00:00.000Z",
+    lastSeenAt: "2026-08-04T12:00:00.000Z",
+    expiresAt: "2026-08-04T22:00:00.000Z",
+  };
+
+  it("fetches and parses the caller's active sessions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify([session]), { status: 200 })),
+    );
+    const sessions = await fetchSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.current).toBe(true);
+  });
+
+  it("throws MailApiError when listing sessions fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })),
+    );
+    await expect(fetchSessions()).rejects.toBeInstanceOf(MailApiError);
+  });
+
+  it("revokes one session by id via DELETE with the id url-encoded", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await revokeSession("a/b+c");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/auth/sessions/a%2Fb%2Bc");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("revokes the other sessions via POST and returns the count", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ revoked: 3 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await revokeOtherSessions()).toBe(3);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/auth/sessions/revoke-others");
+    expect(init.method).toBe("POST");
   });
 });
 
