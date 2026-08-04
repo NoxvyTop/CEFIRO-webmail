@@ -19,7 +19,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "moonshot-v1-8k",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -35,7 +35,7 @@ describe("createOpenAiCompatibleClient", () => {
       expect(headers.Authorization).toBe("Bearer sk-test");
       expect(headers["Content-Type"]).toBe("application/json");
       const requestBody = JSON.parse(init.body as string);
-      expect(requestBody.model).toBe("moonshot-v1-8k");
+      expect(requestBody.model).toBe("sum-model");
       expect(requestBody.messages[0].role).toBe("system");
       expect(requestBody.messages[1].role).toBe("user");
       // The body is fenced in the untrusted delimiter (GH #298) and nothing
@@ -51,7 +51,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "moonshot-v1-8k",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -65,7 +65,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: "- A\n- B\n- C" } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1/",
         fetchFn,
       });
@@ -80,7 +80,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ error: "boom" }, 500);
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -97,7 +97,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({});
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -128,7 +128,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -154,7 +154,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -170,7 +170,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -187,7 +187,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: [] } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -209,7 +209,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -223,7 +223,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: 42 } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -241,7 +241,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "moonshot-v1-8k",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -254,6 +254,8 @@ describe("createOpenAiCompatibleClient", () => {
       expect(result).toEqual(["Ana propuso empezar el lunes", "Beto confirmó"]);
       const [, init] = calls(fetchFn)[0]!;
       const requestBody = JSON.parse(init.body as string);
+      // summarizeThread runs on the summarize model (#310).
+      expect(requestBody.model).toBe("sum-model");
       expect(requestBody.messages[0].role).toBe("system");
       expect(requestBody.messages[1].role).toBe("user");
       const content = requestBody.messages[1].content as string;
@@ -266,7 +268,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ error: "boom" }, 500);
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -296,7 +298,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -316,7 +318,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -330,6 +332,8 @@ describe("createOpenAiCompatibleClient", () => {
       expect(draft).toBe("Estimado equipo, adjunto el borrador solicitado.");
       const [, init] = calls(fetchFn)[0]!;
       const requestBody = JSON.parse(init.body as string);
+      // draftReply runs on the (stronger) draft model (#310).
+      expect(requestBody.model).toBe("draft-model");
       expect(requestBody.messages[0].content).toMatch(/español/i);
       expect(requestBody.messages[1].content).toContain("confirmar el horario de mañana");
       expect(requestBody.messages[1].content).toContain("Reunión de seguimiento");
@@ -340,7 +344,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: "Borrador." } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -356,7 +360,7 @@ describe("createOpenAiCompatibleClient", () => {
       }) as unknown as typeof fetch;
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -385,7 +389,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -402,7 +406,7 @@ describe("createOpenAiCompatibleClient", () => {
       });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -419,7 +423,7 @@ describe("createOpenAiCompatibleClient", () => {
       const fetchFn = fetchReturning({ choices: [{ message: { content: null } }] });
       const client = createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
       });
@@ -439,7 +443,7 @@ describe("createOpenAiCompatibleClient", () => {
     function clientWith(fetchFn: typeof fetch, timeoutMs?: number) {
       return createOpenAiCompatibleClient({
         apiKey: "sk-test",
-        model: "m",
+        models: { summarize: "sum-model", draft: "draft-model" },
         baseUrl: "https://api.moonshot.cn/v1",
         fetchFn,
         timeoutMs,

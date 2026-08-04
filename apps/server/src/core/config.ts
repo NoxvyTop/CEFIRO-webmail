@@ -142,6 +142,13 @@ const configSchema = z.object({
   aiProvider: z.string().min(1).default("anthropic"),
   aiApiKey: z.string().min(1).optional(),
   aiModel: z.string().min(1).default("claude-opus-4-8"),
+  // Per-task model overrides (GH #310). Both optional and default-less: when a
+  // task's variable is unset, buildAiClient falls back to `aiModel` for that
+  // task. Summaries run well on a cheaper/smaller model, while the draft
+  // benefits from a stronger one. The fallback is resolved in buildAiClient
+  // (index.ts), not here — this layer only exposes the raw optionals.
+  aiModelSummarize: z.string().min(1).optional(),
+  aiModelDraft: z.string().min(1).optional(),
   // API root for OpenAI-compatible providers (MiniMax, Kimi/Moonshot, a local
   // Ollama/vLLM/LiteLLM server, ...), INCLUDING any `/v1` segment the
   // provider requires (OpenAI-SDK convention). Only consulted when
@@ -438,6 +445,11 @@ export function loadConfig(
     aiProvider: env.AI_PROVIDER || undefined,
     aiApiKey: env.AI_API_KEY || undefined,
     aiModel: env.AI_MODEL || undefined,
+    // Trimmed like the other optional strings above: a stray space in a compose
+    // file is not a model name and must fall back to AI_MODEL, not configure a
+    // whitespace "model" that the provider would reject.
+    aiModelSummarize: env.AI_MODEL_SUMMARIZE?.trim() || undefined,
+    aiModelDraft: env.AI_MODEL_DRAFT?.trim() || undefined,
     aiBaseUrl: env.AI_BASE_URL || undefined,
     // Trimmed like the other secrets above: a stray space in a compose file
     // must not count as a configured key and half-enable the feature.

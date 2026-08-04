@@ -54,7 +54,7 @@ function toAiError(error: unknown, task: string): DomainError {
  */
 export function createOpenAiCompatibleClient(input: {
   apiKey: string;
-  model: string;
+  models: { summarize: string; draft: string };
   baseUrl: string;
   fetchFn?: typeof fetch;
   /** Outbound deadline per completion — see core/deadline.ts (GH #165). */
@@ -66,11 +66,14 @@ export function createOpenAiCompatibleClient(input: {
     input.timeoutMs ?? DEFAULT_AI_TIMEOUT_MS,
   );
   const endpoint = `${input.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  // Per-task model selection (GH #310): summarize/summarizeThread use
+  // `models.summarize`, draftReply uses `models.draft`. buildAiClient resolves
+  // each from AI_MODEL_SUMMARIZE / AI_MODEL_DRAFT, falling back to AI_MODEL.
+  // Captured here so the `input` shadowing inside draftReply cannot reach them.
+  const summarizeModel = input.models.summarize;
+  const draftModel = input.models.draft;
 
-  // Note: both tasks currently reuse the single configured `model`. Per-task
-  // model selection (e.g. a cheaper model for summarize vs. draftReply) is a
-  // future enhancement — see GitHub issue #115 ("consider").
-  async function chatComplete(messages: ChatMessage[]): Promise<string> {
+  async function chatComplete(model: string, messages: ChatMessage[]): Promise<string> {
     const res = await fetchFn(endpoint, {
       method: "POST",
       headers: {
@@ -78,7 +81,7 @@ export function createOpenAiCompatibleClient(input: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: input.model,
+        model,
         max_tokens: MAX_TOKENS,
         messages,
       }),
@@ -109,7 +112,7 @@ export function createOpenAiCompatibleClient(input: {
   return {
     async summarize(body: string): Promise<string[]> {
       try {
-        const content = await chatComplete([
+        const content = await chatComplete(summarizeModel, [
           { role: "system", content: SUMMARIZE_SYSTEM_PROMPT },
           { role: "user", content: buildSummarizeUserPrompt(body) },
         ]);
@@ -121,7 +124,7 @@ export function createOpenAiCompatibleClient(input: {
 
     async summarizeThread(messages: Array<{ from: string; body: string }>): Promise<string[]> {
       try {
-        const content = await chatComplete([
+        const content = await chatComplete(summarizeModel, [
           { role: "system", content: THREAD_SUMMARY_SYSTEM_PROMPT },
           { role: "user", content: buildThreadSummaryPrompt(messages) },
         ]);
@@ -134,7 +137,7 @@ export function createOpenAiCompatibleClient(input: {
     async draftReply(input: { intent: string; subject?: string; context?: string }): Promise<string> {
       const prompt = buildDraftReplyPrompt(input.intent, input.subject, input.context);
       try {
-        const content = await chatComplete([
+        const content = await chatComplete(draftModel, [
           { role: "system", content: DRAFT_REPLY_SYSTEM_PROMPT },
           { role: "user", content: prompt },
         ]);

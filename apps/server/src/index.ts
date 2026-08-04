@@ -247,10 +247,16 @@ if (config.jmapUrl) {
 // OpenAI-compatible `/v1/chat/completions` API (MiniMax, Kimi/Moonshot, or a
 // self-hosted Ollama/vLLM/LiteLLM server) via a single adapter configured
 // with `aiBaseUrl`. Anything else (default) uses the Anthropic adapter.
-// Both tasks currently reuse the same `config.aiModel` — per-task model
-// selection is a future enhancement (see GitHub issue #115 "consider").
+// Per-task model selection (GH #310): summarize/summarizeThread and draftReply
+// can each run on their own model, resolved here from AI_MODEL_SUMMARIZE /
+// AI_MODEL_DRAFT, each falling back to the shared `config.aiModel` (AI_MODEL)
+// when unset. Summaries do well on a cheaper/smaller model; the draft benefits
+// from a stronger one.
 function buildAiClient(): AiClient | null {
   if (!config.aiEnabled || !config.aiApiKey) return null;
+  const summarizeModel = config.aiModelSummarize ?? config.aiModel;
+  const draftModel = config.aiModelDraft ?? config.aiModel;
+  const models = { summarize: summarizeModel, draft: draftModel };
   if (config.aiProvider === "openai-compat") {
     if (!config.aiBaseUrl) {
       log("warn", "ai provider openai-compat requires aiBaseUrl (AI_BASE_URL); AI features disabled", {});
@@ -258,21 +264,29 @@ function buildAiClient(): AiClient | null {
     }
     return createOpenAiCompatibleClient({
       apiKey: config.aiApiKey,
-      model: config.aiModel,
+      models,
       baseUrl: config.aiBaseUrl,
       timeoutMs: config.aiTimeoutMs,
     });
   }
   return createAnthropicAiClient({
     apiKey: config.aiApiKey,
-    model: config.aiModel,
+    models,
     timeoutMs: config.aiTimeoutMs,
   });
 }
 
 const aiClient: AiClient | null = buildAiClient();
 
-log("info", "ai features", { enabled: aiClient !== null, provider: config.aiProvider });
+// Model names are configuration, not secrets, so they are safe to log — this
+// lets an operator confirm per-task selection (GH #310) took effect. API keys
+// are never logged.
+log("info", "ai features", {
+  enabled: aiClient !== null,
+  provider: config.aiProvider,
+  summarizeModel: config.aiModelSummarize ?? config.aiModel,
+  draftModel: config.aiModelDraft ?? config.aiModel,
+});
 
 // #294 (delivery slice): Web Push is inert until the full VAPID trio is set —
 // same default-safe gate as buildAiClient above. A partially configured trio is
