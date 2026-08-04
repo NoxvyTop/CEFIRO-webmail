@@ -27,6 +27,11 @@ export type ErrorNamespace = "admin" | "auth" | "composer" | "mail" | "settings"
  * need the same guarantee.
  */
 export const SERVER_ERROR_CODES = [
+  // GH #13/#50: a request scoped to a shared mailbox (`?accountId=`) the
+  // session cannot reach — 403 from resolveAccountId
+  // (apps/server/src/infra/jmap/client.ts). Defense in depth; the selector only
+  // ever offers accounts the session lists, so this is the stale-selection case.
+  "account_forbidden",
   "ai_disabled",
   "ai_provider_error",
   "ai_rate_limited",

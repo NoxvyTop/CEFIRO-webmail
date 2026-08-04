@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  MailApiError, fetchInstanceSettings, fetchMailboxes, fetchMessages, fetchThread, updateMessage,
+  MailApiError, destroyMessage, fetchInstanceSettings, fetchMailboxes, fetchMessages,
+  fetchSharedAccounts, fetchThread, updateMessage,
 } from "./api";
 
 const mailbox = {
@@ -59,5 +60,61 @@ describe("mail api client", () => {
     const settings = await fetchInstanceSettings();
     expect(settings.sentWithFooter).toBe(true);
     expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/instance");
+  });
+});
+
+// GH #13/#50: shared-mailbox access threads the active account into every mail
+// request as `?accountId=`; personal (no accountId) stays byte-identical.
+describe("shared-mailbox account scoping", () => {
+  function stubFetch(body: unknown) {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body))) as unknown as (
+      input: string,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("fetches the shared accounts from /api/mail/shared-accounts", async () => {
+    const fetchMock = stubFetch([{ id: "acc-shared", name: "Ventas" }]);
+    const accounts = await fetchSharedAccounts();
+    expect(accounts).toEqual([{ id: "acc-shared", name: "Ventas" }]);
+    expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/mail/shared-accounts");
+  });
+
+  it("appends accountId to the mailboxes request", async () => {
+    const fetchMock = stubFetch([]);
+    await fetchMailboxes("acc-shared");
+    expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/mail/mailboxes?accountId=acc-shared");
+  });
+
+  it("omits the accountId param for the personal mailbox", async () => {
+    const fetchMock = stubFetch([]);
+    await fetchMailboxes();
+    expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/mail/mailboxes");
+  });
+
+  it("adds accountId to the messages query string", async () => {
+    const fetchMock = stubFetch({ total: 0, position: 0, emails: [] });
+    await fetchMessages({ mailboxId: "mb1", position: 0, limit: 50, accountId: "acc-shared" });
+    expect(String((fetchMock as any).mock.calls[0]?.[0])).toContain("accountId=acc-shared");
+  });
+
+  it("appends accountId to a thread request", async () => {
+    const fetchMock = stubFetch({ id: "t1", emails: [] });
+    await fetchThread("t1", "acc-shared");
+    expect(String((fetchMock as any).mock.calls[0]?.[0])).toBe("/api/mail/threads/t1?accountId=acc-shared");
+  });
+
+  it("appends accountId to update and destroy requests", async () => {
+    const updateMock = stubFetch({ ok: true });
+    await updateMessage("e1", { keywords: { $seen: true } }, "acc-shared");
+    expect(String((updateMock as any).mock.calls[0]?.[0])).toBe("/api/mail/messages/e1?accountId=acc-shared");
+
+    const destroyMock = stubFetch({ ok: true });
+    await destroyMessage("e1", "acc-shared");
+    const [url, init] = (destroyMock as any).mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("/api/mail/messages/e1?accountId=acc-shared");
+    expect(init?.method).toBe("DELETE");
   });
 });

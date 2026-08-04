@@ -43,12 +43,33 @@ export type JmapSessionUrls = {
   uploadUrl: string;
   downloadUrl: string;
 };
+/**
+ * One account reachable in a JMAP session (RFC 8620 §2 `accounts`) — GH #13/#50
+ * shared mailboxes. `id` is the JMAP accountId; `name` its display name;
+ * `isPersonal` marks the member's OWN mail account (the one `accountId` points
+ * at). A group/shared account Stalwart exposes via membership is `isPersonal:
+ * false`, and is what the member can browse by passing its id as `?accountId=`.
+ */
+export type JmapAccount = { id: string; name: string; isPersonal: boolean };
+
 export type JmapSession = {
   apiUrl: string;
   accountId: string;
   eventSourceUrl: string;
   uploadUrl: string;
   downloadUrl: string;
+  /**
+   * Every account this credential can reach in the session, personal and shared
+   * alike (GH #13/#50). `getSession` builds it from the session's `accounts`
+   * object and always sets it; back-compat keeps `accountId` pointing at the
+   * personal account.
+   *
+   * Optional for the same reason `capabilities` is: a hand-built session — every
+   * JMAP fixture in the test suite — still typechecks and means "accounts
+   * unknown", which resolveAccountId treats as "only the personal account is
+   * known".
+   */
+  accounts?: JmapAccount[];
   /**
    * The capability URIs the session advertises (RFC 8620 §2 — the keys of the
    * session's `capabilities` object), i.e. what this server may assume the
@@ -232,6 +253,39 @@ export function resolveSessionUrls(
   };
 }
 
+/**
+ * The JMAP accountId a mail request should run against, given the optional
+ * `?accountId=` the client asked for (GH #13/#50 shared mailboxes).
+ *
+ * - absent (undefined / null / "") → the member's personal account, so every
+ *   route behaves exactly as it did before the shared-mailbox work.
+ * - present and reachable in this session (the personal account, or a shared
+ *   account Stalwart exposes via membership) → that account.
+ * - present but NOT reachable → 403 `account_forbidden`.
+ *
+ * Defense in depth (design GH #13, "Autorización"): Stalwart already lists only
+ * the accounts a member may see, so an id outside the session would never have
+ * worked upstream anyway — this turns that into a clean, id-non-leaking error
+ * instead of an opaque JMAP failure, and keeps a client from probing account
+ * ids. An absent `accounts` list (a hand-built session) still admits the
+ * personal accountId, so existing single-account callers are unaffected.
+ */
+export function resolveAccountId(
+  session: JmapSession,
+  requested: string | null | undefined,
+): string {
+  if (requested === undefined || requested === null || requested === "") {
+    return session.accountId;
+  }
+  const reachable =
+    requested === session.accountId ||
+    (session.accounts ?? []).some((account) => account.id === requested);
+  if (!reachable) {
+    throw new DomainError("account_forbidden", 403, "errors.account_forbidden");
+  }
+  return requested;
+}
+
 export function createJmapClient(input: {
   baseUrl: string;
   fetchFn?: typeof fetch;
@@ -312,12 +366,25 @@ export function createJmapClient(input: {
         uploadUrl?: string;
         downloadUrl?: string;
         primaryAccounts?: Record<string, string>;
+        accounts?: Record<string, { name?: string; isPersonal?: boolean } | undefined>;
         capabilities?: Record<string, unknown>;
       };
       const accountId = body.primaryAccounts?.["urn:ietf:params:jmap:mail"];
       if (!body.apiUrl || !accountId) {
         throw jmapUnavailable();
       }
+      // GH #13/#50: keep every account the session lists, not just the primary
+      // one this server used to take. `isPersonal` is derived from the primary
+      // mail account rather than the session's own flag so it is exactly "the
+      // member's own mailbox" — the shared/group accounts (isPersonal: false)
+      // are what GET /shared-accounts returns and what resolveAccountId admits.
+      const accounts: JmapAccount[] = Object.entries(body.accounts ?? {}).map(
+        ([id, info]) => ({
+          id,
+          name: typeof info?.name === "string" ? info.name : "",
+          isPersonal: id === accountId,
+        }),
+      );
       const capabilities = Object.keys(body.capabilities ?? {});
       const urls = resolveSessionUrls(
         {
@@ -329,7 +396,7 @@ export function createJmapClient(input: {
         baseUrl,
         urlMode,
       );
-      return { ...urls, accountId, capabilities };
+      return { ...urls, accountId, accounts, capabilities };
     },
 
     /**

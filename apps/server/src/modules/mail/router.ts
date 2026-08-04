@@ -6,6 +6,7 @@ import {
   saveDraftResultSchema,
   saveDraftSchema,
   sendEmailSchema,
+  sharedAccountsSchema,
   signatureInputSchema,
   userPreferencesUpdateSchema,
   type AttachmentMeta,
@@ -29,6 +30,7 @@ import { deriveSenderAuthVerdict } from "./sender-auth";
 import { guardStream, mailStreams } from "./streams";
 import {
   jmapAuthHeader,
+  resolveAccountId,
   withJmapTransportErrors,
   type JmapAuth,
   type JmapAuthMode,
@@ -265,11 +267,12 @@ async function lookupComposeContext(
   jmap: JmapClient,
   auth: JmapAuth,
   session: JmapSession,
+  accountId: string,
   identityId: string,
 ): Promise<{ identity: JmapIdentity; mailboxes: JmapMailbox[] } | null> {
   const lookup = await jmap.request(auth, session, [
-    ["Identity/get", { accountId: session.accountId, ids: [identityId] }, "i"],
-    ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
+    ["Identity/get", { accountId, ids: [identityId] }, "i"],
+    ["Mailbox/get", { accountId, properties: ["id", "role"] }, "m"],
   ]);
 
   const identityResult = (lookup[0]?.[1] ?? {}) as { list?: JmapIdentity[] };
@@ -360,6 +363,7 @@ async function trashSupersededDraft(input: {
   jmap: JmapClient;
   auth: JmapAuth;
   session: JmapSession;
+  accountId: string;
   originalDraftId: string;
   original: JmapEmail | undefined;
   draftsMailboxId: string;
@@ -376,7 +380,7 @@ async function trashSupersededDraft(input: {
     [
       "Email/set",
       {
-        accountId: input.session.accountId,
+        accountId: input.accountId,
         update: {
           [input.originalDraftId]: {
             [`mailboxIds/${input.draftsMailboxId}`]: null,
@@ -511,13 +515,28 @@ export function createMailRouter(deps: MailDeps) {
     return c.json(preferences);
   });
 
+  // GH #13/#50: the shared mailboxes this member can browse — the NON-personal
+  // accounts Stalwart lists in their JMAP session via group membership. Read
+  // from the CACHED session (requireMail already fetched it), so this adds no
+  // JMAP round trip. The member opens one by passing its id as `?accountId=` to
+  // the mail routes below; membership changes are picked up on the next session
+  // refresh (SESSION_CACHE_TTL_MS, see ./context.ts).
+  router.get("/shared-accounts", requireMail(deps), (c) => {
+    const session = c.get("jmapSession");
+    const shared = (session.accounts ?? [])
+      .filter((account) => !account.isPersonal)
+      .map((account) => ({ id: account.id, name: account.name }));
+    return c.json(sharedAccountsSchema.parse(shared));
+  });
+
   router.get("/mailboxes", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
         "Mailbox/get",
         {
-          accountId: session.accountId,
+          accountId,
           properties: ["id", "name", "parentId", "role", "sortOrder", "unreadEmails", "totalEmails"],
         },
         "0",
@@ -540,8 +559,9 @@ export function createMailRouter(deps: MailDeps) {
 
   router.get("/identities", requireMail(deps), async (c) => {
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
-      ["Identity/get", { accountId: session.accountId }, "0"],
+      ["Identity/get", { accountId }, "0"],
     ]);
     const list = (responses[0]?.[1].list ?? []) as JmapIdentity[];
     const identities: Identity[] = list
@@ -624,6 +644,14 @@ export function createMailRouter(deps: MailDeps) {
     // it so an Email state advance triggers a best-effort contact harvest,
     // while the bytes pass through to the client untouched. Only when a contacts
     // repo is wired; otherwise the stream is proxied exactly as before.
+    //
+    // GH #13/#50: Stalwart's EventSource pushes StateChange for EVERY account in
+    // the session, shared mailboxes included, and those raw bytes flow straight
+    // to the client — so the SPA already invalidates its shared-account queries
+    // (see invalidationKeysForStateChange in the web useMailEvents hook). The
+    // tap below is deliberately scoped to the PERSONAL accountId: contact
+    // harvesting mines the member's OWN inbox into their OWN contacts, and a
+    // shared mailbox's senders are not the member's contacts to harvest.
     const contacts = deps.contacts;
     const jmap = deps.jmap;
     if (contacts && jmap) {
@@ -660,9 +688,10 @@ export function createMailRouter(deps: MailDeps) {
       return errorResponse(c, "stalwart_unavailable", 502);
     }
 
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const uploadUrl = session.uploadUrl.replaceAll(
       "{accountId}",
-      encodeURIComponent(session.accountId),
+      encodeURIComponent(accountId),
     );
     const contentType = c.req.header("content-type") ?? "application/octet-stream";
 
@@ -705,13 +734,14 @@ export function createMailRouter(deps: MailDeps) {
       return errorResponse(c, "stalwart_unavailable", 502);
     }
 
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const blobId = c.req.param("blobId");
     const name = c.req.query("name") ?? "attachment";
     const type = c.req.query("type") ?? "application/octet-stream";
     const dl = c.req.query("dl");
 
     const downloadUrl = session.downloadUrl
-      .replaceAll("{accountId}", encodeURIComponent(session.accountId))
+      .replaceAll("{accountId}", encodeURIComponent(accountId))
       .replaceAll("{blobId}", encodeURIComponent(blobId))
       .replaceAll("{name}", encodeURIComponent(name))
       .replaceAll("{type}", encodeURIComponent(type));
@@ -787,12 +817,13 @@ export function createMailRouter(deps: MailDeps) {
     const limit = Math.max(1, Math.min(requestedLimit, MAX_LIMIT));
 
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const filter = buildMessagesFilter({ mailboxId, query, to, excludeTo, excludeMailboxId, hasKeywords });
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
       [
         "Email/query",
         {
-          accountId: session.accountId,
+          accountId,
           filter,
           sort: [{ property: "receivedAt", isAscending: false }],
           position,
@@ -804,7 +835,7 @@ export function createMailRouter(deps: MailDeps) {
       [
         "Email/get",
         {
-          accountId: session.accountId,
+          accountId,
           "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
           properties: [
             "id",
@@ -850,12 +881,13 @@ export function createMailRouter(deps: MailDeps) {
   router.get("/threads/:threadId", requireMail(deps), async (c) => {
     const threadId = c.req.param("threadId");
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
-      ["Thread/get", { accountId: session.accountId, ids: [threadId] }, "t"],
+      ["Thread/get", { accountId, ids: [threadId] }, "t"],
       [
         "Email/get",
         {
-          accountId: session.accountId,
+          accountId,
           "#ids": { resultOf: "t", name: "Thread/get", path: "/list/*/emailIds" },
           properties: [
             "id",
@@ -934,8 +966,9 @@ export function createMailRouter(deps: MailDeps) {
     }
 
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const responses = await deps.jmap!.request(c.get("jmapAuth"), session, [
-      ["Email/set", { accountId: session.accountId, update: { [id]: patch } }, "s"],
+      ["Email/set", { accountId, update: { [id]: patch } }, "s"],
     ]);
 
     const setResult = (responses[0]?.[1] ?? {}) as {
@@ -972,11 +1005,12 @@ export function createMailRouter(deps: MailDeps) {
   router.delete("/messages/:id", requireMail(deps), async (c) => {
     const id = c.req.param("id");
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const auth = c.get("jmapAuth");
 
     const lookup = await deps.jmap!.request(auth, session, [
-      ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "m"],
-      ["Email/get", { accountId: session.accountId, ids: [id], properties: ["id", "mailboxIds"] }, "e"],
+      ["Mailbox/get", { accountId, properties: ["id", "role"] }, "m"],
+      ["Email/get", { accountId, ids: [id], properties: ["id", "mailboxIds"] }, "e"],
     ]);
 
     const mailboxResult = (lookup[0]?.[1] ?? {}) as { list?: JmapMailbox[] };
@@ -991,7 +1025,7 @@ export function createMailRouter(deps: MailDeps) {
     }
 
     const responses = await deps.jmap!.request(auth, session, [
-      ["Email/set", { accountId: session.accountId, destroy: [id] }, "d"],
+      ["Email/set", { accountId, destroy: [id] }, "d"],
     ]);
 
     const setResult = (responses[0]?.[1] ?? {}) as {
@@ -1027,9 +1061,10 @@ export function createMailRouter(deps: MailDeps) {
     const input = parsed.data;
 
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const auth = c.get("jmapAuth");
 
-    const context = await lookupComposeContext(deps.jmap!, auth, session, input.identityId);
+    const context = await lookupComposeContext(deps.jmap!, auth, session, accountId, input.identityId);
     if (!context) {
       return errorResponse(c, "invalid_identity", 400);
     }
@@ -1057,11 +1092,11 @@ export function createMailRouter(deps: MailDeps) {
     });
 
     const sendResponses = await deps.jmap!.request(auth, session, [
-      ["Email/set", { accountId: session.accountId, create: { draft: create } }, "e"],
+      ["Email/set", { accountId, create: { draft: create } }, "e"],
       [
         "EmailSubmission/set",
         {
-          accountId: session.accountId,
+          accountId,
           create: { sub: { emailId: "#draft", identityId: input.identityId } },
           onSuccessUpdateEmail: {
             "#sub": {
@@ -1130,7 +1165,7 @@ export function createMailRouter(deps: MailDeps) {
           [
             "Email/set",
             {
-              accountId: session.accountId,
+              accountId,
               update: {
                 [draftId]: {
                   [`mailboxIds/${draftsId}`]: null,
@@ -1177,9 +1212,10 @@ export function createMailRouter(deps: MailDeps) {
     const input = parsed.data;
 
     const session = c.get("jmapSession");
+    const accountId = resolveAccountId(session, c.req.query("accountId"));
     const auth = c.get("jmapAuth");
 
-    const context = await lookupComposeContext(deps.jmap!, auth, session, input.identityId);
+    const context = await lookupComposeContext(deps.jmap!, auth, session, accountId, input.identityId);
     if (!context) {
       return errorResponse(c, "invalid_identity", 400);
     }
@@ -1238,13 +1274,13 @@ export function createMailRouter(deps: MailDeps) {
     // read-only and cannot affect the create; it saves a round trip without
     // reintroducing the coupling.
     const draftResponses = await deps.jmap!.request(auth, session, [
-      ["Email/set", { accountId: session.accountId, create: { draft: create } }, "e"],
+      ["Email/set", { accountId, create: { draft: create } }, "e"],
       ...(replaceTarget
         ? ([
             [
               "Email/get",
               {
-                accountId: session.accountId,
+                accountId,
                 ids: [replaceTarget.originalDraftId],
                 properties: ["id", "mailboxIds", "keywords"],
               },
@@ -1277,6 +1313,7 @@ export function createMailRouter(deps: MailDeps) {
           jmap: deps.jmap!,
           auth,
           session,
+          accountId,
           originalDraftId: replaceTarget.originalDraftId,
           original: (originalResult.list ?? [])[0],
           draftsMailboxId: draftsId,

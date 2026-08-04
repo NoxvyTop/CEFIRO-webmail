@@ -1,6 +1,6 @@
 import {
-  instanceSettingsViewSchema, mailboxSchema, messagesPageSchema, threadDetailSchema,
-  type EmailUpdate, type InstanceSettingsView, type Mailbox, type MessagesPage, type ThreadDetail,
+  instanceSettingsViewSchema, mailboxSchema, messagesPageSchema, sharedAccountsSchema, threadDetailSchema,
+  type EmailUpdate, type InstanceSettingsView, type Mailbox, type MessagesPage, type SharedAccount, type ThreadDetail,
 } from "@webmail/shared";
 import { z } from "zod";
 
@@ -9,6 +9,20 @@ export class MailApiError extends Error {
     super(code);
     this.name = "MailApiError";
   }
+}
+
+// GH #13/#50: the URL search param that carries the active shared mailbox in
+// the SPA. Absent means the personal mailbox — the default — so nothing about
+// the personal experience changes. When present it is threaded into every mail
+// request below as `?accountId=`, which the server (resolveAccountId) scopes to
+// that shared account. Shared here so the selector, MailPage and the query keys
+// all name it one way.
+export const ACTIVE_ACCOUNT_PARAM = "account";
+
+// The `?accountId=` suffix for a mail request, or "" for the personal mailbox —
+// keeping personal requests byte-identical to before shared mailboxes existed.
+function accountQuery(accountId?: string): string {
+  return accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
 }
 
 async function parseError(res: Response): Promise<never> {
@@ -21,15 +35,24 @@ async function parseError(res: Response): Promise<never> {
   throw new MailApiError(res.status, code);
 }
 
-export async function fetchMailboxes(): Promise<Mailbox[]> {
-  const res = await fetch("/api/mail/mailboxes");
+// GH #13/#50: the shared mailboxes the signed-in member can browse — the
+// non-personal accounts Stalwart lists in their JMAP session. The account
+// selector reads this to offer them; personal is never in the list.
+export async function fetchSharedAccounts(): Promise<SharedAccount[]> {
+  const res = await fetch("/api/mail/shared-accounts");
+  if (!res.ok) return parseError(res);
+  return sharedAccountsSchema.parse(await res.json());
+}
+
+export async function fetchMailboxes(accountId?: string): Promise<Mailbox[]> {
+  const res = await fetch(`/api/mail/mailboxes${accountQuery(accountId)}`);
   if (!res.ok) return parseError(res);
   return z.array(mailboxSchema).parse(await res.json());
 }
 
 export async function fetchMessages(input: {
   mailboxId?: string; hasKeyword?: string; position: number; limit: number; query?: string;
-  to?: string; excludeTo?: string[]; excludeMailboxId?: string;
+  to?: string; excludeTo?: string[]; excludeMailboxId?: string; accountId?: string;
 }): Promise<MessagesPage> {
   const params = new URLSearchParams({
     position: String(input.position),
@@ -41,19 +64,20 @@ export async function fetchMessages(input: {
   if (input.to) params.set("to", input.to);
   if (input.excludeTo && input.excludeTo.length > 0) params.set("excludeTo", input.excludeTo.join(","));
   if (input.excludeMailboxId) params.set("excludeMailboxId", input.excludeMailboxId);
+  if (input.accountId) params.set("accountId", input.accountId);
   const res = await fetch(`/api/mail/messages?${params}`);
   if (!res.ok) return parseError(res);
   return messagesPageSchema.parse(await res.json());
 }
 
-export async function fetchThread(threadId: string): Promise<ThreadDetail> {
-  const res = await fetch(`/api/mail/threads/${encodeURIComponent(threadId)}`);
+export async function fetchThread(threadId: string, accountId?: string): Promise<ThreadDetail> {
+  const res = await fetch(`/api/mail/threads/${encodeURIComponent(threadId)}${accountQuery(accountId)}`);
   if (!res.ok) return parseError(res);
   return threadDetailSchema.parse(await res.json());
 }
 
-export async function updateMessage(id: string, update: EmailUpdate): Promise<void> {
-  const res = await fetch(`/api/mail/messages/${encodeURIComponent(id)}`, {
+export async function updateMessage(id: string, update: EmailUpdate, accountId?: string): Promise<void> {
+  const res = await fetch(`/api/mail/messages/${encodeURIComponent(id)}${accountQuery(accountId)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(update),
@@ -66,8 +90,10 @@ export async function updateMessage(id: string, update: EmailUpdate): Promise<vo
 // unless the message is actually sitting in Trash; the caller must only ever
 // offer this from the Trash view (see ThreadView.tsx's showDeletePermanently)
 // and gate it behind an explicit confirmation.
-export async function destroyMessage(id: string): Promise<void> {
-  const res = await fetch(`/api/mail/messages/${encodeURIComponent(id)}`, { method: "DELETE" });
+export async function destroyMessage(id: string, accountId?: string): Promise<void> {
+  const res = await fetch(`/api/mail/messages/${encodeURIComponent(id)}${accountQuery(accountId)}`, {
+    method: "DELETE",
+  });
   if (!res.ok) return parseError(res);
 }
 

@@ -222,6 +222,7 @@
       "database_unavailable": "The service is temporarily unavailable. Try again",
       "not_in_trash": "The message is no longer in Trash",
       "destroy_failed": "Could not delete the message",
+      "account_forbidden": "You don't have access to that mailbox",
       "generic": "Mail could not be loaded"
     },
     "unlinked": {
@@ -295,6 +296,11 @@
   "groups": {
     "title": "Groups",
     "showInInbox": "Show in main inbox"
+  },
+  "accounts": {
+    "selectorLabel": "Active mailbox",
+    "personal": "My mailbox",
+    "sharedHeading": "Shared mailboxes"
   },
   "composer": {
     "showQuoted": "Show quoted message",

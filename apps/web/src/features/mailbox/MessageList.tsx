@@ -40,6 +40,10 @@ interface MessageListProps {
   // resolve their stored color/display name instead of falling back to the
   // deterministic hash color and raw JMAP slug.
   customLabels?: CustomLabel[];
+  // GH #13/#50: the active shared mailbox this list is scoped to — part of the
+  // query key (so switching accounts is a distinct cache entry) and threaded
+  // into every read/mutation. Absent = personal mailbox (unchanged).
+  accountId?: string;
 }
 
 function rowClassName(selected: boolean) {
@@ -166,6 +170,7 @@ export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
   onLabels, activeLabel, onClearLabel, onClearSearch, archiveMailboxId, onArchived, customLabels = [],
+  accountId,
 }: MessageListProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -191,9 +196,9 @@ export function MessageList({
     () =>
       [
         "mail", "messages", mailboxId ?? null, hasKeyword ?? null, query, to ?? null,
-        (excludeTo ?? []).join(","), excludeMailboxId ?? null,
+        (excludeTo ?? []).join(","), excludeMailboxId ?? null, accountId ?? null,
       ] as const,
-    [mailboxId, hasKeyword, query, to, excludeTo, excludeMailboxId],
+    [mailboxId, hasKeyword, query, to, excludeTo, excludeMailboxId, accountId],
   );
 
   const messagesQuery = useInfiniteQuery({
@@ -201,7 +206,7 @@ export function MessageList({
     queryFn: ({ pageParam }) =>
       fetchMessages({
         mailboxId, hasKeyword, position: pageParam, limit: PAGE_SIZE, query: query ?? undefined, to, excludeTo,
-        excludeMailboxId,
+        excludeMailboxId, accountId,
       }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
@@ -262,7 +267,8 @@ export function MessageList({
   // the row currently shows. There's no batch JMAP-set endpoint exposed by
   // the server, so this fires one PATCH per id via updateMessage.
   const markSeenMutation = useMutation({
-    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => updateMessage(id, { keywords: { $seen: true } }))),
+    mutationFn: (ids: string[]) =>
+      Promise.all(ids.map((id) => updateMessage(id, { keywords: { $seen: true } }, accountId))),
     onMutate: async (ids) => {
       const idSet = new Set(ids);
       queryClient.setQueryData<InfiniteData<MessagesPage>>(queryKey, (old) => {
@@ -284,7 +290,7 @@ export function MessageList({
 
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailSummary; starred: boolean }) =>
-      updateMessage(email.id, { keywords: { $flagged: starred } }),
+      updateMessage(email.id, { keywords: { $flagged: starred } }, accountId),
     onMutate: async ({ email, starred }) => {
       queryClient.setQueryData<InfiniteData<MessagesPage>>(queryKey, (old) => {
         if (!old) return old;
@@ -310,7 +316,7 @@ export function MessageList({
   const archiveMutation = useMutation({
     mutationFn: (email: EmailSummary) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
-      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } }, accountId);
     },
     onSuccess: (_data, email) => {
       queryClient.invalidateQueries({ queryKey });

@@ -89,7 +89,11 @@ export function FilterSettings() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const filtersQuery = useQuery({ queryKey: FILTERS_QUERY_KEY, queryFn: fetchFilterRules });
-  const mailboxesQuery = useQuery({ queryKey: ["mail", "mailboxes"], queryFn: fetchMailboxes });
+  // Filters are a personal-mailbox setting, so this always reads the personal
+  // folder list (no accountId) — see fetchMailboxes' optional accountId param
+  // (GH #13/#50), wrapped here because a bare queryFn would be handed React
+  // Query's context object as its first argument.
+  const mailboxesQuery = useQuery({ queryKey: ["mail", "mailboxes"], queryFn: () => fetchMailboxes() });
   // Advisory only (GH #254): if this read itself fails there is nothing
   // trustworthy to say about the sync state, so the banner simply stays away
   // rather than inventing a warning out of a failed request.

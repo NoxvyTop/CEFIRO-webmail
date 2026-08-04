@@ -3,6 +3,7 @@ import { DEFAULT_JMAP_TIMEOUT_MS } from "../../core/deadline";
 import {
   createJmapClient,
   jmapAuthHeader,
+  resolveAccountId,
   resolveSessionUrls,
   type JmapMethodCall,
   type JmapSession,
@@ -357,6 +358,63 @@ describe("jmap client", () => {
     });
   });
 
+  // GH #13/#50: getSession used to take only primaryAccounts[mail] and discard
+  // the rest. It now keeps every account the session lists so a member can
+  // browse a shared/group mailbox Stalwart exposes via membership.
+  describe("session accounts (GH #13/#50)", () => {
+    it("keeps every account and marks the primary mail account personal", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning({
+          ...sessionBody,
+          accounts: {
+            "acc-1": { name: "u@noxvytop.com", isPersonal: true },
+            "acc-shared": { name: "Ventas", isPersonal: false },
+          },
+        }),
+      });
+
+      const session = await client.getSession(auth);
+
+      expect(session.accountId).toBe("acc-1");
+      expect(session.accounts).toEqual([
+        { id: "acc-1", name: "u@noxvytop.com", isPersonal: true },
+        { id: "acc-shared", name: "Ventas", isPersonal: false },
+      ]);
+    });
+
+    it("derives isPersonal from the primary mail account, not the session flag", async () => {
+      // A misconfigured provider could claim isPersonal on a non-primary
+      // account; only primaryAccounts[mail] is trusted as "the member's own".
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning({
+          ...sessionBody,
+          accounts: {
+            "acc-1": { name: "Me", isPersonal: false },
+            "acc-shared": { name: "Ventas", isPersonal: true },
+          },
+        }),
+      });
+
+      const session = await client.getSession(auth);
+
+      expect(session.accounts?.find((a) => a.id === "acc-1")?.isPersonal).toBe(true);
+      expect(session.accounts?.find((a) => a.id === "acc-shared")?.isPersonal).toBe(false);
+    });
+
+    it("reports an empty list when the session advertises no accounts object", async () => {
+      const client = createJmapClient({
+        baseUrl: "https://mail.test",
+        fetchFn: fetchReturning(sessionBody),
+      });
+
+      const session = await client.getSession(auth);
+
+      expect(session.accounts).toEqual([]);
+    });
+  });
+
   // GH #144. RFC 8621 §4.2 obliges a server to reject an unrecognised property
   // with a method-level `invalidArguments`, and a method error fails the whole
   // batch — so a provider that does not implement `messageId`/`references`/
@@ -555,5 +613,53 @@ describe("jmap client", () => {
       await assertion;
       vi.useRealTimers();
     });
+  });
+});
+
+// GH #13/#50: resolves which account a mail request runs against from the
+// optional `?accountId=`, with a clean 403 rather than an opaque JMAP failure
+// for an account the session cannot reach.
+describe("resolveAccountId", () => {
+  const session: JmapSession = {
+    apiUrl: "https://mail.test/jmap/",
+    accountId: "acc-personal",
+    eventSourceUrl: "https://mail.test/es",
+    uploadUrl: "https://mail.test/upload/{accountId}/",
+    downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    accounts: [
+      { id: "acc-personal", name: "Me", isPersonal: true },
+      { id: "acc-shared", name: "Ventas", isPersonal: false },
+    ],
+  };
+
+  it("returns the personal account when nothing is requested", () => {
+    expect(resolveAccountId(session, undefined)).toBe("acc-personal");
+    expect(resolveAccountId(session, null)).toBe("acc-personal");
+    expect(resolveAccountId(session, "")).toBe("acc-personal");
+  });
+
+  it("returns the personal account when it is explicitly requested", () => {
+    expect(resolveAccountId(session, "acc-personal")).toBe("acc-personal");
+  });
+
+  it("returns a shared account the session lists", () => {
+    expect(resolveAccountId(session, "acc-shared")).toBe("acc-shared");
+  });
+
+  it("throws 403 account_forbidden for an id the session cannot reach", () => {
+    expect(() => resolveAccountId(session, "acc-other")).toThrowError(
+      expect.objectContaining({ code: "account_forbidden", httpStatus: 403 }),
+    );
+  });
+
+  it("admits the personal account even when the accounts list is absent", () => {
+    // A hand-built session (test fixtures) has no accounts list, but the
+    // personal accountId must still resolve for back-compat.
+    const bare: JmapSession = { ...session, accounts: undefined };
+    expect(resolveAccountId(bare, undefined)).toBe("acc-personal");
+    expect(resolveAccountId(bare, "acc-personal")).toBe("acc-personal");
+    expect(() => resolveAccountId(bare, "acc-shared")).toThrowError(
+      expect.objectContaining({ code: "account_forbidden" }),
+    );
   });
 });

@@ -12,6 +12,7 @@ import {
   FileSpreadsheetIcon,
 } from "../../app/ui/icons";
 import { AttachmentViewer } from "./AttachmentViewer";
+import { blobUrl } from "./blobUrl";
 import { PdfThumbnail } from "./PdfThumbnail";
 
 interface AttachmentCardProps {
@@ -21,6 +22,9 @@ interface AttachmentCardProps {
   // by the reader's usage (ThreadView), which never removes attachments —
   // that usage renders unchanged.
   onRemove?: () => void;
+  // GH #13/#50: the active shared mailbox this attachment belongs to, so its
+  // blob is fetched/downloaded from that account. Absent = personal mailbox.
+  accountId?: string;
 }
 
 export type AttachmentThumbnailKind = "image" | "pdf" | "icon";
@@ -85,16 +89,11 @@ function formatSizeKb(size: number) {
   return `${(size / 1024).toFixed(1)} KB`;
 }
 
-function blobUrl(blobId: string, name: string, type: string, download: boolean): string {
-  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}${download ? "&dl=1" : ""}`;
-}
-
 // Gmail-style attachment card: a thumbnail/preview area on top (a real
 // image, a pdf.js-rendered first page, or a blank icon area for anything
 // else), and a footer row with the file-type icon, name (size), and the
 // download/view actions.
-export function AttachmentCard({ attachment, onRemove }: AttachmentCardProps) {
+export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCardProps) {
   const { t } = useTranslation();
   const name = attachment.name ?? "attachment";
   const kind = attachmentThumbnailKind(attachment.type);
@@ -122,7 +121,7 @@ export function AttachmentCard({ attachment, onRemove }: AttachmentCardProps) {
     <>
       {kind === "image" && !imageFailed && (
         <img
-          src={blobUrl(attachment.blobId, name, attachment.type, false)}
+          src={blobUrl(attachment.blobId, name, attachment.type, { accountId })}
           alt={name}
           loading="lazy"
           onError={() => setImageFailed(true)}
@@ -134,6 +133,7 @@ export function AttachmentCard({ attachment, onRemove }: AttachmentCardProps) {
           blobId={attachment.blobId}
           name={name}
           type={attachment.type}
+          accountId={accountId}
           // GH #94: a slow-rendering PDF thumbnail shows the branded Céfiro
           // loader (compact, no label — this card is small) while pdf.js is
           // still working. A PERMANENTLY failed PDF instead keeps the plain
@@ -180,7 +180,10 @@ export function AttachmentCard({ attachment, onRemove }: AttachmentCardProps) {
         <span className="min-w-0 flex-1 truncate">
           {name} ({formatSizeKb(attachment.size)})
         </span>
-        <a href={blobUrl(attachment.blobId, name, attachment.type, true)} className="text-accent-text underline">
+        <a
+          href={blobUrl(attachment.blobId, name, attachment.type, { download: true, accountId })}
+          className="text-accent-text underline"
+        >
           {t("attachments.download")}
         </a>
         {previewable && (
@@ -196,6 +199,7 @@ export function AttachmentCard({ attachment, onRemove }: AttachmentCardProps) {
       <AttachmentViewer
         attachment={viewerOpen ? attachment : null}
         kind={previewKind ?? "image"}
+        accountId={accountId}
         onClose={() => setViewerOpen(false)}
       />
     </div>

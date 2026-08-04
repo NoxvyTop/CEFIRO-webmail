@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { healthResponseSchema } from "@webmail/shared";
 import { useAuth } from "../features/auth/useAuth";
+import { AccountSelector } from "../features/mailbox/AccountSelector";
 import { useProfile } from "../features/settings/useProfile";
 import { CefiroLoader } from "./ui/CefiroLoader";
 import { CefiroLogo } from "./ui/CefiroLogo";
@@ -146,6 +147,11 @@ export function App() {
           )}
           {user && (
             <div className="ml-auto flex shrink-0 items-center gap-3">
+              {/* GH #13/#50: the shared-mailbox selector belongs to the mail
+                  view, so it only shows on that route — it switches the mail
+                  view's active account and has no meaning on Settings/Admin. It
+                  renders nothing when the member has no shared mailboxes. */}
+              {location.pathname === "/" && <AccountSelector />}
               <button
                 type="button"
                 aria-haspopup="dialog"

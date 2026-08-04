@@ -34,6 +34,10 @@ interface ThreadViewProps {
   // care about Trash keep compiling unchanged — mirrors archiveMailboxId's
   // role, just for the trash-role mailbox instead.
   trashMailboxId?: string | null;
+  // GH #13/#50: the active shared mailbox this thread is being read from —
+  // threaded into the thread query key and every read/mutation so the whole
+  // reader operates on that account. Absent = personal mailbox (unchanged).
+  accountId?: string;
 }
 
 interface DeletePermanentlyConfirmDialogProps {
@@ -164,15 +168,17 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
 // it in full, and this reuses that module's own key sets so the two can't drift.
 const MAILBOX_MOVE_INVALIDATION_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS];
 
-export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null }: ThreadViewProps) {
+export function ThreadView({
+  threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null, accountId,
+}: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
   const threadQuery = useQuery({
-    queryKey: ["mail", "thread", threadId],
-    queryFn: () => fetchThread(threadId),
+    queryKey: ["mail", "thread", threadId, accountId ?? null],
+    queryFn: () => fetchThread(threadId, accountId),
     retry: mailRetry,
   });
 
@@ -284,7 +290,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
-      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } }, accountId);
     },
     onSuccess: () => {
       invalidateAfterMailboxMove();
@@ -299,7 +305,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const unarchiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!inboxMailboxId) throw new Error("no inbox mailbox");
-      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } }, accountId);
     },
     onSuccess: () => {
       invalidateAfterMailboxMove();
@@ -315,7 +321,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const deleteMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!trashMailboxId) throw new Error("no trash mailbox");
-      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } }, accountId);
     },
     onSuccess: () => {
       invalidateAfterMailboxMove();
@@ -332,7 +338,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   // DeletePermanentlyConfirmDialog below — never directly from the action
   // bar click.
   const destroyMutation = useMutation({
-    mutationFn: (email: EmailDetail) => destroyMessage(email.id),
+    mutationFn: (email: EmailDetail) => destroyMessage(email.id, accountId),
     onSuccess: () => {
       invalidateAfterMailboxMove();
       setDeletePermanentlyConfirmOpen(false);
@@ -355,7 +361,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
 
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
-      updateMessage(email.id, { keywords: { $flagged: starred } }),
+      updateMessage(email.id, { keywords: { $flagged: starred } }, accountId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
@@ -366,7 +372,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   // email, the same pattern the star affordance already uses.
   const keywordMutation = useMutation({
     mutationFn: ({ email, label, checked }: { email: EmailDetail; label: string; checked: boolean }) =>
-      updateMessage(email.id, { keywords: { [label]: checked } }),
+      updateMessage(email.id, { keywords: { [label]: checked } }, accountId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
@@ -883,6 +889,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                     bodyText={email.bodyText}
                     attachments={email.attachments}
                     bodyTruncated={email.bodyTruncated}
+                    accountId={accountId}
                     onInlineImageError={(cids) => reportFailedInlineCids(email.id, cids)}
                   />
                 </div>
@@ -893,7 +900,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                     </p>
                     <div className="flex flex-wrap gap-3">
                       {visibleAttachments.map((attachment) => (
-                        <AttachmentCard key={attachment.blobId} attachment={attachment} />
+                        <AttachmentCard key={attachment.blobId} attachment={attachment} accountId={accountId} />
                       ))}
                     </div>
                   </div>

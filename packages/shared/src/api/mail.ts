@@ -11,6 +11,21 @@ export const mailboxSchema = z.object({
 });
 export type Mailbox = z.infer<typeof mailboxSchema>;
 
+// GH #13/#50: a shared/group mailbox the signed-in member can browse and read
+// with their OWN credential — Stalwart exposes it in the member's JMAP session
+// via group membership. `id` is the JMAP accountId the client passes back as
+// `?accountId=` to scope the mail routes to that mailbox; `name` is its display
+// name for the account selector. The member's personal mailbox is deliberately
+// NOT in this list (GET /api/mail/shared-accounts returns non-personal only).
+export const sharedAccountSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+export type SharedAccount = z.infer<typeof sharedAccountSchema>;
+
+export const sharedAccountsSchema = z.array(sharedAccountSchema);
+export type SharedAccounts = z.infer<typeof sharedAccountsSchema>;
+
 export const emailAddressSchema = z.object({
   name: z.string().nullable(),
   email: z.string(),

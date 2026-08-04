@@ -7,6 +7,8 @@ import {
   emailUpdateSchema,
   mailboxSchema,
   senderAuthVerdictSchema,
+  sharedAccountSchema,
+  sharedAccountsSchema,
   threadDetailSchema,
   userPreferencesSchema,
   userPreferencesUpdateSchema,
@@ -107,6 +109,27 @@ describe("mail contracts", () => {
     expect(emailUpdateSchema.parse({ keywords: { $seen: true } }).keywords).toEqual({
       $seen: true,
     });
+  });
+});
+
+describe("sharedAccountSchema (GH #13/#50)", () => {
+  it("accepts a shared account", () => {
+    const parsed = sharedAccountSchema.parse({ id: "acc-shared", name: "Ventas" });
+    expect(parsed).toEqual({ id: "acc-shared", name: "Ventas" });
+  });
+
+  it("rejects a shared account missing its id", () => {
+    expect(() => sharedAccountSchema.parse({ name: "Ventas" })).toThrow();
+  });
+
+  it("parses a list of shared accounts, including the empty list", () => {
+    expect(sharedAccountsSchema.parse([])).toEqual([]);
+    expect(
+      sharedAccountsSchema.parse([
+        { id: "a", name: "Ventas" },
+        { id: "b", name: "Soporte" },
+      ]),
+    ).toHaveLength(2);
   });
 });
 
