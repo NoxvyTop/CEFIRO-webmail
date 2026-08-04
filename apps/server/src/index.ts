@@ -1,4 +1,6 @@
 import { serveStatic } from "hono/bun";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, type HealthCheck } from "./app";
 import { loadConfig, type AppConfig } from "./core/config";
@@ -334,7 +336,6 @@ const app = createApp({
     sessionTtlHours: config.sessionTtlHours,
     bootstrap,
     oidcClient,
-    isProduction: config.isProduction,
     trustedProxyHops: config.trustedProxyHops,
   }),
   setupRouter: createSetupRouter({
@@ -376,12 +377,17 @@ const app = createApp({
   contactsRouter: createContactsRouter({ sessions, contacts }),
 });
 
-// Both signals come from the validated config rather than a second read of the
-// environment (GH #218): NODE_ENV has exactly one interpretation in this
-// process — `config.isProduction`, the same one that forces Secure cookies —
-// and STATIC_DIR is checked for being non-empty before we mount anything on it.
-if (config.isProduction) {
-  const root = config.staticDir;
+// Mount the SPA whenever a built one is actually present, not on NODE_ENV
+// (GH #288). `config.staticDir` is resolved the way hono/bun's serveStatic
+// resolves `root` — relative to the process cwd, or the absolute path the
+// Docker image sets via STATIC_DIR — so probing `<staticDir>/index.html` on the
+// same base answers the only question that matters: is there a build to serve?
+// A dev source checkout has none (Vite serves the SPA on its own port), so this
+// stays unmounted there regardless of NODE_ENV; the Docker image points
+// STATIC_DIR at the build, so it mounts in every environment. STATIC_DIR being
+// non-empty is still guaranteed by the config schema (GH #218).
+const root = config.staticDir;
+if (existsSync(join(root, "index.html"))) {
   app.use("*", serveStatic({ root }));
   app.use("*", serveStatic({ root, path: "index.html" }));
 }

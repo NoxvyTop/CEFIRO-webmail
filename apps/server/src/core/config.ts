@@ -71,11 +71,13 @@ const configSchema = z.object({
     .array(z.object({ version: z.number().int().positive(), key: masterKeySchema }))
     .default([]),
   appUrl: z.string().url(),
-  // Deployment environment (GH #196). Only "production" is load-bearing: it is
-  // what forces Secure cookies regardless of APP_URL's scheme, so a prod
-  // deployment behind a TLS-terminating proxy configured with APP_URL=http://…
-  // can no longer silently ship a cleartext session cookie. Defaults to
-  // development so local/test runs over http keep working unchanged.
+  // Deployment environment. Load-bearing via WEAK_MASTER_KEY_ENVS below: any
+  // value outside the {development,test} allowlist refuses a weak MASTER_KEY
+  // (GH #223). It used to ALSO force Secure cookies in production (GH #196), but
+  // that coupling was removed in GH #288 — Secure is now derived per request
+  // from the effective scheme (see modules/auth/router.ts), correct behind both
+  // an HTTP and an HTTPS edge. Defaults to development so local/test runs over
+  // http keep working unchanged.
   nodeEnv: z.string().min(1).default("development"),
   bootstrapMode: z.boolean(),
   // The break-glass credential, supplied by the operator (GH #235). Optional

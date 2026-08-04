@@ -164,9 +164,6 @@ export type AuthRouterDeps = {
    * the audit `ip` column are keyed off it; see core/client-ip.ts.
    */
   trustedProxyHops?: number;
-  // When true (NODE_ENV=production, see core/config.ts), every cookie is
-  // written Secure regardless of APP_URL's scheme — see cookieSecure below.
-  isProduction?: boolean;
 };
 
 export function createAuthRouter(deps: AuthRouterDeps) {
@@ -188,16 +185,40 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     deps.loginRateLimiter ??
     createRateLimiter({ limit: LOGIN_MAX_ATTEMPTS, windowMs: LOGIN_WINDOW_MS });
 
-  // GH #196: a production deployment must never ship a cleartext session or
-  // OIDC-state cookie. Before this, `secure` was derived solely from APP_URL's
-  // scheme, so APP_URL=http://… in production (e.g. behind a TLS-terminating
-  // proxy the operator forgot to reflect in APP_URL) silently disabled Secure.
-  // Forcing Secure in production — rather than refusing to boot on a non-https
-  // APP_URL — is the fail-safe choice: it needs no operator action, adds no new
-  // boot failure mode, and still lets local/dev over http (isProduction=false)
-  // keep working from the scheme as before.
-  const cookieSecure = (url?: string): boolean =>
-    (deps.isProduction ?? false) || (url ?? "").startsWith("https");
+  // Whether to mark a cookie `Secure`, derived from the scheme the CLIENT
+  // actually used to reach the edge — read per request, not from NODE_ENV
+  // (GH #288). This replaces the GH #196 "force Secure in production" floor: that
+  // floor was added because deriving Secure from APP_URL's scheme dropped it
+  // when an operator ran APP_URL=http behind a TLS-terminating proxy — but it is
+  // wrong the other way, because on a plain-HTTP edge served from a
+  // non-`.localhost` domain the browser refuses a Secure cookie outright, so the
+  // OIDC state cookie is never stored and login cannot complete. The effective
+  // request scheme is the correct signal behind BOTH an HTTP edge (not Secure)
+  // and an HTTPS edge (Secure), and needs no NODE_ENV.
+  const cookieSecure = (c: {
+    req: { header(name: string): string | undefined; url: string };
+  }): boolean => {
+    // Trust X-Forwarded-Proto only as far as the operator's proxy contract goes
+    // (TRUSTED_PROXY_HOPS). When it is a comma-separated chain, read the entry
+    // the SAME way core/client-ip.ts attributes the client IP: count trusted
+    // hops from the RIGHT (the end a client cannot reach) and take that hop's
+    // scheme. A chain shorter than the declared hop count — or no header at all
+    // — did not travel the described path, so fall through to the direct scheme.
+    if (trustedProxyHops > 0) {
+      const forwardedProto = c.req.header("x-forwarded-proto");
+      if (forwardedProto) {
+        const chain = forwardedProto.split(",");
+        const index = chain.length - trustedProxyHops;
+        if (index >= 0) {
+          const scheme = chain[index]?.trim().toLowerCase() ?? "";
+          if (scheme !== "") return scheme === "https";
+        }
+      }
+    }
+    // No trusted proxy (or nothing usable in the header): the scheme on the
+    // socket this process terminates is the real one.
+    return new URL(c.req.url).protocol === "https:";
+  };
 
   router.get("/me", requireSession(deps.sessions), (c) => c.json(c.get("user")));
 
@@ -247,7 +268,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       httpOnly: true,
       path: "/",
       sameSite: "Lax",
-      secure: cookieSecure(appUrl),
+      secure: cookieSecure(c),
       maxAge: 600,
     });
     return c.redirect(
@@ -263,7 +284,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
   });
 
   router.post("/bootstrap", async (c) => {
-    const { bootstrap, users, audit, appUrl } = deps;
+    const { bootstrap, users, audit } = deps;
     if (!bootstrap?.enabled || !users || !audit) {
       return errorResponse(c, "not_found", 404);
     }
@@ -319,7 +340,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       httpOnly: true,
       path: "/",
       sameSite: "Lax",
-      secure: cookieSecure(appUrl),
+      secure: cookieSecure(c),
       maxAge: ttl * 3600,
     });
     await audit.record({ actor: BOOTSTRAP_ADMIN_EMAIL, action: "bootstrap.login", ip });
@@ -385,7 +406,7 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         httpOnly: true,
         path: "/",
         sameSite: "Lax",
-        secure: cookieSecure(appUrl),
+        secure: cookieSecure(c),
         maxAge: ttl * 3600,
       });
       await audit.record({
