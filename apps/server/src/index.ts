@@ -27,6 +27,7 @@ import { createSieveSyncStateRepo } from "./infra/repos/sieve-sync-state";
 import { createVacationSettingsRepo } from "./infra/repos/vacation-settings";
 import { createContactsRepo } from "./infra/repos/contacts";
 import { createPushSubscriptionsRepo } from "./infra/repos/push-subscriptions";
+import { createAiSummariesRepo } from "./infra/repos/ai-summaries";
 import { findUncoveredKeyVersions } from "./infra/db/key-versions";
 import {
   createKeyring,
@@ -190,6 +191,7 @@ const sieveRawScript = createSieveRawScriptRepo(db);
 const vacationSettings = createVacationSettingsRepo(db);
 const contacts = createContactsRepo(db);
 const pushSubscriptions = createPushSubscriptionsRepo(db);
+const aiSummaries = createAiSummariesRepo(db);
 const bootstrap = createBootstrap(config.bootstrapMode, config.bootstrapPassword);
 const jmap = config.jmapUrl
   ? createJmapClient({
@@ -400,7 +402,7 @@ const app = createApp({
     jmap,
   }),
   adminRouter: createAdminRouter({ sessions, users, mailCredentials, audit, ssoConfig, instanceSettings }),
-  aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient }),
+  aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient, aiSummaries }),
   pushRouter: createPushRouter({
     sessions,
     pushSubscriptions,

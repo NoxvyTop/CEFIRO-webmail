@@ -1,5 +1,6 @@
 import type { AiClient } from "../../core/ai";
 import type { RateLimiter } from "../../core/rate-limit";
+import type { AiSummariesRepo } from "../../infra/repos/ai-summaries";
 import type { JmapAccessDeps, MailVariables } from "../mail/context";
 import type { SessionStore } from "../auth/sessions";
 
@@ -11,6 +12,10 @@ import type { SessionStore } from "../auth/sessions";
 export type AiDeps = JmapAccessDeps & {
   sessions: SessionStore;
   aiClient: AiClient | null;
+  // #307: server-side cache of generated summaries. Not nullable like aiClient —
+  // it is a local DB repo, always available — so a cache hit can return stored
+  // bullets without re-billing the paid provider.
+  aiSummaries: AiSummariesRepo;
   fetchFn?: typeof fetch;
   // Per-user quota over the paid-LLM endpoints (GH #194). Injectable so tests
   // drive a small limit; a default is created in the router when absent.

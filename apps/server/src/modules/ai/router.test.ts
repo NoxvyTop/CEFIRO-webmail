@@ -5,10 +5,11 @@ import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
+import { createAiSummariesRepo } from "../../infra/repos/ai-summaries";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
-import { capThreadMessages, createAiRouter, stripQuotedTrail } from "./router";
+import { capThreadMessages, createAiRouter, stripQuotedTrail, threadContentKey } from "./router";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import type { AiClient } from "../../core/ai";
 import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";
@@ -17,6 +18,7 @@ const sql = createDb(testDatabaseUrl());
 
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
+let aiSummaries: ReturnType<typeof createAiSummariesRepo>;
 let token: string;
 
 beforeAll(async () => {
@@ -26,6 +28,7 @@ beforeAll(async () => {
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
   mailCredentials = createMailCredentialsRepo(sql, key);
+  aiSummaries = createAiSummariesRepo(sql);
   sessions = createSessionStore(sql);
 
   const user = await users.create({
@@ -151,7 +154,7 @@ function stubThreadJmap(
 
 function makeApp(aiClient: AiClient | null, jmap: JmapClient | null, aiRateLimiter?: RateLimiter) {
   return createApp({
-    aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient, aiRateLimiter }),
+    aiRouter: createAiRouter({ sessions, mailCredentials, jmap, aiClient, aiSummaries, aiRateLimiter }),
   });
 }
 
@@ -468,5 +471,96 @@ describe("capThreadMessages (GH #195)", () => {
     const totalChars = result.messages.reduce((n, m) => n + m.body.length, 0);
     expect(totalChars).toBeLessThanOrEqual(12);
     expect(result.messages.at(-1)).toEqual(msg("c", "CCCCC"));
+  });
+});
+
+describe("threadContentKey (#307)", () => {
+  it("is deterministic for the same ordered id set", () => {
+    expect(threadContentKey(["a", "b", "c"])).toBe(threadContentKey(["a", "b", "c"]));
+  });
+
+  it("changes when a new message is added (a grown thread)", () => {
+    // A new reply changes the id set → a new key → a cache miss, never stale.
+    expect(threadContentKey(["a", "b"])).not.toBe(threadContentKey(["a", "b", "c"]));
+  });
+
+  it("is order-sensitive", () => {
+    expect(threadContentKey(["a", "b"])).not.toBe(threadContentKey(["b", "a"]));
+  });
+});
+
+describe("ai router — summary cache (#307)", () => {
+  it("caches a message summary: a repeat request returns the same bullets without a second provider call", async () => {
+    const { client } = stubJmap("Please review the invoice attached.");
+    const ai = fakeAiClient();
+    const app = makeApp(ai, client);
+
+    const first = await post(app, "/api/mail/messages/cache-msg-1/summarize", {});
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { bullets: string[] }).bullets).toEqual(["one", "two", "three"]);
+
+    const second = await post(app, "/api/mail/messages/cache-msg-1/summarize", {});
+    expect(second.status).toBe(200);
+    const secondJson = (await second.json()) as { bullets: string[]; cached?: boolean };
+    // Same bullets, and flagged as served from cache.
+    expect(secondJson.bullets).toEqual(["one", "two", "three"]);
+    expect(secondJson.cached).toBe(true);
+
+    // The paid provider was called exactly once across both requests.
+    expect(ai.summarizeCalls).toHaveLength(1);
+  });
+
+  it("caches a thread summary: an identical repeat request is a cache hit with no provider call", async () => {
+    const { client } = stubThreadJmap({
+      id: "cache-th-1",
+      messages: [
+        { id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "Hola equipo." },
+        { id: "e2", receivedAt: "2026-07-21T09:00:00Z", bodyText: "Confirmo." },
+      ],
+    });
+    const ai = fakeAiClient();
+    const app = makeApp(ai, client);
+
+    const first = await post(app, "/api/mail/threads/cache-th-1/summarize", {});
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { bullets: string[] }).bullets).toEqual(["t-one", "t-two"]);
+
+    const second = await post(app, "/api/mail/threads/cache-th-1/summarize", {});
+    expect(second.status).toBe(200);
+    const secondJson = (await second.json()) as { bullets: string[]; cached?: boolean };
+    expect(secondJson.bullets).toEqual(["t-one", "t-two"]);
+    expect(secondJson.cached).toBe(true);
+
+    expect(ai.summarizeThreadCalls).toHaveLength(1);
+  });
+
+  it("regenerates a thread summary when a new message changes the id set (cache miss)", async () => {
+    const ai = fakeAiClient();
+
+    const twoMessages = stubThreadJmap({
+      id: "cache-th-2",
+      messages: [
+        { id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "Hola equipo." },
+        { id: "e2", receivedAt: "2026-07-21T09:00:00Z", bodyText: "Confirmo." },
+      ],
+    });
+    const appBefore = makeApp(ai, twoMessages.client);
+    expect((await post(appBefore, "/api/mail/threads/cache-th-2/summarize", {})).status).toBe(200);
+
+    // A new reply arrives → the ordered id set grows → a different content key.
+    const threeMessages = stubThreadJmap({
+      id: "cache-th-2",
+      messages: [
+        { id: "e1", receivedAt: "2026-07-20T10:00:00Z", bodyText: "Hola equipo." },
+        { id: "e2", receivedAt: "2026-07-21T09:00:00Z", bodyText: "Confirmo." },
+        { id: "e3", receivedAt: "2026-07-22T08:00:00Z", bodyText: "Una cosa más." },
+      ],
+    });
+    const appAfter = makeApp(ai, threeMessages.client);
+    expect((await post(appAfter, "/api/mail/threads/cache-th-2/summarize", {})).status).toBe(200);
+
+    // Two distinct id sets → two provider calls: the grown thread never returns
+    // the stale first summary.
+    expect(ai.summarizeThreadCalls).toHaveLength(2);
   });
 });
