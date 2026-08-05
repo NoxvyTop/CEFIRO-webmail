@@ -21,6 +21,7 @@ import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
 import { AiSummaryCard } from "./AiSummaryCard";
+import { describeAudience } from "./audience";
 import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody, isSafeInlineImage } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
@@ -191,6 +192,9 @@ export function ThreadView({
     queryFn: fetchIdentities,
   });
   const identities = identitiesQuery.data ?? [];
+  // The account's own identity addresses, used to work out who a received
+  // message was addressed to relative to "me" (see describeAudience below).
+  const identityEmails = identities.map((identity) => identity.email);
 
   // Powers custom label colors/names in the subject chips and the label-apply
   // menu below — shares the ["mail","preferences"] cache key with MailPage's
@@ -870,9 +874,16 @@ export function ThreadView({
                         sender cannot forge this mark via their display name. */}
                     <SenderAuthBadge verdict={email.senderAuth} />
                   </span>
-                  {toCcLabel && (
+                  {/* Sent messages show "Para: <recipients>" and so only
+                      render when there are recipients; received messages always
+                      show the sender + a computed audience ("para mí", "para mí
+                      y N más", …) derived from the real to/cc — never a fixed
+                      string — so the gate differs by branch. */}
+                  {(isSentByMe ? toCcLabel : sender) && (
                     <span className="block truncate text-[12.5px] text-muted">
-                      {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
+                      {isSentByMe
+                        ? `${t("mail.sentTo")} ${toCcLabel}`
+                        : `${sender?.email} · ${describeAudience(email.to, email.cc, identityEmails, t)}`}
                     </span>
                   )}
                 </span>

@@ -272,7 +272,13 @@
     "labelNameRequired": "Escribe un nombre para la etiqueta",
     "labelNameDuplicate": "Ya existe una etiqueta con ese nombre",
     "noLabelsToApply": "Todavía no tienes etiquetas. Crea una desde la barra lateral",
-    "toMeAndTeam": "para mí y el equipo",
+    "audience": {
+      "toMe": "para mí",
+      "toMeAndName": "para mí y {{name}}",
+      "toMeAndCount": "para mí y {{count}} más",
+      "toName": "para {{name}}",
+      "toNameAndCount": "para {{name}} y {{count}} más"
+    },
     "sentTo": "Para:",
     "yesterday": "Ayer",
     "expandMessage": "Mostrar mensaje completo de {{sender}}",

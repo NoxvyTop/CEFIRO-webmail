@@ -765,18 +765,49 @@ describe("ThreadView", () => {
       renderThread();
 
       expect(await screen.findByText(`${i18n.t("mail.sentTo")} Dave`)).toBeInTheDocument();
-      // The sent message (carol@example.com, matching the identity) no longer
-      // uses the raw "<email> · para mí y el equipo" framing — the other
-      // message in the thread (alice, a received email) is unaffected and
-      // keeps it, so the assertion is scoped to carol's line specifically.
+      // The sent message (carol@example.com, matching the identity) uses the
+      // "Para: <recipients>" framing, not the "<email> · <audience>" framing a
+      // received message gets — the other message in the thread (alice, a
+      // received email) is unaffected, so the assertion is scoped to carol's
+      // line specifically.
       expect(screen.queryByText(/carol@example\.com ·/)).not.toBeInTheDocument();
     });
 
-    it("keeps the inbox framing for a received message when identities don't match the sender", async () => {
+    it("shows a computed audience (not a fixed string) for a received message", async () => {
+      // Neither sender matches an identity, so both messages are "received".
+      // Alice's message was addressed to Bob, so its audience is derived from
+      // that real recipient — "para Bob" — rather than a hardcoded literal.
       stubFetch([{ id: "id1", name: "Someone Else", email: "someone-else@example.com" }]);
       renderThread();
 
-      expect(await screen.findByText(new RegExp(i18n.t("mail.toMeAndTeam")))).toBeInTheDocument();
+      expect(await screen.findByText(/alice@example\.com · para Bob/)).toBeInTheDocument();
+      // The old hardcoded "para mí y el equipo" literal is gone for good.
+      expect(screen.queryByText(/el equipo/)).not.toBeInTheDocument();
+    });
+
+    it("counts the account itself in a received message's audience", async () => {
+      const state = structuredClone(thread);
+      // Alice (not one of my identities) writes to Bob (me) and Dave — a
+      // received message where I'm one of several recipients, so the audience
+      // is "para mí y Dave".
+      state.emails[0]!.to = [
+        { name: "Bob", email: "bob@example.com" },
+        { name: "Dave", email: "dave@example.com" },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) {
+            return new Response(JSON.stringify([{ id: "id1", name: "Bob", email: "bob@example.com" }]));
+          }
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      expect(await screen.findByText(/alice@example\.com · para mí y Dave/)).toBeInTheDocument();
     });
   });
 

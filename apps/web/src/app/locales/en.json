@@ -272,7 +272,13 @@
     "labelNameRequired": "Enter a name for the label",
     "labelNameDuplicate": "A label with that name already exists",
     "noLabelsToApply": "No labels yet. Create one from the sidebar",
-    "toMeAndTeam": "me and the team",
+    "audience": {
+      "toMe": "to me",
+      "toMeAndName": "to me and {{name}}",
+      "toMeAndCount": "to me and {{count}} more",
+      "toName": "to {{name}}",
+      "toNameAndCount": "to {{name}} and {{count}} more"
+    },
     "sentTo": "To:",
     "yesterday": "Yesterday",
     "expandMessage": "Expand message from {{sender}}",
