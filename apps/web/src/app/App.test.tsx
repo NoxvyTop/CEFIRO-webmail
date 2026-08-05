@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
@@ -92,6 +92,37 @@ describe("App header avatar fallback", () => {
     // was rendered, i.e. the UserMenu/Avatar wiring fell back correctly.
     expect(within(avatarButton).getByText("E")).toBeInTheDocument();
     expect(avatarButton.querySelector("img")).toBeNull();
+  });
+});
+
+// GH #13/#50 (G-4): the header lost its shared-mailbox selector and its
+// standalone "Atajos" button — accounts switch from the sidebar's shared page
+// now, and "Atajos" lives inside the profile dropdown, opening the same dialog.
+describe("App header after the shared-mailboxes refinement", () => {
+  it("no longer renders the account selector or a standalone Atajos button in the header", async () => {
+    renderApp();
+
+    await screen.findByRole("button", { name: i18n.t("auth.signedInAs", { email: user.email }) });
+    // The old "Buzón activo" account selector is gone from the header.
+    expect(screen.queryByRole("button", { name: i18n.t("accounts.selectorLabel") })).toBeNull();
+    // With the profile menu closed, there is no "Atajos" control anywhere — the
+    // standalone header button is gone and the menu item is not yet mounted.
+    expect(screen.queryByRole("button", { name: i18n.t("shortcuts.title") })).toBeNull();
+  });
+
+  it("opens the shortcuts dialog from the Atajos item inside the profile dropdown", async () => {
+    renderApp();
+
+    const avatar = await screen.findByRole("button", {
+      name: i18n.t("auth.signedInAs", { email: user.email }),
+    });
+    fireEvent.click(avatar);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: i18n.t("shortcuts.title") }));
+
+    expect(
+      await screen.findByRole("dialog", { name: i18n.t("shortcuts.overlayTitle") }),
+    ).toBeInTheDocument();
   });
 });
 

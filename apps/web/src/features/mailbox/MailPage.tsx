@@ -1,12 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import type { CustomLabel, EmailSummary } from "@webmail/shared";
 import { ACTIVE_ACCOUNT_PARAM, fetchMailboxes, fetchThread } from "./api";
 import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
 import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
 import { MessageList } from "./MessageList";
+import { SharedMailboxBanner } from "./SharedMailboxBanner";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
 import { ThreadView } from "../reader/ThreadView";
@@ -30,6 +31,7 @@ const Composer = lazy(() =>
 export function MailPage() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -442,6 +444,7 @@ export function MailPage() {
         selectedLabel={labelParam}
         onSelectLabel={handleSelectLabel}
         onCompose={handleCompose}
+        onOpenSharedMailboxes={() => navigate("/shared")}
         composeDisabled={!hasIdentities}
         customLabels={customLabels}
         onCreateLabel={(label) => createLabelMutation.mutate(label)}
@@ -456,6 +459,11 @@ export function MailPage() {
           threadParam ? "hidden lg:flex" : "flex"
         } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
+        {/* GH #13/#50 (G-4): the account selector that used to name the active
+            shared mailbox in the top bar is gone; this read-only indicator names
+            it inside the mail view instead, with a way back to the personal
+            inbox. Renders nothing on the personal mailbox. */}
+        <SharedMailboxBanner />
         {/* GH #274: this tab could not open a live stream (429 too_many_streams).
             A persistent, polite banner — not a toast that fades — because the
             limitation lasts until a stream frees up and the tab is reloaded. */}

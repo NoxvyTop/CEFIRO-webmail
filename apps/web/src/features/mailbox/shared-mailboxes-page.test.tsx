@@ -5,17 +5,17 @@ import { MemoryRouter, useLocation } from "react-router";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { SharedAccount } from "@webmail/shared";
-import { MailApiError } from "../mailbox/api";
+import { MailApiError } from "./api";
 import { ToastProvider } from "../../app/ui/toast";
-import { SharedMailboxesSettings } from "./SharedMailboxesSettings";
+import { SharedMailboxesPage } from "./SharedMailboxesPage";
 
 const { fetchSharedAccounts, setSharedAccountCopyPreference } = vi.hoisted(() => ({
   fetchSharedAccounts: vi.fn(),
   setSharedAccountCopyPreference: vi.fn(),
 }));
 
-vi.mock("../mailbox/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../mailbox/api")>();
+vi.mock("./api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api")>();
   return { ...actual, fetchSharedAccounts, setSharedAccountCopyPreference };
 });
 
@@ -27,19 +27,19 @@ function copyToggleName(name: string): string {
 }
 
 // Exposes the live location so an "Entrar" navigation is observable without a
-// real browser (mirrors account-selector.test.tsx's search probe).
+// real browser (mirrors the shared-mailbox banner test's location probe).
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
-function renderPanel() {
+function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <ToastProvider>
-        <MemoryRouter initialEntries={["/settings"]}>
-          <SharedMailboxesSettings />
+        <MemoryRouter initialEntries={["/shared"]}>
+          <SharedMailboxesPage />
           <LocationProbe />
         </MemoryRouter>
       </ToastProvider>
@@ -56,11 +56,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("SharedMailboxesSettings (GH #13/#50)", () => {
-  it("lists the shared mailboxes with the copy toggle reflecting copyOptIn", async () => {
+describe("SharedMailboxesPage (GH #13/#50 G-4)", () => {
+  it("renders the page heading and lists the shared mailboxes with the copy toggle reflecting copyOptIn", async () => {
     fetchSharedAccounts.mockResolvedValue([ventas, soporte]);
-    renderPanel();
+    renderPage();
 
+    expect(
+      await screen.findByRole("heading", { name: i18n.t("sharedMailboxes.title") }),
+    ).toBeInTheDocument();
     expect(await screen.findByText("Ventas")).toBeInTheDocument();
     expect(screen.getByText("Soporte")).toBeInTheDocument();
 
@@ -73,7 +76,7 @@ describe("SharedMailboxesSettings (GH #13/#50)", () => {
     // A pending promise keeps the mutation in flight, so the checkbox we assert
     // on is showing the OPTIMISTIC state, not a server round-trip.
     setSharedAccountCopyPreference.mockReturnValue(new Promise<SharedAccount>(() => {}));
-    renderPanel();
+    renderPage();
 
     const toggle = await screen.findByLabelText(copyToggleName("Ventas"));
     expect(toggle).not.toBeChecked();
@@ -86,21 +89,19 @@ describe("SharedMailboxesSettings (GH #13/#50)", () => {
   it("reverts the toggle and shows a toast when the PUT fails", async () => {
     fetchSharedAccounts.mockResolvedValue([ventas]);
     setSharedAccountCopyPreference.mockRejectedValue(new MailApiError(403, "account_forbidden"));
-    renderPanel();
+    renderPage();
 
     const toggle = await screen.findByLabelText(copyToggleName("Ventas"));
     fireEvent.click(toggle);
 
     expect(await screen.findByText(i18n.t("sharedMailboxes.copyError"))).toBeInTheDocument();
     expect(setSharedAccountCopyPreference).toHaveBeenCalledWith("acc-ventas", true);
-    await waitFor(() =>
-      expect(screen.getByLabelText(copyToggleName("Ventas"))).not.toBeChecked(),
-    );
+    await waitFor(() => expect(screen.getByLabelText(copyToggleName("Ventas"))).not.toBeChecked());
   });
 
   it("'Entrar' switches to the mailbox by setting the account URL param", async () => {
     fetchSharedAccounts.mockResolvedValue([ventas]);
-    renderPanel();
+    renderPage();
 
     await screen.findByText("Ventas");
     fireEvent.click(screen.getByRole("button", { name: i18n.t("sharedMailboxes.enter") }));
@@ -110,14 +111,14 @@ describe("SharedMailboxesSettings (GH #13/#50)", () => {
 
   it("renders a friendly empty state when there are no shared mailboxes", async () => {
     fetchSharedAccounts.mockResolvedValue([]);
-    renderPanel();
+    renderPage();
 
     expect(await screen.findByText(i18n.t("sharedMailboxes.empty"))).toBeInTheDocument();
   });
 
-  it("shows a retry instead of a blank panel when the list cannot be loaded", async () => {
+  it("shows a retry instead of a blank page when the list cannot be loaded", async () => {
     fetchSharedAccounts.mockRejectedValueOnce(new MailApiError(503, "database_unavailable"));
-    renderPanel();
+    renderPage();
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(i18n.t("settings.errors.generic"));

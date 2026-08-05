@@ -6,7 +6,6 @@ import { ContactsSettings } from "./ContactsSettings";
 import { FilterSettings } from "./FilterSettings";
 import { ProfileSettings } from "./ProfileSettings";
 import { SessionsSettings } from "./SessionsSettings";
-import { SharedMailboxesSettings } from "./SharedMailboxesSettings";
 import { SignatureSettings } from "./SignatureSettings";
 import { VacationSettings } from "./VacationSettings";
 import { PushSettings, PUSH_STATUS_QUERY_KEY } from "../notifications/PushSettings";
@@ -18,7 +17,6 @@ type Section =
   | "filters"
   | "vacation"
   | "contacts"
-  | "sharedMailboxes"
   | "sessions"
   | "notifications";
 
@@ -28,10 +26,6 @@ const NAV_ITEMS: { id: Section; labelKey: string }[] = [
   { id: "filters", labelKey: "settings.nav.filters" },
   { id: "vacation", labelKey: "settings.nav.vacation" },
   { id: "contacts", labelKey: "settings.nav.contacts" },
-  // GH #13/#50: shared mailboxes the member can enter, plus the copy opt-in.
-  // Always shown; the panel itself renders a friendly empty state for the
-  // common case of a member with no shared mailboxes.
-  { id: "sharedMailboxes", labelKey: "settings.nav.sharedMailboxes" },
   // #302: active sessions / devices with individual revocation. Always shown —
   // every user has at least their current session.
   { id: "sessions", labelKey: "settings.nav.sessions" },
@@ -121,13 +115,6 @@ export function SettingsPage() {
             <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
               <h2 className="text-lg font-medium">{t("contacts.title")}</h2>
               <ContactsSettings />
-            </section>
-          )}
-
-          {section === "sharedMailboxes" && (
-            <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
-              <h2 className="text-lg font-medium">{t("sharedMailboxes.title")}</h2>
-              <SharedMailboxesSettings />
             </section>
           )}
 

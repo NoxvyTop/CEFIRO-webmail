@@ -43,6 +43,7 @@ function stubFetch() {
     vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.includes("/api/auth/me")) return new Response(JSON.stringify(user));
+      if (path.includes("/api/mail/shared-accounts")) return new Response(JSON.stringify([]));
       if (path.includes("/api/mail/mailboxes")) return new Response(JSON.stringify(mailboxes));
       if (path.includes("/api/mail/messages")) {
         return new Response(JSON.stringify({ total: 0, position: 0, emails: [] }));
@@ -92,6 +93,23 @@ describe("mailbox sidebar", () => {
 
     expect(await screen.findAllByText("Archive")).not.toHaveLength(0);
     expect(archive!.closest("[aria-current]")).toHaveAttribute("aria-current", "true");
+  });
+
+  // GH #13/#50 (G-4): shared mailboxes moved out of the header selector into
+  // their own page, reached from a dedicated sidebar item.
+  it("has a 'Buzones compartidos' item that navigates to the shared mailboxes page", async () => {
+    stubFetch();
+    renderAt("/");
+
+    await screen.findAllByText(inboxName);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("sharedMailboxes.title") }));
+
+    // The route changed to the page, which owns its own <h1> heading and, with
+    // no shared mailboxes in this stub, its friendly empty state.
+    expect(
+      await screen.findByRole("heading", { name: i18n.t("sharedMailboxes.title") }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("sharedMailboxes.empty"))).toBeInTheDocument();
   });
 
   it("renders the starred entry and marks it current when the starred param is set", async () => {
