@@ -19,6 +19,14 @@ const AdminPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("../features/settings/SettingsPage").then((module) => ({ default: module.SettingsPage })),
 );
+// GH #13/#50 (G-4): the "Buzones compartidos" page, reached from the left
+// sidebar. Split off the initial mail bundle for the same reason as Settings —
+// most sessions never open it. It renders inside App's <Outlet> Suspense.
+const SharedMailboxesPage = lazy(() =>
+  import("../features/mailbox/SharedMailboxesPage").then((module) => ({
+    default: module.SharedMailboxesPage,
+  })),
+);
 const SetupPage = lazy(() =>
   import("../features/setup/SetupPage").then((module) => ({ default: module.SetupPage })),
 );
@@ -39,6 +47,7 @@ export const routes: RouteObject[] = [
     children: [
       { path: "/", element: <MailPage /> },
       { path: "/settings", element: <SettingsPage /> },
+      { path: "/shared", element: <SharedMailboxesPage /> },
       {
         path: "/admin",
         element: (

@@ -26,9 +26,14 @@ describe("preferences client", () => {
       new Response(JSON.stringify({ groupMailInMainInbox: true })),
     ) as unknown as (input: string, init?: RequestInit) => Promise<Response>;
     vi.stubGlobal("fetch", fetchMock);
-    // customLabels defaults to [] when the server response omits it
-    // (backward compatible with servers/fixtures that predate this field).
-    await expect(fetchPreferences()).resolves.toEqual({ groupMailInMainInbox: true, customLabels: [] });
+    // customLabels and sharedMailboxCopyOptIn default to [] when the server
+    // response omits them (backward compatible with servers/fixtures that
+    // predate these fields).
+    await expect(fetchPreferences()).resolves.toEqual({
+      groupMailInMainInbox: true,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+    });
     expect((fetchMock as any).mock.calls[0]?.[0]).toBe("/api/mail/preferences");
   });
 
@@ -45,6 +50,7 @@ describe("preferences client", () => {
     await expect(updatePreferences({ groupMailInMainInbox: false })).resolves.toEqual({
       groupMailInMainInbox: false,
       customLabels: [],
+      sharedMailboxCopyOptIn: [],
     });
     const call = (fetchMock as any).mock.calls[0];
     const [url, init] = call as [string, RequestInit];
@@ -68,6 +74,7 @@ describe("preferences client", () => {
     await expect(updatePreferences({ customLabels: [label] })).resolves.toEqual({
       groupMailInMainInbox: true,
       customLabels: [label],
+      sharedMailboxCopyOptIn: [],
     });
     const [, init] = (fetchMock as any).mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init?.body))).toEqual({ customLabels: [label] });

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
 import { CloseIcon } from "../../app/ui/icons";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
+import { blobUrl } from "./blobUrl";
 
 interface AttachmentViewerProps {
   /**
@@ -19,23 +20,11 @@ interface AttachmentViewerProps {
    * types stay download-only and never reach this component.
    */
   kind: "image" | "pdf";
+  // GH #13/#50: the active shared mailbox this attachment belongs to, so both
+  // the download link and the preview-bytes fetch are scoped to that account.
+  // Absent = personal mailbox.
+  accountId?: string;
   onClose: () => void;
-}
-
-// Only used for the Descargar link — a real, credential-carrying navigation
-// straight to the blob endpoint (dl=1 forces Content-Disposition:
-// attachment), which needs no object-URL indirection since nothing renders
-// or executes as part of a download.
-function downloadUrl(blobId: string, name: string, type: string): string {
-  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}&dl=1`;
-}
-
-// Fetches raw bytes to build an object URL from — no dl=1 (this isn't a
-// download). Mirrors PdfThumbnail's blobFetchUrl.
-function blobFetchUrl(blobId: string, name: string, type: string): string {
-  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}`;
 }
 
 /**
@@ -75,7 +64,7 @@ function blobFetchUrl(blobId: string, name: string, type: string): string {
  * Imprimir stays disabled until that iframe's `onLoad` fires, so a click
  * can never print a still-loading (blank) document.
  */
-export function AttachmentViewer({ attachment, kind, onClose }: AttachmentViewerProps) {
+export function AttachmentViewer({ attachment, kind, accountId, onClose }: AttachmentViewerProps) {
   const { t } = useTranslation();
   const printFrameRef = useRef<HTMLIFrameElement>(null);
   const open = attachment !== null;
@@ -105,7 +94,7 @@ export function AttachmentViewer({ attachment, kind, onClose }: AttachmentViewer
     const name = attachment.name ?? "attachment";
     const type = attachment.type;
 
-    fetch(blobFetchUrl(attachment.blobId, name, type), { credentials: "include" })
+    fetch(blobUrl(attachment.blobId, name, type, { accountId }), { credentials: "include" })
       .then((response) => {
         if (!response.ok) throw new Error(`blob fetch failed: ${response.status}`);
         return response.arrayBuffer();
@@ -125,7 +114,7 @@ export function AttachmentViewer({ attachment, kind, onClose }: AttachmentViewer
       isCurrent = false;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [attachment?.blobId, attachment?.type, attachment?.name]);
+  }, [attachment?.blobId, attachment?.type, attachment?.name, accountId]);
 
   useEffect(() => {
     if (!open) return;
@@ -165,7 +154,7 @@ export function AttachmentViewer({ attachment, kind, onClose }: AttachmentViewer
         <div className="flex items-center gap-4 border-b border-line px-5 py-3">
           <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold">{name}</span>
           <a
-            href={downloadUrl(attachment.blobId, name, attachment.type)}
+            href={blobUrl(attachment.blobId, name, attachment.type, { download: true, accountId })}
             className="shrink-0 text-[13px] font-semibold text-accent-text underline"
           >
             {t("attachments.download")}

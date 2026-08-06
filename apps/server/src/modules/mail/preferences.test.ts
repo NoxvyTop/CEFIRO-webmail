@@ -62,7 +62,11 @@ describe("preferences routes", () => {
       headers: { cookie: `session=${token}` },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ groupMailInMainInbox: true, customLabels: [] });
+    expect(await res.json()).toEqual({
+      groupMailInMainInbox: true,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+    });
   });
 
   it("persists a PUT and reflects it on a subsequent GET", async () => {
@@ -74,12 +78,20 @@ describe("preferences routes", () => {
       body: JSON.stringify({ groupMailInMainInbox: false }),
     });
     expect(putRes.status).toBe(200);
-    expect(await putRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
+    expect(await putRes.json()).toEqual({
+      groupMailInMainInbox: false,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+    });
 
     const getRes = await app.request("/api/mail/preferences", {
       headers: { cookie: `session=${token}` },
     });
-    expect(await getRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
+    expect(await getRes.json()).toEqual({
+      groupMailInMainInbox: false,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+    });
   });
 
   it("keeps the prior value on an empty PUT patch (merge, not overwrite)", async () => {
@@ -91,12 +103,20 @@ describe("preferences routes", () => {
       body: JSON.stringify({}),
     });
     expect(emptyPutRes.status).toBe(200);
-    expect(await emptyPutRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
+    expect(await emptyPutRes.json()).toEqual({
+      groupMailInMainInbox: false,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+    });
 
     const getRes = await app.request("/api/mail/preferences", {
       headers: { cookie: `session=${token}` },
     });
-    expect(await getRes.json()).toEqual({ groupMailInMainInbox: false, customLabels: [] });
+    expect(await getRes.json()).toEqual({
+      groupMailInMainInbox: false,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+    });
   });
 
   it("returns 400 invalid_body on malformed JSON", async () => {
@@ -209,6 +229,7 @@ describe("custom labels persistence (preferences.customLabels)", () => {
     expect(await res.json()).toEqual({
       groupMailInMainInbox: true,
       customLabels: [{ slug: "ok-one", name: "Ok", color: "#9B6BDB" }],
+      sharedMailboxCopyOptIn: [],
     });
   });
 });

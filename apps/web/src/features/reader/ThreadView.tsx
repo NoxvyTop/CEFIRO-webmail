@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { MailApiError, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
+import { MailApiError, copyMessageToInbox, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
@@ -21,6 +21,7 @@ import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
 import { AiSummaryCard } from "./AiSummaryCard";
+import { describeAudience } from "./audience";
 import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody, isSafeInlineImage } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
@@ -34,6 +35,10 @@ interface ThreadViewProps {
   // care about Trash keep compiling unchanged — mirrors archiveMailboxId's
   // role, just for the trash-role mailbox instead.
   trashMailboxId?: string | null;
+  // GH #13/#50: the active shared mailbox this thread is being read from —
+  // threaded into the thread query key and every read/mutation so the whole
+  // reader operates on that account. Absent = personal mailbox (unchanged).
+  accountId?: string;
 }
 
 interface DeletePermanentlyConfirmDialogProps {
@@ -164,15 +169,17 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
 // it in full, and this reuses that module's own key sets so the two can't drift.
 const MAILBOX_MOVE_INVALIDATION_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS];
 
-export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null }: ThreadViewProps) {
+export function ThreadView({
+  threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null, accountId,
+}: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
   const threadQuery = useQuery({
-    queryKey: ["mail", "thread", threadId],
-    queryFn: () => fetchThread(threadId),
+    queryKey: ["mail", "thread", threadId, accountId ?? null],
+    queryFn: () => fetchThread(threadId, accountId),
     retry: mailRetry,
   });
 
@@ -185,6 +192,9 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
     queryFn: fetchIdentities,
   });
   const identities = identitiesQuery.data ?? [];
+  // The account's own identity addresses, used to work out who a received
+  // message was addressed to relative to "me" (see describeAudience below).
+  const identityEmails = identities.map((identity) => identity.email);
 
   // Powers custom label colors/names in the subject chips and the label-apply
   // menu below — shares the ["mail","preferences"] cache key with MailPage's
@@ -284,7 +294,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const archiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
-      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } }, accountId);
     },
     onSuccess: () => {
       invalidateAfterMailboxMove();
@@ -299,7 +309,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const unarchiveMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!inboxMailboxId) throw new Error("no inbox mailbox");
-      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } }, accountId);
     },
     onSuccess: () => {
       invalidateAfterMailboxMove();
@@ -315,7 +325,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   const deleteMutation = useMutation({
     mutationFn: (email: EmailDetail) => {
       if (!trashMailboxId) throw new Error("no trash mailbox");
-      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } });
+      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } }, accountId);
     },
     onSuccess: () => {
       invalidateAfterMailboxMove();
@@ -332,7 +342,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   // DeletePermanentlyConfirmDialog below — never directly from the action
   // bar click.
   const destroyMutation = useMutation({
-    mutationFn: (email: EmailDetail) => destroyMessage(email.id),
+    mutationFn: (email: EmailDetail) => destroyMessage(email.id, accountId),
     onSuccess: () => {
       invalidateAfterMailboxMove();
       setDeletePermanentlyConfirmOpen(false);
@@ -353,9 +363,31 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
     setDestroyError(null);
   }
 
+  // GH #13/#50 (G-2): copies the last email of a SHARED mailbox into the
+  // member's own personal inbox. Only ever reachable when `accountId` is set —
+  // i.e. a shared mailbox is active (the button below is hidden otherwise), so
+  // the guard is defense-in-depth, mirroring archive/unarchive's own guards.
+  // The copy lands in a different account (personal), so nothing in the
+  // currently-viewed shared account changes — success is just a toast.
+  const copyToInboxMutation = useMutation({
+    mutationFn: (email: EmailDetail) => {
+      if (!accountId) throw new Error("no shared account");
+      return copyMessageToInbox(email.id, accountId);
+    },
+    onSuccess: () => {
+      showToast(t("mail.copiedToInbox"));
+    },
+    onError: (err) => {
+      // Same mapped-key treatment the destroy path uses (GH #215): an unmapped
+      // server code resolves to the namespace's generic message rather than
+      // being shown to the user as a literal i18n key.
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+    },
+  });
+
   const starMutation = useMutation({
     mutationFn: ({ email, starred }: { email: EmailDetail; starred: boolean }) =>
-      updateMessage(email.id, { keywords: { $flagged: starred } }),
+      updateMessage(email.id, { keywords: { $flagged: starred } }, accountId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
@@ -366,7 +398,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
   // email, the same pattern the star affordance already uses.
   const keywordMutation = useMutation({
     mutationFn: ({ email, label, checked }: { email: EmailDetail; label: string; checked: boolean }) =>
-      updateMessage(email.id, { keywords: { [label]: checked } }),
+      updateMessage(email.id, { keywords: { [label]: checked } }, accountId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
@@ -628,6 +660,21 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
             {t("mail.deletePermanently")}
           </button>
         )}
+        {/* GH #13/#50 (G-2): copy-to-my-inbox is offered ONLY while a shared
+            mailbox is active (accountId set). On the personal mailbox it is
+            hidden — copying a message to the same inbox it already lives in is
+            meaningless, and the server refuses it anyway. */}
+        {accountId && (
+          <button
+            type="button"
+            onClick={() => copyToInboxMutation.mutate(lastEmail)}
+            disabled={copyToInboxMutation.isPending}
+            className={actionButtonClass}
+          >
+            <InboxIcon size={15} />
+            {t("mail.copyToInbox")}
+          </button>
+        )}
         <button
           type="button"
           aria-label={t(starred ? "mail.unstar" : "mail.star")}
@@ -827,9 +874,16 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                         sender cannot forge this mark via their display name. */}
                     <SenderAuthBadge verdict={email.senderAuth} />
                   </span>
-                  {toCcLabel && (
+                  {/* Sent messages show "Para: <recipients>" and so only
+                      render when there are recipients; received messages always
+                      show the sender + a computed audience ("para mí", "para mí
+                      y N más", …) derived from the real to/cc — never a fixed
+                      string — so the gate differs by branch. */}
+                  {(isSentByMe ? toCcLabel : sender) && (
                     <span className="block truncate text-[12.5px] text-muted">
-                      {isSentByMe ? `${t("mail.sentTo")} ${toCcLabel}` : `${sender?.email} · ${t("mail.toMeAndTeam")}`}
+                      {isSentByMe
+                        ? `${t("mail.sentTo")} ${toCcLabel}`
+                        : `${sender?.email} · ${describeAudience(email.to, email.cc, identityEmails, t)}`}
                     </span>
                   )}
                 </span>
@@ -883,6 +937,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                     bodyText={email.bodyText}
                     attachments={email.attachments}
                     bodyTruncated={email.bodyTruncated}
+                    accountId={accountId}
                     onInlineImageError={(cids) => reportFailedInlineCids(email.id, cids)}
                   />
                 </div>
@@ -893,7 +948,7 @@ export function ThreadView({ threadId, archiveMailboxId, inboxMailboxId, trashMa
                     </p>
                     <div className="flex flex-wrap gap-3">
                       {visibleAttachments.map((attachment) => (
-                        <AttachmentCard key={attachment.blobId} attachment={attachment} />
+                        <AttachmentCard key={attachment.blobId} attachment={attachment} accountId={accountId} />
                       ))}
                     </div>
                   </div>

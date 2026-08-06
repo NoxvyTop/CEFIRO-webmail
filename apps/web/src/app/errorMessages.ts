@@ -27,6 +27,11 @@ export type ErrorNamespace = "admin" | "auth" | "composer" | "mail" | "settings"
  * need the same guarantee.
  */
 export const SERVER_ERROR_CODES = [
+  // GH #13/#50: a request scoped to a shared mailbox (`?accountId=`) the
+  // session cannot reach — 403 from resolveAccountId
+  // (apps/server/src/infra/jmap/client.ts). Defense in depth; the selector only
+  // ever offers accounts the session lists, so this is the stale-selection case.
+  "account_forbidden",
   "ai_disabled",
   "ai_provider_error",
   "ai_rate_limited",
@@ -35,8 +40,14 @@ export const SERVER_ERROR_CODES = [
   // could reach the user with nothing behind it — the exact failure #215 fixed
   // for `mail` and `composer`.
   "contact_exists",
+  // GH #13/#50 (G-2): copy-to-my-inbox on a shared mailbox. `invalid_account`
+  // is the 400 for a personal/own account (the server refuses a same-account
+  // copy — Stalwart rejects it); `copy_failed` is the 502 when the JMAP
+  // Email/copy did not confirm the created copy.
+  "copy_failed",
   "database_unavailable",
   "destroy_failed",
+  "invalid_account",
   // GH #46: the admin console's own codes (`forbidden`, `last_admin`,
   // `self_archive`, `self_demotion`, `user_exists`). The three 409s exist to
   // EXPLAIN a block, and the console collapsed all of them into "the action

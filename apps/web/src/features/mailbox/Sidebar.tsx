@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import type { CustomLabel, Identity, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
-import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon } from "../../app/ui/icons";
+import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon, UsersIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
 import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
@@ -29,6 +29,10 @@ interface SidebarProps {
   selectedLabel: string | null;
   onSelectLabel: (label: string) => void;
   onCompose: () => void;
+  // GH #13/#50 (G-4): opens the "Buzones compartidos" page. Kept as a callback
+  // (the parent owns the route navigation) so the Sidebar stays presentational,
+  // like every other nav item here.
+  onOpenSharedMailboxes?: () => void;
   // CLARO-10: honest disabled state when there are no identities to compose
   // from (e.g. mailbox not linked yet) instead of a silent no-op click.
   composeDisabled?: boolean;
@@ -49,6 +53,7 @@ interface SidebarProps {
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
   groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
+  onOpenSharedMailboxes = () => {},
   composeDisabled = false, customLabels = [], onCreateLabel = () => {}, onDeleteLabel = () => {},
   open = false, onClose = () => {},
 }: SidebarProps) {
@@ -83,6 +88,7 @@ export function Sidebar({
   const selectGroup = closeAfter(onSelectGroup);
   const selectLabel = closeAfter(onSelectLabel);
   const compose = closeAfter(onCompose);
+  const openSharedMailboxes = closeAfter(onOpenSharedMailboxes);
   const displayLabels = mergeLabels(labels, customLabels.map((custom) => custom.slug));
   const customLabelSlugs = new Set(customLabels.map((custom) => custom.slug.toLowerCase()));
 
@@ -213,6 +219,21 @@ export function Sidebar({
         </li>
         {afterStarred.map(renderMailboxRow)}
       </ul>
+      {/* GH #13/#50 (G-4): shared mailboxes get their own page (reached here),
+          not a header selector. Its own row after the folder list, split off by
+          a hairline divider so it reads as a separate destination rather than
+          another folder. Always shown — the page itself handles the common case
+          of a member with no shared mailboxes with a friendly empty state. */}
+      <div className="border-t border-line pt-3">
+        <button
+          type="button"
+          onClick={openSharedMailboxes}
+          className="flex h-[38px] w-full items-center gap-[11px] rounded-[9px] px-3 text-left text-sm hover:bg-hover"
+        >
+          <UsersIcon size={17} />
+          <span>{t("sharedMailboxes.title")}</span>
+        </button>
+      </div>
       {/* GH #102/#83: the ETIQUETAS rail always renders, but no longer
           scaffolds any canonical labels — it's empty on a fresh mailbox
           until the user creates their own or real keywords are discovered

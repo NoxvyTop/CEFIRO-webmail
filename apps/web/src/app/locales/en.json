@@ -222,6 +222,9 @@
       "database_unavailable": "The service is temporarily unavailable. Try again",
       "not_in_trash": "The message is no longer in Trash",
       "destroy_failed": "Could not delete the message",
+      "account_forbidden": "You don't have access to that mailbox",
+      "invalid_account": "That mailbox can't be copied to your inbox",
+      "copy_failed": "Could not copy the message to your inbox",
       "generic": "Mail could not be loaded"
     },
     "unlinked": {
@@ -247,6 +250,8 @@
     "deleted": "Moved to Trash",
     "deletePermanently": "Delete permanently",
     "deletedPermanently": "Message permanently deleted",
+    "copyToInbox": "Copy to my inbox",
+    "copiedToInbox": "Copied to your inbox",
     "deletePermanentlyConfirm": {
       "title": "Delete this message permanently?",
       "description": "\"{{subject}}\" will be permanently deleted. This can't be undone.",
@@ -267,7 +272,13 @@
     "labelNameRequired": "Enter a name for the label",
     "labelNameDuplicate": "A label with that name already exists",
     "noLabelsToApply": "No labels yet. Create one from the sidebar",
-    "toMeAndTeam": "me and the team",
+    "audience": {
+      "toMe": "to me",
+      "toMeAndName": "to me and {{name}}",
+      "toMeAndCount": "to me and {{count}} more",
+      "toName": "to {{name}}",
+      "toNameAndCount": "to {{name}} and {{count}} more"
+    },
     "sentTo": "To:",
     "yesterday": "Yesterday",
     "expandMessage": "Expand message from {{sender}}",
@@ -295,6 +306,23 @@
   "groups": {
     "title": "Groups",
     "showInInbox": "Show in main inbox"
+  },
+  "accounts": {
+    "selectorLabel": "Active mailbox",
+    "personal": "My mailbox",
+    "sharedHeading": "Shared mailboxes"
+  },
+  "sharedMailboxes": {
+    "title": "Shared mailboxes",
+    "description": "The shared mailboxes you can access. Enter any of them, or ask for their mail to also land in your inbox.",
+    "empty": "You don't have any shared mailboxes yet. When an administrator adds you to one, it will show up here.",
+    "enter": "Enter",
+    "copyLabel": "Receive a copy in my inbox",
+    "copyToggle": "Receive a copy of {{name}} in my inbox",
+    "copyHelp": "When new mail arrives in this mailbox, a copy will be delivered to your inbox. Automatic delivery ships in an upcoming update; for now you can copy messages manually from the mailbox.",
+    "copyError": "Couldn't change the preference. Please try again.",
+    "activeIndicator": "Shared mailbox: {{name}}",
+    "backToPersonal": "Back to my mailbox"
   },
   "composer": {
     "showQuoted": "Show quoted message",

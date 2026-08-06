@@ -121,6 +121,9 @@ function renderThread(
   archiveMailboxId: string | null = null,
   inboxMailboxId: string | null = null,
   trashMailboxId: string | null = null,
+  // GH #13/#50 (G-2): the active shared mailbox this thread is read from —
+  // undefined = personal (the default, unchanged for every existing test).
+  accountId?: string,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -132,6 +135,7 @@ function renderThread(
             archiveMailboxId={archiveMailboxId}
             inboxMailboxId={inboxMailboxId}
             trashMailboxId={trashMailboxId}
+            accountId={accountId}
           />
           <ComposeParamProbe />
         </ToastProvider>
@@ -466,6 +470,86 @@ describe("ThreadView", () => {
     ).not.toBeInTheDocument();
   });
 
+  // GH #13/#50 (G-2): copy a message from a shared mailbox into the member's
+  // own personal inbox. The action is offered ONLY while a shared mailbox is
+  // active (accountId set) and hidden on the personal mailbox.
+  describe("copy to inbox (G-2)", () => {
+    function stubSharedThread(copyStatus = 200) {
+      const state = structuredClone(thread);
+      return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.includes("/copy-to-inbox") && method === "POST") {
+          return copyStatus === 200
+            ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+            : new Response(
+                JSON.stringify({ code: "copy_failed", message: "errors.copy_failed", traceId: "t1" }),
+                { status: copyStatus },
+              );
+        }
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+        if (url.includes("/api/mail/preferences")) {
+          return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      });
+    }
+
+    it("shows Copiar a mi bandeja when a shared mailbox is active", async () => {
+      vi.stubGlobal("fetch", stubSharedThread());
+      renderThread("t1", null, null, null, "acc-shared");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      expect(
+        within(actionsBar).getByRole("button", { name: i18n.t("mail.copyToInbox") }),
+      ).toBeInTheDocument();
+    });
+
+    it("hides Copiar a mi bandeja on the personal mailbox (no active account)", async () => {
+      vi.stubGlobal("fetch", stubSharedThread());
+      renderThread(); // no accountId → personal mailbox
+
+      await screen.findByTestId("thread-actions-bar");
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.copyToInbox") }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("clicking it POSTs to the copy endpoint with the shared accountId and shows a success toast", async () => {
+      const fetchMock = stubSharedThread();
+      vi.stubGlobal("fetch", fetchMock);
+      renderThread("t1", null, null, null, "acc-shared");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.copyToInbox") }));
+
+      const copyCall = await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) =>
+            String(input) === "/api/mail/messages/e2/copy-to-inbox?accountId=acc-shared" &&
+            (init as RequestInit | undefined)?.method === "POST",
+        );
+        expect(call).toBeTruthy();
+        return call;
+      });
+      expect(copyCall).toBeTruthy();
+
+      expect(await screen.findByText(i18n.t("mail.copiedToInbox"))).toBeInTheDocument();
+    });
+
+    it("shows an error toast when the copy fails", async () => {
+      vi.stubGlobal("fetch", stubSharedThread(502));
+      renderThread("t1", null, null, null, "acc-shared");
+
+      const actionsBar = await screen.findByTestId("thread-actions-bar");
+      fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.copyToInbox") }));
+
+      expect(await screen.findByText(i18n.t("mail.errors.copy_failed"))).toBeInTheDocument();
+    });
+  });
+
   describe("attachments", () => {
     it("renders the attachments block after the email body, not between the AI card and the body", async () => {
       stubFetch();
@@ -681,18 +765,49 @@ describe("ThreadView", () => {
       renderThread();
 
       expect(await screen.findByText(`${i18n.t("mail.sentTo")} Dave`)).toBeInTheDocument();
-      // The sent message (carol@example.com, matching the identity) no longer
-      // uses the raw "<email> · para mí y el equipo" framing — the other
-      // message in the thread (alice, a received email) is unaffected and
-      // keeps it, so the assertion is scoped to carol's line specifically.
+      // The sent message (carol@example.com, matching the identity) uses the
+      // "Para: <recipients>" framing, not the "<email> · <audience>" framing a
+      // received message gets — the other message in the thread (alice, a
+      // received email) is unaffected, so the assertion is scoped to carol's
+      // line specifically.
       expect(screen.queryByText(/carol@example\.com ·/)).not.toBeInTheDocument();
     });
 
-    it("keeps the inbox framing for a received message when identities don't match the sender", async () => {
+    it("shows a computed audience (not a fixed string) for a received message", async () => {
+      // Neither sender matches an identity, so both messages are "received".
+      // Alice's message was addressed to Bob, so its audience is derived from
+      // that real recipient — "para Bob" — rather than a hardcoded literal.
       stubFetch([{ id: "id1", name: "Someone Else", email: "someone-else@example.com" }]);
       renderThread();
 
-      expect(await screen.findByText(new RegExp(i18n.t("mail.toMeAndTeam")))).toBeInTheDocument();
+      expect(await screen.findByText(/alice@example\.com · para Bob/)).toBeInTheDocument();
+      // The old hardcoded "para mí y el equipo" literal is gone for good.
+      expect(screen.queryByText(/el equipo/)).not.toBeInTheDocument();
+    });
+
+    it("counts the account itself in a received message's audience", async () => {
+      const state = structuredClone(thread);
+      // Alice (not one of my identities) writes to Bob (me) and Dave — a
+      // received message where I'm one of several recipients, so the audience
+      // is "para mí y Dave".
+      state.emails[0]!.to = [
+        { name: "Bob", email: "bob@example.com" },
+        { name: "Dave", email: "dave@example.com" },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/identities")) {
+            return new Response(JSON.stringify([{ id: "id1", name: "Bob", email: "bob@example.com" }]));
+          }
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      expect(await screen.findByText(/alice@example\.com · para mí y Dave/)).toBeInTheDocument();
     });
   });
 

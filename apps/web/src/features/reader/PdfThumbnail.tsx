@@ -9,11 +9,15 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 // Note: destroy() lives on the *loading task* returned by getDocument(),
 // not on the resolved PDFDocumentProxy — that class has no public destroy.
 import type { PDFDocumentLoadingTask } from "pdfjs-dist";
+import { blobUrl } from "./blobUrl";
 
 interface PdfThumbnailProps {
   blobId: string;
   name: string;
   type: string;
+  // GH #13/#50: the active shared mailbox this PDF belongs to, so its bytes are
+  // fetched from that account. Absent = personal mailbox.
+  accountId?: string;
   /**
    * Rendered if the PDF permanently fails to load or render — network
    * failure, corrupt/encrypted PDF, no canvas support, etc. This component
@@ -34,12 +38,6 @@ interface PdfThumbnailProps {
    * distinction internally, this prop just exposes it.
    */
   loadingFallback?: ReactNode;
-}
-
-function blobFetchUrl(blobId: string, name: string, type: string): string {
-  const query = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-  // No dl=1 — this fetches bytes to render, not to download.
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}`;
 }
 
 // Caps the rendered canvas so a large PDF page never produces an oversized
@@ -69,7 +67,7 @@ const MAX_HEIGHT = 160;
  * component unmounts or the attachment changes before rendering gets that
  * far.
  */
-export function PdfThumbnail({ blobId, name, type, fallback, loadingFallback }: PdfThumbnailProps) {
+export function PdfThumbnail({ blobId, name, type, accountId, fallback, loadingFallback }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const taskRef = useRef<PDFDocumentLoadingTask | null>(null);
   // GH #94: was a plain `ready` boolean — widened to a 3-state status so the
@@ -86,7 +84,7 @@ export function PdfThumbnail({ blobId, name, type, fallback, loadingFallback }: 
 
     async function renderThumbnail() {
       try {
-        const response = await fetch(blobFetchUrl(blobId, name, type), { credentials: "include" });
+        const response = await fetch(blobUrl(blobId, name, type, { accountId }), { credentials: "include" });
         if (!response.ok) throw new Error(`blob fetch failed: ${response.status}`);
         const data = await response.arrayBuffer();
         if (!isCurrent) return;
@@ -141,7 +139,7 @@ export function PdfThumbnail({ blobId, name, type, fallback, loadingFallback }: 
         taskRef.current = null;
       }
     };
-  }, [blobId, name, type]);
+  }, [blobId, name, type, accountId]);
 
   // Falls back to `fallback` while loading too when `loadingFallback` isn't
   // given — matches this component's original single-placeholder behavior

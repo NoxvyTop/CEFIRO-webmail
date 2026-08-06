@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { isQuoteSeparatorLine, type AttachmentMeta } from "@webmail/shared";
+import { blobUrl } from "./blobUrl";
 import { extractReferencedCids, sanitizeEmailHtml } from "./sanitize";
 
 interface EmailBodyProps {
   bodyHtml: string | null;
   bodyText: string | null;
   attachments?: AttachmentMeta[];
+  // GH #13/#50: the active shared mailbox this message belongs to, so inline
+  // cid: images are fetched from that account's blobs. Absent = personal.
+  accountId?: string;
   // GH #140: JMAP reported the fetched body as truncated, so bodyHtml/bodyText
   // below are only the beginning of the real message. Optional (defaulting to
   // "not truncated") so the many existing call sites and fixtures that predate
@@ -36,12 +40,6 @@ export function isSafeInlineImage(type: string): boolean {
   return SAFE_INLINE_IMAGE_TYPES.has(type.split(";")[0]?.trim().toLowerCase() ?? "");
 }
 
-function blobFetchUrl(blobId: string, name: string | null, type: string): string {
-  const query = `name=${encodeURIComponent(name ?? "")}&type=${encodeURIComponent(type)}`;
-  // No dl=1 — this must resolve inline (it's an embedded image, not a download).
-  return `/api/mail/blobs/${encodeURIComponent(blobId)}?${query}`;
-}
-
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -60,8 +58,13 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 // base64-encodes them into a data: URL — data: URLs need no network
 // request and have no origin at all, so they render fine inside the
 // sandboxed iframe without loosening the sandbox.
-async function fetchAsDataUrl(blobId: string, name: string | null, type: string): Promise<string> {
-  const response = await fetch(blobFetchUrl(blobId, name, type), { credentials: "include" });
+async function fetchAsDataUrl(
+  blobId: string,
+  name: string | null,
+  type: string,
+  accountId: string | undefined,
+): Promise<string> {
+  const response = await fetch(blobUrl(blobId, name, type, { accountId }), { credentials: "include" });
   if (!response.ok) throw new Error(`blob fetch failed: ${response.status}`);
   const buffer = await response.arrayBuffer();
   // Anchor the data: prefix to the vetted base type (this is only reached for
@@ -87,6 +90,7 @@ async function fetchAsDataUrl(blobId: string, name: string | null, type: string)
 function useResolvedCidImageMap(
   bodyHtml: string | null,
   attachments: AttachmentMeta[] | undefined,
+  accountId: string | undefined,
 ): { resolvedMap: Record<string, string>; failedCids: string[] } {
   const candidates = useMemo(() => {
     if (!bodyHtml) return [];
@@ -123,7 +127,7 @@ function useResolvedCidImageMap(
     Promise.all(
       candidates.map(async (attachment) => {
         try {
-          const dataUrl = await fetchAsDataUrl(attachment.blobId, attachment.name, attachment.type);
+          const dataUrl = await fetchAsDataUrl(attachment.blobId, attachment.name, attachment.type, accountId);
           return { cid: attachment.cid, dataUrl } as const;
         } catch {
           // Fetch/network failure: leave this cid unresolved rather than
@@ -147,7 +151,7 @@ function useResolvedCidImageMap(
     return () => {
       isCurrent = false;
     };
-  }, [candidates]);
+  }, [candidates, accountId]);
 
   return { resolvedMap, failedCids };
 }
@@ -706,6 +710,7 @@ function EmailBodyContent({
   bodyHtml,
   bodyText,
   attachments,
+  accountId,
   onInlineImageError,
 }: Omit<EmailBodyProps, "bodyTruncated">) {
   const { t } = useTranslation();
@@ -752,7 +757,7 @@ function EmailBodyContent({
   // inside the sandboxed iframe itself. Built from the FULL raw bodyHtml
   // (pre-split) so cid: images resolve the same whether they land in the
   // new-content half or the quoted-trail half below.
-  const { resolvedMap: cidMap, failedCids } = useResolvedCidImageMap(bodyHtml, attachments);
+  const { resolvedMap: cidMap, failedCids } = useResolvedCidImageMap(bodyHtml, attachments, accountId);
 
   // GH #275: bubble up the cids that failed to render inline so the parent can
   // keep their attachments reachable as downloadable chips. failedCids is a

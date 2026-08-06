@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { Avatar } from "./Avatar";
-import { BellIcon, LogoutIcon, MoonIcon, SettingsIcon, SunIcon, UsersIcon } from "./icons";
+import { BellIcon, KeyboardIcon, LogoutIcon, MoonIcon, SettingsIcon, SunIcon, UsersIcon } from "./icons";
 
 interface UserMenuUser {
   email: string;
@@ -20,6 +20,9 @@ interface UserMenuProps {
   onLogout: () => void;
   showNotifications: boolean;
   onEnableNotifications: () => void;
+  // GH #13/#50 (G-4): opens the keyboard-shortcuts dialog. The standalone
+  // "Atajos" header button moved in here; the `?` keyboard trigger is unchanged.
+  onShowShortcuts: () => void;
 }
 
 const menuItemClass =
@@ -33,6 +36,7 @@ export function UserMenu({
   onLogout,
   showNotifications,
   onEnableNotifications,
+  onShowShortcuts,
 }: UserMenuProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -94,6 +98,20 @@ export function UserMenu({
               {t("admin.title")}
             </Link>
           )}
+          {/* GH #13/#50 (G-4): the "Atajos" launcher moved here from a standalone
+              header button; it opens the same shortcuts dialog. */}
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClass}
+            onClick={() => {
+              onShowShortcuts();
+              setOpen(false);
+            }}
+          >
+            <KeyboardIcon />
+            {t("shortcuts.title")}
+          </button>
           <button
             type="button"
             role="menuitem"

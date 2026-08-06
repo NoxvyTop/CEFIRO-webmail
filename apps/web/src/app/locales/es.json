@@ -222,6 +222,9 @@
       "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
       "not_in_trash": "El mensaje ya no está en la papelera",
       "destroy_failed": "No se pudo eliminar el mensaje",
+      "account_forbidden": "No tienes acceso a ese buzón",
+      "invalid_account": "Ese buzón no admite copiar a tu bandeja",
+      "copy_failed": "No se pudo copiar el mensaje a tu bandeja",
       "generic": "No se pudo cargar el correo"
     },
     "unlinked": {
@@ -247,6 +250,8 @@
     "deleted": "Movido a la papelera",
     "deletePermanently": "Eliminar definitivamente",
     "deletedPermanently": "Mensaje eliminado definitivamente",
+    "copyToInbox": "Copiar a mi bandeja",
+    "copiedToInbox": "Copiado a tu bandeja",
     "deletePermanentlyConfirm": {
       "title": "¿Eliminar este mensaje definitivamente?",
       "description": "«{{subject}}» se eliminará definitivamente. Esta acción no se puede deshacer.",
@@ -267,7 +272,13 @@
     "labelNameRequired": "Escribe un nombre para la etiqueta",
     "labelNameDuplicate": "Ya existe una etiqueta con ese nombre",
     "noLabelsToApply": "Todavía no tienes etiquetas. Crea una desde la barra lateral",
-    "toMeAndTeam": "para mí y el equipo",
+    "audience": {
+      "toMe": "para mí",
+      "toMeAndName": "para mí y {{name}}",
+      "toMeAndCount": "para mí y {{count}} más",
+      "toName": "para {{name}}",
+      "toNameAndCount": "para {{name}} y {{count}} más"
+    },
     "sentTo": "Para:",
     "yesterday": "Ayer",
     "expandMessage": "Mostrar mensaje completo de {{sender}}",
@@ -295,6 +306,23 @@
   "groups": {
     "title": "Grupos",
     "showInInbox": "Mostrar en bandeja principal"
+  },
+  "accounts": {
+    "selectorLabel": "Buzón activo",
+    "personal": "Mi buzón",
+    "sharedHeading": "Buzones compartidos"
+  },
+  "sharedMailboxes": {
+    "title": "Buzones compartidos",
+    "description": "Los buzones compartidos a los que tenés acceso. Entrá a cualquiera o pedí que sus correos también lleguen a tu bandeja.",
+    "empty": "Todavía no tenés buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
+    "enter": "Entrar",
+    "copyLabel": "Recibir copia en mi bandeja",
+    "copyToggle": "Recibir copia de {{name}} en mi bandeja",
+    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja. La entrega automática se activa en una próxima actualización; por ahora podés copiar correos manualmente desde el buzón.",
+    "copyError": "No se pudo cambiar la preferencia. Inténtalo de nuevo.",
+    "activeIndicator": "Buzón compartido: {{name}}",
+    "backToPersonal": "Volver a mi buzón"
   },
   "composer": {
     "showQuoted": "Mostrar mensaje citado",

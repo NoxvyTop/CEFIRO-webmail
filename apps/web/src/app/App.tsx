@@ -146,18 +146,11 @@ export function App() {
           )}
           {user && (
             <div className="ml-auto flex shrink-0 items-center gap-3">
-              <button
-                type="button"
-                aria-haspopup="dialog"
-                onClick={() => setShowShortcuts((current) => !current)}
-                // GH #295: keyboard shortcuts don't apply on touch devices, so
-                // the "Atajos" launcher only shows from md+ (where a keyboard
-                // is present). The Escape/`?` handlers stay wired regardless.
-                className="hidden h-[34px] shrink-0 items-center gap-[7px] rounded-[8px] border border-line px-3 text-[13px] text-muted transition hover:bg-hover hover:text-ink md:flex"
-              >
-                <kbd aria-hidden="true" className="rounded border border-line px-[6px] py-[1px] text-[11px]">?</kbd>
-                {t("shortcuts.title")}
-              </button>
+              {/* GH #13/#50 (G-4): the shared-mailbox selector and the standalone
+                  "Atajos" button both left the header — accounts now switch from
+                  the "Buzones compartidos" page (left sidebar), and "Atajos"
+                  moved into the profile menu below. The `?`/Escape handlers stay
+                  wired regardless. */}
               <UserMenu
                 user={user}
                 avatarUrl={profile.data?.avatarDataUrl}
@@ -166,6 +159,7 @@ export function App() {
                 onLogout={() => void logout()}
                 showNotifications={notificationPermission === "default"}
                 onEnableNotifications={() => void handleEnableNotifications()}
+                onShowShortcuts={() => setShowShortcuts(true)}
               />
             </div>
           )}
