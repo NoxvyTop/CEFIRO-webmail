@@ -132,7 +132,10 @@ SSE del lado servidor — así que las URLs que el proveedor anuncia las consume
 De ahí la regla: **llegar por el camino más directo y reescribir a ese origen,
 nunca a través del borde TLS público**. Evita el *hairpin* (salir a la nube y
 volver para hablar con tu propio origen) y evita que un CDN corte el SSE, que es
-de larga duración por diseño.
+de larga duración por diseño. Del lado del navegador, `/api/mail/events` responde
+con `X-Accel-Buffering: no` para que un nginx con `proxy_buffering on` (el
+router del ecosistema) no retenga los eventos hasta llenar el búfer o cerrar la
+conexión (#316).
 
 Matriz A×B — topología de red × confianza TLS:
 
