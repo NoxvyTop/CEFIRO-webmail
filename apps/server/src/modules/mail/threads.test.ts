@@ -7,6 +7,7 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
+import { createSentRecipientsRepo, type SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -100,11 +101,12 @@ const stubJmap: JmapClient = {
 
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
+let users: ReturnType<typeof createUsersRepo>;
 let token: string;
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
-  const users = createUsersRepo(sql);
+  users = createUsersRepo(sql);
   const key = await importMasterKey(
     btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
   );
@@ -125,7 +127,11 @@ afterAll(() => sql.end());
 // id. Omitting it (undefined) exercises the fail-safe path — every verdict
 // "unknown" — which is why it is a plain optional, not a defaulted, parameter:
 // a default would swallow an explicit `undefined` and hide that path.
-function makeApp(jmap: JmapClient | null, authServId?: string) {
+//
+// GH #314: `sentRecipients` is optional the same way — omitted, Tier A of the
+// sender-trust indicator is simply never asserted and no backfill runs, which
+// is what keeps every test above byte-identical in what it exercises.
+function makeApp(jmap: JmapClient | null, authServId?: string, sentRecipients?: SentRecipientsRepo) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -134,6 +140,7 @@ function makeApp(jmap: JmapClient | null, authServId?: string) {
       userPreferences: createUserPreferencesRepo(sql),
       jmap,
       authServId,
+      sentRecipients,
     }),
   });
 }
@@ -527,5 +534,217 @@ describe("GET /api/mail/threads/:threadId — truncated bodies (GH #140)", () =>
     });
     const [, getCall] = calls;
     expect((getCall?.[1] as { maxBodyValueBytes: number }).maxBodyValueBytes).toBe(524288);
+  });
+});
+
+// GH #314: the sender-trust tiers resolved end to end through the thread
+// route. Each message below is one row of the security contract; the exact
+// From address/domain the badge is tied to is asserted alongside the tier so
+// a mismatch can never be hidden by a coincidental "known". Own stub (it must
+// also answer the one-time Sent backfill's Mailbox/get + Email/query batches)
+// and own user per test, so the per-user sent_recipients store and the
+// backfill marker start empty every time.
+const PASS_HEADER = {
+  name: "Authentication-Results",
+  value: " mail.cefiro.test; dmarc=pass (p=reject) header.from=partner.test",
+};
+const FAIL_HEADER = {
+  name: "Authentication-Results",
+  value: " mail.cefiro.test; dmarc=fail (p=reject) header.from=partner.test",
+};
+const NONE_HEADER = {
+  name: "Authentication-Results",
+  value: " mail.cefiro.test; dmarc=none header.from=partner.test",
+};
+
+function trustEmail(id: string, from: string, header: { name: string; value: string } | null) {
+  return {
+    id,
+    threadId: "t5",
+    mailboxIds: { mb1: true },
+    from: [{ name: null, email: from }],
+    to: [],
+    subject: id,
+    receivedAt: "2026-07-06T10:00:00Z",
+    preview: "",
+    keywords: {},
+    hasAttachment: false,
+    size: 10,
+    messageId: null,
+    references: null,
+    inReplyTo: null,
+    headers: header ? [header] : [],
+  };
+}
+
+const TRUST_THREAD = [
+  trustEmail("known-pass", "Ana@Partner.Test", PASS_HEADER),
+  trustEmail("known-fail", "ana@partner.test", FAIL_HEADER),
+  trustEmail("sibling-pass", "bob@partner.test", PASS_HEADER),
+  trustEmail("seed-pass", "notifications@noreply.github.com", PASS_HEADER),
+  trustEmail("seed-none", "noreply@github.com", NONE_HEADER),
+  trustEmail("seed-no-header", "noreply@github.com", null),
+  trustEmail("lookalike-pass", "noreply@githiib.com", PASS_HEADER),
+  trustEmail("user-domain-pass", "billing@invoices.acme-partner.test", PASS_HEADER),
+  trustEmail("both-pass", "support@github.com", PASS_HEADER),
+  trustEmail("backfilled-pass", "carla@backfilled.test", PASS_HEADER),
+];
+
+function makeTrustStubJmap(input: {
+  calls: JmapMethodCall[][];
+  sentMailbox?: boolean;
+  backfillThrows?: boolean;
+}): JmapClient {
+  return {
+    getSession: async () => ({
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    }),
+    request: async (_auth, _session, methodCalls) => {
+      input.calls.push(methodCalls);
+      const name = methodCalls[0]?.[0];
+      if (name === "Mailbox/get") {
+        if (input.backfillThrows) throw new Error("boom: simulated JMAP failure");
+        const list = input.sentMailbox === false ? [{ id: "mb1", role: "inbox" }] : [
+          { id: "mb1", role: "inbox" },
+          { id: "mb-sent", role: "sent" },
+        ];
+        return [["Mailbox/get", { list }, "mb"]];
+      }
+      if (name === "Email/query") {
+        return [
+          ["Email/query", { ids: ["s1"], position: 0 }, "q"],
+          ["Email/get", { list: [{ id: "s1", to: [{ email: "carla@backfilled.test" }] }] }, "g"],
+        ];
+      }
+      return [
+        ["Thread/get", { list: [{ id: "t5", emailIds: TRUST_THREAD.map((e) => e.id) }] }, "t"],
+        ["Email/get", { list: TRUST_THREAD }, "g"],
+      ];
+    },
+    uploadBlob: async () => "blob-id",
+  };
+}
+
+async function trustUser() {
+  const user = await users.create({
+    email: `trust-${crypto.randomUUID()}@noxvytop.com`,
+    displayName: "Trust User",
+  });
+  await mailCredentials.set(user.id, "mailbox-pw");
+  const session = await sessions.create(user.id, 1);
+  const sentRecipients = createSentRecipientsRepo(sql);
+  await sentRecipients.record(user.id, ["ana@partner.test", "support@github.com"]);
+  await createUserPreferencesRepo(sql).merge(user.id, { trustedServices: ["acme-partner.test"] });
+  return { userId: user.id, token: session.token, sentRecipients };
+}
+
+describe("GET /api/mail/threads/:threadId — sender trust (GH #314)", () => {
+  async function readTrust(jmap: JmapClient, user: Awaited<ReturnType<typeof trustUser>>) {
+    const res = await makeApp(jmap, "mail.cefiro.test", user.sentRecipients).request("/api/mail/threads/t5", {
+      headers: { cookie: `session=${user.token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = threadDetailSchema.parse(await res.json());
+    return Object.fromEntries(body.emails.map((e) => [e.id, { trust: e.senderTrust, from: e.from[0]?.email }]));
+  }
+
+  it("resolves every tier exactly as the security contract says", async () => {
+    const user = await trustUser();
+    const trust = await readTrust(makeTrustStubJmap({ calls: [] }), user);
+
+    // Tier A: DMARC pass + the user has written to this exact address.
+    expect(trust["known-pass"]).toEqual({ trust: "known", from: "Ana@Partner.Test" });
+    // DMARC fail wins over everything: no positive mark, ever.
+    expect(trust["known-fail"]).toEqual({ trust: "none", from: "ana@partner.test" });
+    // Same domain, different mailbox: not the address the user wrote to.
+    expect(trust["sibling-pass"]).toEqual({ trust: "none", from: "bob@partner.test" });
+    // Tier B via the curated seed, subdomain match.
+    expect(trust["seed-pass"]).toEqual({ trust: "trusted-service", from: "notifications@noreply.github.com" });
+    // A seed domain without a DMARC pass is nothing — exactly the spoof case.
+    expect(trust["seed-none"]).toEqual({ trust: "none", from: "noreply@github.com" });
+    expect(trust["seed-no-header"]).toEqual({ trust: "none", from: "noreply@github.com" });
+    // Look-alike domain: DMARC passes for githiib.com, which is not trusted.
+    expect(trust["lookalike-pass"]).toEqual({ trust: "none", from: "noreply@githiib.com" });
+    // Tier B via the user's own confirmed list, subdomain match.
+    expect(trust["user-domain-pass"]).toEqual({
+      trust: "trusted-service",
+      from: "billing@invoices.acme-partner.test",
+    });
+    // Both tiers apply: trusted-service wins.
+    expect(trust["both-pass"]).toEqual({ trust: "trusted-service", from: "support@github.com" });
+  });
+
+  it("keeps every tier at 'none' when no authserv-id is configured (fail-safe, like senderAuth)", async () => {
+    const user = await trustUser();
+    const res = await makeApp(makeTrustStubJmap({ calls: [] }), undefined, user.sentRecipients).request(
+      "/api/mail/threads/t5",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    const body = threadDetailSchema.parse(await res.json());
+    expect(body.emails.every((e) => e.senderTrust === "none")).toBe(true);
+  });
+
+  it("answers Tier A with ONE sent_recipients query for the whole thread, not one per message", async () => {
+    const user = await trustUser();
+    let hasCalls = 0;
+    const counting: SentRecipientsRepo = {
+      ...user.sentRecipients,
+      has: (userId, emails) => {
+        hasCalls += 1;
+        return user.sentRecipients.has(userId, emails);
+      },
+    };
+    const res = await makeApp(makeTrustStubJmap({ calls: [] }), "mail.cefiro.test", counting).request(
+      "/api/mail/threads/t5",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    expect(res.status).toBe(200);
+    expect(hasCalls).toBe(1);
+  });
+
+  it("runs the one-time Sent backfill on the first read, so a pre-existing correspondent is 'known'", async () => {
+    const user = await trustUser();
+    const calls: JmapMethodCall[][] = [];
+    const jmap = makeTrustStubJmap({ calls });
+
+    const first = await readTrust(jmap, user);
+    expect(first["backfilled-pass"]).toEqual({ trust: "known", from: "carla@backfilled.test" });
+    expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
+
+    // Second read: no backfill batches at all, only the thread's own.
+    await readTrust(jmap, user);
+    expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
+    expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(1);
+  });
+
+  it("still serves the thread when the backfill fails, and retries it on the next read", async () => {
+    const user = await trustUser();
+    const calls: JmapMethodCall[][] = [];
+    const failing = makeTrustStubJmap({ calls, backfillThrows: true });
+
+    const trust = await readTrust(failing, user);
+    expect(trust["known-pass"]?.trust).toBe("known");
+    expect(trust["backfilled-pass"]?.trust).toBe("none");
+
+    const working = makeTrustStubJmap({ calls });
+    const after = await readTrust(working, user);
+    expect(after["backfilled-pass"]?.trust).toBe("known");
+  });
+
+  it("does not run the backfill, and asserts no Tier A, when no sent-recipients store is wired", async () => {
+    const user = await trustUser();
+    const calls: JmapMethodCall[][] = [];
+    const res = await makeApp(makeTrustStubJmap({ calls }), "mail.cefiro.test").request("/api/mail/threads/t5", {
+      headers: { cookie: `session=${user.token}` },
+    });
+    const body = threadDetailSchema.parse(await res.json());
+    expect(body.emails.find((e) => e.id === "known-pass")?.senderTrust).toBe("none");
+    // Tier B still works without the store.
+    expect(body.emails.find((e) => e.id === "seed-pass")?.senderTrust).toBe("trusted-service");
+    expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(0);
   });
 });
