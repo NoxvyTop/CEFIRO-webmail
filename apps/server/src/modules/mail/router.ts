@@ -239,6 +239,8 @@ function toEmailDetail(email: JmapEmailDetail, authServId: string | undefined): 
     references: email.references ?? null,
     inReplyTo: email.inReplyTo ?? null,
     senderAuth: deriveSenderAuthVerdict(email.headers, authServId),
+    // GH #314: no assertion until the thread route resolves the tiers.
+    senderTrust: "none",
   };
 }
 

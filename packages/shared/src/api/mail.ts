@@ -95,6 +95,23 @@ export type AttachmentMeta = z.infer<typeof attachmentMetaSchema>;
 export const senderAuthVerdictSchema = z.enum(["pass", "fail", "unknown"]);
 export type SenderAuthVerdict = z.infer<typeof senderAuthVerdictSchema>;
 
+// GH #314: a POSITIVE-ONLY trust level layered on top of senderAuth, never a
+// replacement for it. "known" means the sender passed DMARC AND the user has
+// previously written to that exact address (a correspondent); "trusted-service"
+// means the sender passed DMARC AND the From domain is on the trusted-services
+// list (curated seed plus the domains the user confirmed). "none" is the
+// absence of an assertion — NOT a warning: DMARC fail stays the only negative
+// signal (senderAuth), so a legitimate first-time sender is never painted as
+// suspicious for merely being new.
+//
+// Kept as its own enum rather than widening senderAuthVerdictSchema: the
+// GH #152 tests pin that enum to the raw DMARC verdict, and mixing "who is
+// this" into "did authentication pass" would let a client render trust off a
+// field that was never meant to carry it. See
+// apps/server/src/modules/mail/sender-trust.ts for how it is resolved.
+export const senderTrustSchema = z.enum(["none", "known", "trusted-service"]);
+export type SenderTrust = z.infer<typeof senderTrustSchema>;
+
 export const emailDetailSchema = emailSummarySchema.extend({
   cc: z.array(emailAddressSchema),
   replyTo: z.array(emailAddressSchema),
@@ -125,6 +142,12 @@ export const emailDetailSchema = emailSummarySchema.extend({
   // hand-written test fixture) parses as "no assertion" rather than either
   // throwing or, far worse, defaulting to a false trust mark.
   senderAuth: senderAuthVerdictSchema.default("unknown"),
+  // GH #314: see senderTrustSchema above. Defaults to "none" — never "known"
+  // or "trusted-service" — so a response from a server that predates this
+  // field (or a hand-written test fixture) parses as "no assertion" rather
+  // than throwing inside threadDetailSchema or, far worse, defaulting to a
+  // false trust mark.
+  senderTrust: senderTrustSchema.default("none"),
   // GH #140: true when JMAP reported at least one of the fetched body values
   // as truncated (RFC 8621 §4.1.4 `isTruncated`), i.e. bodyHtml/bodyText hold
   // a PREFIX of the real body, cut at the server's maxBodyValueBytes budget.
@@ -199,6 +222,15 @@ export const userPreferencesSchema = z.object({
   // deliberately absent from userPreferencesUpdateSchema below. Defaults to []
   // for the same backward-compatibility reason as customLabels.
   sharedMailboxCopyOptIn: z.array(z.string()).default([]),
+  // GH #314: the domains this user confirmed as trusted services (Tier B of
+  // the sender-trust indicator), on top of the curated seed list the server
+  // ships. Written exclusively through PUT/DELETE
+  // /api/mail/trusted-services/:domain — which validates the domain shape and
+  // normalizes it — not the generic preferences PATCH, so it is deliberately
+  // absent from userPreferencesUpdateSchema below, exactly like
+  // sharedMailboxCopyOptIn. Defaults to [] for the same backward-compatibility
+  // reason as customLabels.
+  trustedServices: z.array(z.string()).default([]),
 });
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
@@ -207,3 +239,13 @@ export const userPreferencesUpdateSchema = z.object({
   customLabels: customLabelsListSchema.optional(),
 });
 export type UserPreferencesUpdate = z.infer<typeof userPreferencesUpdateSchema>;
+
+// GH #314: the body of GET /api/mail/trusted-services — the curated seed list
+// (read-only, shipped with the server) and the user's own confirmed domains,
+// kept apart so the client can offer "stop trusting" only for entries the user
+// added: a seed entry cannot be removed per user.
+export const trustedServicesSchema = z.object({
+  seed: z.array(z.string()),
+  user: z.array(z.string()),
+});
+export type TrustedServices = z.infer<typeof trustedServicesSchema>;

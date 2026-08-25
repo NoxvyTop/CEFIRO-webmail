@@ -40,6 +40,7 @@ const thread: ThreadDetail = {
       references: null,
       inReplyTo: null,
       senderAuth: "unknown",
+      senderTrust: "none",
       bodyTruncated: false,
     },
     {
@@ -63,6 +64,7 @@ const thread: ThreadDetail = {
       references: ["e1@example.com"],
       inReplyTo: ["e1@example.com"],
       senderAuth: "unknown",
+      senderTrust: "none",
       bodyTruncated: false,
     },
   ],
@@ -1284,6 +1286,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1308,6 +1311,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1332,6 +1336,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1425,6 +1430,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1449,6 +1455,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1474,6 +1481,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1576,6 +1584,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1627,6 +1636,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1650,6 +1660,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1790,6 +1801,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1813,6 +1825,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1841,6 +1854,7 @@ describe("ThreadView", () => {
         references: null,
         inReplyTo: null,
         senderAuth: "unknown",
+        senderTrust: "none",
         bodyTruncated: false,
       };
     }

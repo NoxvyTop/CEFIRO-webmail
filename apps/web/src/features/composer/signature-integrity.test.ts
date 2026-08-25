@@ -38,6 +38,7 @@ function makeEmail(overrides: Partial<EmailDetail> = {}): EmailDetail {
     references: null,
     inReplyTo: null,
     senderAuth: "unknown",
+    senderTrust: "none",
     bodyTruncated: false,
     ...overrides,
   };

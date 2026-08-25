@@ -41,6 +41,7 @@ function email(id: string, subject: string, from: string, messageId: string) {
     references: null,
     inReplyTo: null,
     senderAuth: "unknown",
+    senderTrust: "none",
     bodyTruncated: false,
   };
 }
