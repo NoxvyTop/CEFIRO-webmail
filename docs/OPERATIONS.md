@@ -132,10 +132,7 @@ SSE del lado servidor — así que las URLs que el proveedor anuncia las consume
 De ahí la regla: **llegar por el camino más directo y reescribir a ese origen,
 nunca a través del borde TLS público**. Evita el *hairpin* (salir a la nube y
 volver para hablar con tu propio origen) y evita que un CDN corte el SSE, que es
-de larga duración por diseño. Del lado del navegador, `/api/mail/events` responde
-con `X-Accel-Buffering: no` para que un nginx con `proxy_buffering on` (el
-router del ecosistema) no retenga los eventos hasta llenar el búfer o cerrar la
-conexión (#316).
+de larga duración por diseño.
 
 Matriz A×B — topología de red × confianza TLS:
 
@@ -295,6 +292,15 @@ Traefik (`forwardedHeaders`) y Caddy (`X-Forwarded-For`) anexan por defecto y no
 necesitan nada más. Un proxy configurado con `proxy_set_header X-Forwarded-For
 $remote_addr` (sustituir) **también funciona** con `1`: deja una cadena de un
 solo elemento escrito por él.
+
+**Streaming (SSE).** `/api/mail/events` es una respuesta de larga duración.
+Responde con `X-Accel-Buffering: no` para que un nginx con `proxy_buffering on`
+(el router del ecosistema) no retenga los eventos hasta llenar el búfer o cerrar
+la conexión (#316). Solo actúa sobre **el nginx que hace el `proxy_pass`
+directo** al contenedor: nginx consume la cabecera y no la reenvía, así que en
+una topología de dos saltos (`CDN o balanceador → nginx → contenedor`) el salto
+exterior tiene que desactivar el búfer para esa ruta por su cuenta. Traefik y
+Caddy no bufferizan respuestas por defecto y no necesitan nada.
 
 **Cómo se cuenta.** Uno por cada proxy que anexa, en el camino real de la
 petición:
