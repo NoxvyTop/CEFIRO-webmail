@@ -66,6 +66,7 @@ describe("preferences routes", () => {
       groupMailInMainInbox: true,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
   });
 
@@ -82,6 +83,7 @@ describe("preferences routes", () => {
       groupMailInMainInbox: false,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
 
     const getRes = await app.request("/api/mail/preferences", {
@@ -91,6 +93,7 @@ describe("preferences routes", () => {
       groupMailInMainInbox: false,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
   });
 
@@ -107,6 +110,7 @@ describe("preferences routes", () => {
       groupMailInMainInbox: false,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
 
     const getRes = await app.request("/api/mail/preferences", {
@@ -116,6 +120,7 @@ describe("preferences routes", () => {
       groupMailInMainInbox: false,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
   });
 
@@ -230,6 +235,7 @@ describe("custom labels persistence (preferences.customLabels)", () => {
       groupMailInMainInbox: true,
       customLabels: [{ slug: "ok-one", name: "Ok", color: "#9B6BDB" }],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
   });
 });

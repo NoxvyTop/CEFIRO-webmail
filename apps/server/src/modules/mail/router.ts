@@ -30,6 +30,7 @@ import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthVerdict } from "./sender-auth";
 import { guardStream, mailStreams } from "./streams";
+import { createTrustedServicesRouter } from "./trusted-services";
 import {
   jmapAuthHeader,
   resolveAccountId,
@@ -444,6 +445,11 @@ export function createMailRouter(deps: MailDeps) {
   const authServId = deps.authServId;
 
   router.use("*", requireSession(deps.sessions));
+
+  // GH #314: the trusted-services list (seed + the user's confirmed domains)
+  // behind the sender-trust badge — app-side preference state, so it sits next
+  // to /preferences rather than behind requireMail. See ./trusted-services.ts.
+  router.route("/trusted-services", createTrustedServicesRouter({ userPreferences: deps.userPreferences }));
 
   router.get("/signatures", async (c) => {
     const user = c.get("user");

@@ -1,17 +1,27 @@
 import type postgres from "postgres";
 import { customLabelSchema, type CustomLabel } from "@webmail/shared";
+import { normalizeDomainName } from "../../core/domain-name";
 import type { Db } from "../db/client";
 
 const DEFAULTS = {
   groupMailInMainInbox: true,
   customLabels: [] as CustomLabel[],
   sharedMailboxCopyOptIn: [] as string[],
+  trustedServices: [] as string[],
 };
+
+// GH #314: upper bound on the user's trusted-services list. Every thread read
+// builds a Set from this list to resolve the badge (see the thread route), so
+// a row that somehow grew without bound would tax every message the user
+// opens. 200 is far above what a person confirms by hand and small enough
+// that the Set is free.
+const MAX_TRUSTED_SERVICES = 200;
 
 type StoredPreferences = {
   groupMailInMainInbox: boolean;
   customLabels: CustomLabel[];
   sharedMailboxCopyOptIn: string[];
+  trustedServices: string[];
 };
 
 // Defensive parse for whatever is stored in the jsonb column: the PUT route
@@ -52,6 +62,29 @@ function parseSharedMailboxCopyOptIn(value: unknown): string[] {
   return result;
 }
 
+// GH #314: defensive parse of the user's trusted-service domains. Stricter
+// than the two parsers above on purpose: whatever survives here becomes a
+// trust decision on the reader (a "trusted service" badge next to a sender),
+// so an entry that is not a canonical domain is dropped rather than kept as
+// an opaque string. normalizeDomainName lowercases and trims, so a
+// hand-edited "GitHub.com" still matches the lowercased From domain, and an
+// entry like "com" or "user@evil.test" never reaches the compare at all.
+// Duplicates (post-normalisation) collapse to the first occurrence, and the
+// list is capped at MAX_TRUSTED_SERVICES.
+function parseTrustedServices(value: unknown): string[] {
+  if (!Array.isArray(value)) return DEFAULTS.trustedServices;
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const domain = normalizeDomainName(entry);
+    if (domain === null || seen.has(domain)) continue;
+    seen.add(domain);
+    result.push(domain);
+    if (result.length >= MAX_TRUSTED_SERVICES) break;
+  }
+  return result;
+}
+
 export function createUserPreferencesRepo(sql: Db) {
   return {
     async get(userId: string): Promise<StoredPreferences> {
@@ -66,6 +99,7 @@ export function createUserPreferencesRepo(sql: Db) {
             : DEFAULTS.groupMailInMainInbox,
         customLabels: parseCustomLabels(stored.customLabels),
         sharedMailboxCopyOptIn: parseSharedMailboxCopyOptIn(stored.sharedMailboxCopyOptIn),
+        trustedServices: parseTrustedServices(stored.trustedServices),
       };
     },
     async merge(userId: string, patch: Record<string, unknown>): Promise<StoredPreferences> {
