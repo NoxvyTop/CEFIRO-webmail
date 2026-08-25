@@ -721,9 +721,15 @@ export function createMailRouter(deps: MailDeps) {
     // tap below is deliberately scoped to the PERSONAL accountId: contact
     // harvesting mines the member's OWN inbox into their OWN contacts, and a
     // shared mailbox's senders are not the member's contacts to harvest.
+    //
+    // GH #314: the same tap also feeds the sent-recipients store (the to/cc/bcc
+    // of messages landing in Sent — mail sent from other clients that never
+    // passes through POST /send below). Either store alone is enough to tap;
+    // with neither wired the stream is proxied untouched, exactly as before.
     const contacts = deps.contacts;
+    const sentRecipients = deps.sentRecipients;
     const jmap = deps.jmap;
-    if (contacts && jmap) {
+    if ((contacts || sentRecipients) && jmap) {
       const user = streamUser;
       const auth = c.get("jmapAuth");
       // The harvest runs whenever mail arrives, which is long after this
@@ -737,6 +743,7 @@ export function createMailRouter(deps: MailDeps) {
           withLogContext(logContext, () =>
             harvestOnMailArrival({
               contacts,
+              sentRecipients,
               jmap,
               auth,
               session,
@@ -1351,6 +1358,29 @@ export function createMailRouter(deps: MailDeps) {
       } catch {
         log("warn", "send: remediation of the post-submission move to Sent threw", {
           emailId: draftId,
+        });
+      }
+    }
+
+    // GH #314: a confirmed submission is the one moment this server KNOWS the
+    // user wrote to these addresses, so it feeds the known-sender store here,
+    // synchronously — after the confirmation above, never before it, so a
+    // send that did not go out can never make a stranger "known". The user's
+    // own identities are excluded (a note-to-self is not a correspondent):
+    // the From identity of this send and the signed-in address. Best-effort,
+    // like the remediation above: the mail HAS gone out, and a store hiccup
+    // must not turn that into a 502 that invites a duplicate send.
+    if (deps.sentRecipients) {
+      const own = new Set([identity.email.toLowerCase(), c.get("user").email.toLowerCase()]);
+      const recipients = [...input.to, ...input.cc, ...input.bcc]
+        .map((address) => address.email)
+        .filter((email) => !own.has(email.toLowerCase()));
+      try {
+        await deps.sentRecipients.record(c.get("user").userId, recipients);
+      } catch (error) {
+        log("warn", "send: recording sent recipients failed", {
+          emailId: draftId,
+          error: String(error),
         });
       }
     }

@@ -125,6 +125,12 @@ describe("createUserPreferencesRepo — trustedServices (GH #314)", () => {
     expect((await repo.get(userId)).trustedServices).toEqual([]);
   });
 
+  it("does not expose the internal backfill marker through get()", async () => {
+    const userId = await freshUserId();
+    await repo.markSentRecipientsBackfilled(userId);
+    expect(await repo.get(userId)).not.toHaveProperty("sentRecipientsBackfilledAt");
+  });
+
   it("caps the list at 200 entries so a runaway row cannot make every thread read expensive", async () => {
     const userId = await freshUserId();
     const many = Array.from({ length: 250 }, (_, i) => `svc-${i}.example`);
@@ -136,5 +142,35 @@ describe("createUserPreferencesRepo — trustedServices (GH #314)", () => {
     expect(prefs.trustedServices).toHaveLength(200);
     expect(prefs.trustedServices[0]).toBe("svc-0.example");
     expect(prefs.trustedServices[199]).toBe("svc-199.example");
+  });
+});
+
+// GH #314: the one-time sent-mailbox backfill records when it ran under the
+// same jsonb row (key `sentRecipientsBackfilledAt`), through dedicated methods
+// so the marker never leaks into GET /preferences and can never be set by the
+// generic PATCH.
+describe("createUserPreferencesRepo — sentRecipientsBackfilledAt (GH #314)", () => {
+  it("is null until the backfill has been marked", async () => {
+    const userId = await freshUserId();
+    expect(await repo.getSentRecipientsBackfilledAt(userId)).toBeNull();
+  });
+
+  it("records an ISO timestamp once marked, without touching other keys", async () => {
+    const userId = await freshUserId();
+    await repo.merge(userId, { trustedServices: ["partner.test"] });
+    await repo.markSentRecipientsBackfilled(userId);
+    const at = await repo.getSentRecipientsBackfilledAt(userId);
+    expect(at).not.toBeNull();
+    expect(Number.isNaN(Date.parse(at as string))).toBe(false);
+    expect((await repo.get(userId)).trustedServices).toEqual(["partner.test"]);
+  });
+
+  it("treats a hand-corrupted non-string marker as not backfilled", async () => {
+    const userId = await freshUserId();
+    await sql`
+      insert into user_preferences (user_id, preferences)
+      values (${userId}, ${sql.json({ sentRecipientsBackfilledAt: 42 })})
+    `;
+    expect(await repo.getSentRecipientsBackfilledAt(userId)).toBeNull();
   });
 });

@@ -68,6 +68,9 @@ describe("migrate", () => {
       "sso_config",
       "integrations",
       "schema_migrations",
+      // GH #314: Tier A ("known sender") store — addresses the user has
+      // written to, kept apart from `contacts` on purpose.
+      "sent_recipients",
     ]) {
       expect(names).toContain(expected);
     }

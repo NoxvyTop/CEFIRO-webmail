@@ -111,6 +111,28 @@ export function createUserPreferencesRepo(sql: Db) {
       `;
       return this.get(userId);
     },
+
+    // GH #314: when the one-time Sent-mailbox backfill of sent_recipients ran
+    // for this user (ISO timestamp), or null if it never has. Stored under the
+    // same jsonb row (key `sentRecipientsBackfilledAt`) because it is per-user
+    // state with the same lifetime as the row, but read and written ONLY
+    // through these two methods: it is deliberately absent from get() so it
+    // never leaks into GET /api/mail/preferences, and absent from the shared
+    // update schema so the generic PATCH can neither set nor clear it. A
+    // hand-corrupted non-string value reads as "not backfilled" — the worst
+    // that does is run the bounded backfill once more.
+    async getSentRecipientsBackfilledAt(userId: string): Promise<string | null> {
+      const rows = await sql<{ at: unknown }[]>`
+        select preferences -> 'sentRecipientsBackfilledAt' as at
+        from user_preferences where user_id = ${userId}
+      `;
+      const at = rows[0]?.at;
+      return typeof at === "string" && at !== "" ? at : null;
+    },
+
+    async markSentRecipientsBackfilled(userId: string): Promise<void> {
+      await this.merge(userId, { sentRecipientsBackfilledAt: new Date().toISOString() });
+    },
   };
 }
 
