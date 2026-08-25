@@ -224,6 +224,8 @@
       "destroy_failed": "No se pudo eliminar el mensaje",
       "account_forbidden": "No tienes acceso a ese buzón",
       "invalid_account": "Ese buzón no admite copiar a tu bandeja",
+      "invalid_domain": "El dominio de ese remitente no se puede añadir como servicio de confianza",
+      "trusted_service_seed": "Ese servicio es de confianza por defecto y no se puede quitar",
       "copy_failed": "No se pudo copiar el mensaje a tu bandeja",
       "generic": "No se pudo cargar el correo"
     },
@@ -286,6 +288,14 @@
     "senderAuth": {
       "passLabel": "Autenticación del remitente verificada (SPF/DKIM/DMARC)",
       "failLabel": "Autenticación del remitente fallida — este mensaje podría ser falsificado"
+    },
+    "senderTrust": {
+      "knownLabel": "Remitente conocido: ya has escrito a {{address}}",
+      "trustedServiceLabel": "Servicio de confianza: {{domain}}",
+      "trustAction": "Confiar en {{domain}}",
+      "untrustAction": "Dejar de confiar en {{domain}}",
+      "trusted": "{{domain}} ahora es un servicio de confianza",
+      "untrusted": "{{domain}} ya no es un servicio de confianza"
     },
     "bodyTruncated": {
       "title": "Este mensaje está incompleto",

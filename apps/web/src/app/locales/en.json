@@ -224,6 +224,8 @@
       "destroy_failed": "Could not delete the message",
       "account_forbidden": "You don't have access to that mailbox",
       "invalid_account": "That mailbox can't be copied to your inbox",
+      "invalid_domain": "That sender's domain can't be added as a trusted service",
+      "trusted_service_seed": "That service is trusted by default and can't be removed",
       "copy_failed": "Could not copy the message to your inbox",
       "generic": "Mail could not be loaded"
     },
@@ -286,6 +288,14 @@
     "senderAuth": {
       "passLabel": "Sender authentication passed (SPF/DKIM/DMARC verified)",
       "failLabel": "Sender authentication failed — this message may be spoofed"
+    },
+    "senderTrust": {
+      "knownLabel": "Known sender: you have written to {{address}}",
+      "trustedServiceLabel": "Trusted service: {{domain}}",
+      "trustAction": "Trust {{domain}}",
+      "untrustAction": "Stop trusting {{domain}}",
+      "trusted": "{{domain}} is now a trusted service",
+      "untrusted": "{{domain}} is no longer a trusted service"
     },
     "bodyTruncated": {
       "title": "This message is incomplete",
