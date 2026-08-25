@@ -693,6 +693,11 @@ export function createMailRouter(deps: MailDeps) {
       "content-type": "text/event-stream",
       "cache-control": "no-store",
       connection: "keep-alive",
+      // The ecosystem router runs nginx with `proxy_buffering on`, which holds
+      // an upstream response until its buffer fills or the connection closes —
+      // for a stream that idles between events that means bursts, or nothing
+      // until disconnect. nginx honours this header per response (GH #316).
+      "x-accel-buffering": "no",
     };
 
     // GH #180: this subscription (types=Email,Mailbox) is where the server

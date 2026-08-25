@@ -148,6 +148,32 @@ describe("GET /api/mail/events", () => {
     expect(headers.authorization).toMatch(/^Basic /);
   });
 
+  it("disables reverse-proxy response buffering so events are not batched (GH #316)", async () => {
+    upstreamResponse = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("event: ping\ndata: {}\n\n"));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    );
+
+    const res = await makeApp(stubJmap, stubFetch()).request("/api/mail/events", {
+      headers: { cookie: `session=${token}` },
+    });
+
+    expect(res.status).toBe(200);
+    // nginx (`proxy_buffering on` at the ecosystem router) honours this per
+    // response; without it the stream is held until its buffer fills or the
+    // connection closes, and events arrive in bursts instead of live.
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("connection")).toBe("keep-alive");
+    await res.text();
+  });
+
   it("returns 502 stalwart_unavailable when upstream responds non-ok", async () => {
     upstreamResponse = new Response(null, { status: 500 });
 

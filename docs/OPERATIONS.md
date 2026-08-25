@@ -293,6 +293,15 @@ necesitan nada más. Un proxy configurado con `proxy_set_header X-Forwarded-For
 $remote_addr` (sustituir) **también funciona** con `1`: deja una cadena de un
 solo elemento escrito por él.
 
+**Streaming (SSE).** `/api/mail/events` es una respuesta de larga duración.
+Responde con `X-Accel-Buffering: no` para que un nginx con `proxy_buffering on`
+(el router del ecosistema) no retenga los eventos hasta llenar el búfer o cerrar
+la conexión (#316). Solo actúa sobre **el nginx que hace el `proxy_pass`
+directo** al contenedor: nginx consume la cabecera y no la reenvía, así que en
+una topología de dos saltos (`CDN o balanceador → nginx → contenedor`) el salto
+exterior tiene que desactivar el búfer para esa ruta por su cuenta. Traefik y
+Caddy no bufferizan respuestas por defecto y no necesitan nada.
+
 **Cómo se cuenta.** Uno por cada proxy que anexa, en el camino real de la
 petición:
 
