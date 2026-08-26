@@ -424,7 +424,10 @@ en modo estricto; inmutable y no editable por usuario) y los dominios que el
 usuario confirma desde el lector ("Confiar en {dominio}", solo ofrecido con
 DMARC `pass`), guardados en `user_preferences.preferences.trustedServices` y
 gestionados por `GET/PUT/DELETE /api/mail/trusted-services[/:dominio]`.
-Quitar una entrada de la semilla responde `409 trusted_service_seed`.
+Quitar una entrada de la semilla responde `409 trusted_service_seed`; añadir
+una entrada nueva cuando la lista del usuario ya tiene 200 responde
+`409 trusted_services_limit` (volver a confiar una ya presente sigue siendo
+`200`).
 
 No es BIMI: no se consulta DNS del remitente ni se descarga ningún logotipo;
 la marca es un icono fijo junto al dominio real. No requiere variables de

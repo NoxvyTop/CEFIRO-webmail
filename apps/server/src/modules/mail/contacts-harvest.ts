@@ -195,8 +195,9 @@ export async function harvestSentRecipients(input: {
  * requested unconditionally so the two paths never diverge in what they read.
  *
  * GH #314 (JD-4): the mailbox role lookup is likewise made ONCE, here, and
- * handed to both. It is skipped entirely when neither store is wired, so an
- * arrival that has nothing to harvest still costs no round trip at all.
+ * handed to both. The arrival page itself is always fetched (the caller only
+ * wires this hook when at least one store exists); the role lookup is the
+ * part that is skipped when neither store is present.
  */
 export async function harvestOnMailArrival(input: {
   contacts?: ContactsRepo;
