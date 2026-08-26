@@ -861,8 +861,11 @@ async function retryFailed(
  *   Message-ID answers this too: it cannot be looked for, so it is retried
  *   exactly as it was before this check existed (at-least-once for that one
  *   message, the trade the header's absence forces);
- * - `unknown` → the question could not be asked (the query failed), so hold
- *   off: no copy, and the attempt is spent by the caller with the reason.
+ * - `unknown` → the question could not be asked (the member's personal inbox
+ *   could not be resolved, or the query failed), so hold off: no copy, and
+ *   the attempt is spent by the caller with the reason. The inbox case used
+ *   to answer `absent`, against this very contract, so one cached lookup
+ *   failure made every retry for that member copy WITHOUT verification.
  *
  * It is NOT a second dedup store. A member who deleted their copy is asked to
  * receive it again — the same answer the manual button gives — and the ledger
@@ -877,7 +880,7 @@ async function alreadyCopied(
 ): Promise<{ verdict: "present" | "absent" } | { verdict: "unknown"; reason: string }> {
   if (!messageId) return { verdict: "absent" };
   const personalInboxId = await personalInboxOf(deps, member, resolved, inboxes);
-  if (personalInboxId === null) return { verdict: "absent" };
+  if (personalInboxId === null) return { verdict: "unknown", reason: "personal inbox unresolved" };
   try {
     const responses = await deps.jmap.request(resolved.auth, resolved.session, [
       [

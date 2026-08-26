@@ -1202,6 +1202,24 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("verif"))).toBe(true);
   });
 
+  // GH #313: `alreadyCopied` answered "absent" when the member's personal
+  // inbox could not be resolved — against its own contract — so a cached
+  // lookup failure made every retry for that member copy WITHOUT verification.
+  // An inbox that cannot be named is a question that cannot be asked.
+  it("holds off, spending an attempt, when the member's inbox cannot be resolved for the verification", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<lost@shared.test>");
+    h.noPersonalInboxFor.add(ana.email);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1, skipped: 0 });
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.verifications).toEqual([]);
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(2);
+    expect(h.copies.errors.get(`${ana.userId}|${SHARED}|e1`)).toBe(
+      "verification unavailable: personal inbox unresolved",
+    );
+  });
+
   it("ages out a copy whose verification never answers, so it stops holding the head of the batch", async () => {
     h.copies.seedFailed(ana.userId, SHARED, "e-stuck", 0, "<stuck@shared.test>");
     h.queryThrowsForMessageId.add("<stuck@shared.test>");
