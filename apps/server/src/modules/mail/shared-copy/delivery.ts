@@ -88,6 +88,29 @@ export const DELIVERY_LEASE_TTL_MS = 600_000;
  */
 const PROCESS_LEASE_OWNER = crypto.randomUUID();
 
+/**
+ * How old a cursor may be before the cycle re-baselines instead of resuming
+ * from it (`SHARED_MAILBOX_COPY_STALE_MS`, in prose). TWO poll intervals: one
+ * is the normal spacing between cycles, so two means "at least one whole cycle
+ * did not happen" — the worker was off, the deployment was down, or nobody
+ * opted into this account — while still tolerating a poll that ran late.
+ *
+ * Derived from SHARED_MAILBOX_COPY_POLL_MS rather than configured on its own
+ * (./worker.ts passes it in): an operator who lengthens the poll means the
+ * cycles to be further apart, and a fixed staleness window would start calling
+ * every one of their normal resumes a backlog.
+ *
+ * This constant is the fallback for a cycle called with no `staleMs` — two of
+ * the DEFAULT five-minute poll intervals.
+ */
+export const DELIVERY_STALE_POLL_INTERVALS = 2;
+export const DEFAULT_DELIVERY_STALE_MS = 600_000;
+
+/** The stale window for a worker polling every `pollMs`. */
+export function staleMsForPoll(pollMs: number): number {
+  return pollMs * DELIVERY_STALE_POLL_INTERVALS;
+}
+
 export type SharedCopyMember = { userId: string; email: string };
 
 type LogFn = (
@@ -98,8 +121,20 @@ type LogFn = (
 
 /** The slice of infra/repos/shared-mailbox-copies.ts the cycle uses. */
 export type SharedCopyStore = {
-  getCursor(sharedAccountId: string): Promise<string | null>;
+  getState(
+    sharedAccountId: string,
+  ): Promise<{ emailState: string | null; lastCycleAt: Date | null }>;
   setCursor(sharedAccountId: string, emailState: string): Promise<void>;
+  /**
+   * Records the members this account had not seen before at `baselinedState`,
+   * forgets the ones no longer listed, and answers with the newly recorded
+   * ids — the members this cycle must NOT deliver to.
+   */
+  baselineMembers(
+    sharedAccountId: string,
+    userIds: string[],
+    baselinedState: string,
+  ): Promise<string[]>;
   hasCopies(userId: string, sharedAccountId: string, emailIds: string[]): Promise<Set<string>>;
   recordCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
   acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
@@ -118,6 +153,12 @@ export type DeliveryDeps = {
    * per-process id.
    */
   leaseOwner?: string;
+  /**
+   * How old this account's cursor may be before the cycle re-baselines instead
+   * of resuming from it. Injected by ./worker.ts as two poll intervals;
+   * defaults to DEFAULT_DELIVERY_STALE_MS.
+   */
+  staleMs?: number;
   log?: LogFn;
   /**
    * Observed once per attempted copy. Defaults to the `/metrics` facade
@@ -128,6 +169,17 @@ export type DeliveryDeps = {
   onCopyResult?(result: "copied" | "failed" | "skipped"): void;
 };
 
+/**
+ * Why a cycle recorded the current state instead of delivering:
+ * - `no_cursor`: this account has never been followed;
+ * - `stale_cursor`: no cycle has run for this account in `staleMs` — the
+ *   worker was off, or nobody opted in — so what sits behind the cursor is a
+ *   backlog, not a gap worth replaying into everyone's inbox;
+ * - `cannot_calculate_changes`: the provider no longer has history that far
+ *   back.
+ */
+export type BaselineReason = "no_cursor" | "stale_cursor" | "cannot_calculate_changes";
+
 export type ElectedWatcher = {
   member: SharedCopyMember;
   auth: JmapAuth;
@@ -137,7 +189,7 @@ export type ElectedWatcher = {
 export type DeliveryCycleResult =
   | { status: "no_watcher" }
   | { status: "locked" }
-  | { status: "baselined"; reason: "no_cursor" | "cannot_calculate_changes" }
+  | { status: "baselined"; reason: BaselineReason }
   | {
       status: "delivered";
       copied: number;
@@ -231,14 +283,25 @@ async function baseline(
   deps: DeliveryDeps,
   watcher: ElectedWatcher,
   sharedAccountId: string,
-  reason: "no_cursor" | "cannot_calculate_changes",
+  members: SharedCopyMember[],
+  reason: BaselineReason,
 ): Promise<DeliveryCycleResult> {
   const state = await currentEmailState(watcher, deps, sharedAccountId);
   await deps.copies.setCursor(sharedAccountId, state);
+  // The members are baselined at the same state the account is: a cycle that
+  // copies nothing must still leave every member "seen from here", or the
+  // next cycle would baseline them all over again and delay their first copy
+  // by another interval.
+  await deps.copies.baselineMembers(
+    sharedAccountId,
+    members.map((member) => member.userId),
+    state,
+  );
   (deps.log ?? defaultLog)(reason === "no_cursor" ? "info" : "warn", "shared mailbox copy: baselined", {
     sharedAccountId,
     reason,
     state,
+    members: members.length,
   });
   return { status: "baselined", reason };
 }
@@ -378,9 +441,44 @@ async function deliver(
     return { status: "no_watcher" };
   }
 
-  let cursor = await deps.copies.getCursor(sharedAccountId);
-  if (cursor === null) {
-    return baseline(deps, watcher, sharedAccountId, "no_cursor");
+  const state = await deps.copies.getState(sharedAccountId);
+  if (state.emailState === null) {
+    return baseline(deps, watcher, sharedAccountId, members, "no_cursor");
+  }
+  // A cursor nothing has moved in `staleMs` does not describe a gap worth
+  // replaying: it points at everything that arrived while the worker was off,
+  // or while this account had nobody to deliver to. Copying all of it at once
+  // is the failure this guard exists for; the manual button still reaches it.
+  const staleMs = deps.staleMs ?? DEFAULT_DELIVERY_STALE_MS;
+  const cursorAgeMs = state.lastCycleAt === null ? Infinity : Date.now() - state.lastCycleAt.getTime();
+  if (cursorAgeMs > staleMs) {
+    log("warn", "shared mailbox copy: cursor went stale, re-baselining", {
+      sharedAccountId,
+      staleMs,
+      cursorAgeMs: Number.isFinite(cursorAgeMs) ? cursorAgeMs : null,
+    });
+    return baseline(deps, watcher, sharedAccountId, members, "stale_cursor");
+  }
+  let cursor = state.emailState;
+
+  // Members this account had never seen are recorded at the state this cycle
+  // starts from and served from the NEXT one: an opt-in is forward-looking,
+  // and delivering to a member who joined mid-cycle would hand them every
+  // message the account has seen since it was first baselined.
+  const joining = new Set(
+    await deps.copies.baselineMembers(
+      sharedAccountId,
+      members.map((member) => member.userId),
+      cursor,
+    ),
+  );
+  const deliverTo = members.filter((member) => !joining.has(member.userId));
+  if (joining.size > 0) {
+    log("info", "shared mailbox copy: members baselined, deliverable next cycle", {
+      sharedAccountId,
+      baselined: joining.size,
+      state: cursor,
+    });
   }
 
   const counts = { copied: 0, skipped: 0, failed: 0 };
@@ -392,16 +490,16 @@ async function deliver(
       page = await fetchChanges(deps, watcher, sharedAccountId, cursor);
     } catch (error) {
       if (error instanceof JmapMethodError && error.methodErrorType === "cannotCalculateChanges") {
-        return baseline(deps, watcher, sharedAccountId, "cannot_calculate_changes");
+        return baseline(deps, watcher, sharedAccountId, members, "cannot_calculate_changes");
       }
       throw error;
     }
     pages += 1;
 
-    if (page.created.length > 0) {
+    if (page.created.length > 0 && deliverTo.length > 0) {
       const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created);
       if (deliverable.length > 0) {
-        await deliverPage(deps, sharedAccountId, members, deliverable, counts);
+        await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts);
       }
     }
     // After the page's copies, never before: a crash in between replays the

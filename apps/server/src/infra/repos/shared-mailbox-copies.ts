@@ -9,21 +9,82 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
   return {
     /** The last processed Email state of the shared account, or null if never baselined. */
     async getCursor(sharedAccountId: string): Promise<string | null> {
-      const rows = await sql<{ email_state: string }[]>`
+      const rows = await sql<{ email_state: string | null }[]>`
         select email_state from shared_mailbox_copy_state
         where shared_account_id = ${sharedAccountId}
       `;
       return rows[0]?.email_state ?? null;
     },
 
+    /**
+     * The cursor AND when it was last moved. The two are read together because
+     * the cycle needs both to decide whether to resume or to re-baseline: a
+     * cursor with no recent cycle behind it points at a backlog, not at a gap
+     * worth replaying (see the migration header).
+     */
+    async getState(
+      sharedAccountId: string,
+    ): Promise<{ emailState: string | null; lastCycleAt: Date | null }> {
+      const rows = await sql<{ email_state: string | null; last_cycle_at: Date | null }[]>`
+        select email_state, last_cycle_at from shared_mailbox_copy_state
+        where shared_account_id = ${sharedAccountId}
+      `;
+      return {
+        emailState: rows[0]?.email_state ?? null,
+        lastCycleAt: rows[0]?.last_cycle_at ?? null,
+      };
+    },
+
+    /**
+     * Moves the cursor and stamps `last_cycle_at`, always together: a cursor
+     * whose age is unknown is the one the next cycle cannot tell apart from a
+     * week-old backlog. Leaves the lease columns alone — the caller already
+     * holds the lease it is writing under.
+     */
     async setCursor(sharedAccountId: string, emailState: string): Promise<void> {
       await sql`
-        insert into shared_mailbox_copy_state (shared_account_id, email_state)
-        values (${sharedAccountId}, ${emailState})
+        insert into shared_mailbox_copy_state (shared_account_id, email_state, last_cycle_at)
+        values (${sharedAccountId}, ${emailState}, now())
         on conflict (shared_account_id) do update set
           email_state = excluded.email_state,
+          last_cycle_at = now(),
           updated_at = now()
       `;
+    },
+
+    /**
+     * Records every member of `userIds` that this account had not seen before,
+     * at `baselinedState`, and answers with exactly those ids — the members
+     * that must NOT receive copies this cycle. Everyone else in the list is
+     * deliverable.
+     *
+     * Also forgets members who are no longer in the list, which is what makes
+     * an opt-out → opt-in round trip a fresh baseline rather than a back-fill
+     * of everything that arrived while they were away.
+     *
+     * Two statements rather than one: the prune and the insert touch disjoint
+     * rows (out of the list vs. in it), so there is nothing to make atomic
+     * between them, and the cycle deliberately spans no transaction.
+     */
+    async baselineMembers(
+      sharedAccountId: string,
+      userIds: string[],
+      baselinedState: string,
+    ): Promise<string[]> {
+      await sql`
+        delete from shared_mailbox_member_state
+        where shared_account_id = ${sharedAccountId}
+          and not (user_id = any(${userIds}::uuid[]))
+      `;
+      if (userIds.length === 0) return [];
+      const rows = await sql<{ user_id: string }[]>`
+        insert into shared_mailbox_member_state (user_id, shared_account_id, baselined_state)
+        select id, ${sharedAccountId}, ${baselinedState}
+        from unnest(${userIds}::uuid[]) as id
+        on conflict (user_id, shared_account_id) do nothing
+        returning user_id
+      `;
+      return rows.map((row) => row.user_id);
     },
 
     async hasCopy(userId: string, sharedAccountId: string, emailId: string): Promise<boolean> {

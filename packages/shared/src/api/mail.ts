@@ -25,9 +25,14 @@ export const sharedAccountSchema = z.object({
   // userPreferencesSchema.sharedMailboxCopyOptIn). Defaults to false so a
   // response from a server that predates the field — and the account selector,
   // which reads only id/name — still parses. Since GH #313 the server's copy
-  // worker consumes it: new mail in the shared inbox is copied to every member
-  // with this set, from the moment they opt in (never retroactively — see
-  // docs/design/shared-mailboxes.md).
+  // worker consumes it, and the rule is exact: the first delivery cycle that
+  // sees a member for an account only RECORDS them (at the state that cycle
+  // started from), and copies reach them from the NEXT cycle onwards. So mail
+  // already in the shared mailbox when they opted in — including anything that
+  // arrived during the very cycle they joined — is never copied; the manual
+  // "copy to my inbox" button is what reaches it. Opting out and back in
+  // records them afresh, so the gap is not back-filled either. See
+  // docs/design/shared-mailboxes.md.
   copyOptIn: z.boolean().default(false),
 });
 export type SharedAccount = z.infer<typeof sharedAccountSchema>;

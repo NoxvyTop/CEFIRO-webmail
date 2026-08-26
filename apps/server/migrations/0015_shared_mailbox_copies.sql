@@ -52,12 +52,41 @@
 -- `email_state` is NULLABLE, and null means "never baselined": taking the
 -- lease is what creates the row, so an account can legitimately have a lease
 -- (and, later, a `last_cycle_at`) before it has a cursor.
+--
+-- `last_cycle_at` is stamped on every cursor advance and is what makes a
+-- STALE cursor recognisable. A cursor on its own cannot say WHEN it was left
+-- there, so a deployment whose worker was off for a week — or an account
+-- nobody opted into for a week — resumed from a week-old state and replayed
+-- the entire backlog into every member's inbox. Past a threshold the worker
+-- re-baselines instead (see modules/mail/shared-copy/delivery.ts): the mail in
+-- that gap stays reachable through the manual copy button, which is the same
+-- answer this feature already gives for mail older than the opt-in.
 create table shared_mailbox_copy_state (
   shared_account_id text primary key,
   email_state text,
+  last_cycle_at timestamptz,
   lease_owner text,
   lease_until timestamptz,
   updated_at timestamptz not null default now()
+);
+
+-- `shared_mailbox_member_state` is the PER-MEMBER baseline. The account cursor
+-- answers "what is new in this mailbox"; it cannot answer "new since when for
+-- THIS member", and using it for both handed a member who opted in today every
+-- message that arrived since the account was first baselined — possibly months
+-- of somebody else's mail, copied into their inbox in one burst.
+--
+-- A member first seen for an account is written here with the state that cycle
+-- started from and receives copies only from the NEXT cycle onwards. The row
+-- is removed when the member stops opting in, so opting back in baselines them
+-- again rather than back-filling the gap: the opt-in is forward-looking, in
+-- exactly the same sense as the account baseline above.
+create table shared_mailbox_member_state (
+  user_id uuid not null references users(id) on delete cascade,
+  shared_account_id text not null,
+  baselined_state text not null,
+  first_seen_at timestamptz not null default now(),
+  primary key (user_id, shared_account_id)
 );
 
 create table shared_mailbox_copies (

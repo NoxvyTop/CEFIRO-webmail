@@ -72,8 +72,10 @@ describe("migrate", () => {
       // written to, kept apart from `contacts` on purpose.
       "sent_recipients",
       // GH #313: automatic shared-mailbox copies — the per-account Email state
-      // cursor and the per-member dedup ledger.
+      // cursor (with its delivery lease), the per-member baseline and the
+      // per-member dedup ledger.
       "shared_mailbox_copy_state",
+      "shared_mailbox_member_state",
       "shared_mailbox_copies",
     ]) {
       expect(names).toContain(expected);

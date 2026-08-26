@@ -85,7 +85,8 @@ function harness(initial: OptIn[] = [ana, bruno]) {
   const delivery: DeliveryDeps = {
     jmap,
     copies: {
-      getCursor: async () => null,
+      getState: async () => ({ emailState: null, lastCycleAt: null }),
+      baselineMembers: async () => [],
       setCursor: async () => {},
       hasCopies: async () => new Set(),
       recordCopy: async () => {},

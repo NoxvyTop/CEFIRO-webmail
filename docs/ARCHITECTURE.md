@@ -323,6 +323,7 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
 | `sent_recipients` | direcciones a las que el usuario ha escrito (nivel "remitente conocido" del indicador de confianza, #314); separada de `contacts` a propósito |
 | `shared_mailbox_copy_state` | cursor de las copias automáticas de buzones compartidos (#313): último estado `Email` JMAP procesado (nulo = nunca fijado) y el arrendamiento de entrega por cuenta (`lease_owner`, `lease_until`), una fila por cuenta compartida |
+| `shared_mailbox_member_state` | línea base por miembro (#313): desde qué estado recibe copias cada miembro de cada cuenta compartida; se borra al desactivar la opción |
 | `shared_mailbox_copies` | libro de copias entregadas (#313): (miembro, cuenta compartida, mensaje origen), lo que impide duplicados al repetir una página |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
@@ -457,10 +458,17 @@ El diseño y las alternativas descartadas están en
    miembro dado de baja o con credencial revocada solo cuesta una línea de
    log. Sin candidato, el ciclo no toca nada.
 2. **Cursor.** El servidor guarda el último estado `Email` de la cuenta
-   compartida que procesó (`shared_mailbox_copy_state`). Sin fila, el primer
-   ciclo **solo fija el estado actual, sin copiar**: el opt-in es hacia
-   adelante, y el correo anterior sigue disponible con el botón manual. Con
-   fila, pide `Email/changes { sinceState, maxChanges: 100 }` y recorre como
+   compartida que procesó y **cuándo** lo dejó ahí (`shared_mailbox_copy_state`,
+   `email_state` + `last_cycle_at`). Sin fila, el primer ciclo **solo fija el
+   estado actual, sin copiar**: el opt-in es hacia adelante, y el correo
+   anterior sigue disponible con el botón manual. Si el cursor lleva más de
+   `SHARED_MAILBOX_COPY_STALE_MS` sin moverse —dos intervalos de sondeo,
+   derivados de `SHARED_MAILBOX_COPY_POLL_MS`, sin variable propia— el ciclo
+   **vuelve a fijar el estado actual y no copia nada**, avisando en el log: un
+   cursor así no señala un hueco, señala todo lo que llegó mientras el worker
+   estuvo apagado o mientras nadie tenía la opción activada, y reproducirlo
+   vaciaría el buzón compartido de golpe en la bandeja de cada miembro. Con
+   fila reciente, pide `Email/changes { sinceState, maxChanges: 100 }` y recorre como
    mucho cinco páginas por ciclo; lo que quede lo termina el siguiente. Si el
    proveedor responde `cannotCalculateChanges` (el cursor es más viejo que su
    historial), se vuelve a fijar el estado y se avisa en el log: el correo de
@@ -471,13 +479,21 @@ El diseño y las alternativas descartadas están en
    + `Email/get mailboxIds`) sobre la cuenta compartida filtra los ids creados:
    lo enviado por el grupo, los borradores y lo archivado por una regla Sieve
    no es "correo nuevo del buzón".
-4. **Copiar a cada miembro**, con la sesión de cada uno (un miembro cuya sesión
-   ya no lista la cuenta se salta con log). Antes de cada copia se consulta el
+4. **Línea base por miembro.** El primer ciclo que ve a un miembro en una
+   cuenta solo lo **registra** (`shared_mailbox_member_state`, con el estado
+   del que arrancó ese ciclo) y **no le copia nada**; recibe copias a partir
+   del ciclo siguiente. Así, activar la opción nunca reparte el correo que ya
+   estaba en el buzón compartido —ni siquiera el de ese mismo ciclo—, que es
+   justo lo que cubre el botón manual. Si el miembro desactiva la opción, su
+   fila se borra, de modo que volver a activarla lo registra de nuevo en lugar
+   de rellenarle el hueco.
+5. **Copiar a cada miembro** ya registrado, con la sesión de cada uno (un
+   miembro cuya sesión ya no lista la cuenta se salta con log). Antes de cada copia se consulta el
    libro `shared_mailbox_copies` en una sola query por página; después de cada
    copia confirmada (`created`, nunca por ausencia de `notCreated`) se escribe
    la fila. Un fallo en la copia de un miembro se cuenta, se registra y **no
    bloquea a los demás**.
-5. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
+6. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
    Una caída entre la última copia y el avance repite la página en el ciclo
    siguiente, y el libro convierte la repetición en saltos, no en duplicados.
    El cursor avanza aunque la copia de un miembro haya fallado: lo que protege

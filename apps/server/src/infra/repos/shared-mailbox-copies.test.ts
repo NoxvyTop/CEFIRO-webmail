@@ -46,6 +46,7 @@ function freshAccountId(): string {
 describe("createSharedMailboxCopiesRepo — cursor (GH #313)", () => {
   it("has no cursor for an account never baselined", async () => {
     expect(await repo.getCursor(freshAccountId())).toBeNull();
+    expect(await repo.getState(freshAccountId())).toEqual({ emailState: null, lastCycleAt: null });
   });
 
   it("stores the Email state and overwrites it on the next advance", async () => {
@@ -63,6 +64,101 @@ describe("createSharedMailboxCopiesRepo — cursor (GH #313)", () => {
     await repo.setCursor(b, "b-state");
     expect(await repo.getCursor(a)).toBe("a-state");
     expect(await repo.getCursor(b)).toBe("b-state");
+  });
+
+  // GH #313: the cursor alone cannot say WHEN it was last moved, so a worker
+  // that was off for a week resumed from a week-old state and replayed the
+  // whole backlog into every member's inbox. Every advance stamps the row.
+  it("stamps when the cursor was last moved, so a stale one can be spotted", async () => {
+    const accountId = freshAccountId();
+    const before = Date.now();
+    await repo.setCursor(accountId, "s1");
+    const state = await repo.getState(accountId);
+    expect(state.emailState).toBe("s1");
+    expect(state.lastCycleAt).toBeInstanceOf(Date);
+    expect(state.lastCycleAt!.getTime()).toBeGreaterThanOrEqual(before - 1_000);
+
+    await sql`
+      update shared_mailbox_copy_state
+      set last_cycle_at = now() - interval '2 hours'
+      where shared_account_id = ${accountId}
+    `;
+    const stale = await repo.getState(accountId);
+    expect(Date.now() - stale.lastCycleAt!.getTime()).toBeGreaterThan(3_600_000);
+
+    // Advancing again refreshes the stamp.
+    await repo.setCursor(accountId, "s2");
+    expect(Date.now() - (await repo.getState(accountId)).lastCycleAt!.getTime()).toBeLessThan(
+      60_000,
+    );
+  });
+});
+
+// GH #313: who is allowed to receive copies for an account, and from when. A
+// member first seen in a cycle is BASELINED in it — the row records the state
+// that cycle started from — and only the NEXT cycle delivers to them, so
+// opting in never back-fills the mail that was already in the shared mailbox.
+describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
+  it("baselines every member the first time it sees them, and nobody twice", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    const bruno = await freshUserId();
+
+    const first = await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+    expect(new Set(first)).toEqual(new Set([ana, bruno]));
+
+    // The second cycle knows them: they are deliverable now.
+    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-2")).toEqual([]);
+  });
+
+  it("baselines only the member who joined an account already being cycled", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    const bruno = await freshUserId();
+    await repo.baselineMembers(accountId, [ana], "s-1");
+
+    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-2")).toEqual([bruno]);
+    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-3")).toEqual([]);
+  });
+
+  it("keeps the state the member was baselined at", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    await repo.baselineMembers(accountId, [ana], "s-1");
+    await repo.baselineMembers(accountId, [ana], "s-2");
+    const rows = await sql<{ baselined_state: string }[]>`
+      select baselined_state from shared_mailbox_member_state
+      where user_id = ${ana} and shared_account_id = ${accountId}
+    `;
+    expect(rows[0]?.baselined_state).toBe("s-1");
+  });
+
+  it("forgets a member who opted out, so opting back in baselines them again", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    const bruno = await freshUserId();
+    await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+
+    // Bruno opted out: he is no longer in the account's member list.
+    expect(await repo.baselineMembers(accountId, [ana], "s-2")).toEqual([]);
+    // ...and coming back does not back-fill what arrived while he was away.
+    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-3")).toEqual([bruno]);
+  });
+
+  it("keeps the baseline per account and drops it with the user", async () => {
+    const a = freshAccountId();
+    const b = freshAccountId();
+    const ana = await freshUserId();
+    await repo.baselineMembers(a, [ana], "s-1");
+    expect(await repo.baselineMembers(b, [ana], "s-1")).toEqual([ana]);
+
+    await sql`delete from users where id = ${ana}`;
+    const rows = await sql`select 1 from shared_mailbox_member_state where user_id = ${ana}`;
+    expect(rows).toHaveLength(0);
+  });
+
+  it("tolerates an account with no members at all", async () => {
+    expect(await repo.baselineMembers(freshAccountId(), [], "s-1")).toEqual([]);
   });
 });
 

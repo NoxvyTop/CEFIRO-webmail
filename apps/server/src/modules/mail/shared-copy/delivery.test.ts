@@ -10,6 +10,7 @@ import {
 } from "../../../infra/jmap/client";
 import type { MailSessionResult } from "../context";
 import {
+  DEFAULT_DELIVERY_STALE_MS,
   DELIVERY_MAX_PAGES,
   electWatcher,
   runDeliveryCycle,
@@ -54,25 +55,68 @@ function sessionFor(email: string, reaches: string[]): JmapSession {
 /** In-memory stand-in for infra/repos/shared-mailbox-copies.ts. */
 function fakeCopiesRepo() {
   const cursors = new Map<string, string>();
+  const cycledAt = new Map<string, number>();
   const ledger = new Set<string>();
   const cursorWrites: string[] = [];
   const leases = new Map<string, { owner: string; until: number }>();
   const leaseLog: Array<{ op: "acquire" | "renew" | "release"; owner: string; ok: boolean }> = [];
+  /** Members this account has already baselined, per account. */
+  const memberState = new Map<string, Map<string, string>>();
   const key = (u: string, a: string, e: string) => `${u}|${a}|${e}`;
   return {
     cursors,
+    cycledAt,
     ledger,
     cursorWrites,
     leases,
     leaseLog,
+    memberState,
     /** Stands in for another replica holding this account's lease. */
     holdLease(accountId: string, owner = "other-replica", ttlMs = 60_000) {
       leases.set(accountId, { owner, until: Date.now() + ttlMs });
     },
+    /** A cursor a cycle left behind just now: the normal resume case. */
+    seedCursor(accountId: string, state: string) {
+      cursors.set(accountId, state);
+      cycledAt.set(accountId, Date.now());
+    },
+    /** A cursor left behind `ageMs` ago — a worker that was off that long. */
+    ageCursor(accountId: string, ageMs: number) {
+      cycledAt.set(accountId, Date.now() - ageMs);
+    },
+    /** Members this account has already baselined. */
+    baselined(accountId: string): string[] {
+      return [...(memberState.get(accountId)?.keys() ?? [])];
+    },
+    /** Members baselined by an earlier cycle, i.e. deliverable from now on. */
+    seedMembers(accountId: string, userIds: string[], state = "s-0") {
+      const seen = memberState.get(accountId) ?? new Map<string, string>();
+      memberState.set(accountId, seen);
+      for (const userId of userIds) seen.set(userId, state);
+    },
     repo: {
       getCursor: async (accountId: string) => cursors.get(accountId) ?? null,
+      getState: async (accountId: string) => ({
+        emailState: cursors.get(accountId) ?? null,
+        lastCycleAt: cycledAt.has(accountId) ? new Date(cycledAt.get(accountId)!) : null,
+      }),
+      baselineMembers: async (accountId: string, userIds: string[], state: string) => {
+        const seen = memberState.get(accountId) ?? new Map<string, string>();
+        memberState.set(accountId, seen);
+        for (const known of [...seen.keys()]) {
+          if (!userIds.includes(known)) seen.delete(known);
+        }
+        const baselined: string[] = [];
+        for (const userId of userIds) {
+          if (seen.has(userId)) continue;
+          seen.set(userId, state);
+          baselined.push(userId);
+        }
+        return baselined;
+      },
       setCursor: async (accountId: string, state: string) => {
         cursors.set(accountId, state);
+        cycledAt.set(accountId, Date.now());
         cursorWrites.push(state);
       },
       hasCopies: async (userId: string, accountId: string, ids: string[]) =>
@@ -317,7 +361,7 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
   // pooled connection open in a transaction for the whole cycle while every
   // query of that cycle asked the same pool for another one.
   it("takes the account lease before anything else and releases it at the end", async () => {
-    h.copies.cursors.set(SHARED, "s-1");
+    h.copies.seedCursor(SHARED, "s-1");
     h.pages = [{ created: [], newState: "s-2" }];
     await run([ana]);
     expect(h.copies.leaseLog[0]).toEqual({ op: "acquire", owner: OWNER, ok: true });
@@ -327,14 +371,15 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
   });
 
   it("releases the account lease when the cycle throws", async () => {
-    h.copies.cursors.set(SHARED, "s-1");
+    h.copies.seedCursor(SHARED, "s-1");
     h.changesError = "serverUnavailable";
     await expect(run([ana])).rejects.toMatchObject({ code: "jmap_error" });
     expect(h.copies.leases.has(SHARED)).toBe(false);
   });
 
   it("renews the lease after each page, and stops delivering once it is lost", async () => {
-    h.copies.cursors.set(SHARED, "s-1");
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId]);
     h.pages = [
       { created: [], newState: "s-2", hasMoreChanges: true },
       { created: ["e1"], newState: "s-3" },
@@ -348,7 +393,8 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
     // Another replica takes the account over between pages: this cycle stops
     // rather than delivering the same pages alongside it.
     h = harness();
-    h.copies.cursors.set(SHARED, "s-1");
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId]);
     h.pages = [
       { created: [], newState: "s-2", hasMoreChanges: true },
       { created: ["e1"], newState: "s-3" },
@@ -378,7 +424,7 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
   });
 
   it("re-baselines and copies nothing when the provider cannot calculate changes from the cursor", async () => {
-    h.copies.cursors.set(SHARED, "s-ancient");
+    h.copies.seedCursor(SHARED, "s-ancient");
     h.currentState = "s-fresh";
     h.changesError = "cannotCalculateChanges";
     await expect(run()).resolves.toEqual({
@@ -391,16 +437,119 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
   });
 
   it("keeps the cursor and propagates any other method error, so the page is retried later", async () => {
-    h.copies.cursors.set(SHARED, "s-1");
+    h.copies.seedCursor(SHARED, "s-1");
     h.changesError = "serverUnavailable";
     await expect(run()).rejects.toMatchObject({ code: "jmap_error" });
     expect(h.copies.cursors.get(SHARED)).toBe("s-1");
   });
 });
 
+// GH #313: the cursor is per ACCOUNT and it stands still whenever no cycle
+// runs — because the worker was off, or because nobody opted in yet. Resuming
+// from it replayed everything that had arrived meanwhile into every member's
+// inbox at once. Two rules fix that: a cursor with no recent cycle behind it
+// is re-baselined, and a member is only delivered to from the cycle AFTER the
+// one that first saw them.
+describe("runDeliveryCycle — staleness and per-member baseline (GH #313)", () => {
+  it("re-baselines instead of replaying the backlog when the cursor went stale", async () => {
+    h.copies.seedCursor(SHARED, "s-old");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    h.copies.ageCursor(SHARED, DEFAULT_DELIVERY_STALE_MS + 1_000);
+    h.currentState = "s-now";
+
+    await expect(run()).resolves.toEqual({ status: "baselined", reason: "stale_cursor" });
+    expect(h.copies.cursors.get(SHARED)).toBe("s-now");
+    expect(changesCalls(h)).toEqual([]);
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.logs.some((l) => l.level === "warn" && l.fields.reason === "stale_cursor")).toBe(true);
+  });
+
+  it("resumes normally while the cursor is younger than the stale window", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId]);
+    h.copies.ageCursor(SHARED, DEFAULT_DELIVERY_STALE_MS - 60_000);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await expect(run([ana])).resolves.toMatchObject({ status: "delivered", copied: 1 });
+  });
+
+  it("honours the stale window the worker derives from the poll interval", async () => {
+    h.copies.seedCursor(SHARED, "s-old");
+    h.copies.seedMembers(SHARED, [ana.userId]);
+    h.copies.ageCursor(SHARED, 30_000);
+    h.deps.staleMs = 20_000;
+    h.currentState = "s-now";
+
+    await expect(run([ana])).resolves.toEqual({ status: "baselined", reason: "stale_cursor" });
+  });
+
+  it("re-baselines a cursor no cycle ever stamped, rather than trusting it", async () => {
+    // Nothing but the cursor: age unknown, so it is treated as a backlog.
+    h.copies.cursors.set(SHARED, "s-unknown-age");
+    h.copies.seedMembers(SHARED, [ana.userId]);
+    h.currentState = "s-now";
+    await expect(run([ana])).resolves.toEqual({ status: "baselined", reason: "stale_cursor" });
+  });
+
+  it("gives a member who joined an active account nothing this cycle and everything the next", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId]); // bruno opts in right now
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    // The joining cycle delivers to ana only, and records bruno's baseline.
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 1 });
+    expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email]);
+    expect(new Set(h.copies.baselined(SHARED))).toEqual(new Set([ana.userId, bruno.userId]));
+
+    // The next cycle treats him like everybody else.
+    h.pages = [{ created: ["e2"], newState: "s-3" }];
+    h.inInbox.add("e2");
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 2 });
+    expect(copyCalls(h).filter((c) => c.by === bruno.email).map((c) => c.emailId)).toEqual(["e2"]);
+  });
+
+  it("baselines every member of an account whose first cycle only recorded the state", async () => {
+    h.currentState = "s-42";
+    await expect(run()).resolves.toEqual({ status: "baselined", reason: "no_cursor" });
+    expect(new Set(h.copies.baselined(SHARED))).toEqual(new Set([ana.userId, bruno.userId]));
+
+    h.pages = [{ created: ["e1"], newState: "s-43" }];
+    h.inInbox.add("e1");
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 2 });
+  });
+
+  it("re-baselines a member who opted out and back in, instead of back-filling the gap", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+
+    // Bruno opts out: the cycle runs for ana alone and forgets him.
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
+    expect(h.copies.baselined(SHARED)).toEqual([ana.userId]);
+
+    // He opts back in: this cycle only re-baselines him, so the mail that
+    // arrived while he was out is not copied to him.
+    h.pages = [{ created: ["e2"], newState: "s-3" }];
+    h.inInbox.add("e2");
+    await expect(run()).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).filter((c) => c.by === bruno.email)).toEqual([]);
+
+    h.pages = [{ created: ["e3"], newState: "s-4" }];
+    h.inInbox.add("e3");
+    await expect(run()).resolves.toMatchObject({ copied: 2 });
+    expect(copyCalls(h).filter((c) => c.by === bruno.email).map((c) => c.emailId)).toEqual(["e3"]);
+  });
+});
+
 describe("runDeliveryCycle — delivery (GH #313)", () => {
   beforeEach(() => {
-    h.copies.cursors.set(SHARED, "s-1");
+    h.copies.seedCursor(SHARED, "s-1");
+    // Both members were baselined by an earlier cycle, so this one delivers to
+    // them. A member's FIRST cycle only baselines them — see the block below.
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
   });
 
   it("asks for changes since the cursor with the elected watcher's credential", async () => {
