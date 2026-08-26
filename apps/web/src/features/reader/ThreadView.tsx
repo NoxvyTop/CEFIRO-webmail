@@ -26,6 +26,24 @@ import { AttachmentCard } from "./AttachmentCard";
 import { EmailBody, isSafeInlineImage } from "./EmailBody";
 import { extractReferencedCids } from "./sanitize";
 import { SenderAuthBadge } from "./SenderAuthBadge";
+import { SenderTrustBadge } from "./SenderTrustBadge";
+import { fetchTrustedServices, trustService, untrustService } from "./trustApi";
+
+// GH #314: the domain part of a From address, for the trust-this-service
+// affordance. Same rule as the server's domainOf (last "@", lowercased) so the
+// domain the button offers is the one the server will match against.
+function senderDomain(address: string | undefined): string | null {
+  if (!address) return null;
+  const at = address.lastIndexOf("@");
+  if (at < 0) return null;
+  const domain = address.slice(at + 1).toLowerCase();
+  return domain === "" ? null : domain;
+}
+
+// GH #314: the trusted-services list is only needed to decide whether a
+// "trusted-service" sender can be UN-trusted (user list) or not (seed), so it
+// is fetched only when a message in the thread actually carries that tier.
+const TRUSTED_SERVICES_QUERY_KEY = ["mail", "trusted-services"] as const;
 
 interface ThreadViewProps {
   threadId: string;
@@ -391,6 +409,48 @@ export function ThreadView({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
+    },
+  });
+
+  // GH #314: "Trust <domain>" / "Stop trusting <domain>". Both invalidate the
+  // thread query so the badge flips from the server's own re-resolution
+  // rather than from an optimistic guess — the server is the only party that
+  // knows whether DMARC passed for that message, and the badge must never
+  // appear on a message it would not vouch for. The trusted-services list is
+  // invalidated too so the untrust affordance follows the user list.
+  const trustedServicesQuery = useQuery({
+    queryKey: TRUSTED_SERVICES_QUERY_KEY,
+    queryFn: fetchTrustedServices,
+    enabled: (threadQuery.data?.emails ?? []).some((email) => email.senderTrust === "trusted-service"),
+  });
+  const userTrustedDomains = trustedServicesQuery.data?.user ?? [];
+
+  function invalidateAfterTrustChange() {
+    queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
+    queryClient.invalidateQueries({ queryKey: TRUSTED_SERVICES_QUERY_KEY });
+  }
+
+  const trustMutation = useMutation({
+    mutationFn: (domain: string) => trustService(domain),
+    onSuccess: (_result, domain) => {
+      invalidateAfterTrustChange();
+      showToast(t("mail.senderTrust.trusted", { domain }));
+    },
+    onError: (err) => {
+      // Mapped-key treatment (GH #215): an unmapped server code resolves to
+      // the namespace's generic message, never to a literal i18n key.
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+    },
+  });
+
+  const untrustMutation = useMutation({
+    mutationFn: (domain: string) => untrustService(domain),
+    onSuccess: (_result, domain) => {
+      invalidateAfterTrustChange();
+      showToast(t("mail.senderTrust.untrusted", { domain }));
+    },
+    onError: (err) => {
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
     },
   });
 
@@ -863,6 +923,39 @@ export function ThreadView({
             // content only, so — like the GH #90 stub above — these are
             // `<span>`s with an explicit block display rather than `<div>`s,
             // which would be invalid inside a `<button>`.
+            // GH #314: the trust-this-service affordance. Offered ONLY when
+            // the server already vouches for the message's authenticity
+            // (senderAuth "pass") and asserts no tier yet — never on a DMARC
+            // fail or unknown, where trusting the domain would not change the
+            // badge and would only teach the reader to click through a
+            // warning. Not offered for a "known" sender either: Tier A is a
+            // fact about correspondence, not a preference to set. The reverse
+            // affordance appears only when the domain is on the USER list —
+            // a seed entry cannot be removed per user (the server answers
+            // 409), so offering it would be a button that always fails.
+            // Rendered outside senderHeaderContent because that content is
+            // the header <button> when the message is collapsible, and a
+            // button inside a button is invalid HTML.
+            const domain = senderDomain(sender?.email);
+            const offerTrust = domain !== null && email.senderAuth === "pass" && email.senderTrust === "none";
+            const offerUntrust =
+              domain !== null && email.senderTrust === "trusted-service" && userTrustedDomains.includes(domain);
+            const trustAction =
+              domain !== null && (offerTrust || offerUntrust) ? (
+                <div className="mb-[18px] -mt-2">
+                  <Button
+                    variant="secondary"
+                    className="rounded-full px-3 py-1 text-[12.5px] font-semibold"
+                    disabled={trustMutation.isPending || untrustMutation.isPending}
+                    onClick={() => (offerTrust ? trustMutation.mutate(domain) : untrustMutation.mutate(domain))}
+                  >
+                    {offerTrust
+                      ? t("mail.senderTrust.trustAction", { domain })
+                      : t("mail.senderTrust.untrustAction", { domain })}
+                  </Button>
+                </div>
+              ) : null;
+
             const senderHeaderContent = (
               <>
                 <Avatar name={sender?.name ?? null} email={sender?.email ?? "?"} size={42} />
@@ -873,6 +966,10 @@ export function ThreadView({
                         verdict — never from `sender`/addressLabel above, so a
                         sender cannot forge this mark via their display name. */}
                     <SenderAuthBadge verdict={email.senderAuth} />
+                    {/* GH #314: the positive-only tier above it, tied to the
+                        same `from[0]` address printed just below — so the
+                        reader can check exactly who is being vouched for. */}
+                    {sender && <SenderTrustBadge trust={email.senderTrust} address={sender.email} />}
                   </span>
                   {/* Sent messages show "Para: <recipients>" and so only
                       render when there are recipients; received messages always
@@ -920,6 +1017,7 @@ export function ThreadView({
                     {senderHeaderContent}
                   </div>
                 )}
+                {trustAction}
                 {isNewest && (
                   // #308: `emails` is chronological (oldest→newest, the same
                   // order the server hashes) so its ids key the persistent

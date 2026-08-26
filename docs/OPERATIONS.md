@@ -223,6 +223,12 @@ Stalwart real no se configura desde este repo (el `config.json` del fixture es
 solo el bootstrap de RocksDB; los ajustes reales viven en el store y en
 `docker-cefiro`).
 
+**Indicador de confianza (#314).** Sobre esta insignia el lector muestra un
+segundo nivel solo positivo ("remitente conocido" / "servicio de confianza"),
+que también depende de `JMAP_AUTHSERV_ID`: sin él, todo queda en `none`. No
+añade variables de entorno; la semilla de servicios y las reglas están en
+`docs/ARCHITECTURE.md` ("Indicador de confianza del remitente").
+
 **Base de datos.** El cliente acota la conexión para que una query lenta no
 cuelgue el servicio.
 

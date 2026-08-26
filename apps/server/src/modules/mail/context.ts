@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from "hono";
 import { errorResponse } from "../../core/error-response";
 import type { ContactsRepo } from "../../infra/repos/contacts";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
+import type { SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import type { SignaturesRepo } from "../../infra/repos/signatures";
 import type { UserPreferencesRepo } from "../../infra/repos/user-preferences";
 import type {
@@ -49,6 +50,12 @@ export type MailDeps = {
   // `if (deps.contacts)` at the tap site, so every existing test/deploy that
   // constructs MailDeps without it keeps behaving exactly as before.
   contacts?: ContactsRepo;
+  // Optional (GH #314): the addresses the user has written to — Tier A of the
+  // sender-trust indicator. Fed from POST /send and from the same mail-arrival
+  // tap as `contacts`, read once per GET /threads/:id. Optional for the same
+  // reason `contacts` is: every existing test/deploy that omits it keeps
+  // behaving exactly as before, with Tier A simply never asserted.
+  sentRecipients?: SentRecipientsRepo;
 };
 
 // Narrow slice of MailDeps that requireMail actually needs. Extracted so other

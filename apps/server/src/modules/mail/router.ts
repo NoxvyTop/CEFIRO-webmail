@@ -28,8 +28,12 @@ import { currentLogContext, log, withLogContext } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
-import { deriveSenderAuthVerdict } from "./sender-auth";
+import { deriveSenderAuthFacts } from "./sender-auth";
+import { resolveSenderTrust } from "./sender-trust";
+import { backfillSentRecipients } from "./sent-recipients-backfill";
 import { guardStream, mailStreams } from "./streams";
+import { createTrustedServicesRouter } from "./trusted-services";
+import { TRUSTED_SERVICES_SEED } from "./trusted-services-seed";
 import {
   jmapAuthHeader,
   resolveAccountId,
@@ -212,14 +216,33 @@ function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
     }));
 }
 
+// GH #314: the per-request inputs the sender-trust tiers need, resolved ONCE
+// by the thread route (one sent_recipients query for the thread's distinct
+// senders, one preferences read for the user's trusted domains) and handed to
+// the mapper so it stays synchronous and pure. Absent (undefined) means "assert
+// nothing" — every message maps to "none" — which is what the fixtures and any
+// caller that has not resolved the context get.
+type SenderTrustContext = {
+  knownRecipients: ReadonlySet<string>;
+  trustedDomains: ReadonlySet<string>;
+};
+
 // GH #152: `authServId` is this deployment's own configured authserv-id
 // (JMAP_AUTHSERV_ID), threaded through so deriveSenderAuthVerdict can trust only
 // the Authentication-Results header our own MTA stamped. Passed explicitly
 // rather than closed over so this stays a pure mapper like the rest of the
 // to*() helpers; undefined here means the fail-safe "unknown" for every message.
-function toEmailDetail(email: JmapEmailDetail, authServId: string | undefined): EmailDetail {
+function toEmailDetail(
+  email: JmapEmailDetail,
+  authServId: string | undefined,
+  trust?: SenderTrustContext,
+): EmailDetail {
   const html = collectBodyValues(email.htmlBody, email.bodyValues);
   const text = collectBodyValues(email.textBody, email.bodyValues);
+  // GH #314: the verdict AND the domain that verdict is about, read from the
+  // same trusted header in one pass, so the tier below can be bound to the
+  // address the reader is shown rather than to "some domain passed DMARC".
+  const { verdict: senderAuth, dmarcFromDomain } = deriveSenderAuthFacts(email.headers, authServId);
   return {
     ...toEmailSummary(email),
     cc: toEmailAddresses(email.cc),
@@ -238,7 +261,24 @@ function toEmailDetail(email: JmapEmailDetail, authServId: string | undefined): 
     messageId: email.messageId ?? null,
     references: email.references ?? null,
     inReplyTo: email.inReplyTo ?? null,
-    senderAuth: deriveSenderAuthVerdict(email.headers, authServId),
+    senderAuth,
+    // GH #314: the positive-only tier above senderAuth, resolved from the
+    // FIRST From address — the same one the reader renders next to the badge
+    // (ThreadView shows `from[0]`), so the mark is always tied to the address
+    // the user can see. Gated on senderAuth inside resolveSenderTrust, and on
+    // the DMARC binding it needs `fromCount`/`dmarcFromDomain` for: a pass that
+    // evaluated another domain, or a From header carrying more than one
+    // address, asserts nothing about `from[0]`.
+    senderTrust: trust
+      ? resolveSenderTrust({
+          senderAuth,
+          fromEmail: email.from?.[0]?.email,
+          fromCount: email.from?.length ?? 0,
+          dmarcFromDomain,
+          knownRecipients: trust.knownRecipients,
+          trustedDomains: trust.trustedDomains,
+        })
+      : "none",
   };
 }
 
@@ -442,6 +482,11 @@ export function createMailRouter(deps: MailDeps) {
   const authServId = deps.authServId;
 
   router.use("*", requireSession(deps.sessions));
+
+  // GH #314: the trusted-services list (seed + the user's confirmed domains)
+  // behind the sender-trust badge — app-side preference state, so it sits next
+  // to /preferences rather than behind requireMail. See ./trusted-services.ts.
+  router.route("/trusted-services", createTrustedServicesRouter({ userPreferences: deps.userPreferences }));
 
   router.get("/signatures", async (c) => {
     const user = c.get("user");
@@ -713,9 +758,15 @@ export function createMailRouter(deps: MailDeps) {
     // tap below is deliberately scoped to the PERSONAL accountId: contact
     // harvesting mines the member's OWN inbox into their OWN contacts, and a
     // shared mailbox's senders are not the member's contacts to harvest.
+    //
+    // GH #314: the same tap also feeds the sent-recipients store (the to/cc/bcc
+    // of messages landing in Sent — mail sent from other clients that never
+    // passes through POST /send below). Either store alone is enough to tap;
+    // with neither wired the stream is proxied untouched, exactly as before.
     const contacts = deps.contacts;
+    const sentRecipients = deps.sentRecipients;
     const jmap = deps.jmap;
-    if (contacts && jmap) {
+    if ((contacts || sentRecipients) && jmap) {
       const user = streamUser;
       const auth = c.get("jmapAuth");
       // The harvest runs whenever mail arrives, which is long after this
@@ -729,6 +780,7 @@ export function createMailRouter(deps: MailDeps) {
           withLogContext(logContext, () =>
             harvestOnMailArrival({
               contacts,
+              sentRecipients,
               jmap,
               auth,
               session,
@@ -996,9 +1048,48 @@ export function createMailRouter(deps: MailDeps) {
       (a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt),
     );
 
+    // GH #314: resolve the sender-trust inputs once for the whole thread —
+    // one sent_recipients query for its distinct From addresses and one
+    // preferences read for the user's trusted domains — rather than per
+    // message, so a long conversation costs the same two reads as a short
+    // one. Both are app-side state, so they run AFTER the JMAP round trip
+    // above: a missing thread is still a 404 without touching the database.
+    //
+    // Tier A needs the sent-recipients store, which is optional in MailDeps
+    // (deployments predating this feature). Without it only Tier B is
+    // resolved. With it, the one-time Sent backfill runs first for a user who
+    // has never had it (see sent-recipients-backfill.ts); it never throws, so
+    // a JMAP or database hiccup there degrades to "not known yet" instead of
+    // a broken reader.
+    const user = c.get("user");
+    const auth = c.get("jmapAuth");
+    const sentRecipients = deps.sentRecipients;
+    // requireMail already refused a null jmap above; narrowing it again here
+    // is only for the type.
+    if (sentRecipients && deps.jmap) {
+      await backfillSentRecipients({
+        jmap: deps.jmap,
+        auth,
+        session,
+        userId: user.userId,
+        ownerEmails: [user.email],
+        sentRecipients,
+        userPreferences: deps.userPreferences,
+      });
+    }
+    const senders = [...new Set(emails.map((email) => email.from?.[0]?.email).filter(Boolean))] as string[];
+    const [knownRecipients, preferences] = await Promise.all([
+      sentRecipients ? sentRecipients.has(user.userId, senders) : Promise.resolve(new Set<string>()),
+      deps.userPreferences.get(user.userId),
+    ]);
+    const trust: SenderTrustContext = {
+      knownRecipients,
+      trustedDomains: new Set([...TRUSTED_SERVICES_SEED, ...preferences.trustedServices]),
+    };
+
     const thread: ThreadDetail = {
       id: threadId,
-      emails: emails.map((email) => toEmailDetail(email, authServId)),
+      emails: emails.map((email) => toEmailDetail(email, authServId, trust)),
     };
     return c.json(thread);
   });
@@ -1343,6 +1434,29 @@ export function createMailRouter(deps: MailDeps) {
       } catch {
         log("warn", "send: remediation of the post-submission move to Sent threw", {
           emailId: draftId,
+        });
+      }
+    }
+
+    // GH #314: a confirmed submission is the one moment this server KNOWS the
+    // user wrote to these addresses, so it feeds the known-sender store here,
+    // synchronously — after the confirmation above, never before it, so a
+    // send that did not go out can never make a stranger "known". The user's
+    // own identities are excluded (a note-to-self is not a correspondent):
+    // the From identity of this send and the signed-in address. Best-effort,
+    // like the remediation above: the mail HAS gone out, and a store hiccup
+    // must not turn that into a 502 that invites a duplicate send.
+    if (deps.sentRecipients) {
+      const own = new Set([identity.email.toLowerCase(), c.get("user").email.toLowerCase()]);
+      const recipients = [...input.to, ...input.cc, ...input.bcc]
+        .map((address) => address.email)
+        .filter((email) => !own.has(email.toLowerCase()));
+      try {
+        await deps.sentRecipients.record(c.get("user").userId, recipients);
+      } catch (error) {
+        log("warn", "send: recording sent recipients failed", {
+          emailId: draftId,
+          error: String(error),
         });
       }
     }

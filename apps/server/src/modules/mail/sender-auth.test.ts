@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveSenderAuthVerdict } from "./sender-auth";
+import { deriveSenderAuthFacts, deriveSenderAuthVerdict } from "./sender-auth";
 
 // GH #136 / GH #152: deriveSenderAuthVerdict is a pure function, deliberately
 // free of I/O — same reasoning as extractHarvestCandidates in
@@ -232,6 +232,81 @@ describe("deriveSenderAuthVerdict", () => {
       // just as untrusted.
       const longer = headerList("mail.test.attacker.example; dmarc=pass header.from=cefiro.test");
       expect(deriveSenderAuthVerdict(longer, "mail.test")).toBe("unknown");
+    });
+  });
+});
+
+// GH #314: the verdict alone says "DMARC passed", not "DMARC passed FOR THE
+// DOMAIN THIS READER IS LOOKING AT". The positive trust tiers are tied to
+// `from[0]`, so they need the domain DMARC actually evaluated — the
+// `header.from=` propspec (RFC 8601 §2.3) of the SAME trusted header's `dmarc=`
+// resinfo. Without it a message could carry a genuine `dmarc=pass` for one
+// domain and a second, unevaluated From header for another, and the badge would
+// vouch for the wrong one. Null is the answer to every doubt: absent, ambiguous,
+// or two `dmarc=` entries naming different domains.
+describe("deriveSenderAuthFacts (GH #314)", () => {
+  it("returns the header.from domain alongside the verdict", () => {
+    expect(
+      deriveSenderAuthFacts(
+        headerList("mail.example.com; dkim=pass header.d=partner.test; dmarc=pass (p=reject) header.from=partner.test"),
+        OWN,
+      ),
+    ).toEqual({ verdict: "pass", dmarcFromDomain: "partner.test" });
+  });
+
+  it("returns a null domain when the dmarc entry carries no header.from propspec", () => {
+    expect(deriveSenderAuthFacts(headerList("mail.example.com; dmarc=pass"), OWN)).toEqual({
+      verdict: "pass",
+      dmarcFromDomain: null,
+    });
+  });
+
+  it("lowercases the domain and strips a trailing root dot", () => {
+    expect(
+      deriveSenderAuthFacts(headerList("mail.example.com; dmarc=pass header.from=Partner.TEST"), OWN)
+        .dmarcFromDomain,
+    ).toBe("partner.test");
+    expect(
+      deriveSenderAuthFacts(headerList("mail.example.com; dmarc=pass header.from=partner.test."), OWN)
+        .dmarcFromDomain,
+    ).toBe("partner.test");
+  });
+
+  it("ignores a header.from hidden inside an RFC 5322 comment", () => {
+    expect(
+      deriveSenderAuthFacts(
+        headerList(
+          "mail.example.com; dmarc=pass (p=reject dis=none header.from=evil.test) " +
+            "header.from=partner.test policy.dmarc=none",
+        ),
+        OWN,
+      ).dmarcFromDomain,
+    ).toBe("partner.test");
+  });
+
+  it("returns null when two dmarc entries name different domains, or only one names any", () => {
+    expect(
+      deriveSenderAuthFacts(
+        headerList("mail.example.com; dmarc=pass header.from=partner.test; dmarc=pass header.from=evil.test"),
+        OWN,
+      ).dmarcFromDomain,
+    ).toBeNull();
+    expect(
+      deriveSenderAuthFacts(
+        headerList("mail.example.com; dmarc=pass header.from=partner.test; dmarc=pass"),
+        OWN,
+      ).dmarcFromDomain,
+    ).toBeNull();
+  });
+
+  it("returns null for a header that is not from the configured authserv-id, and for no header at all", () => {
+    expect(
+      deriveSenderAuthFacts(headerList("forged-mta.attacker.test; dmarc=pass header.from=partner.test"), OWN),
+    ).toEqual({ verdict: "unknown", dmarcFromDomain: null });
+    expect(deriveSenderAuthFacts(undefined, OWN)).toEqual({ verdict: "unknown", dmarcFromDomain: null });
+    expect(deriveSenderAuthFacts(headerList("mail.example.com; dmarc=pass header.from=partner.test"), "")).toEqual({
+      verdict: "unknown",
+      dmarcFromDomain: null,
     });
   });
 });

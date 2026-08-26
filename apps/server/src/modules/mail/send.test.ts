@@ -7,6 +7,7 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
+import { createSentRecipientsRepo, type SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -79,7 +80,10 @@ const stubJmap: JmapClient = {
 
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
+let sentRecipients: SentRecipientsRepo;
 let token: string;
+let userId: string;
+let userEmail: string;
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
@@ -89,12 +93,12 @@ beforeAll(async () => {
   );
   mailCredentials = createMailCredentialsRepo(sql, key);
   sessions = createSessionStore(sql);
+  sentRecipients = createSentRecipientsRepo(sql);
 
-  const withCred = await users.create({
-    email: `m-${crypto.randomUUID()}@noxvytop.com`,
-    displayName: "Mail User",
-  });
+  userEmail = `m-${crypto.randomUUID()}@noxvytop.com`;
+  const withCred = await users.create({ email: userEmail, displayName: "Mail User" });
   await mailCredentials.set(withCred.id, "mailbox-pw");
+  userId = withCred.id;
   token = (await sessions.create(withCred.id, 1)).token;
 });
 afterAll(() => sql.end());
@@ -109,7 +113,10 @@ beforeEach(() => {
   remediationResponse = { updated: { "e-new": null } };
 });
 
-function makeApp() {
+// GH #314: `sentRecipients` is optional here exactly as it is in MailDeps, so
+// every pre-existing test keeps running the route without the known-sender
+// store wired — the same shape the contacts harvest uses.
+function makeApp(sentRecipients?: SentRecipientsRepo) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -117,6 +124,7 @@ function makeApp() {
       signatures: createSignaturesRepo(sql),
       userPreferences: createUserPreferencesRepo(sql),
       jmap: stubJmap,
+      sentRecipients,
     }),
   });
 }
@@ -354,5 +362,79 @@ describe("POST /api/mail/send", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+});
+
+// GH #314: a confirmed send is the strongest "I know this address" signal the
+// server ever sees, so it feeds the Tier A ("known sender") store
+// synchronously — after the submission is confirmed, never before.
+describe("POST /api/mail/send — sent recipients (GH #314)", () => {
+  function send(payload: unknown, repo: SentRecipientsRepo = sentRecipients) {
+    return makeApp(repo).request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it("records every to/cc/bcc address, lowercased, once the submission is confirmed", async () => {
+    const res = await send({
+      ...basePayload,
+      to: [{ name: "Bob", email: "Bob@Partner.Test" }],
+      cc: [{ name: null, email: "carla@partner.test" }],
+      bcc: [{ name: null, email: "dave@partner.test" }],
+    });
+    expect(res.status).toBe(200);
+    const known = await sentRecipients.has(userId, [
+      "bob@partner.test",
+      "carla@partner.test",
+      "dave@partner.test",
+    ]);
+    expect(known).toEqual(new Set(["bob@partner.test", "carla@partner.test", "dave@partner.test"]));
+  });
+
+  it("never records the user's own identities (the From identity or the signed-in address)", async () => {
+    const res = await send({
+      ...basePayload,
+      to: [{ name: "Me", email: "Carlos@noxvytop.com" }],
+      cc: [{ name: null, email: userEmail.toUpperCase() }],
+      bcc: [{ name: null, email: "erin@partner.test" }],
+    });
+    expect(res.status).toBe(200);
+    const known = await sentRecipients.has(userId, [
+      "carlos@noxvytop.com",
+      userEmail.toLowerCase(),
+      "erin@partner.test",
+    ]);
+    expect(known).toEqual(new Set(["erin@partner.test"]));
+  });
+
+  it("records nothing when the submission is not confirmed — a failed send is not a correspondent", async () => {
+    submissionResponse = { notCreated: { sub: { type: "invalidProperties" } } };
+    const res = await send({ ...basePayload, to: [{ name: null, email: "failed@partner.test" }] });
+    expect(res.status).toBe(502);
+    expect(await sentRecipients.has(userId, ["failed@partner.test"])).toEqual(new Set());
+  });
+
+  it("still reports the send as successful when recording the recipients throws (best-effort)", async () => {
+    const failing: SentRecipientsRepo = {
+      ...sentRecipients,
+      record: async () => {
+        throw new Error("boom: simulated DB failure");
+      },
+    };
+    const res = await send({ ...basePayload, to: [{ name: null, email: "frank@partner.test" }] }, failing);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("does nothing when no sent-recipients store is wired (deployments predating GH #314)", async () => {
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...basePayload, to: [{ name: null, email: "grace@partner.test" }] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await sentRecipients.has(userId, ["grace@partner.test"])).toEqual(new Set());
   });
 });

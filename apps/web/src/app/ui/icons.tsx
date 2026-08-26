@@ -195,6 +195,18 @@ export function ShieldCheckIcon({ size = 16 }: IconProps) {
   );
 }
 
+// GH #314: sender-trust indicator (known sender / trusted service) — see
+// SenderTrustBadge.tsx. A seal with a tick, visually distinct from the shield
+// the authenticity badge uses so the two marks never read as one.
+export function BadgeCheckIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps} aria-hidden="true">
+      <path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
 export function ShieldAlertIcon({ size = 16 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>

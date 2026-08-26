@@ -7,10 +7,12 @@ import {
   emailUpdateSchema,
   mailboxSchema,
   senderAuthVerdictSchema,
+  senderTrustSchema,
   sharedAccountCopyPreferenceSchema,
   sharedAccountSchema,
   sharedAccountsSchema,
   threadDetailSchema,
+  trustedServicesSchema,
   userPreferencesSchema,
   userPreferencesUpdateSchema,
 } from "./mail";
@@ -249,6 +251,57 @@ describe("emailDetailSchema", () => {
       expect(() => emailDetailSchema.parse({ ...base, senderAuth: "verified" })).toThrow();
     });
   });
+
+  // GH #314: senderTrust is the POSITIVE-ONLY tier above senderAuth — "known"
+  // (DMARC pass + the user has written to that exact address before) or
+  // "trusted-service" (DMARC pass + From domain on the trusted-services list).
+  // "none" is the safe default for a server response that predates the field:
+  // a client reading a missing field as trusted would mint exactly the false
+  // mark this feature must never produce. It is NOT folded into senderAuth —
+  // the GH #152 tests pin that enum's contract.
+  describe("senderTrust", () => {
+    it("accepts explicit none/known/trusted-service values", () => {
+      expect(emailDetailSchema.parse({ ...base, senderTrust: "none" }).senderTrust).toBe("none");
+      expect(emailDetailSchema.parse({ ...base, senderTrust: "known" }).senderTrust).toBe("known");
+      expect(emailDetailSchema.parse({ ...base, senderTrust: "trusted-service" }).senderTrust).toBe(
+        "trusted-service",
+      );
+    });
+
+    it("defaults senderTrust to 'none' when the field is missing (older server response)", () => {
+      const payload: Record<string, unknown> = { ...base };
+      expect(emailDetailSchema.parse(payload).senderTrust).toBe("none");
+    });
+
+    it("rejects a senderTrust value outside the enum, e.g. a senderAuth verdict", () => {
+      expect(() => emailDetailSchema.parse({ ...base, senderTrust: "pass" })).toThrow();
+    });
+  });
+});
+
+describe("senderTrustSchema (GH #314)", () => {
+  it("accepts none, known and trusted-service", () => {
+    expect(senderTrustSchema.parse("none")).toBe("none");
+    expect(senderTrustSchema.parse("known")).toBe("known");
+    expect(senderTrustSchema.parse("trusted-service")).toBe("trusted-service");
+  });
+
+  it("rejects any other string", () => {
+    expect(() => senderTrustSchema.parse("verified")).toThrow();
+    expect(() => senderTrustSchema.parse("pass")).toThrow();
+  });
+});
+
+describe("trustedServicesSchema (GH #314)", () => {
+  it("parses the seed and user domain lists", () => {
+    const parsed = trustedServicesSchema.parse({ seed: ["github.com"], user: ["partner.test"] });
+    expect(parsed).toEqual({ seed: ["github.com"], user: ["partner.test"] });
+  });
+
+  it("rejects a payload missing either list", () => {
+    expect(() => trustedServicesSchema.parse({ seed: ["github.com"] })).toThrow();
+    expect(() => trustedServicesSchema.parse({ user: [] })).toThrow();
+  });
 });
 
 describe("senderAuthVerdictSchema", () => {
@@ -305,6 +358,19 @@ describe("userPreferencesSchema", () => {
     expect(parsed.sharedMailboxCopyOptIn).toEqual(["acc-shared", "acc-soporte"]);
   });
 
+  it("defaults trustedServices to an empty array when absent (backward compatible, GH #314)", () => {
+    const parsed = userPreferencesSchema.parse({ groupMailInMainInbox: true });
+    expect(parsed.trustedServices).toEqual([]);
+  });
+
+  it("keeps an explicit trustedServices list of domains", () => {
+    const parsed = userPreferencesSchema.parse({
+      groupMailInMainInbox: true,
+      trustedServices: ["partner.test", "billing.example"],
+    });
+    expect(parsed.trustedServices).toEqual(["partner.test", "billing.example"]);
+  });
+
   it("accepts a preferences payload with custom labels", () => {
     const label = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
     const parsed = userPreferencesSchema.parse({ groupMailInMainInbox: true, customLabels: [label] });
@@ -336,5 +402,14 @@ describe("userPreferencesUpdateSchema", () => {
     const a = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
     const b = { slug: "ventas", name: "Otra", color: "#E8639C" };
     expect(() => userPreferencesUpdateSchema.parse({ customLabels: [a, b] })).toThrow();
+  });
+
+  // GH #314: trustedServices is written ONLY through the dedicated
+  // /api/mail/trusted-services routes (which validate each domain), exactly
+  // like sharedMailboxCopyOptIn — the generic PATCH must strip it rather than
+  // let an arbitrary list be merged into the trust decision.
+  it("strips trustedServices from a patch (written only via the dedicated route)", () => {
+    const parsed = userPreferencesUpdateSchema.parse({ trustedServices: ["evil.test"] });
+    expect(parsed).not.toHaveProperty("trustedServices");
   });
 });

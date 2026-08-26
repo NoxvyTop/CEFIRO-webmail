@@ -20,6 +20,7 @@ import { createMailCredentialsRepo } from "./infra/repos/mail-credentials";
 import { createSignaturesRepo } from "./infra/repos/signatures";
 import { createSsoConfigRepo } from "./infra/repos/sso-config";
 import { createUserPreferencesRepo } from "./infra/repos/user-preferences";
+import { createSentRecipientsRepo } from "./infra/repos/sent-recipients";
 import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
 import { createSieveRawScriptRepo } from "./infra/repos/sieve-raw-script";
@@ -188,6 +189,8 @@ const instanceSettings = createInstanceSettingsRepo(db);
 const mailCredentials = createMailCredentialsRepo(db, keyring);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
+// GH #314: the addresses the user has written to (Tier A "known sender").
+const sentRecipients = createSentRecipientsRepo(db);
 const filterRules = createFilterRulesRepo(db);
 const sieveSyncState = createSieveSyncStateRepo(db);
 const sieveRawScript = createSieveRawScriptRepo(db);
@@ -407,6 +410,7 @@ const app = createApp({
     userPreferences,
     jmap,
     contacts,
+    sentRecipients,
     timeoutMs: config.jmapTimeoutMs,
     // The raw-fetch routes (SSE, blob up/download) must present the mailbox
     // credential the same way the JMAP client does, or `bearer` would work for

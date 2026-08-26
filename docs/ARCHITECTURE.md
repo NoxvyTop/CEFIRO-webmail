@@ -321,6 +321,7 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `audit_log` | actor, acción, objetivo, fecha, IP, detalle (JSON) |
 | `sso_config` | proveedor OIDC: issuer, client_id, client_secret (cifrado), scopes |
 | `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
+| `sent_recipients` | direcciones a las que el usuario ha escrito (nivel "remitente conocido" del indicador de confianza, #314); separada de `contacts` a propósito |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
 descifrada no se persiste nunca — se re-descifra bajo demanda y se cachea
@@ -374,6 +375,64 @@ memoria del navegador para renderizarse.
   correo, fuera de esta aplicación).
 - La restricción de egress limita el alcance de cualquier compromiso del
   servidor.
+
+### Indicador de confianza del remitente (#314)
+
+Sobre la insignia de autenticidad (#136/#152: veredicto DMARC `pass`/`fail`/
+`unknown` leído de `Authentication-Results`, ver `docs/OPERATIONS.md`), el
+lector muestra un segundo nivel **solo positivo** (`senderTrust`), calculado en
+`GET /api/mail/threads/:id` por `modules/mail/sender-trust.ts`:
+
+| Nivel | Condición |
+|-------|-----------|
+| `known` (remitente conocido) | DMARC `pass` **y** la dirección `From` exacta es una a la que el usuario ha escrito antes (`sent_recipients`). |
+| `trusted-service` (servicio de confianza) | DMARC `pass` **y** el dominio del `From` está en la lista de servicios de confianza, o es subdominio de una entrada (`noreply.github.com` cae bajo `github.com`). |
+| `none` | Cualquier otro caso. No es un aviso: es la ausencia de afirmación. |
+
+Si aplican los dos, gana `trusted-service`. Reglas que no se negocian:
+
+- **DMARC `pass` es la puerta.** Sin él no hay nivel, aunque la dirección sea
+  conocida o el dominio esté en la lista: un `fail` sigue siendo la única señal
+  negativa y nunca se contradice con una marca positiva. Un `pass` solo, sin
+  coincidencia, tampoco da confianza. No se parsea DKIM `d=`: DMARC ya exige
+  alineación con el dominio del `From` (RFC 7489 §6.6.2).
+- **El `pass` debe estar ligado a la dirección que se muestra.** Un `dmarc=pass`
+  es evidencia sobre el dominio que DMARC evaluó, no sobre cualquier dirección
+  del mensaje: `deriveSenderAuthFacts` lee el propspec `header.from=` del
+  `dmarc=` de esa misma cabecera de confianza y el nivel solo se asigna si ese
+  dominio coincide exactamente con el de `from[0]`. Además el mensaje debe
+  llevar **una sola** dirección en `From` (RFC 5322 permite varias y DMARC
+  evalúa una); con varias, cuál ve el lector es un accidente de representación
+  y no se afirma ningún nivel. Sin `header.from=` legible, o con dos entradas
+  `dmarc=` que nombran dominios distintos, el resultado es `none`.
+- **La interfaz muestra siempre la dirección o el dominio real** junto a la
+  insignia (`SenderTrustBadge`, con el `from[0]` que devuelve el servidor en
+  su nombre accesible), para que el lector compruebe a quién se avala.
+- **"Está en contactos" no es señal.** `contacts` se alimenta de cada remitente
+  que llega (#124/#180), así que un phisher ganaría una fila con solo enviar.
+  `sent_recipients` registra únicamente la dirección **saliente**: envíos
+  confirmados por `POST /send`, los mensajes que aparecen en *Enviados* en la
+  cosecha de llegada, y un backfill único y acotado (200 mensajes más
+  recientes de *Enviados*) la primera vez que un usuario abre un hilo.
+- **Coincidencia de dominio por etiquetas**, en minúsculas: `githiib.com` o
+  `notgithub.com` nunca coinciden con `github.com`; `com` tampoco.
+
+La lista de servicios de confianza es la unión de una **semilla curada**
+(`apps/server/src/modules/mail/trusted-services-seed.ts`: grandes proveedores
+cuyo correo transaccional es objetivo habitual de phishing y que publican DMARC
+en modo estricto; inmutable y no editable por usuario) y los dominios que el
+usuario confirma desde el lector ("Confiar en {dominio}", solo ofrecido con
+DMARC `pass`), guardados en `user_preferences.preferences.trustedServices` y
+gestionados por `GET/PUT/DELETE /api/mail/trusted-services[/:dominio]`.
+Quitar una entrada de la semilla responde `409 trusted_service_seed`; añadir
+una entrada nueva cuando la lista del usuario ya tiene 200 responde
+`409 trusted_services_limit` (volver a confiar una ya presente sigue siendo
+`200`).
+
+No es BIMI: no se consulta DNS del remitente ni se descarga ningún logotipo;
+la marca es un icono fijo junto al dominio real. No requiere variables de
+entorno nuevas; sin `JMAP_AUTHSERV_ID` todo queda en `none`, igual que la
+insignia de autenticidad queda en `unknown`.
 
 ### Papelera con retención
 

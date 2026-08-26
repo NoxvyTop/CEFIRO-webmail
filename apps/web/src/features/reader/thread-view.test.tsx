@@ -40,6 +40,7 @@ const thread: ThreadDetail = {
       references: null,
       inReplyTo: null,
       senderAuth: "unknown",
+      senderTrust: "none",
       bodyTruncated: false,
     },
     {
@@ -63,6 +64,7 @@ const thread: ThreadDetail = {
       references: ["e1@example.com"],
       inReplyTo: ["e1@example.com"],
       senderAuth: "unknown",
+      senderTrust: "none",
       bodyTruncated: false,
     },
   ],
@@ -1284,6 +1286,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1308,6 +1311,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1332,6 +1336,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1425,6 +1430,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1449,6 +1455,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1474,6 +1481,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1576,6 +1584,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1627,6 +1636,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1650,6 +1660,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1790,6 +1801,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
           {
@@ -1813,6 +1825,7 @@ describe("ThreadView", () => {
             references: null,
             inReplyTo: null,
             senderAuth: "unknown",
+            senderTrust: "none",
             bodyTruncated: false,
           },
         ],
@@ -1841,6 +1854,7 @@ describe("ThreadView", () => {
         references: null,
         inReplyTo: null,
         senderAuth: "unknown",
+        senderTrust: "none",
         bodyTruncated: false,
       };
     }
@@ -2673,5 +2687,163 @@ describe("truncated body notice (GH #140)", () => {
 
     await screen.findByRole("heading", { name: "Re: Quarterly report" });
     expect(screen.queryByText(i18n.t("mail.bodyTruncated.title"))).not.toBeInTheDocument();
+  });
+});
+
+// GH #314: the sender-trust badge and the "Trust this service" affordance,
+// wired into the expanded (newest) message. The badge's own rendering rules
+// per tier are covered in sender-trust-badge.test.tsx; these tests check that
+// ThreadView renders it from the last email's `senderTrust` next to the real
+// address, and that the trust/untrust actions call the right endpoints and
+// refresh the thread so the badge flips.
+describe("sender trust badge and trust-this-service action (GH #314)", () => {
+  type TrustState = ThreadDetail["emails"][number]["senderTrust"];
+  type AuthState = ThreadDetail["emails"][number]["senderAuth"];
+
+  // A fetch stub whose thread endpoint reflects trust/untrust mutations: a PUT
+  // flips the last email to "trusted-service", a DELETE flips it back to
+  // "none", exactly as the real server would after invalidation refetches.
+  function stubTrustThread(input: {
+    senderAuth: AuthState;
+    senderTrust: TrustState;
+    userList?: string[];
+    putStatus?: number;
+  }) {
+    const state = structuredClone(thread);
+    const last = state.emails[1];
+    if (!last) throw new Error("fixture must carry a second (newest) email");
+    last.senderAuth = input.senderAuth;
+    last.senderTrust = input.senderTrust;
+    let userList = [...(input.userList ?? [])];
+    const fetchMock = vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(request);
+      const method = init?.method ?? "GET";
+      const prefix = "/api/mail/trusted-services/";
+      if (url.startsWith(prefix) && method === "PUT") {
+        if (input.putStatus && input.putStatus !== 200) {
+          return new Response(JSON.stringify({ code: "invalid_domain" }), { status: input.putStatus });
+        }
+        userList.push(decodeURIComponent(url.slice(prefix.length)));
+        last.senderTrust = "trusted-service";
+        return new Response(JSON.stringify({ seed: ["github.com"], user: userList }));
+      }
+      if (url.startsWith(prefix) && method === "DELETE") {
+        const domain = decodeURIComponent(url.slice(prefix.length));
+        userList = userList.filter((entry) => entry !== domain);
+        last.senderTrust = "none";
+        return new Response(JSON.stringify({ seed: ["github.com"], user: userList }));
+      }
+      if (url === "/api/mail/trusted-services") {
+        return new Response(JSON.stringify({ seed: ["github.com"], user: userList }));
+      }
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+      if (url.includes("/api/mail/preferences")) {
+        return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  // The last email (e2) is from carol@example.com — the address the badge and
+  // the action must name.
+  const knownLabel = () => i18n.t("mail.senderTrust.knownLabel", { address: "carol@example.com" });
+  const trustedLabel = () => i18n.t("mail.senderTrust.trustedServiceLabel", { domain: "example.com" });
+  const trustAction = () => i18n.t("mail.senderTrust.trustAction", { domain: "example.com" });
+  const untrustAction = () => i18n.t("mail.senderTrust.untrustAction", { domain: "example.com" });
+
+  it("shows the known-sender mark, naming the real address, when senderTrust is 'known'", async () => {
+    stubTrustThread({ senderAuth: "pass", senderTrust: "known" });
+    renderThread();
+
+    expect(await screen.findByRole("img", { name: knownLabel() })).toBeInTheDocument();
+    // The authenticity mark it sits next to is still rendered, not replaced.
+    expect(screen.getByRole("img", { name: i18n.t("mail.senderAuth.passLabel") })).toBeInTheDocument();
+    // And the real address is printed in the header, next to the marks.
+    expect(screen.getAllByText(/carol@example\.com/).length).toBeGreaterThan(0);
+  });
+
+  it("shows the trusted-service mark, naming the real domain, when senderTrust is 'trusted-service'", async () => {
+    stubTrustThread({ senderAuth: "pass", senderTrust: "trusted-service" });
+    renderThread();
+
+    expect(await screen.findByRole("img", { name: trustedLabel() })).toBeInTheDocument();
+  });
+
+  it("shows no trust mark and no action when senderTrust is 'none' and the sender is unauthenticated", async () => {
+    stubTrustThread({ senderAuth: "unknown", senderTrust: "none" });
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    expect(screen.queryByRole("img", { name: knownLabel() })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: trustedLabel() })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: trustAction() })).not.toBeInTheDocument();
+  });
+
+  it("offers no trust action on a DMARC fail — nothing may vouch for a spoofed message", async () => {
+    stubTrustThread({ senderAuth: "fail", senderTrust: "none" });
+    renderThread();
+
+    await screen.findByRole("img", { name: i18n.t("mail.senderAuth.failLabel") });
+    expect(screen.queryByRole("button", { name: trustAction() })).not.toBeInTheDocument();
+  });
+
+  it("offers 'Trust <domain>' for an authenticated but untrusted sender, and flips the badge after PUT", async () => {
+    const fetchMock = stubTrustThread({ senderAuth: "pass", senderTrust: "none" });
+    renderThread();
+
+    fireEvent.click(await screen.findByRole("button", { name: trustAction() }));
+
+    expect(await screen.findByRole("img", { name: trustedLabel() })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mail/trusted-services/example.com", { method: "PUT" });
+    // The affordance is gone now that the domain is trusted.
+    expect(screen.queryByRole("button", { name: trustAction() })).not.toBeInTheDocument();
+  });
+
+  it("offers 'Stop trusting <domain>' only when the domain is on the USER list, and flips back after DELETE", async () => {
+    const fetchMock = stubTrustThread({
+      senderAuth: "pass",
+      senderTrust: "trusted-service",
+      userList: ["example.com"],
+    });
+    renderThread();
+
+    fireEvent.click(await screen.findByRole("button", { name: untrustAction() }));
+
+    expect(await screen.findByRole("button", { name: trustAction() })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mail/trusted-services/example.com", { method: "DELETE" });
+    expect(screen.queryByRole("img", { name: trustedLabel() })).not.toBeInTheDocument();
+  });
+
+  it("offers no untrust action for a domain trusted through the seed (not per-user removable)", async () => {
+    stubTrustThread({ senderAuth: "pass", senderTrust: "trusted-service", userList: [] });
+    renderThread();
+
+    await screen.findByRole("img", { name: trustedLabel() });
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: untrustAction() })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: trustAction() })).not.toBeInTheDocument();
+  });
+
+  it("offers no trust action for a known sender — Tier A is a fact, not a preference", async () => {
+    stubTrustThread({ senderAuth: "pass", senderTrust: "known" });
+    renderThread();
+
+    await screen.findByRole("img", { name: knownLabel() });
+    expect(screen.queryByRole("button", { name: trustAction() })).not.toBeInTheDocument();
+  });
+
+  it("reports a refused PUT through the mapped error message and keeps the action available", async () => {
+    stubTrustThread({ senderAuth: "pass", senderTrust: "none", putStatus: 400 });
+    renderThread();
+
+    fireEvent.click(await screen.findByRole("button", { name: trustAction() }));
+
+    expect(await screen.findByText(i18n.t("mail.errors.invalid_domain"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: trustAction() })).toBeInTheDocument();
   });
 });

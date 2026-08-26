@@ -26,13 +26,14 @@ describe("preferences client", () => {
       new Response(JSON.stringify({ groupMailInMainInbox: true })),
     ) as unknown as (input: string, init?: RequestInit) => Promise<Response>;
     vi.stubGlobal("fetch", fetchMock);
-    // customLabels and sharedMailboxCopyOptIn default to [] when the server
-    // response omits them (backward compatible with servers/fixtures that
-    // predate these fields).
+    // customLabels, sharedMailboxCopyOptIn and trustedServices (GH #314)
+    // default to [] when the server response omits them (backward compatible
+    // with servers/fixtures that predate these fields).
     await expect(fetchPreferences()).resolves.toEqual({
       groupMailInMainInbox: true,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
     expect((fetchMock as any).mock.calls[0]?.[0]).toBe("/api/mail/preferences");
   });
@@ -51,6 +52,7 @@ describe("preferences client", () => {
       groupMailInMainInbox: false,
       customLabels: [],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
     const call = (fetchMock as any).mock.calls[0];
     const [url, init] = call as [string, RequestInit];
@@ -75,6 +77,7 @@ describe("preferences client", () => {
       groupMailInMainInbox: true,
       customLabels: [label],
       sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
     const [, init] = (fetchMock as any).mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init?.body))).toEqual({ customLabels: [label] });
