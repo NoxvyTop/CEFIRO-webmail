@@ -758,7 +758,29 @@ describe("loadConfig", () => {
       expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "false" }).sharedMailboxCopyEnabled).toBe(false);
       expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "0" }).sharedMailboxCopyEnabled).toBe(false);
       expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "true" }).sharedMailboxCopyEnabled).toBe(true);
+      expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "1" }).sharedMailboxCopyEnabled).toBe(true);
       expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "" }).sharedMailboxCopyEnabled).toBe(true);
+    });
+
+    // GH #313: the switch used to be "off only on false/0", which made every
+    // other word — `off`, `no`, `disabled` — mean ON. An operator who wrote one
+    // of those got the delivery they were trying to pause, silently. Same rule
+    // JMAP_URL_MODE follows: normalise the spelling, refuse the unknown word.
+    it("accepts surrounding whitespace and any case on SHARED_MAILBOX_COPY_ENABLED", () => {
+      expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: " FALSE " }).sharedMailboxCopyEnabled).toBe(false);
+      expect(loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: " True " }).sharedMailboxCopyEnabled).toBe(true);
+    });
+
+    it("refuses the boot on a SHARED_MAILBOX_COPY_ENABLED word it does not know", () => {
+      expect(() => loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "off" })).toThrow(
+        /SHARED_MAILBOX_COPY_ENABLED/,
+      );
+      expect(() => loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "no" })).toThrow(
+        /SHARED_MAILBOX_COPY_ENABLED/,
+      );
+      expect(() => loadConfig({ ...validEnv, SHARED_MAILBOX_COPY_ENABLED: "yes" })).toThrow(
+        /SHARED_MAILBOX_COPY_ENABLED/,
+      );
     });
 
     it("reads a SHARED_MAILBOX_COPY_POLL_MS override and treats an empty one as absent", () => {
