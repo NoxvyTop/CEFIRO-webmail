@@ -46,9 +46,10 @@ export interface ShutdownDeps {
    * Stops background work BEFORE the listener drains (GH #313): the
    * shared-mailbox copy worker holds upstream EventSource sockets and may be
    * mid-cycle, and a cycle that starts a copy while the pool is closing ends
-   * with a half-recorded page. Bounded by `graceMs` like the drain itself, and
-   * a rejection or an overrun is logged and stepped over — a stuck worker must
-   * not keep a deploy from finishing any more than a stuck request may.
+   * with a half-recorded page. It SHARES `graceMs` with the drain (see
+   * `MIN_DRAIN_MS`), and a rejection or an overrun is logged and stepped over
+   * — a stuck worker must not keep a deploy from finishing any more than a
+   * stuck request may.
    */
   stopWorkers?: () => Promise<void>;
 }
@@ -58,6 +59,21 @@ export interface ShutdownDeps {
 // one source of truth rather than a copy that can drift.
 export const DEFAULT_GRACE_MS = 15_000;
 export const DEFAULT_DB_TIMEOUT_MS = 5_000;
+
+/**
+ * Floor of the drain's share of `graceMs` (GH #313). Stopping the workers and
+ * draining the listener are two phases of ONE budget: each used to race the
+ * full `graceMs`, so `SHUTDOWN_GRACE_MS=15000` could take 30s to reach the
+ * forced close — past the kill timeout of every orchestrator that sets one,
+ * which turns the graceful stop this module exists for into a SIGKILL.
+ *
+ * The floor exists because "the workers used the whole budget" must still
+ * leave the listener a moment to finish the request in flight; a zero-length
+ * drain would force-close every live connection the instant a worker overran,
+ * which is the failure mode the budget was meant to avoid. One second is the
+ * same lower bound closeDb already applies to its own timeout.
+ */
+export const MIN_DRAIN_MS = 1_000;
 
 /**
  * Builds an idempotent shutdown handler. The first invocation runs the full
@@ -72,20 +88,20 @@ export function createShutdown(deps: ShutdownDeps): (reason: ShutdownReason) => 
 
   let started = false;
 
-  async function stopWorkers(): Promise<void> {
+  async function stopWorkers(budgetMs: number): Promise<void> {
     if (!deps.stopWorkers) return;
     const stopping = deps.stopWorkers().catch((error) => {
       log("error", "background worker stop failed", { error: String(error) });
     });
-    const timedOut = await raceTimeout(stopping, graceMs);
+    const timedOut = await raceTimeout(stopping, budgetMs);
     if (timedOut) {
-      log("warn", "background worker stop timed out; continuing shutdown", { graceMs });
+      log("warn", "background worker stop timed out; continuing shutdown", { graceMs, budgetMs });
     } else {
       log("info", "background workers stopped", {});
     }
   }
 
-  async function drainServer(): Promise<void> {
+  async function drainServer(budgetMs: number): Promise<void> {
     // Bun drains at the connection level: stop(false) stops accepting new
     // connections and resolves once every in-flight request has completed.
     // Bound that wait — a stuck long-lived request must not block the deploy
@@ -93,10 +109,11 @@ export function createShutdown(deps: ShutdownDeps): (reason: ShutdownReason) => 
     const drained = server.stop(false).catch((error) => {
       log("error", "server stop failed", { error: String(error) });
     });
-    const timedOut = await raceTimeout(drained, graceMs);
+    const timedOut = await raceTimeout(drained, budgetMs);
     if (timedOut) {
       log("warn", "shutdown drain timed out; forcing connection close", {
         graceMs,
+        budgetMs,
         pendingRequests: server.pendingRequests,
       });
       await server.stop(true).catch((error) => {
@@ -127,8 +144,13 @@ export function createShutdown(deps: ShutdownDeps): (reason: ShutdownReason) => 
       signal: reason.kind === "signal" ? reason.signal : undefined,
     });
 
-    await stopWorkers();
-    await drainServer();
+    // ONE deadline for both bounded phases (GH #313): whatever stopping the
+    // workers spends comes off the drain's share, so the wait before the
+    // forced close is graceMs — never graceMs twice — with MIN_DRAIN_MS as
+    // the drain's floor.
+    const deadline = Date.now() + graceMs;
+    await stopWorkers(graceMs);
+    await drainServer(Math.max(MIN_DRAIN_MS, deadline - Date.now()));
     await closeDb();
 
     log("info", "shutdown complete", { code });

@@ -516,9 +516,12 @@ cursor y libro confirman por su cuenta.
 y `SHARED_MAILBOX_COPY_ENABLED` no desactivado, arranca **después** de que el
 listener esté escuchando, y sin opt-ins no corre ciclos ni abre suscripciones.
 En el apagado ordenado (#193) se detiene **antes** de drenar el listener
-(`createShutdown.stopWorkers`), acotado por `SHUTDOWN_GRACE_MS`, para que
-ningún ciclo empiece una copia contra un pool que se está cerrando. Cada copia
-intentada suma en `cefiro_shared_mailbox_copies_total{result}`.
+(`createShutdown.stopWorkers`) para que ningún ciclo empiece una copia contra
+un pool que se está cerrando. Las dos fases comparten **un solo plazo**,
+`SHUTDOWN_GRACE_MS`: lo que tarde en pararse el worker se descuenta del
+drenaje, con un suelo de 1 s (`MIN_DRAIN_MS`), de modo que la espera hasta el
+cierre forzado nunca es el doble del plazo configurado. Cada copia intentada
+suma en `cefiro_shared_mailbox_copies_total{result}`.
 
 **Fuera de alcance, a propósito:** retención o purga de las copias, borrado en
 cascada, backfill del correo anterior al opt-in y la UI más allá del texto de

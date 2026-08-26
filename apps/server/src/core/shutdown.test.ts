@@ -189,6 +189,78 @@ describe("createShutdown", () => {
       expect(end).toHaveBeenCalledTimes(1);
       expect(exit).toHaveBeenCalledWith(0);
     });
+
+    // GH #313, shutdown budget doubled: stopping the workers and draining the
+    // listener each raced against the FULL graceMs, so an operator who set
+    // SHUTDOWN_GRACE_MS=15000 could wait 30s before the forced close — past
+    // the orchestrator's own kill timeout, which turns a graceful stop into a
+    // SIGKILL. One deadline now covers both phases.
+    it("spends one shared deadline on stopping the workers and draining the server", async () => {
+      vi.useFakeTimers();
+      try {
+        const { server, calls } = fakeServer({ drains: false });
+        const { sql } = fakeSql();
+        const { log } = recordingLog();
+        const exit = vi.fn();
+
+        const shutdown = createShutdown({
+          server,
+          sql,
+          log,
+          graceMs: 10_000,
+          exit,
+          // Stops cleanly, but only after 6 of the 10 seconds.
+          stopWorkers: () => new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+        });
+        const finished = shutdown({ kind: "signal", signal: "SIGTERM" });
+
+        await vi.advanceTimersByTimeAsync(6_000);
+        expect(calls).toEqual([false]); // the drain has started
+
+        // Only the 4s left of the shared budget, not another full 10s.
+        await vi.advanceTimersByTimeAsync(3_999);
+        expect(calls).toEqual([false]);
+        await vi.advanceTimersByTimeAsync(1);
+        await finished;
+
+        expect(calls).toEqual([false, true]);
+        expect(exit).toHaveBeenCalledWith(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still leaves the drain a one-second floor when the workers ate the whole budget", async () => {
+      vi.useFakeTimers();
+      try {
+        const { server, calls } = fakeServer({ drains: false });
+        const { sql } = fakeSql();
+        const { log } = recordingLog();
+        const exit = vi.fn();
+
+        const shutdown = createShutdown({
+          server,
+          sql,
+          log,
+          graceMs: 5_000,
+          exit,
+          stopWorkers: () => new Promise<void>(() => {}),
+        });
+        const finished = shutdown({ kind: "signal", signal: "SIGTERM" });
+
+        await vi.advanceTimersByTimeAsync(5_000); // the worker stop times out
+        expect(calls).toEqual([false]);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(calls).toEqual([false]);
+        await vi.advanceTimersByTimeAsync(1);
+        await finished;
+
+        expect(calls).toEqual([false, true]);
+        expect(exit).toHaveBeenCalledWith(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

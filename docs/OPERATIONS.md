@@ -88,7 +88,7 @@ al desplegar, no a mitad de la jornada.
 | `SESSION_TTL_HOURS` | `12` | Vida absoluta de la sesión (tope no extensible). |
 | `SESSION_IDLE_MINUTES` | — | Timeout por inactividad (sliding, #301). Sin definir = sin límite de inactividad. Si se define, una sesión sin uso durante más de estos minutos caduca antes del tope absoluto. |
 | `STATIC_DIR` | `/app/apps/web/dist` | Ya viene fijado en la imagen. |
-| `SHUTDOWN_GRACE_MS` | `15000` | Plazo para que terminen las peticiones en vuelo al recibir SIGTERM. |
+| `SHUTDOWN_GRACE_MS` | `15000` | Plazo **único y compartido** entre las dos fases acotadas del apagado: parar los trabajos de fondo (#313) y drenar las peticiones en vuelo. Lo que consuma la primera se descuenta de la segunda, con un suelo de 1 s para el drenaje, así que la espera hasta el cierre forzado no supera este valor (antes cada fase corría su propio plazo y podía llegar al doble, más que el kill timeout del orquestador). |
 | `SHUTDOWN_DB_TIMEOUT_MS` | `5000` | Plazo para cerrar el pool de Postgres. |
 
 **Correo (proveedor JMAP).** Sin `JMAP_URL` los endpoints de correo responden
