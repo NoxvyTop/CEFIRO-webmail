@@ -71,6 +71,8 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
   let membership: Membership[] =
     initialMembership ?? initial.map(({ userId, accountIds }) => ({ userId, accountIds }));
   let listFailure: Error | null = null;
+  /** A failing PREFERENCE membership listing — the one the owed members come from. */
+  let membershipFailure: Error | null = null;
   /** A pending opt-in listing, when the test wants stop() to land during it. */
   let listGate: Promise<void> | null = null;
   /** Accounts the state store already knows about, and the prunes it received. */
@@ -143,7 +145,10 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
       if (listFailure) throw listFailure;
       return optIns;
     },
-    listOptInMembership: async () => membership,
+    listOptInMembership: async () => {
+      if (membershipFailure) throw membershipFailure;
+      return membership;
+    },
     pollMs: 300_000,
     timers: timers.timers,
     log: (level, msg, fields = {}) => {
@@ -211,6 +216,9 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
     },
     failPruneWith(error: Error | null) {
       pruneFailure = error;
+    },
+    failMembershipWith(error: Error | null) {
+      membershipFailure = error;
     },
     failPruneFor(accountId: string) {
       pruneFailFor.add(accountId);
@@ -518,6 +526,69 @@ describe("createSharedCopyWorker — membership reconcile (GH #313)", () => {
       ),
     ).toBe(true);
     expect(h.cycles.map((c) => c.sharedAccountId)).toEqual(["acc-a", "acc-b"]);
+    await h.worker.stop();
+  });
+
+  // GH #313: `preferenceMembers` is assigned only after listOptInMembership()
+  // RESOLVES, so a rejection left the poll running its cycles over an empty map
+  // (the first poll) or a stale one (any later poll) — and that map is exactly
+  // what tells the cycle whom it OWES a copy. The cursor then advanced past
+  // those members' mail with no trail written, which is the loss the trail
+  // exists to prevent. Membership unknown means no cycle, not a guessed one.
+  it("runs no cycle in a poll whose membership listing failed, and cycles again on the next one", async () => {
+    const h = harness();
+    h.failMembershipWith(new Error("db away"));
+    h.worker.start();
+    await settle();
+
+    expect(h.cycles).toEqual([]);
+    expect(h.logs.some((l) => l.level === "error" && l.msg.includes("membership unknown"))).toBe(
+      true,
+    );
+    // The watchers are not the casualty of a listing that failed: a push while
+    // the membership is unknown is skipped by the cycle, not by closing the
+    // socket that would have told us about it.
+    expect(h.worker.watching).toEqual(["acc-a", "acc-b"]);
+    expect(h.timers.delays()).toEqual([300_000]);
+
+    h.failMembershipWith(null);
+    h.timers.fireNext();
+    await settle();
+    expect(h.cycles.map((c) => c.sharedAccountId)).toEqual(["acc-a", "acc-b"]);
+    await h.worker.stop();
+  });
+
+  it("runs no cycle in a later poll whose membership listing failed, and keeps the watchers", async () => {
+    const h = harness();
+    h.worker.start();
+    await settle();
+    expect(h.cycles).toHaveLength(2);
+
+    h.failMembershipWith(new Error("db away"));
+    h.timers.fireNext();
+    await settle();
+
+    // A stale map is not knowledge: a member who opted in since the last poll
+    // would be owed nothing at all by a cycle run from it.
+    expect(h.cycles).toHaveLength(2);
+    expect(h.worker.watching).toEqual(["acc-a", "acc-b"]);
+    expect(h.timers.delays()).toEqual([300_000]);
+    await h.worker.stop();
+  });
+
+  it("skips a pushed cycle while the membership has never been listed at all", async () => {
+    const h = harness();
+    h.failMembershipWith(new Error("db away"));
+    h.worker.start();
+    await settle();
+
+    h.watchers.get("acc-a")!.onChange("acc-a");
+    await settle();
+
+    expect(h.cycles).toEqual([]);
+    expect(
+      h.logs.some((l) => l.fields.sharedAccountId === "acc-a" && l.msg.includes("membership unknown")),
+    ).toBe(true);
     await h.worker.stop();
   });
 

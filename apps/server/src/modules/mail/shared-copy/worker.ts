@@ -21,6 +21,13 @@
  *   delivered within the interval. Because the cycle reads from a cursor
  *   (../delivery.ts), a poll that finds nothing new costs one `Email/changes`
  *   per account and nothing else.
+ * - Either trigger runs a cycle only when the PREFERENCE membership is known.
+ *   That listing is what tells the cycle whom it owes a copy, so a poll whose
+ *   listing failed skips its cycles (the watchers stay open) and a push before
+ *   the first successful listing is skipped too. The cursor advances past a
+ *   page whatever happens, so a cycle run without that answer would leave no
+ *   trail for the members missing from it — one interval of latency against
+ *   somebody's mail.
  *
  * A pure poll was rejected for the latency (five minutes is too slow for a
  * "new mail in ventas@" copy, and polling every few seconds multiplies
@@ -194,6 +201,14 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
    * does with `membership`.
    */
   let preferenceMembers = new Map<string, string[]>();
+  /**
+   * Whether that listing has EVER been read. The map above starts empty and an
+   * empty map is indistinguishable from "nobody opts in", so a cycle run before
+   * the first listing succeeded would owe a copy to nobody at all — and the
+   * cursor advances past their mail regardless. A push before that point is
+   * skipped rather than served from an answer nobody has given yet.
+   */
+  let membershipLoaded = false;
   const watchers = new Map<string, Pick<SharedMailboxWatcher, "stop">>();
   const queue = new Set<string>();
   let draining: Promise<void> | null = null;
@@ -202,6 +217,15 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   let pollTimer: unknown;
 
   async function cycleFor(sharedAccountId: string): Promise<void> {
+    if (!membershipLoaded) {
+      // A push can arrive before the first poll has read the preference
+      // membership — or after one that failed. Running the cycle anyway would
+      // hand it an empty owed list, and the cursor would advance past the mail
+      // of every member the deliverable listing leaves out with nothing
+      // written for them. The next poll runs the cycle from a real answer.
+      log("warn", "shared mailbox copy: membership unknown; cycle skipped", { sharedAccountId });
+      return;
+    }
     const members = membership.get(sharedAccountId);
     // An account nobody opts into any more can still be signalled by a
     // watcher that was closed a moment ago; there is nobody to copy for.
@@ -285,6 +309,10 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   async function reconcileMembers(): Promise<void> {
     const members = membershipByAccount(await input.listOptInMembership());
     preferenceMembers = members;
+    // The listing itself is what the cycles depend on; the prunes below are
+    // per-account best effort and one that fails costs a baseline row five
+    // minutes, not the cycle its owed members.
+    membershipLoaded = true;
     for (const accountId of await delivery.copies.listAccountIds()) {
       if (stopped) return;
       try {
@@ -349,18 +377,33 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
       const optIns = await input.listOptIns();
       if (stopped) return;
       membership = membersByAccount(optIns);
+      let membershipKnown = true;
       try {
         await reconcileMembers();
       } catch (error) {
-        // The membership listing itself failed (a prune that fails is caught
-        // per account): a member keeps a baseline row for another five
-        // minutes, which must not also cost this poll its watchers and cycles.
-        log("error", "shared mailbox copy: membership reconcile failed", { error: String(error) });
+        // The PREFERENCE membership listing failed (a prune that fails is
+        // caught per account). That listing is what tells the cycle whom it
+        // owes a copy, and `preferenceMembers` is only assigned once it
+        // resolves — so the cycles of this poll would run over an empty map on
+        // the first poll, or a stale one on any later poll, and the cursor
+        // would advance past the mail of every member missing from it with
+        // nothing written for them. Skipped instead, and tried again next
+        // poll: a deferred cycle costs one interval of latency, a cycle run
+        // from an answer we do not have costs somebody their mail.
+        membershipKnown = false;
+        log("error", "shared mailbox copy: membership unknown; cycles skipped this poll", {
+          error: String(error),
+        });
       }
       if (stopped) return;
+      // The watchers stand either way: they are reconciled from the opt-in
+      // listing, which did answer, and closing them would only cost us the
+      // pushes that tell the next poll there is something to deliver.
       reconcileWatchers();
-      for (const accountId of membership.keys()) queue.add(accountId);
-      await drain();
+      if (membershipKnown) {
+        for (const accountId of membership.keys()) queue.add(accountId);
+        await drain();
+      }
     } catch (error) {
       // The listing is the one step that can fail here (cycles catch their
       // own): keep the previous membership and watchers, and try again next

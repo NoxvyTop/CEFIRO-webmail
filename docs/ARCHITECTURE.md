@@ -732,7 +732,13 @@ que caía durante el listado o la reconciliación iba seguido igualmente de la
 reconciliación de suscripciones, que volvía a abrir watchers en el mapa que
 `stop()` acababa de vaciar. La reconciliación de miembros captura el fallo
 **por cuenta**, para que una poda que falla no deje sin podar a las cuentas
-siguientes. Las dos fases comparten **un solo plazo**,
+siguientes. Si lo que falla es el **listado de membresía por preferencia**, ese
+sondeo **no corre ciclos** (las suscripciones se quedan abiertas) y un push
+anterior al primer listado correcto también se salta: ese listado es lo que dice
+a quién se le **debe** una copia, y un ciclo corrido sin él avanzaría el cursor
+por encima del correo de los miembros que falten en el mapa sin dejarles rastro.
+Se reintenta en el sondeo siguiente: un ciclo aplazado cuesta un intervalo,
+correrlo con una respuesta que no se tiene cuesta correo. Las dos fases comparten **un solo plazo**,
 `SHUTDOWN_GRACE_MS`: lo que tarde en pararse el worker se descuenta del
 drenaje, con un suelo de 1 s (`MIN_DRAIN_MS`) para que la petición en vuelo
 pueda terminar aunque el worker se coma el plazo entero. La espera hasta el
