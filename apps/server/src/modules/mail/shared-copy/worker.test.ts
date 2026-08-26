@@ -86,6 +86,7 @@ function harness(initial: OptIn[] = [ana, bruno]) {
     jmap,
     copies: {
       getState: async () => ({ emailState: null, lastCycleAt: null }),
+      markCycleAttempt: async () => {},
       baselineMembers: async () => [],
       setCursor: async () => {},
       copyStates: async () => new Map(),

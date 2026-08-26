@@ -25,10 +25,11 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
-     * The cursor AND when it was last moved. The two are read together because
-     * the cycle needs both to decide whether to resume or to re-baseline: a
-     * cursor with no recent cycle behind it points at a backlog, not at a gap
-     * worth replaying (see the migration header).
+     * The cursor AND when a cycle was last attempted for this account. Only
+     * the cursor decides anything — delivery always resumes from it, however
+     * old it is — so `lastCycleAt` is read alongside purely as the operator's
+     * view of whether this account is being cycled at all (see the migration
+     * header).
      */
     async getState(
       sharedAccountId: string,
@@ -44,10 +45,27 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
-     * Moves the cursor and stamps `last_cycle_at`, always together: a cursor
-     * whose age is unknown is the one the next cycle cannot tell apart from a
-     * week-old backlog. Leaves the lease columns alone — the caller already
-     * holds the lease it is writing under.
+     * Stamps "a cycle was attempted for this account, now". Written as soon as
+     * the cycle takes the lease, so the stamp covers the runs that reached no
+     * member and the ones that threw — which are exactly the runs an operator
+     * needs to see. Nothing in delivery decides anything from it.
+     *
+     * An update, not an upsert: taking the lease is what creates the row, and
+     * a cycle only ever stamps under its own lease.
+     */
+    async markCycleAttempt(sharedAccountId: string): Promise<void> {
+      await sql`
+        update shared_mailbox_copy_state set
+          last_cycle_at = now(),
+          updated_at = now()
+        where shared_account_id = ${sharedAccountId}
+      `;
+    },
+
+    /**
+     * Moves the cursor and refreshes `last_cycle_at` with it, so the stamp
+     * covers the whole run rather than only its start. Leaves the lease
+     * columns alone — the caller already holds the lease it is writing under.
      */
     async setCursor(sharedAccountId: string, emailState: string): Promise<void> {
       await sql`

@@ -52,7 +52,6 @@ import type { JmapAuthMode } from "../../../infra/jmap/client";
 import {
   electWatcher,
   runDeliveryCycle,
-  staleMsForPoll,
   type DeliveryCycleResult,
   type DeliveryDeps,
   type SharedCopyMember,
@@ -135,10 +134,6 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   const delivery: DeliveryDeps = {
     ...input.delivery,
     leaseOwner: input.leaseOwner ?? input.delivery.leaseOwner ?? crypto.randomUUID(),
-    // Derived from the poll interval, not configured separately: an operator
-    // who lengthens the poll means the cycles to be further apart, and a fixed
-    // window would start calling their normal resumes a backlog.
-    staleMs: input.delivery.staleMs ?? staleMsForPoll(input.pollMs),
   };
   const openWatcher =
     input.openWatcher ??

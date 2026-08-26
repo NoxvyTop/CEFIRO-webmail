@@ -10,7 +10,6 @@ import {
 } from "../../../infra/jmap/client";
 import type { MailSessionResult } from "../context";
 import {
-  DEFAULT_DELIVERY_STALE_MS,
   DELIVERY_MAX_PAGES,
   DELIVERY_RETRY_MAX_ATTEMPTS,
   electWatcher,
@@ -64,6 +63,8 @@ function fakeCopiesRepo(events: string[]) {
   /** Insertion order of the failed rows, standing in for `order by updated_at`. */
   const failedOrder: string[] = [];
   const cursorWrites: string[] = [];
+  /** Accounts whose cycle stamped an attempt, in order. */
+  const cycleAttempts: string[] = [];
   let failMarkCopied = 0;
   const leases = new Map<string, { owner: string; until: number }>();
   const leaseLog: Array<{ op: "acquire" | "renew" | "release"; owner: string; ok: boolean }> = [];
@@ -77,6 +78,7 @@ function fakeCopiesRepo(events: string[]) {
     attempts,
     errors,
     cursorWrites,
+    cycleAttempts,
     /** A copy an earlier cycle failed `attemptCount` times. */
     seedFailed(userId: string, accountId: string, emailId: string, attemptCount: number) {
       const id = key(userId, accountId, emailId);
@@ -101,9 +103,13 @@ function fakeCopiesRepo(events: string[]) {
       cursors.set(accountId, state);
       cycledAt.set(accountId, Date.now());
     },
-    /** A cursor left behind `ageMs` ago — a worker that was off that long. */
+    /** A cursor last touched `ageMs` ago — a worker that was off that long. */
     ageCursor(accountId: string, ageMs: number) {
       cycledAt.set(accountId, Date.now() - ageMs);
+    },
+    /** How old this account's `last_cycle_at` stamp is right now. */
+    cursorAgeMs(accountId: string): number {
+      return Date.now() - (cycledAt.get(accountId) ?? 0);
     },
     /** Members this account has already baselined. */
     baselined(accountId: string): string[] {
@@ -121,6 +127,10 @@ function fakeCopiesRepo(events: string[]) {
         emailState: cursors.get(accountId) ?? null,
         lastCycleAt: cycledAt.has(accountId) ? new Date(cycledAt.get(accountId)!) : null,
       }),
+      markCycleAttempt: async (accountId: string) => {
+        cycleAttempts.push(accountId);
+        cycledAt.set(accountId, Date.now());
+      },
       baselineMembers: async (accountId: string, userIds: string[], state: string) => {
         const seen = memberState.get(accountId) ?? new Map<string, string>();
         memberState.set(accountId, seen);
@@ -533,52 +543,63 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
   });
 });
 
-// GH #313: the cursor is per ACCOUNT and it stands still whenever no cycle
-// runs — because the worker was off, or because nobody opted in yet. Resuming
-// from it replayed everything that had arrived meanwhile into every member's
-// inbox at once. Two rules fix that: a cursor with no recent cycle behind it
-// is re-baselined, and a member is only delivered to from the cycle AFTER the
-// one that first saw them.
-describe("runDeliveryCycle — staleness and per-member baseline (GH #313)", () => {
-  it("re-baselines instead of replaying the backlog when the cursor went stale", async () => {
+// GH #313: delivery used to re-baseline whenever the cursor had not moved in
+// two poll intervals, which silently dropped EVERY message of any gap longer
+// than that — a provider outage, a deploy, an account with no watcher, a cycle
+// error the worker swallowed. Time cannot tell an intentional pause from an
+// outage, so there is no time-based rule at all any more: the cursor is always
+// resumed, and the per-member baseline is the only thing that keeps an opt-in
+// from back-filling.
+describe("runDeliveryCycle — resuming after a gap and per-member baseline (GH #313)", () => {
+  it("delivers the backlog from the persisted cursor after an hour with no cycle", async () => {
     h.copies.seedCursor(SHARED, "s-old");
     h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
-    h.copies.ageCursor(SHARED, DEFAULT_DELIVERY_STALE_MS + 1_000);
-    h.currentState = "s-now";
+    h.copies.ageCursor(SHARED, 3_600_000);
+    h.pages = [{ created: ["e1", "e2"], newState: "s-now" }];
+    h.inInbox.add("e1").add("e2");
 
-    await expect(run()).resolves.toEqual({ status: "baselined", reason: "stale_cursor" });
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 4 });
+    expect(changesCalls(h).map((c) => c.params.sinceState)).toEqual(["s-old"]);
     expect(h.copies.cursors.get(SHARED)).toBe("s-now");
-    expect(changesCalls(h)).toEqual([]);
-    expect(copyCalls(h)).toEqual([]);
-    expect(h.logs.some((l) => l.level === "warn" && l.fields.reason === "stale_cursor")).toBe(true);
   });
 
-  it("resumes normally while the cursor is younger than the stale window", async () => {
-    h.copies.seedCursor(SHARED, "s-1");
+  it("resumes from a cursor no cycle ever stamped, rather than throwing it away", async () => {
+    // A row written before `last_cycle_at` existed, or one whose stamp a
+    // failed cycle never wrote: the cursor itself is still the truth.
+    h.copies.cursors.set(SHARED, "s-unstamped");
     h.copies.seedMembers(SHARED, [ana.userId]);
-    h.copies.ageCursor(SHARED, DEFAULT_DELIVERY_STALE_MS - 60_000);
     h.pages = [{ created: ["e1"], newState: "s-2" }];
     h.inInbox.add("e1");
 
     await expect(run([ana])).resolves.toMatchObject({ status: "delivered", copied: 1 });
+    expect(changesCalls(h).map((c) => c.params.sinceState)).toEqual(["s-unstamped"]);
   });
 
-  it("honours the stale window the worker derives from the poll interval", async () => {
-    h.copies.seedCursor(SHARED, "s-old");
-    h.copies.seedMembers(SHARED, [ana.userId]);
-    h.copies.ageCursor(SHARED, 30_000);
-    h.deps.staleMs = 20_000;
-    h.currentState = "s-now";
+  // `last_cycle_at` survives as an informational stamp only: it says when a
+  // cycle was last ATTEMPTED, so it is written as soon as the lease is taken
+  // rather than on a successful advance — a run that reached no member, or
+  // threw, is still a run the operator wants to see.
+  it("stamps the attempt as soon as the lease is taken", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.ageCursor(SHARED, 3_600_000);
+    h.pages = [{ created: [], newState: "s-2" }];
 
-    await expect(run([ana])).resolves.toEqual({ status: "baselined", reason: "stale_cursor" });
+    await run([ana]);
+    expect(h.copies.cycleAttempts).toEqual([SHARED]);
+    expect(h.copies.cursorAgeMs(SHARED)).toBeLessThan(60_000);
   });
 
-  it("re-baselines a cursor no cycle ever stamped, rather than trusting it", async () => {
-    // Nothing but the cursor: age unknown, so it is treated as a backlog.
-    h.copies.cursors.set(SHARED, "s-unknown-age");
-    h.copies.seedMembers(SHARED, [ana.userId]);
-    h.currentState = "s-now";
-    await expect(run([ana])).resolves.toEqual({ status: "baselined", reason: "stale_cursor" });
+  it("stamps the attempt even when no member can reach the account", async () => {
+    h.noCredentialFor.add(ana.email);
+    await expect(run([ana])).resolves.toEqual({ status: "no_watcher" });
+    expect(h.copies.cycleAttempts).toEqual([SHARED]);
+    expect(h.copies.cursorWrites).toEqual([]);
+  });
+
+  it("stamps no attempt for a cycle it never ran, because another replica holds the lease", async () => {
+    h.copies.holdLease(SHARED);
+    await expect(run([ana])).resolves.toEqual({ status: "locked" });
+    expect(h.copies.cycleAttempts).toEqual([]);
   });
 
   it("gives a member who joined an active account nothing this cycle and everything the next", async () => {

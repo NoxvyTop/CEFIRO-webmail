@@ -53,14 +53,15 @@
 -- lease is what creates the row, so an account can legitimately have a lease
 -- (and, later, a `last_cycle_at`) before it has a cursor.
 --
--- `last_cycle_at` is stamped on every cursor advance and is what makes a
--- STALE cursor recognisable. A cursor on its own cannot say WHEN it was left
--- there, so a deployment whose worker was off for a week — or an account
--- nobody opted into for a week — resumed from a week-old state and replayed
--- the entire backlog into every member's inbox. Past a threshold the worker
--- re-baselines instead (see modules/mail/shared-copy/delivery.ts): the mail in
--- that gap stays reachable through the manual copy button, which is the same
--- answer this feature already gives for mail older than the opt-in.
+-- `last_cycle_at` is INFORMATIONAL. It is stamped as soon as a cycle takes the
+-- account's lease (and refreshed on every cursor advance), so it means "a cycle
+-- was last attempted then" — including the runs that reached no member and the
+-- ones that threw. Nothing decides anything from it: delivery always resumes
+-- from `email_state`, however old it is. An age-based re-baseline used to sit
+-- here and was removed, because the clock cannot tell an intentional pause from
+-- an outage, a deploy, an account with no watcher or a swallowed cycle error —
+-- and it answered all of them by dropping every message of the gap. A gap
+-- DEFERS delivery (the backlog drains five pages a cycle); it never cancels it.
 create table shared_mailbox_copy_state (
   shared_account_id text primary key,
   email_state text,

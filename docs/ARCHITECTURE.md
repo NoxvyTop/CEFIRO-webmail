@@ -464,23 +464,28 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    miembro dado de baja o con credencial revocada solo cuesta una línea de
    log. Sin candidato, el ciclo no toca nada.
 2. **Cursor.** El servidor guarda el último estado `Email` de la cuenta
-   compartida que procesó y **cuándo** lo dejó ahí (`shared_mailbox_copy_state`,
-   `email_state` + `last_cycle_at`). Sin fila, el primer ciclo **solo fija el
-   estado actual, sin copiar**: el opt-in es hacia adelante, y el correo
-   anterior sigue disponible con el botón manual. Si el cursor lleva más de
-   `SHARED_MAILBOX_COPY_STALE_MS` sin moverse —dos intervalos de sondeo,
-   derivados de `SHARED_MAILBOX_COPY_POLL_MS`, sin variable propia— el ciclo
-   **vuelve a fijar el estado actual y no copia nada**, avisando en el log: un
-   cursor así no señala un hueco, señala todo lo que llegó mientras el worker
-   estuvo apagado o mientras nadie tenía la opción activada, y reproducirlo
-   vaciaría el buzón compartido de golpe en la bandeja de cada miembro. Con
-   fila reciente, pide `Email/changes { sinceState, maxChanges: 100 }` y recorre como
-   mucho cinco páginas por ciclo; lo que quede lo termina el siguiente. Si el
-   proveedor responde `cannotCalculateChanges` (el cursor es más viejo que su
-   historial), se vuelve a fijar el estado y se avisa en el log: el correo de
-   ese hueco es incognoscible, y un barrido "los N más recientes" repartiría
-   duplicados. Cualquier otro error del proveedor se propaga **sin mover el
-   cursor**, para reintentar la misma página en el siguiente sondeo o push.
+   compartida que procesó (`shared_mailbox_copy_state.email_state`). Sin fila,
+   el primer ciclo **solo fija el estado actual, sin copiar**: el opt-in es
+   hacia adelante, y el correo anterior sigue disponible con el botón manual.
+   Con fila, el ciclo **siempre reanuda desde el cursor, tenga la edad que
+   tenga**: pide `Email/changes { sinceState, maxChanges: 100 }` y recorre como
+   mucho cinco páginas por ciclo; lo que quede lo termina el siguiente. Parar
+   el worker, un despliegue o una caída del proveedor **aplazan** la entrega,
+   no la cancelan: al volver, el atraso se drena a razón de cinco páginas por
+   ciclo. Lo que impide que un miembro reciba correo anterior a su propio
+   opt-in no es el tiempo, es la línea base por miembro (punto 4). Un descarte
+   por antigüedad —el ciclo re-fijaba el estado si el cursor llevaba dos
+   intervalos de sondeo quieto— se retiró justamente por eso: el reloj no
+   distingue una pausa intencionada de una caída, así que tiraba todo el correo
+   del hueco. `last_cycle_at` sobrevive **solo como dato informativo**: se
+   sella en cuanto el ciclo toma el arrendamiento, de modo que dice "último
+   intento" (incluye los ciclos sin watcher y los que fallaron), y nadie decide
+   nada con él. Si el proveedor responde `cannotCalculateChanges` (el cursor es
+   más viejo que su historial), se vuelve a fijar el estado y se avisa en el
+   log: el correo de ese hueco es incognoscible, y un barrido "los N más
+   recientes" repartiría duplicados. Cualquier otro error del proveedor se
+   propaga **sin mover el cursor**, para reintentar la misma página en el
+   siguiente sondeo o push.
 3. **Solo bandeja de entrada.** Un lote de lectura (`Mailbox/query role=inbox`
    + `Email/get mailboxIds, keywords`) sobre la cuenta compartida filtra los ids
    creados y, de paso, trae las `keywords` de cada mensaje, que se pasan a la

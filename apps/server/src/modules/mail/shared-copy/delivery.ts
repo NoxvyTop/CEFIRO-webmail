@@ -39,6 +39,12 @@
  * - no cursor → record the current state, copy NOTHING (`baselined`): the
  *   opt-in is forward-looking, and historic mail stays reachable through the
  *   manual copy;
+ * - a cursor left behind by a cycle that ran hours or days ago → resumed like
+ *   any other. Time is NOT evidence: an outage, a deploy, an account nobody
+ *   could watch and a cycle whose error was swallowed are indistinguishable
+ *   from a pause, and the age-based re-baseline this replaces dropped every
+ *   message of the gap. A gap DEFERS delivery (the backlog drains at
+ *   DELIVERY_MAX_PAGES pages a cycle), it never cancels it;
  * - the provider no longer has history from the cursor (`cannotCalculateChanges`)
  *   → re-baseline, warn, copy nothing: the mail in that gap is unknowable, and
  *   guessing at it (a newest-N sweep) would deliver duplicates for the part
@@ -114,29 +120,6 @@ export const DELIVERY_RETRY_LIMIT = 100;
  */
 const PROCESS_LEASE_OWNER = crypto.randomUUID();
 
-/**
- * How old a cursor may be before the cycle re-baselines instead of resuming
- * from it (`SHARED_MAILBOX_COPY_STALE_MS`, in prose). TWO poll intervals: one
- * is the normal spacing between cycles, so two means "at least one whole cycle
- * did not happen" — the worker was off, the deployment was down, or nobody
- * opted into this account — while still tolerating a poll that ran late.
- *
- * Derived from SHARED_MAILBOX_COPY_POLL_MS rather than configured on its own
- * (./worker.ts passes it in): an operator who lengthens the poll means the
- * cycles to be further apart, and a fixed staleness window would start calling
- * every one of their normal resumes a backlog.
- *
- * This constant is the fallback for a cycle called with no `staleMs` — two of
- * the DEFAULT five-minute poll intervals.
- */
-export const DELIVERY_STALE_POLL_INTERVALS = 2;
-export const DEFAULT_DELIVERY_STALE_MS = 600_000;
-
-/** The stale window for a worker polling every `pollMs`. */
-export function staleMsForPoll(pollMs: number): number {
-  return pollMs * DELIVERY_STALE_POLL_INTERVALS;
-}
-
 export type SharedCopyMember = { userId: string; email: string };
 
 type LogFn = (
@@ -150,6 +133,12 @@ export type SharedCopyStore = {
   getState(
     sharedAccountId: string,
   ): Promise<{ emailState: string | null; lastCycleAt: Date | null }>;
+  /**
+   * Stamps "a cycle was attempted for this account, now". Informational only —
+   * nothing decides anything from it — so it is written as soon as the lease
+   * is taken rather than on a successful advance.
+   */
+  markCycleAttempt(sharedAccountId: string): Promise<void>;
   setCursor(sharedAccountId: string, emailState: string): Promise<void>;
   /**
    * Records the members this account had not seen before at `baselinedState`,
@@ -199,12 +188,6 @@ export type DeliveryDeps = {
    * per-process id.
    */
   leaseOwner?: string;
-  /**
-   * How old this account's cursor may be before the cycle re-baselines instead
-   * of resuming from it. Injected by ./worker.ts as two poll intervals;
-   * defaults to DEFAULT_DELIVERY_STALE_MS.
-   */
-  staleMs?: number;
   log?: LogFn;
   /**
    * Observed once per attempted copy. Defaults to the `/metrics` facade
@@ -218,13 +201,17 @@ export type DeliveryDeps = {
 /**
  * Why a cycle recorded the current state instead of delivering:
  * - `no_cursor`: this account has never been followed;
- * - `stale_cursor`: no cycle has run for this account in `staleMs` — the
- *   worker was off, or nobody opted in — so what sits behind the cursor is a
- *   backlog, not a gap worth replaying into everyone's inbox;
  * - `cannot_calculate_changes`: the provider no longer has history that far
  *   back.
+ *
+ * There is deliberately no time-based reason. A cursor that has not moved in
+ * hours is not evidence of anything: the worker may have been off, the
+ * provider unreachable, the account without a watcher, or a cycle may simply
+ * have failed and been swallowed. Re-baselining on that guess dropped every
+ * message of the gap, so a cycle always resumes from the cursor and the
+ * per-member baseline is the only rule that keeps an opt-in from back-filling.
  */
-export type BaselineReason = "no_cursor" | "stale_cursor" | "cannot_calculate_changes";
+export type BaselineReason = "no_cursor" | "cannot_calculate_changes";
 
 export type ElectedWatcher = {
   member: SharedCopyMember;
@@ -717,20 +704,12 @@ async function deliver(
   if (state.emailState === null) {
     return baseline(deps, watcher, sharedAccountId, members, "no_cursor");
   }
-  // A cursor nothing has moved in `staleMs` does not describe a gap worth
-  // replaying: it points at everything that arrived while the worker was off,
-  // or while this account had nobody to deliver to. Copying all of it at once
-  // is the failure this guard exists for; the manual button still reaches it.
-  const staleMs = deps.staleMs ?? DEFAULT_DELIVERY_STALE_MS;
-  const cursorAgeMs = state.lastCycleAt === null ? Infinity : Date.now() - state.lastCycleAt.getTime();
-  if (cursorAgeMs > staleMs) {
-    log("warn", "shared mailbox copy: cursor went stale, re-baselining", {
-      sharedAccountId,
-      staleMs,
-      cursorAgeMs: Number.isFinite(cursorAgeMs) ? cursorAgeMs : null,
-    });
-    return baseline(deps, watcher, sharedAccountId, members, "stale_cursor");
-  }
+  // However old the cursor is, it is where delivery resumes. An age-based
+  // re-baseline used to drop the whole gap on the guess that it was an
+  // intentional pause, which is a guess the server cannot make: an outage, a
+  // deploy, an account with no watcher and a swallowed cycle error all look
+  // exactly the same from here. A gap DEFERS delivery — the backlog drains at
+  // five pages a cycle — it never cancels it.
   let cursor = state.emailState;
 
   // Members this account had never seen are recorded at the state this cycle
@@ -844,6 +823,12 @@ export async function runDeliveryCycle(
   if (!leased) return { status: "locked" };
 
   try {
+    // Stamped as soon as the cycle is certainly ours to run and before
+    // anything in it can fail, so `last_cycle_at` means "last ATTEMPT" —
+    // including a cycle that found no watcher or threw. Nothing decides
+    // anything from it; it is there for the operator, and a stamp only a
+    // successful advance wrote would quietly call a failing account idle.
+    await deps.copies.markCycleAttempt(sharedAccountId);
     return await deliver(deps, input, owner);
   } finally {
     // Best effort, and deliberately not allowed to mask the cycle's own

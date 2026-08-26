@@ -66,10 +66,41 @@ describe("createSharedMailboxCopiesRepo — cursor (GH #313)", () => {
     expect(await repo.getCursor(b)).toBe("b-state");
   });
 
-  // GH #313: the cursor alone cannot say WHEN it was last moved, so a worker
-  // that was off for a week resumed from a week-old state and replayed the
-  // whole backlog into every member's inbox. Every advance stamps the row.
-  it("stamps when the cursor was last moved, so a stale one can be spotted", async () => {
+  // GH #313: `last_cycle_at` is informational — delivery resumes from the
+  // cursor however old it is — and it means "a cycle was last ATTEMPTED
+  // then", so the cycle stamps it as soon as it takes the lease and the
+  // cursor advance refreshes it.
+  it("stamps an attempted cycle, even before any cursor exists", async () => {
+    const accountId = freshAccountId();
+    // No row at all: nothing to stamp and nothing to fail on.
+    await expect(repo.markCycleAttempt(accountId)).resolves.toBeUndefined();
+    expect(await repo.getState(accountId)).toEqual({ emailState: null, lastCycleAt: null });
+
+    // Taking the lease is what creates the row; the stamp lands on it without
+    // inventing a cursor the account has not been given yet.
+    expect(await repo.acquireLease(accountId, "owner-a", 60_000)).toBe(true);
+    await repo.markCycleAttempt(accountId);
+    const state = await repo.getState(accountId);
+    expect(state.emailState).toBeNull();
+    expect(Date.now() - state.lastCycleAt!.getTime()).toBeLessThan(60_000);
+  });
+
+  it("refreshes the attempt stamp on a later cycle", async () => {
+    const accountId = freshAccountId();
+    await repo.setCursor(accountId, "s1");
+    await sql`
+      update shared_mailbox_copy_state
+      set last_cycle_at = now() - interval '2 hours'
+      where shared_account_id = ${accountId}
+    `;
+    await repo.markCycleAttempt(accountId);
+    const state = await repo.getState(accountId);
+    // The stamp moved; the cursor did not — an attempt is not an advance.
+    expect(state.emailState).toBe("s1");
+    expect(Date.now() - state.lastCycleAt!.getTime()).toBeLessThan(60_000);
+  });
+
+  it("stamps when the cursor was last moved, so the operator sees the last run", async () => {
     const accountId = freshAccountId();
     const before = Date.now();
     await repo.setCursor(accountId, "s1");
