@@ -499,7 +499,13 @@ El diseño y las alternativas descartadas están en
    mensaje duplicado es el fallo que el miembro nota, y para el que falta hay
    una recuperación evidente: el botón manual de copiar a la bandeja. Un fallo
    en la copia de un miembro se cuenta, se registra y **no bloquea a los
-   demás**.
+   demás**: la fila queda en `failed` con su motivo y su número de intentos,
+   y **cada ciclo empieza reintentando** un lote acotado de esas filas (100
+   como mucho, hasta 5 intentos por copia) antes de mirar páginas nuevas. Sin
+   eso, un fallo pasajero del proveedor costaba el mensaje para siempre,
+   porque el cursor ya había avanzado por encima de la página que lo traía.
+   Agotados los intentos, la fila se queda como registro de una copia que no
+   se entregó.
 6. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
    Una caída entre la última copia y el avance repite la página en el ciclo
    siguiente, y el libro convierte la repetición en saltos, no en duplicados.

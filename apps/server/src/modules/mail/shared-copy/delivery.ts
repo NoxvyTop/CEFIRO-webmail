@@ -87,6 +87,25 @@ export const DELIVERY_PAGE_SIZE = 100;
 export const DELIVERY_LEASE_TTL_MS = 600_000;
 
 /**
+ * How many times a failed copy is re-attempted before the cycle gives up on
+ * it. Five, spread over five cycles (25 minutes at the default poll), covers
+ * the failures that pass on their own — a provider restart, a brief network
+ * fault, a mailbox momentarily locked — while a copy that cannot succeed (the
+ * source destroyed, a member permanently over quota) stops costing a JMAP call
+ * every cycle for ever. The row stays behind as the record that it was not
+ * delivered.
+ */
+export const DELIVERY_RETRY_MAX_ATTEMPTS = 5;
+
+/**
+ * How many failed copies one cycle re-attempts. Keeps the recovery work
+ * proportional: a provider outage that failed thousands of copies is drained
+ * over several cycles instead of stalling the first one behind a queue of
+ * retries while new mail waits.
+ */
+export const DELIVERY_RETRY_LIMIT = 100;
+
+/**
  * Identifies THIS process as a lease holder when no owner was injected. The
  * worker mints its own (see ./worker.ts) and passes it in; this fallback keeps
  * a directly-called cycle — a test, a one-off script — from having to.
@@ -152,6 +171,18 @@ export type SharedCopyStore = {
   beginCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
   /** Confirms a copy the provider acknowledged. */
   markCopied(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
+  /** Marks a refused or thrown copy `failed`, counting the attempt. */
+  markFailed(
+    userId: string,
+    sharedAccountId: string,
+    emailId: string,
+    lastError: string,
+  ): Promise<void>;
+  /** This account's failed copies still worth another try, oldest first. */
+  listRetryable(
+    sharedAccountId: string,
+    options: { maxAttempts: number; limit: number },
+  ): Promise<Array<{ userId: string; emailId: string; attempts: number }>>;
   acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   releaseLease(sharedAccountId: string, owner: string): Promise<void>;
@@ -440,8 +471,7 @@ async function copyOne(
       report("copied");
       return;
     }
-    counts.failed += 1;
-    report("failed");
+    await recordFailure(deps, sharedAccountId, member, emailId, result.reason, counts);
     log("warn", "shared mailbox copy: copy refused", {
       sharedAccountId,
       userId: member.userId,
@@ -449,14 +479,90 @@ async function copyOne(
       reason: result.reason,
     });
   } catch (error) {
-    counts.failed += 1;
-    report("failed");
+    await recordFailure(deps, sharedAccountId, member, emailId, String(error), counts);
     log("warn", "shared mailbox copy: copy failed", {
       sharedAccountId,
       userId: member.userId,
       emailId,
       error: String(error),
     });
+  }
+}
+
+/**
+ * Turns the claimed row into a `failed` one, so the next cycle's retry pass
+ * can pick it up. A failure that only ever reached the log cost the member
+ * that message for good: the cursor advances past the page regardless, and
+ * nothing else remembers the attempt.
+ */
+async function recordFailure(
+  deps: DeliveryDeps,
+  sharedAccountId: string,
+  member: SharedCopyMember,
+  emailId: string,
+  reason: string,
+  counts: DeliveryCounts,
+): Promise<void> {
+  counts.failed += 1;
+  (deps.onCopyResult ?? recordSharedMailboxCopy)("failed");
+  try {
+    await deps.copies.markFailed(member.userId, sharedAccountId, emailId, reason);
+  } catch (error) {
+    // The row stays `pending`, which the next cycle reads as unresolved and
+    // leaves alone. Worse than a retry, better than a duplicate — and this is
+    // a database that is already failing, which the cycle cannot fix.
+    (deps.log ?? defaultLog)("error", "shared mailbox copy: could not record the failure", {
+      sharedAccountId,
+      userId: member.userId,
+      emailId,
+      error: String(error),
+    });
+  }
+}
+
+/**
+ * Re-attempts a bounded batch of this account's failed copies, before the
+ * cycle looks at new pages: a transient provider failure must not cost a
+ * member their message, and the cursor has already moved past the page that
+ * carried it.
+ *
+ * Only members this cycle is delivering to are retried — someone who opted
+ * out, or whom this cycle only just baselined, is left exactly as they are —
+ * and each retry goes through the same copy path as a fresh one, ledger
+ * included, so a retry that succeeds is a confirmed copy and one that fails
+ * again just spends another attempt.
+ */
+async function retryFailed(
+  deps: DeliveryDeps,
+  sharedAccountId: string,
+  members: SharedCopyMember[],
+  counts: DeliveryCounts,
+): Promise<void> {
+  if (members.length === 0) return;
+  const log = deps.log ?? defaultLog;
+  const retryable = await deps.copies.listRetryable(sharedAccountId, {
+    maxAttempts: DELIVERY_RETRY_MAX_ATTEMPTS,
+    limit: DELIVERY_RETRY_LIMIT,
+  });
+  if (retryable.length === 0) return;
+
+  const byMember = new Map<string, string[]>();
+  for (const row of retryable) {
+    byMember.set(row.userId, [...(byMember.get(row.userId) ?? []), row.emailId]);
+  }
+  for (const member of members) {
+    const emailIds = byMember.get(member.userId);
+    if (!emailIds || emailIds.length === 0) continue;
+    const resolved = await resolveMember(deps, sharedAccountId, member);
+    if (!resolved) continue;
+    log("info", "shared mailbox copy: retrying failed copies", {
+      sharedAccountId,
+      userId: member.userId,
+      emailIds: emailIds.length,
+    });
+    for (const emailId of emailIds) {
+      await copyOne(deps, sharedAccountId, member, resolved, emailId, counts);
+    }
   }
 }
 
@@ -564,6 +670,13 @@ async function deliver(
   }
 
   const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0 };
+
+  // Before any new page: the copies an earlier cycle could not make. The
+  // cursor has already moved past the pages that carried them, so this pass is
+  // the only thing that still can deliver them — and doing it first keeps a
+  // transient failure from ageing out behind a busy mailbox.
+  await retryFailed(deps, sharedAccountId, deliverTo, counts);
+
   let pages = 0;
   let truncated = false;
   for (;;) {

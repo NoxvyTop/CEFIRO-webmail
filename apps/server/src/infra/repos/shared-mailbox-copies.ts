@@ -186,6 +186,62 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
+     * Records a copy the provider refused or that threw, and counts the try.
+     * The row is what makes the failure survivable: the cursor moves on (a
+     * page pinned behind one member's failure would starve everyone else's
+     * mail), and the next cycle's retry pass picks this up instead of the
+     * message being lost with nothing but a log line behind it.
+     */
+    async markFailed(
+      userId: string,
+      sharedAccountId: string,
+      emailId: string,
+      lastError: string,
+    ): Promise<void> {
+      await sql`
+        update shared_mailbox_copies set
+          status = 'failed',
+          attempts = attempts + 1,
+          last_error = ${lastError},
+          updated_at = now()
+        where user_id = ${userId}
+          and shared_account_id = ${sharedAccountId}
+          and email_id = ${emailId}
+      `;
+    },
+
+    /**
+     * The failed copies of this account still worth another try: fewer than
+     * `maxAttempts` behind them, oldest first, at most `limit` of them.
+     *
+     * Bounded on both axes on purpose. `maxAttempts` is what keeps a copy that
+     * cannot succeed — a message destroyed at the source, a member permanently
+     * over quota — from being retried for ever; the row stays as the record of
+     * a copy that will not be delivered. `limit` keeps one cycle's recovery
+     * work proportional, so a provider outage that failed thousands of copies
+     * is drained over several cycles instead of stalling the first one behind
+     * a queue of retries while new mail waits.
+     */
+    async listRetryable(
+      sharedAccountId: string,
+      options: { maxAttempts: number; limit: number },
+    ): Promise<Array<{ userId: string; emailId: string; attempts: number }>> {
+      const rows = await sql<{ user_id: string; email_id: string; attempts: number }[]>`
+        select user_id, email_id, attempts from shared_mailbox_copies
+        where shared_account_id = ${sharedAccountId}
+          and status = 'failed'
+          and attempts < ${options.maxAttempts}
+        order by updated_at asc
+        limit ${options.limit}
+      `;
+      return rows.map((row) => ({
+        userId: row.user_id,
+        emailId: row.email_id,
+        attempts: row.attempts,
+      }));
+    },
+
+    /**
      * Records a confirmed copy in one step, for the manual copy route, which
      * has no cycle around it to claim the row first. Idempotent: a member who
      * presses the button twice, or presses it for mail a cycle already

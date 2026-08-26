@@ -12,6 +12,7 @@ import type { MailSessionResult } from "../context";
 import {
   DEFAULT_DELIVERY_STALE_MS,
   DELIVERY_MAX_PAGES,
+  DELIVERY_RETRY_MAX_ATTEMPTS,
   electWatcher,
   runDeliveryCycle,
   type DeliveryDeps,
@@ -58,6 +59,10 @@ function fakeCopiesRepo(events: string[]) {
   const cycledAt = new Map<string, number>();
   /** (member|account|email) → ledger status, exactly like the real table. */
   const states = new Map<string, "pending" | "copied" | "failed">();
+  const attempts = new Map<string, number>();
+  const errors = new Map<string, string>();
+  /** Insertion order of the failed rows, standing in for `order by updated_at`. */
+  const failedOrder: string[] = [];
   const cursorWrites: string[] = [];
   let failMarkCopied = 0;
   const leases = new Map<string, { owner: string; until: number }>();
@@ -69,7 +74,17 @@ function fakeCopiesRepo(events: string[]) {
     cursors,
     cycledAt,
     states,
+    attempts,
+    errors,
     cursorWrites,
+    /** A copy an earlier cycle failed `attemptCount` times. */
+    seedFailed(userId: string, accountId: string, emailId: string, attemptCount: number) {
+      const id = key(userId, accountId, emailId);
+      states.set(id, "failed");
+      attempts.set(id, attemptCount);
+      errors.set(id, "copy_failed");
+      if (!failedOrder.includes(id)) failedOrder.push(id);
+    },
     leases,
     leaseLog,
     memberState,
@@ -147,6 +162,35 @@ function fakeCopiesRepo(events: string[]) {
           throw new Error("database unavailable");
         }
         states.set(key(userId, accountId, emailId), "copied");
+      },
+      markFailed: async (
+        userId: string,
+        accountId: string,
+        emailId: string,
+        lastError: string,
+      ) => {
+        const id = key(userId, accountId, emailId);
+        events.push(`ledger:failed:${userId}:${emailId}`);
+        states.set(id, "failed");
+        attempts.set(id, (attempts.get(id) ?? 0) + 1);
+        errors.set(id, lastError);
+        if (!failedOrder.includes(id)) failedOrder.push(id);
+      },
+      listRetryable: async (
+        accountId: string,
+        options: { maxAttempts: number; limit: number },
+      ) => {
+        const rows: Array<{ userId: string; emailId: string; attempts: number }> = [];
+        for (const id of failedOrder) {
+          if (rows.length >= options.limit) break;
+          const [userId, account, emailId] = id.split("|") as [string, string, string];
+          if (account !== accountId) continue;
+          if (states.get(id) !== "failed") continue;
+          const tries = attempts.get(id) ?? 0;
+          if (tries >= options.maxAttempts) continue;
+          rows.push({ userId, emailId, attempts: tries });
+        }
+        return rows;
       },
       recordCopy: async (userId: string, accountId: string, emailId: string) => {
         states.set(key(userId, accountId, emailId), "copied");
@@ -718,6 +762,11 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(await h.copies.repo.hasCopies(ana.userId, SHARED, ["e1"])).toEqual(new Set());
     expect(await h.copies.repo.hasCopies(bruno.userId, SHARED, ["e1"])).toEqual(new Set(["e1"]));
     expect(h.logs.some((l) => l.level === "warn" && l.fields.userId === ana.userId)).toBe(true);
+    // Recorded as failed with its reason, not just logged: the cursor moves on
+    // and this row is what the next cycle's retry pass picks up.
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(1);
+    expect(h.copies.errors.get(`${ana.userId}|${SHARED}|e1`)).toBe("copy_failed");
   });
 
   it("counts a copy whose JMAP call throws as failed and still serves the others", async () => {
@@ -743,6 +792,62 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
 
     await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 1 });
     expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email]);
+  });
+
+  // GH #313: a transient failure — the provider briefly refusing, a dropped
+  // connection — used to cost the member that message for good, because the
+  // cursor advanced past the page that carried it and nothing remembered the
+  // attempt. Every cycle now drains a bounded batch of failed rows first.
+  it("retries a copy that failed on an earlier cycle, before it looks at new pages", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    h.throwCopyFor.add(ana.email);
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1 });
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
+
+    // Next cycle: the provider is healthy again. The retry runs before the new
+    // page, and the message that was nearly lost is delivered.
+    h.throwCopyFor.clear();
+    h.events.length = 0;
+    h.pages = [{ created: ["e2"], newState: "s-3" }];
+    h.inInbox.add("e2");
+    await expect(run([ana])).resolves.toMatchObject({ copied: 2, failed: 0 });
+    expect(copyCalls(h).slice(-2).map((c) => c.emailId)).toEqual(["e1", "e2"]);
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("copied");
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e2`)).toBe("copied");
+  });
+
+  it("stops retrying a copy that has used its attempts, and leaves the row as the record", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", DELIVERY_RETRY_MAX_ATTEMPTS);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 0 });
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
+  });
+
+  it("counts a retry that fails again and does not touch a member who is no longer opted in", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1);
+    h.copies.seedFailed(bruno.userId, SHARED, "e9", 1);
+    h.refuseCopyFor.add(ana.email);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    // Bruno is not in this cycle's member list, so his failed row waits.
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1 });
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(2);
+    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e9`)).toBe(1);
+  });
+
+  it("does not retry for a member this cycle only just baselined", async () => {
+    // A member who opted out and back in: their old failed rows are not a
+    // reason to deliver to them during the cycle that re-baselines them.
+    h.copies.memberState.get(SHARED)?.delete(bruno.userId);
+    h.copies.seedFailed(bruno.userId, SHARED, "e9", 1);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run()).resolves.toMatchObject({ copied: 0, failed: 0 });
+    expect(copyCalls(h)).toEqual([]);
   });
 
   it("advances the cursor after each page and follows hasMoreChanges", async () => {

@@ -250,6 +250,95 @@ describe("createSharedMailboxCopiesRepo — dedup ledger (GH #313)", () => {
   });
 });
 
+// GH #313: a copy the provider refused or that threw used to be counted, logged
+// and forgotten while the cursor moved past it — the member simply never got
+// that message, and nothing was left to say so. A failed copy is now a row with
+// a try count, and every cycle drains a bounded batch of them before it looks
+// at new pages.
+describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)", () => {
+  it("records a failure with its reason and counts the attempt", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "failed"]]));
+
+    const rows = await sql<{ attempts: number; last_error: string }[]>`
+      select attempts, last_error from shared_mailbox_copies
+      where user_id = ${member} and shared_account_id = ${accountId} and email_id = 'e1'
+    `;
+    expect(rows[0]).toMatchObject({ attempts: 1, last_error: "copy_failed" });
+
+    // A second attempt that fails again adds to the count rather than resetting.
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "over_quota");
+    const second = await sql<{ attempts: number; last_error: string }[]>`
+      select attempts, last_error from shared_mailbox_copies
+      where user_id = ${member} and shared_account_id = ${accountId} and email_id = 'e1'
+    `;
+    expect(second[0]).toMatchObject({ attempts: 2, last_error: "over_quota" });
+  });
+
+  it("lists the failed copies of an account that are still worth retrying", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+
+    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).toEqual([
+      { userId: member, emailId: "e1", attempts: 1 },
+    ]);
+    // A pending or a copied row is not a retry candidate.
+    await repo.beginCopy(member, accountId, "e2");
+    await repo.recordCopy(member, accountId, "e3");
+    expect(
+      (await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).map((r) => r.emailId),
+    ).toEqual(["e1"]);
+  });
+
+  it("gives up on a copy that has used its attempts", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await repo.beginCopy(member, accountId, "e1");
+      await repo.markFailed(member, accountId, "e1", "copy_failed");
+    }
+    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).toEqual([]);
+    // The row stays, as the record of a copy that will not be delivered.
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "failed"]]));
+  });
+
+  it("bounds the batch and keeps it to the account asked for", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    const other = freshAccountId();
+    for (const emailId of ["e1", "e2", "e3"]) {
+      await repo.beginCopy(member, accountId, emailId);
+      await repo.markFailed(member, accountId, emailId, "copy_failed");
+    }
+    await repo.beginCopy(member, other, "e9");
+    await repo.markFailed(member, other, "e9", "copy_failed");
+
+    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 2 })).toHaveLength(2);
+    expect(
+      (await repo.listRetryable(other, { maxAttempts: 5, limit: 100 })).map((r) => r.emailId),
+    ).toEqual(["e9"]);
+  });
+
+  it("stops listing a failed copy once it finally succeeds", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markCopied(member, accountId, "e1");
+
+    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).toEqual([]);
+    expect(await repo.hasCopy(member, accountId, "e1")).toBe(true);
+  });
+});
+
 // GH #313: the per-account delivery LEASE that replaced the transaction-scoped
 // advisory lock. The lock held a transaction open for the whole cycle while the
 // cycle's own queries went through the outer pool — a guaranteed deadlock at
