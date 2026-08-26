@@ -406,7 +406,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     await repo.markFailed(member, accountId, "e1", "copy_failed");
 
     expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([
-      { userId: member, emailId: "e1", attempts: 1 },
+      { userId: member, emailId: "e1", attempts: 1, messageId: null },
     ]);
     // A pending or a copied row is not a retry candidate.
     await repo.beginCopy(member, accountId, "e2");
@@ -450,6 +450,41 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
   // opted out — or whom the current cycle is only baselining — sat at the head
   // of it for ever, so a live member's failed copy could never reach the
   // batch at all.
+  // GH #313: an Email/copy whose response was lost after the provider had
+  // committed it is recorded `failed` and retried, which delivers the message
+  // twice. The claim carries the source's Message-ID so the retry can look for
+  // the copy in the member's own inbox before making another one.
+  it("keeps the source Message-ID on the claim, for the retry to look the copy up", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+
+    await repo.beginCopy(member, accountId, "e1", "<abc@shared.test>");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(
+      await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }),
+    ).toEqual([{ userId: member, emailId: "e1", attempts: 1, messageId: "<abc@shared.test>" }]);
+
+    // The retry claims the row again without knowing the Message-ID — it works
+    // from the ledger, not from a page — and must not erase it.
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(
+      (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]
+        ?.messageId,
+    ).toBe("<abc@shared.test>");
+  });
+
+  it("records no Message-ID for a source that carries none", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.beginCopy(member, accountId, "e1", null);
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(
+      (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]
+        ?.messageId,
+    ).toBeNull();
+  });
+
   it("lists only the members the caller can deliver to right now", async () => {
     const accountId = freshAccountId();
     const departed = await freshUserId();
@@ -464,7 +499,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
 
     expect(
       await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }),
-    ).toEqual([{ userId: member, emailId: "e-mine", attempts: 1 }]);
+    ).toEqual([{ userId: member, emailId: "e-mine", attempts: 1, messageId: null }]);
     // Nobody deliverable is not "everybody": an empty list retries nothing.
     expect(await repo.listRetryable(accountId, { userIds: [], maxAttempts: 5, limit: 100 })).toEqual(
       [],

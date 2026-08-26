@@ -60,6 +60,8 @@ function fakeCopiesRepo(events: string[]) {
   const states = new Map<string, "pending" | "copied" | "failed">();
   const attempts = new Map<string, number>();
   const errors = new Map<string, string>();
+  /** The source Message-ID each ledger row carries, exactly like the column. */
+  const messageIds = new Map<string, string | null>();
   /** Insertion order of the failed rows, standing in for `order by updated_at`. */
   const failedOrder: string[] = [];
   const cursorWrites: string[] = [];
@@ -104,12 +106,23 @@ function fakeCopiesRepo(events: string[]) {
     cursorWrites,
     cycleAttempts,
     retryQueries,
-    /** A copy an earlier cycle failed `attemptCount` times. */
-    seedFailed(userId: string, accountId: string, emailId: string, attemptCount: number) {
+    messageIds,
+    /**
+     * A copy an earlier cycle failed `attemptCount` times, with the source's
+     * Message-ID as that cycle recorded it (null when the source had none).
+     */
+    seedFailed(
+      userId: string,
+      accountId: string,
+      emailId: string,
+      attemptCount: number,
+      messageId: string | null = `<mid-${emailId}>`,
+    ) {
       const id = key(userId, accountId, emailId);
       states.set(id, "failed");
       attempts.set(id, attemptCount);
       errors.set(id, "copy_failed");
+      messageIds.set(id, messageId);
       if (!failedOrder.includes(id)) failedOrder.push(id);
     },
     leases,
@@ -187,10 +200,18 @@ function fakeCopiesRepo(events: string[]) {
         }
         return found;
       },
-      beginCopy: async (userId: string, accountId: string, emailId: string) => {
+      beginCopy: async (
+        userId: string,
+        accountId: string,
+        emailId: string,
+        messageId?: string | null,
+      ) => {
         events.push(`ledger:begin:${userId}:${emailId}`);
-        if (states.get(key(userId, accountId, emailId)) === "copied") return;
-        states.set(key(userId, accountId, emailId), "pending");
+        const id = key(userId, accountId, emailId);
+        // Never erased by a claim that does not know it (the retry pass).
+        if (messageId != null || !messageIds.has(id)) messageIds.set(id, messageId ?? null);
+        if (states.get(id) === "copied") return;
+        states.set(id, "pending");
       },
       markCopied: async (userId: string, accountId: string, emailId: string) => {
         events.push(`ledger:copied:${userId}:${emailId}`);
@@ -218,7 +239,12 @@ function fakeCopiesRepo(events: string[]) {
         options: { userIds: string[]; maxAttempts: number; limit: number },
       ) => {
         retryQueries.push(options.userIds);
-        const rows: Array<{ userId: string; emailId: string; attempts: number }> = [];
+        const rows: Array<{
+          userId: string;
+          emailId: string;
+          attempts: number;
+          messageId: string | null;
+        }> = [];
         for (const id of failedOrder) {
           if (rows.length >= options.limit) break;
           const [userId, account, emailId] = id.split("|") as [string, string, string];
@@ -227,7 +253,7 @@ function fakeCopiesRepo(events: string[]) {
           if (states.get(id) !== "failed") continue;
           const tries = attempts.get(id) ?? 0;
           if (tries >= options.maxAttempts) continue;
-          rows.push({ userId, emailId, attempts: tries });
+          rows.push({ userId, emailId, attempts: tries, messageId: messageIds.get(id) ?? null });
         }
         return rows;
       },
@@ -280,6 +306,14 @@ type Harness = {
   keywordsFor: Map<string, Record<string, boolean>>;
   /** Members whose PERSONAL inbox the provider cannot resolve. */
   noPersonalInboxFor: Set<string>;
+  /** The Message-ID the shared account reports for a message (default: one per id). */
+  messageIdFor: Map<string, string[]>;
+  /** `${member email}|${Message-ID}` pairs already sitting in that member's inbox. */
+  personalCopies: Set<string>;
+  /** Members whose personal Email/query throws. */
+  queryThrowsFor: Set<string>;
+  /** Every Email/query the verification made, in order. */
+  verifications: Array<{ by: string; messageId: string; inMailbox: string }>;
   /** Ledger writes and Email/copy calls, in the order they happened. */
   events: string[];
   currentState: string;
@@ -304,6 +338,10 @@ function harness(): Harness {
     reaches: new Map(),
     keywordsFor: new Map(),
     noPersonalInboxFor: new Set(),
+    messageIdFor: new Map(),
+    personalCopies: new Set(),
+    queryThrowsFor: new Set(),
+    verifications: [],
     currentState: "s-now",
   };
   const jmap: JmapClient = {
@@ -353,6 +391,9 @@ function harness(): Harness {
                   ...(properties.includes("keywords")
                     ? { keywords: h.keywordsFor.get(id) ?? { $seen: true } }
                     : {}),
+                  ...(properties.includes("messageId")
+                    ? { messageId: h.messageIdFor.get(id) ?? [`<mid-${id}>`] }
+                    : {}),
                 })),
               },
               callId,
@@ -362,6 +403,21 @@ function harness(): Harness {
           return [
             "Email/get",
             { state: h.currentState, list: ids.map((id) => ({ id, keywords: { $seen: true } })) },
+            callId,
+          ];
+        }
+        if (name === "Email/query") {
+          // The retry pass looking for a copy it may already have made, by the
+          // source's Message-ID, in the member's own inbox.
+          const filter = params.filter as { inMailbox: string; header: [string, string] };
+          const messageId = filter.header[1];
+          h.verifications.push({ by: auth.email, messageId, inMailbox: filter.inMailbox });
+          if (h.queryThrowsFor.has(auth.email)) {
+            throw new DomainError("stalwart_unavailable", 502, "x");
+          }
+          return [
+            "Email/query",
+            { ids: h.personalCopies.has(`${auth.email}|${messageId}`) ? ["already-there"] : [] },
             callId,
           ];
         }
@@ -838,8 +894,9 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
       accountId: SHARED,
       ids: ["e-inbox", "e-sent", "e-draft"],
       // `keywords` rides along with the classification read, so no copy needs
-      // a read of its own to preserve the source's flags.
-      properties: ["mailboxIds", "keywords"],
+      // a read of its own to preserve the source's flags; `messageId` is what
+      // lets a retry ask whether the copy was already made.
+      properties: ["mailboxIds", "keywords", "messageId"],
     });
   });
 
@@ -928,6 +985,69 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(h.copies.states.get(`${ana.userId}|${SHARED}|e2`)).toBe("copied");
   });
 
+  // GH #313: an Email/copy whose response was lost after the provider had
+  // already committed it was recorded `failed` and retried — and the retry
+  // delivered the message a second time. The claim now carries the source's
+  // Message-ID, and the retry pass looks for that message in the member's own
+  // inbox before copying anything.
+  it("records the source Message-ID with the claim, for a later retry to check", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    h.messageIdFor.set("e1", ["<abc@shared.test>"]);
+
+    await run([ana]);
+    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e1`)).toBe("<abc@shared.test>");
+  });
+
+  it("marks a retry copied, without copying, when the member's inbox already holds it", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<lost@shared.test>");
+    h.personalCopies.add(`${ana.email}|<lost@shared.test>`);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 0, skipped: 1 });
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("copied");
+    expect(h.verifications).toEqual([
+      {
+        by: ana.email,
+        messageId: "<lost@shared.test>",
+        inMailbox: `inbox-personal-${ana.email}`,
+      },
+    ]);
+  });
+
+  it("copies on retry when the verification finds nothing in the member's inbox", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<absent@shared.test>");
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
+    expect(h.verifications).toHaveLength(1);
+  });
+
+  it("retries without verifying when the source carried no Message-ID", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, null);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
+    expect(h.verifications).toEqual([]);
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
+  });
+
+  it("leaves the row for the next cycle when the verification itself fails", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<unknown@shared.test>");
+    h.queryThrowsFor.add(ana.email);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    // Copying blind is the one thing that cannot be undone, so an unanswerable
+    // question spends no attempt and makes no copy.
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 0, skipped: 0 });
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(1);
+    expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("verif"))).toBe(true);
+  });
+
   it("stops retrying a copy that has used its attempts, and leaves the row as the record", async () => {
     h.copies.seedFailed(ana.userId, SHARED, "e1", DELIVERY_RETRY_MAX_ATTEMPTS);
     h.pages = [{ created: [], newState: "s-2" }];
@@ -1001,6 +1121,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect((shared[0]![1] as { properties: string[] }).properties).toEqual([
       "mailboxIds",
       "keywords",
+      "messageId",
     ]);
   });
 

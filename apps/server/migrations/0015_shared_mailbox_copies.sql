@@ -118,6 +118,22 @@ create table shared_mailbox_member_state (
 -- ARE retried, up to `attempts` tries, so a transient provider failure does not
 -- cost a member their copy while the cursor moves past it. `last_error` keeps
 -- the last reason for the operator.
+--
+-- `message_id` is the SOURCE message's RFC 5322 Message-ID, recorded with the
+-- claim, and it exists for exactly one question: a retry has to know whether
+-- the copy it is about to make was already made. An Email/copy whose response
+-- was lost after the provider committed it looks identical to one that never
+-- happened — it is recorded `failed` — and retrying it delivered the message
+-- twice. Before re-copying, the cycle asks the member's own account for that
+-- Message-ID in their inbox and confirms the row instead if it is there.
+--
+-- This is NOT the provider-derived dedup rejected above: it is a check on the
+-- retry path only, over a copy this deployment claimed itself, and its two
+-- weaknesses are bounded accordingly. A member who deleted the copy is asked
+-- to receive it again, which is the same answer they get from the manual
+-- button; a source with no Message-ID (nullable for that reason) is retried
+-- exactly as it was before. The ledger row, not this column, remains the
+-- record of what was delivered.
 create table shared_mailbox_copies (
   user_id uuid not null references users(id) on delete cascade,
   shared_account_id text not null,
@@ -125,6 +141,7 @@ create table shared_mailbox_copies (
   status text not null default 'pending' check (status in ('pending', 'copied', 'failed')),
   attempts int not null default 0,
   last_error text,
+  message_id text,
   copied_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (user_id, shared_account_id, email_id)

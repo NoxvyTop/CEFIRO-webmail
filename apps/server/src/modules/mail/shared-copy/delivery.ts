@@ -168,8 +168,17 @@ export type SharedCopyStore = {
     sharedAccountId: string,
     emailIds: string[],
   ): Promise<Map<string, SharedCopyStatus>>;
-  /** Claims the copy as `pending`, before the Email/copy is issued. */
-  beginCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
+  /**
+   * Claims the copy as `pending`, before the Email/copy is issued, recording
+   * the source's Message-ID when the caller read one — that is what a later
+   * retry checks against the member's inbox.
+   */
+  beginCopy(
+    userId: string,
+    sharedAccountId: string,
+    emailId: string,
+    messageId?: string | null,
+  ): Promise<void>;
   /** Confirms a copy the provider acknowledged. */
   markCopied(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
   /** Marks a refused or thrown copy `failed`, counting the attempt. */
@@ -186,7 +195,9 @@ export type SharedCopyStore = {
   listRetryable(
     sharedAccountId: string,
     options: { userIds: string[]; maxAttempts: number; limit: number },
-  ): Promise<Array<{ userId: string; emailId: string; attempts: number }>>;
+  ): Promise<
+    Array<{ userId: string; emailId: string; attempts: number; messageId: string | null }>
+  >;
   acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   releaseLease(sharedAccountId: string, owner: string): Promise<void>;
@@ -365,8 +376,17 @@ async function baseline(
 
 type ChangesPage = { newState: string; hasMoreChanges: boolean; created: string[] };
 
-/** A message of the page that is deliverable, with what the copy needs of it. */
-type DeliverableEmail = { id: string; keywords: Record<string, boolean> };
+/**
+ * A message of the page that is deliverable, with what the copy needs of it:
+ * its keywords (carried into the copy) and its RFC 5322 Message-ID (recorded
+ * with the claim, so a retry can ask whether the copy already exists). Null
+ * when the source has no Message-ID header — rare, but legal.
+ */
+type DeliverableEmail = {
+  id: string;
+  keywords: Record<string, boolean>;
+  messageId: string | null;
+};
 
 async function fetchChanges(
   deps: DeliveryDeps,
@@ -412,13 +432,14 @@ async function inboxOnly(
 ): Promise<DeliverableEmail[]> {
   const responses = await deps.jmap.request(watcher.auth, watcher.session, [
     ["Mailbox/query", { accountId: sharedAccountId, filter: { role: "inbox" } }, "mbx"],
-    // `keywords` rides along with the `mailboxIds` this read needs anyway, so
-    // each copy carries the source's flags without a read of its own. Without
-    // it, every (member, message) pair paid a round trip to fetch keywords
-    // that are identical for all of them.
+    // `keywords` and `messageId` ride along with the `mailboxIds` this read
+    // needs anyway: the first carries the source's flags into each copy, the
+    // second is recorded with the claim so a retry can ask whether the copy
+    // already exists. Without them, every (member, message) pair paid a round
+    // trip for answers that are identical for all of them.
     [
       "Email/get",
-      { accountId: sharedAccountId, ids, properties: ["mailboxIds", "keywords"] },
+      { accountId: sharedAccountId, ids, properties: ["mailboxIds", "keywords", "messageId"] },
       "src",
     ],
   ]);
@@ -435,11 +456,17 @@ async function inboxOnly(
       id: string;
       mailboxIds?: Record<string, boolean>;
       keywords?: Record<string, boolean>;
+      /** RFC 8621 §4.1.1: the header's value is a LIST of ids. */
+      messageId?: string[] | null;
     }>;
   }).list ?? [];
   return list
     .filter((email) => email.mailboxIds?.[inboxId] === true)
-    .map((email) => ({ id: email.id, keywords: email.keywords ?? {} }));
+    .map((email) => ({
+      id: email.id,
+      keywords: email.keywords ?? {},
+      messageId: email.messageId?.[0] ?? null,
+    }));
 }
 
 /**
@@ -496,6 +523,13 @@ async function copyOne(
   emailId: string,
   counts: DeliveryCounts,
   /**
+   * The source's RFC 5322 Message-ID, read with the page, recorded on the
+   * claim so a retry can ask whether this copy already exists. Null when the
+   * source has none, and on the retry pass — which has the row's own value
+   * already and must not overwrite it.
+   */
+  messageId: string | null,
+  /**
    * What the cycle already knows about this copy: the member's inbox (resolved
    * once per cycle) and the source's keywords (read with the page). Absent on
    * the retry pass, which works from ledger rows rather than a page and lets
@@ -511,7 +545,7 @@ async function copyOne(
   // copy on the next cycle and deliver the message twice. A claim that
   // survives without a confirmation is read as "may have been copied" and
   // never copied again.
-  await deps.copies.beginCopy(member.userId, sharedAccountId, emailId);
+  await deps.copies.beginCopy(member.userId, sharedAccountId, emailId, messageId);
   try {
     const result = await copyEmailToPersonalInbox({
       jmap: deps.jmap,
@@ -625,6 +659,10 @@ async function renewLeaseOrLose(
  * The restriction is pushed into the QUERY, not applied to its answer: the
  * batch is the oldest hundred failed rows of the account, so rows nobody can
  * deliver used to fill it and starve the members being served.
+ *
+ * Every retry that CAN be verified is verified first (see `alreadyCopied`): a
+ * copy the provider committed and then failed to acknowledge is recorded
+ * `failed`, and re-copying it is the duplicate this design refuses.
  */
 async function retryFailed(
   deps: DeliveryDeps,
@@ -632,9 +670,11 @@ async function retryFailed(
   members: SharedCopyMember[],
   counts: DeliveryCounts,
   owner: string,
+  inboxes: Map<string, string | null>,
 ): Promise<boolean> {
   if (members.length === 0) return true;
   const log = deps.log ?? defaultLog;
+  const report = deps.onCopyResult ?? recordSharedMailboxCopy;
   const retryable = await deps.copies.listRetryable(sharedAccountId, {
     userIds: members.map((member) => member.userId),
     maxAttempts: DELIVERY_RETRY_MAX_ATTEMPTS,
@@ -642,28 +682,111 @@ async function retryFailed(
   });
   if (retryable.length === 0) return true;
 
-  const byMember = new Map<string, string[]>();
+  const byMember = new Map<string, Array<{ emailId: string; messageId: string | null }>>();
   for (const row of retryable) {
-    byMember.set(row.userId, [...(byMember.get(row.userId) ?? []), row.emailId]);
+    byMember.set(row.userId, [
+      ...(byMember.get(row.userId) ?? []),
+      { emailId: row.emailId, messageId: row.messageId },
+    ]);
   }
   for (const member of members) {
-    const emailIds = byMember.get(member.userId);
-    if (!emailIds || emailIds.length === 0) continue;
+    const rows = byMember.get(member.userId);
+    if (!rows || rows.length === 0) continue;
     const resolved = await resolveMember(deps, sharedAccountId, member);
     if (!resolved) continue;
     log("info", "shared mailbox copy: retrying failed copies", {
       sharedAccountId,
       userId: member.userId,
-      emailIds: emailIds.length,
+      emailIds: rows.length,
     });
-    for (const emailId of emailIds) {
-      await copyOne(deps, sharedAccountId, member, resolved, emailId, counts);
+    for (const row of rows) {
+      const verdict = await alreadyCopied(deps, member, resolved, row.messageId, inboxes);
+      if (verdict === "unknown") {
+        // The provider could not answer, so nothing is known about whether the
+        // copy exists. Copying blind is the one move that cannot be taken back;
+        // the row keeps its attempt count and the next cycle asks again.
+        continue;
+      }
+      if (verdict === "present") {
+        counts.skipped += 1;
+        report("skipped");
+        try {
+          await deps.copies.markCopied(member.userId, sharedAccountId, row.emailId);
+        } catch (error) {
+          // The copy is there either way; the row stays `failed` and the next
+          // cycle reaches the same conclusion for the cost of one query.
+          log("error", "shared mailbox copy: could not confirm a copy found in the inbox", {
+            sharedAccountId,
+            userId: member.userId,
+            emailId: row.emailId,
+            error: String(error),
+          });
+        }
+        continue;
+      }
+      await copyOne(deps, sharedAccountId, member, resolved, row.emailId, counts, null);
     }
     if (!(await renewLeaseOrLose(deps, sharedAccountId, owner, { userId: member.userId }))) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Whether the member's personal inbox ALREADY holds a copy of the source
+ * message, found by the RFC 5322 Message-ID recorded with the claim.
+ *
+ * This exists for one failure only: an `Email/copy` whose response was lost
+ * after the provider had committed it. That is recorded `failed`, exactly like
+ * a copy that never happened, and retrying it delivered the message twice.
+ *
+ * Three answers, and each drives a different move:
+ * - `present` → confirm the row, copy nothing;
+ * - `absent` → copy, which is what the retry is for;
+ * - `unknown` → the question could not be asked (no Message-ID on the source,
+ *   no personal inbox, or the query failed), so behave as before this check
+ *   existed for the first case and hold off for the others.
+ *
+ * It is NOT a second dedup store. A member who deleted their copy is asked to
+ * receive it again — the same answer the manual button gives — and the ledger
+ * row stays the record of what was delivered.
+ */
+async function alreadyCopied(
+  deps: DeliveryDeps,
+  member: SharedCopyMember,
+  resolved: { auth: JmapAuth; session: JmapSession },
+  messageId: string | null,
+  inboxes: Map<string, string | null>,
+): Promise<"present" | "absent" | "unknown"> {
+  // A source with no Message-ID cannot be looked for, so it is retried exactly
+  // as it was before this check existed: at-least-once for that one message,
+  // which is the trade the header's absence forces.
+  if (!messageId) return "absent";
+  const personalInboxId = await personalInboxOf(deps, member, resolved, inboxes);
+  if (personalInboxId === null) return "absent";
+  try {
+    const responses = await deps.jmap.request(resolved.auth, resolved.session, [
+      [
+        "Email/query",
+        {
+          accountId: resolved.session.accountId,
+          filter: { inMailbox: personalInboxId, header: ["Message-ID", messageId] },
+          limit: 1,
+        },
+        "q",
+      ],
+    ]);
+    const ids = ((responses[0]?.[1] ?? {}) as { ids?: string[] }).ids ?? [];
+    return ids.length > 0 ? "present" : "absent";
+  } catch (error) {
+    (deps.log ?? defaultLog)("warn", "shared mailbox copy: retry verification failed", {
+      userId: member.userId,
+      messageId,
+      error: String(error),
+    });
+    return "unknown";
+  }
 }
 
 /**
@@ -718,9 +841,8 @@ async function deliverPage(
         resolved,
         email.id,
         counts,
-        personalInboxId === null
-          ? undefined
-          : { personalInboxId, keywords: email.keywords },
+        email.messageId,
+        personalInboxId === null ? undefined : { personalInboxId, keywords: email.keywords },
       );
     }
     if (unresolved.length > 0) {
@@ -801,7 +923,7 @@ async function deliver(
   // cursor has already moved past the pages that carried them, so this pass is
   // the only thing that still can deliver them — and doing it first keeps a
   // transient failure from ageing out behind a busy mailbox.
-  let leaseLost = !(await retryFailed(deps, sharedAccountId, deliverTo, counts, owner));
+  let leaseLost = !(await retryFailed(deps, sharedAccountId, deliverTo, counts, owner, inboxes));
 
   let pages = 0;
   let truncated = false;

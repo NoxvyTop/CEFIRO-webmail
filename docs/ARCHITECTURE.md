@@ -553,6 +553,22 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    porque el cursor ya había avanzado por encima de la página que lo traía.
    Agotados los intentos, la fila se queda como registro de una copia que no
    se entregó.
+
+   **Antes de reintentar, se comprueba.** Un `Email/copy` cuya respuesta se
+   pierde *después* de que el proveedor la haya hecho queda igual que uno que
+   nunca ocurrió —fila `failed`—, y reintentarlo entregaba el mensaje dos
+   veces. Por eso la reserva guarda el `Message-ID` del mensaje de origen (lo
+   trae la misma lectura de la página) y el reintento pregunta primero por él
+   en la bandeja del miembro (`Email/query { inMailbox, header: ["Message-ID",
+   …], limit: 1 }`, con su propia sesión): si aparece, la fila pasa a `copied`
+   **sin copiar**; si no, se copia. Si el origen no trae `Message-ID` —raro,
+   pero legal— se reintenta como antes, asumiendo el duplicado para ese caso.
+   Si la consulta falla, no se copia nada: no gasta intento y el ciclo
+   siguiente vuelve a preguntar, porque copiar a ciegas es lo único que no
+   tiene vuelta atrás. No es un segundo libro de dedupe: solo se usa en el
+   camino de reintento, sobre una copia que este servidor reservó, y si el
+   miembro borró la copia se le vuelve a entregar, igual que con el botón
+   manual.
 6. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
    Una caída entre la última copia y el avance repite la página en el ciclo
    siguiente, y el libro convierte la repetición en saltos, no en duplicados.

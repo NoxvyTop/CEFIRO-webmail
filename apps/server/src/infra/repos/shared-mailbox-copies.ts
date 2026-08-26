@@ -230,13 +230,25 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
      *
      * A confirmed copy is never demoted (the `where`): a replayed page must
      * not turn a delivered copy back into an open question.
+     *
+     * `messageId` is the SOURCE message's RFC 5322 Message-ID, which the cycle
+     * reads with the page. It is what lets a later retry ask whether the copy
+     * was already made (see the migration header). Kept with `coalesce`: the
+     * retry pass claims the row again without knowing it, and that claim must
+     * not erase the answer it is about to depend on.
      */
-    async beginCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void> {
+    async beginCopy(
+      userId: string,
+      sharedAccountId: string,
+      emailId: string,
+      messageId?: string | null,
+    ): Promise<void> {
       await sql`
-        insert into shared_mailbox_copies (user_id, shared_account_id, email_id, status)
-        values (${userId}, ${sharedAccountId}, ${emailId}, 'pending')
+        insert into shared_mailbox_copies (user_id, shared_account_id, email_id, status, message_id)
+        values (${userId}, ${sharedAccountId}, ${emailId}, 'pending', ${messageId ?? null})
         on conflict (user_id, shared_account_id, email_id) do update set
           status = 'pending',
+          message_id = coalesce(excluded.message_id, shared_mailbox_copies.message_id),
           updated_at = now()
         where shared_mailbox_copies.status <> 'copied'
       `;
@@ -311,10 +323,14 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     async listRetryable(
       sharedAccountId: string,
       options: { userIds: string[]; maxAttempts: number; limit: number },
-    ): Promise<Array<{ userId: string; emailId: string; attempts: number }>> {
+    ): Promise<
+      Array<{ userId: string; emailId: string; attempts: number; messageId: string | null }>
+    > {
       if (options.userIds.length === 0) return [];
-      const rows = await sql<{ user_id: string; email_id: string; attempts: number }[]>`
-        select user_id, email_id, attempts from shared_mailbox_copies
+      const rows = await sql<
+        { user_id: string; email_id: string; attempts: number; message_id: string | null }[]
+      >`
+        select user_id, email_id, attempts, message_id from shared_mailbox_copies
         where shared_account_id = ${sharedAccountId}
           and user_id = any(${options.userIds}::uuid[])
           and status = 'failed'
@@ -326,6 +342,7 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
         userId: row.user_id,
         emailId: row.email_id,
         attempts: row.attempts,
+        messageId: row.message_id,
       }));
     },
 
