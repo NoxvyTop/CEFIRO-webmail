@@ -24,8 +24,10 @@ export const sharedAccountSchema = z.object({
   // new mail from this shared mailbox in their own inbox (see
   // userPreferencesSchema.sharedMailboxCopyOptIn). Defaults to false so a
   // response from a server that predates the field — and the account selector,
-  // which reads only id/name — still parses. Persisted intent only: no copy is
-  // delivered from this yet (deferred, see docs/design/shared-mailboxes.md).
+  // which reads only id/name — still parses. Since GH #313 the server's copy
+  // worker consumes it: new mail in the shared inbox is copied to every member
+  // with this set, from the moment they opt in (never retroactively — see
+  // docs/design/shared-mailboxes.md).
   copyOptIn: z.boolean().default(false),
 });
 export type SharedAccount = z.infer<typeof sharedAccountSchema>;

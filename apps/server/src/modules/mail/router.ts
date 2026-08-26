@@ -591,10 +591,13 @@ export function createMailRouter(deps: MailDeps) {
   });
 
   // GH #13/#50 (G-3): record whether this member wants a copy of new mail from a
-  // shared mailbox delivered to their own inbox. This ONLY persists intent — no
-  // copy is made here and nothing consumes the preference yet (deferred, see
-  // docs/design/shared-mailboxes.md); the member still pulls copies manually via
-  // copy-to-inbox above. The `:id` names the shared account: resolveAccountId
+  // shared mailbox delivered to their own inbox. This route ONLY persists the
+  // intent — no copy is made here. What consumes it (GH #313) is the
+  // background worker in ./shared-copy/, which lists every opted-in member on
+  // each cycle (userPreferences.listSharedMailboxCopyOptIns) and copies each
+  // new message of the shared inbox to them; the copy-to-inbox route below
+  // remains for mail that predates the opt-in. The `:id` names the shared
+  // account: resolveAccountId
   // authorizes it against the member's session (403 account_forbidden if
   // unreachable), and it MUST be a shared, non-personal account — a personal id
   // is refused with 400 invalid_account, mirroring copy-to-inbox, since opting

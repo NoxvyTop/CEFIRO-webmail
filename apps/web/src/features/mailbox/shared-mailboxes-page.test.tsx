@@ -71,6 +71,22 @@ describe("SharedMailboxesPage (GH #13/#50 G-4)", () => {
     expect(screen.getByLabelText(copyToggleName("Soporte"))).toBeChecked();
   });
 
+  // GH #313: the helper used to promise automatic delivery "in an upcoming
+  // update" and point at the manual copy. Delivery is automatic now, in both
+  // languages, so the copy must not keep apologising for a gap that is closed.
+  it("describes automatic delivery without deferring it to a later update", async () => {
+    fetchSharedAccounts.mockResolvedValue([ventas]);
+    renderPage();
+    await screen.findByText("Ventas");
+
+    for (const language of ["en", "es"]) {
+      const help = i18n.getFixedT(language)("sharedMailboxes.copyHelp");
+      expect(help).not.toMatch(/upcoming|manual|próxima actualización|manualmente/i);
+      expect(help.length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText(i18n.t("sharedMailboxes.copyHelp"))).toBeInTheDocument();
+  });
+
   it("optimistically flips the toggle and PUTs the opt-in on click", async () => {
     fetchSharedAccounts.mockResolvedValue([ventas]);
     // A pending promise keeps the mutation in flight, so the checkbox we assert
