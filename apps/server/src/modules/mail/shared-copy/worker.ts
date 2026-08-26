@@ -71,6 +71,9 @@ type LogFn = (
 
 export type SharedCopyOptIn = { userId: string; email: string; accountIds: string[] };
 
+/** A user whose preference names these shared accounts, deliverable or not. */
+export type SharedCopyMembership = { userId: string; accountIds: string[] };
+
 export type WatcherFactoryInput = {
   sharedAccountId: string;
   resolveWatcher: () => ReturnType<typeof electWatcher>;
@@ -79,8 +82,17 @@ export type WatcherFactoryInput = {
 
 export type SharedCopyWorkerInput = {
   delivery: DeliveryDeps;
-  /** infra/repos/user-preferences.ts listSharedMailboxCopyOptIns. */
+  /**
+   * infra/repos/user-preferences.ts listSharedMailboxCopyOptIns: the members
+   * a cycle can DELIVER to right now (active, with a credential).
+   */
   listOptIns(): Promise<SharedCopyOptIn[]>;
+  /**
+   * infra/repos/user-preferences.ts listSharedMailboxCopyOptInMembership:
+   * everybody whose preference names an account, deliverable or not. What
+   * the member prune is reconciled against — see `reconcileMembers`.
+   */
+  listOptInMembership(): Promise<SharedCopyMembership[]>;
   pollMs: number;
   /** For the default watcher factory: how the subscription dials the provider. */
   fetchFn?: typeof fetch;
@@ -119,6 +131,19 @@ function membersByAccount(optIns: SharedCopyOptIn[]): Map<string, SharedCopyMemb
       const members = byAccount.get(accountId) ?? [];
       members.push({ userId, email });
       byAccount.set(accountId, members);
+    }
+  }
+  return byAccount;
+}
+
+/** User ids per shared account, from the flat preference membership listing. */
+function membershipByAccount(membership: SharedCopyMembership[]): Map<string, string[]> {
+  const byAccount = new Map<string, string[]>();
+  for (const { userId, accountIds } of membership) {
+    for (const accountId of accountIds) {
+      const userIds = byAccount.get(accountId) ?? [];
+      userIds.push(userId);
+      byAccount.set(accountId, userIds);
     }
   }
   return byAccount;
@@ -213,16 +238,20 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
    * the worker's own membership map cannot, because an account nobody opts
    * into is not in it.
    *
+   * Reconciled against the PREFERENCE membership, not the deliverable list
+   * the cycles run for: that list filters `active` and joins the credential,
+   * so a member deactivated for an afternoon, or momentarily without a
+   * credential, read as "opted out" and lost their baseline and their owed
+   * `pending`/`failed` rows. Such a member is neither delivered to nor
+   * pruned; when they are back, delivery resumes where it left off.
+   *
    * Idempotent by construction: an account whose members did not change has
    * nothing to prune, so this is a no-op statement per account per poll.
    */
   async function reconcileMembers(): Promise<void> {
+    const members = membershipByAccount(await input.listOptInMembership());
     for (const accountId of await delivery.copies.listAccountIds()) {
-      const members = membership.get(accountId) ?? [];
-      await delivery.copies.pruneMembers(
-        accountId,
-        members.map((member) => member.userId),
-      );
+      await delivery.copies.pruneMembers(accountId, members.get(accountId) ?? []);
     }
   }
 

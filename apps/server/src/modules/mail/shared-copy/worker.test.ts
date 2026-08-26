@@ -62,9 +62,14 @@ function sessionReaching(email: string, accountIds: string[]): JmapSession {
   };
 }
 
-function harness(initial: OptIn[] = [ana, bruno]) {
+type Membership = { userId: string; accountIds: string[] };
+
+function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership[]) {
   const timers = fakeTimers();
   let optIns = initial;
+  /** What the PREFERENCES say, regardless of active/credential (default: the same people). */
+  let membership: Membership[] =
+    initialMembership ?? initial.map(({ userId, accountIds }) => ({ userId, accountIds }));
   let listFailure: Error | null = null;
   /** Accounts the state store already knows about, and the prunes it received. */
   let knownAccounts: string[] = ["acc-a", "acc-b"];
@@ -123,6 +128,7 @@ function harness(initial: OptIn[] = [ana, bruno]) {
       if (listFailure) throw listFailure;
       return optIns;
     },
+    listOptInMembership: async () => membership,
     pollMs: 300_000,
     timers: timers.timers,
     log: (level, msg, fields = {}) => {
@@ -162,8 +168,15 @@ function harness(initial: OptIn[] = [ana, bruno]) {
     watchers,
     throwFor,
     prunes,
-    setOptIns(next: OptIn[]) {
+    /** Sets the deliverable opt-ins; the membership follows unless `keepMembership`. */
+    setOptIns(next: OptIn[], options: { keepMembership?: boolean } = {}) {
       optIns = next;
+      if (!options.keepMembership) {
+        membership = next.map(({ userId, accountIds }) => ({ userId, accountIds }));
+      }
+    },
+    setMembership(next: Membership[]) {
+      membership = next;
     },
     setKnownAccounts(next: string[]) {
       knownAccounts = next;
@@ -357,6 +370,46 @@ describe("createSharedCopyWorker — membership reconcile (GH #313)", () => {
     expect(h.logs.some((l) => l.level === "error" && l.msg.includes("reconcile"))).toBe(true);
     expect(h.cycles.map((c) => c.sharedAccountId)).toEqual(["acc-a", "acc-b"]);
     expect(h.timers.delays()).toEqual([300_000]);
+    await h.worker.stop();
+  });
+
+  // GH #313: the prune ran against the DELIVERABLE listing (active users with
+  // a credential), so a member deactivated for an afternoon read as "opted
+  // out" and lost their baseline and their owed rows. Membership is what the
+  // preference says; deliverability is a separate, narrower question.
+  it("prunes against the preference membership, not the deliverable list", async () => {
+    // Bruno is deactivated right now: still a member, not deliverable.
+    const h = harness([ana], [
+      { userId: ana.userId, accountIds: ana.accountIds },
+      { userId: bruno.userId, accountIds: bruno.accountIds },
+    ]);
+    h.worker.start();
+    await settle();
+
+    expect(h.prunes).toContainEqual({ accountId: "acc-a", userIds: [ana.userId, bruno.userId] });
+    expect(h.cycles.find((c) => c.sharedAccountId === "acc-a")?.members).toEqual([
+      { userId: ana.userId, email: ana.email },
+    ]);
+
+    // Reactivated: the next poll delivers to him again, with nothing lost.
+    h.setOptIns([ana, bruno], { keepMembership: true });
+    h.timers.fireNext();
+    await settle();
+    expect(h.cycles.at(-2)?.members.map((m) => m.userId)).toEqual([ana.userId, bruno.userId]);
+    await h.worker.stop();
+  });
+
+  it("still prunes a member whose preference no longer names the account", async () => {
+    const h = harness();
+    h.worker.start();
+    await settle();
+    h.prunes.length = 0;
+
+    h.setMembership([{ userId: ana.userId, accountIds: ["acc-a"] }]);
+    h.timers.fireNext();
+    await settle();
+    expect(h.prunes).toContainEqual({ accountId: "acc-a", userIds: [ana.userId] });
+    expect(h.prunes).toContainEqual({ accountId: "acc-b", userIds: [] });
     await h.worker.stop();
   });
 

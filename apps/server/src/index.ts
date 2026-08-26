@@ -280,6 +280,7 @@ function buildSharedCopyWorker() {
       onCopyResult: recordSharedMailboxCopy,
     },
     listOptIns: () => userPreferences.listSharedMailboxCopyOptIns(),
+    listOptInMembership: () => userPreferences.listSharedMailboxCopyOptInMembership(),
     pollMs: config.sharedMailboxCopyPollMs,
     fetchFn: withJmapTransportErrors(withDeadlineFetch(fetch, "stalwart", config.jmapTimeoutMs)),
     authMode: config.jmapAuthMode,

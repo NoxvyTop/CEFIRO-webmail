@@ -15,10 +15,28 @@ export type SharedCopyStatus = "pending" | "copied" | "failed";
  */
 export function createSharedMailboxCopiesRepo(sql: Db) {
   /**
-   * Shared by the repo's own `pruneMembers` and by `baselineMembers`, as a
-   * plain function rather than through `this`: the repo is handed around as a
-   * bag of methods (see modules/mail/shared-copy/delivery.ts SharedCopyStore)
-   * and a destructured method must not lose the other one.
+   * Forgets every member of this account that is not in `userIds`, which is
+   * what makes an opt-out → opt-in round trip a fresh baseline rather than a
+   * resume across the gap. An empty list is legitimate and means "nobody
+   * opts into this account any more".
+   *
+   * Called by the worker ONLY, against the preference membership listing
+   * (userPreferences.listSharedMailboxCopyOptInMembership): the delivery
+   * cycle used to prune too, against the deliverable list it runs for, so a
+   * member deactivated for an afternoon or momentarily without a credential
+   * read as opted out and lost their baseline and their owed rows inside the
+   * first cycle. Membership is what the preference says, and nothing else.
+   *
+   * Their OPEN ledger rows go with the baseline: a `pending` or `failed` row
+   * describes a copy that was never delivered, and keeping it let the retry
+   * pass hand a re-joiner mail from before they left — the very back-fill the
+   * baseline exists to prevent — while orphan rows of members who never came
+   * back sat at the head of `listRetryable` starving everyone else. The
+   * `copied` rows stay: they are the dedup history of mail the member really
+   * did receive, and losing it would deliver those messages twice.
+   *
+   * One statement, so the two deletes cannot disagree about who was pruned:
+   * the ledger delete reads the member rows the first delete removed.
    */
   async function pruneMembers(sharedAccountId: string, userIds: string[]): Promise<void> {
     await sql`
@@ -116,23 +134,6 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
       return rows.map((row) => row.shared_account_id);
     },
 
-    /**
-     * Forgets every member of this account that is not in `userIds`, which is
-     * what makes an opt-out → opt-in round trip a fresh baseline rather than a
-     * resume across the gap. An empty list is legitimate and means "nobody
-     * opts into this account any more".
-     *
-     * Their OPEN ledger rows go with the baseline: a `pending` or `failed` row
-     * describes a copy that was never delivered, and keeping it let the retry
-     * pass hand a re-joiner mail from before they left — the very back-fill the
-     * baseline exists to prevent — while orphan rows of members who never came
-     * back sat at the head of `listRetryable` starving everyone else. The
-     * `copied` rows stay: they are the dedup history of mail the member really
-     * did receive, and losing it would deliver those messages twice.
-     *
-     * One statement, so the two deletes cannot disagree about who was pruned:
-     * the ledger delete reads the member rows the first delete removed.
-     */
     pruneMembers,
 
     /**
@@ -142,17 +143,16 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
      * compares each message's `receivedAt` against it (see the migration
      * header); nobody is excluded from a cycle for being new.
      *
-     * Prunes first, through the same `pruneMembers` the worker calls out of
-     * cycle: a cycle is one of the two places membership can shrink, not the
-     * only one, and both must leave exactly the same state behind.
+     * Records only, never prunes: a member absent from `userIds` is left
+     * exactly as they are. The cycle calls this with the DELIVERABLE members,
+     * and a member who is merely deactivated or credential-less today is
+     * still a member (see `pruneMembers`).
      *
-     * Three statements rather than one: the prune and the insert touch
-     * disjoint rows (out of the list vs. in it), the read afterwards is what
-     * makes a member's baseline the one recorded — not the one this call would
-     * have written — and the cycle deliberately spans no transaction.
+     * Two statements rather than one: the read afterwards is what makes a
+     * member's baseline the one recorded — not the one this call would have
+     * written — and the cycle deliberately spans no transaction.
      */
     async baselineMembers(sharedAccountId: string, userIds: string[]): Promise<Map<string, Date>> {
-      await pruneMembers(sharedAccountId, userIds);
       if (userIds.length === 0) return new Map();
       await sql`
         insert into shared_mailbox_member_state (user_id, shared_account_id)

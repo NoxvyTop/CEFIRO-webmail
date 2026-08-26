@@ -550,10 +550,18 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    irresoluble—, porque sin él ningún mensaje se puede situar frente a ninguna
    línea base. Si el miembro desactiva la opción, su fila se borra, de modo que
    volver a activarla lo registra de nuevo —con hora nueva— en lugar de
-   rellenarle el hueco. La limpieza la hace el **worker en cada sondeo**,
-   sobre todas las cuentas con estado guardado, no el ciclo: un buzón que se
-   queda sin ningún miembro no vuelve a tener ciclo, y su última baja se
-   quedaba registrada para siempre. Con la fila se van también sus copias
+   rellenarle el hueco. La limpieza la hace **solo el worker, en cada
+   sondeo**, sobre todas las cuentas con estado guardado, no el ciclo: un
+   buzón que se queda sin ningún miembro no vuelve a tener ciclo, y su última
+   baja se quedaba registrada para siempre. Y la hace contra **lo que dice la
+   preferencia** (`listSharedMailboxCopyOptInMembership`: todo usuario cuya
+   preferencia nombra la cuenta, esté activo o no, tenga credencial o no), no
+   contra la lista entregable (`listSharedMailboxCopyOptIns`, que filtra
+   `active` y exige credencial) con la que corren los ciclos: podar contra esa
+   lista hacía que un miembro desactivado una tarde, o sin credencial un
+   momento, pasara por "dado de baja" y perdiera su línea base y sus copias
+   pendientes. Ese miembro **ni recibe ni se poda**; al volver, la entrega
+   sigue donde estaba. Con la fila se van también sus copias
    **pendientes y fallidas** de ese buzón (las `copied` se conservan como
    historial anti-duplicado): eran correo que ya no se le puede entregar, el
    reintento se las habría repartido al volver —justo el hueco que la línea

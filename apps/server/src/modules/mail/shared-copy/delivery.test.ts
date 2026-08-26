@@ -82,8 +82,7 @@ function fakeCopiesRepo(events: string[]) {
   /**
    * The real prune, in miniature (see infra/repos/shared-mailbox-copies.ts):
    * a member this account no longer has loses their baseline row AND their
-   * open ledger rows, while the confirmed ones stay as dedup history. Shared
-   * by `pruneMembers` and `baselineMembers` exactly as the repo shares it.
+   * open ledger rows, while the confirmed ones stay as dedup history.
    */
   function prune(accountId: string, userIds: string[]): void {
     const seen = memberState.get(accountId) ?? new Map<string, Date>();
@@ -189,7 +188,8 @@ function fakeCopiesRepo(events: string[]) {
         prune(accountId, userIds);
       },
       baselineMembers: async (accountId: string, userIds: string[]) => {
-        prune(accountId, userIds);
+        // Records only: pruning is the worker's, against the preference
+        // listing, exactly as in the real repo.
         const seen = memberState.get(accountId) ?? new Map<string, Date>();
         memberState.set(accountId, seen);
         const now = new Date();
@@ -877,7 +877,9 @@ describe("runDeliveryCycle — resuming after a gap and per-member baseline (GH 
     h.copies.seedCursor(SHARED, "s-1");
     h.copies.seedMembers(SHARED, [ana.userId, bruno.userId], new Date(now - 3_600_000));
 
-    // Bruno opts out: the cycle runs for ana alone and forgets him.
+    // Bruno opts out: the worker prunes him against the preference listing
+    // and the cycle runs for ana alone.
+    await h.copies.repo.pruneMembers(SHARED, [ana.userId]);
     h.pages = [{ created: ["e1"], newState: "s-2" }];
     h.inInbox.add("e1");
     await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
@@ -1281,7 +1283,12 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
   });
 
-  it("counts a retry that fails again, and prunes the open rows of a member who left", async () => {
+  // GH #313: the cycle used to prune against its own member list — the
+  // DELIVERABLE members — so a member deactivated for an afternoon, or
+  // momentarily without a credential, lost their owed rows inside the first
+  // cycle that ran without them. Pruning is the worker's, against what the
+  // preference says; a cycle neither delivers to nor forgets such a member.
+  it("counts a retry that fails again, and leaves a member absent from this cycle exactly as they were", async () => {
     h.copies.seedFailed(ana.userId, SHARED, "e1", 1);
     h.copies.seedFailed(bruno.userId, SHARED, "e9", 1);
     h.refuseCopyFor.add(ana.email);
@@ -1290,10 +1297,17 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1 });
     expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
     expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(2);
-    // Bruno is not in this cycle's member list — he opted out — so the
-    // baseline prune drops his open row with his baseline. Nothing can ever
-    // deliver it, and left behind it would sit at the head of the retry batch.
-    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e9`)).toBeUndefined();
+    // Bruno is not in this cycle's list — deactivated right now — so nothing
+    // is delivered to him, and his baseline and his owed row are kept for
+    // when he is back.
+    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e9`)).toBe("failed");
+    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e9`)).toBe(1);
+    expect(h.copies.baselined(SHARED)).toContain(bruno.userId);
+
+    // Reactivated: the next cycle resumes his owed copy.
+    h.pages = [{ created: [], newState: "s-3" }];
+    await expect(run()).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).at(-1)).toMatchObject({ by: bruno.email, emailId: "e9" });
   });
 
   // GH #313: the batch is the oldest failed rows of the ACCOUNT, capped at

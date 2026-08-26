@@ -235,4 +235,33 @@ describe("createUserPreferencesRepo — listSharedMailboxCopyOptIns (GH #313)", 
     expect(listed.find((entry) => entry.userId === dirty.id)?.accountIds).toEqual(["acc-a"]);
     expect(listed.map((entry) => entry.userId)).not.toContain(junk.id);
   });
+
+  // GH #313: the worker pruned membership against the DELIVERABLE listing
+  // above, which filters `active` and joins `mail_credentials` — so a member
+  // deactivated for an afternoon, or momentarily without a credential, read
+  // as "opted out" and lost their baseline and their owed `pending`/`failed`
+  // rows. Membership is what the PREFERENCE says, and nothing else.
+  describe("listSharedMailboxCopyOptInMembership", () => {
+    it("lists a deactivated or credential-less member whose preference still names the account", async () => {
+      const inactive = await optedInUser(["acc-a"], { active: false });
+      const noCredential = await optedInUser(["acc-b"], { credential: false });
+      const both = await optedInUser(["acc-a", "acc-b"]);
+      const listed = await repo.listSharedMailboxCopyOptInMembership();
+      expect(listed).toContainEqual({ userId: inactive.id, accountIds: ["acc-a"] });
+      expect(listed).toContainEqual({ userId: noCredential.id, accountIds: ["acc-b"] });
+      expect(listed).toContainEqual({ userId: both.id, accountIds: ["acc-a", "acc-b"] });
+    });
+
+    it("leaves out members with no opt-in, an empty one, a malformed one or one that parses to nothing", async () => {
+      const none = await freshUserId();
+      const empty = await optedInUser([]);
+      const malformed = await optedInUser("acc-a");
+      const junk = await optedInUser(["", 5, null]);
+      const ids = (await repo.listSharedMailboxCopyOptInMembership()).map((entry) => entry.userId);
+      expect(ids).not.toContain(none);
+      expect(ids).not.toContain(empty.id);
+      expect(ids).not.toContain(malformed.id);
+      expect(ids).not.toContain(junk.id);
+    });
+  });
 });

@@ -209,6 +209,40 @@ export function createUserPreferencesRepo(sql: Db) {
       }
       return listed;
     },
+
+    // GH #313: MEMBERSHIP, as opposed to deliverability above — every user
+    // whose preference names at least one shared account, whether or not they
+    // are active or hold a mailbox credential right now. The worker prunes
+    // per-account member state against THIS list and delivers from the other:
+    // pruning against the deliverable list read a member deactivated for an
+    // afternoon, or momentarily without a credential, as "opted out", and
+    // took their baseline and their owed `pending`/`failed` rows with it. The
+    // preference is the only thing that says whether somebody is a member;
+    // active/credential only say whether they can be delivered to today.
+    // Same lazy CASE guard and the same defensive parse as the listing above,
+    // for the same reasons; no email, because nothing here is delivered.
+    async listSharedMailboxCopyOptInMembership(): Promise<
+      Array<{ userId: string; accountIds: string[] }>
+    > {
+      const rows = await sql<{ user_id: string; account_ids: unknown }[]>`
+        select p.user_id, p.preferences -> 'sharedMailboxCopyOptIn' as account_ids
+        from user_preferences p
+        where (
+          case
+            when jsonb_typeof(p.preferences -> 'sharedMailboxCopyOptIn') = 'array'
+              then jsonb_array_length(p.preferences -> 'sharedMailboxCopyOptIn')
+            else 0
+          end
+        ) > 0
+      `;
+      const listed: Array<{ userId: string; accountIds: string[] }> = [];
+      for (const row of rows) {
+        const accountIds = parseSharedMailboxCopyOptIn(row.account_ids);
+        if (accountIds.length === 0) continue;
+        listed.push({ userId: row.user_id, accountIds });
+      }
+      return listed;
+    },
   };
 }
 

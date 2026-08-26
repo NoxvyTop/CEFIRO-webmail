@@ -261,7 +261,9 @@ del miembro (PULL).
   recibe solo lo que el buzón recibió a partir de esa hora —`receivedAt`, con
   60 s de margen de reloj—, nunca el atraso anterior, tarde lo que tarde el
   cursor en drenarlo), y el correo previo se copia a mano. Al desactivar la
-  opción, el worker borra en el siguiente sondeo —no en
+  opción —y solo por la preferencia: un miembro desactivado o sin credencial
+  sigue siendo miembro, no recibe pero tampoco se poda—, el worker borra en el
+  siguiente sondeo —no en
   el siguiente ciclo, que un buzón sin miembros ya no tiene— el registro del
   miembro y las copias que le quedaban pendientes o fallidas de ese buzón,
   conservando las ya entregadas como historial anti-duplicado; volver a

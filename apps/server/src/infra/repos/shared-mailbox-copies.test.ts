@@ -176,19 +176,40 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
     expect(second.get(ana)!.getTime()).toBeLessThan(first.get(ana)!.getTime());
   });
 
-  it("forgets a member who opted out, so opting back in baselines them afresh", async () => {
+  it("forgets a pruned member, so opting back in baselines them afresh", async () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     const bruno = await freshUserId();
     await repo.baselineMembers(accountId, [ana, bruno]);
     await ageBaseline(bruno, accountId, 3_600_000);
 
-    // Bruno opted out: he is no longer in the account's member list.
+    // Bruno opted out: the worker prunes him against the preference listing.
+    await repo.pruneMembers(accountId, [ana]);
     expect([...(await repo.baselineMembers(accountId, [ana])).keys()]).toEqual([ana]);
     // ...and coming back does not back-fill what arrived while he was away:
     // his baseline is now, not the hour-old one.
     const rejoined = await repo.baselineMembers(accountId, [ana, bruno]);
     expect(Date.now() - rejoined.get(bruno)!.getTime()).toBeLessThan(60_000);
+  });
+
+  // GH #313: a cycle runs for the DELIVERABLE members — active, with a
+  // credential — and used to prune against that very list, so a member
+  // deactivated for an afternoon lost their baseline and their owed rows
+  // inside the first cycle. Pruning is the worker's job alone, against what
+  // the preference says; a cycle only records who it sees.
+  it("keeps a member it was not asked about: baselining never prunes", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    const bruno = await freshUserId();
+    const first = await repo.baselineMembers(accountId, [ana, bruno]);
+    await repo.beginCopy(bruno, accountId, "owed");
+    await repo.markFailed(bruno, accountId, "owed", "copy_failed");
+
+    // A cycle for ana alone — bruno is deactivated right now.
+    await repo.baselineMembers(accountId, [ana]);
+
+    expect((await repo.baselineMembers(accountId, [ana, bruno])).get(bruno)).toEqual(first.get(bruno));
+    expect(await repo.copyStates(bruno, accountId, ["owed"])).toEqual(new Map([["owed", "failed"]]));
   });
 
   it("keeps the baseline per account and drops it with the user", async () => {
