@@ -1,6 +1,14 @@
 import type { Db } from "../db/client";
 
 /**
+ * State of one (member, shared account, source message) in the ledger:
+ * `pending` = claimed, the copy may or may not have been made; `copied` =
+ * confirmed by the provider; `failed` = refused or thrown, and retryable.
+ * Mirrors the check constraint in migrations/0015_shared_mailbox_copies.sql.
+ */
+export type SharedCopyStatus = "pending" | "copied" | "failed";
+
+/**
  * Cursor + dedup ledger + per-account delivery lease for automatic
  * shared-mailbox copies (GH #313). See
  * migrations/0015_shared_mailbox_copies.sql for what each table is for.
@@ -87,21 +95,23 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
       return rows.map((row) => row.user_id);
     },
 
+    /** Whether this member holds a CONFIRMED copy of that message. */
     async hasCopy(userId: string, sharedAccountId: string, emailId: string): Promise<boolean> {
       const rows = await sql`
         select 1 from shared_mailbox_copies
         where user_id = ${userId}
           and shared_account_id = ${sharedAccountId}
           and email_id = ${emailId}
+          and status = 'copied'
       `;
       return rows.length > 0;
     },
 
     /**
-     * The subset of `emailIds` this member already holds a copy of, in ONE
-     * query for the whole page — the cycle checks every created id for every
-     * member, and a per-id round trip would make a 100-message page cost
-     * hundreds of queries per member.
+     * The subset of `emailIds` this member already holds a CONFIRMED copy of.
+     * A claimed-but-unconfirmed row (`pending`) is deliberately not one: it
+     * says a copy may have been made, which is exactly what `copyStates`
+     * exists to tell apart.
      */
     async hasCopies(
       userId: string,
@@ -114,21 +124,82 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
         where user_id = ${userId}
           and shared_account_id = ${sharedAccountId}
           and email_id = any(${emailIds}::text[])
+          and status = 'copied'
       `;
       return new Set(rows.map((row) => row.email_id));
     },
 
     /**
-     * Records a confirmed copy. Idempotent on purpose: a page replayed after a
-     * crash between the copy and the cursor advance re-records what it finds
-     * already there, and that must be a no-op rather than an error that stops
-     * the page.
+     * The ledger status of every one of `emailIds` this member has a row for,
+     * in ONE query for the whole page — the cycle checks every created id for
+     * every member, and a per-id round trip would make a 100-message page cost
+     * hundreds of queries per member. An id with no row has never been
+     * attempted.
+     */
+    async copyStates(
+      userId: string,
+      sharedAccountId: string,
+      emailIds: string[],
+    ): Promise<Map<string, SharedCopyStatus>> {
+      if (emailIds.length === 0) return new Map();
+      const rows = await sql<{ email_id: string; status: SharedCopyStatus }[]>`
+        select email_id, status from shared_mailbox_copies
+        where user_id = ${userId}
+          and shared_account_id = ${sharedAccountId}
+          and email_id = any(${emailIds}::text[])
+      `;
+      return new Map(rows.map((row) => [row.email_id, row.status]));
+    },
+
+    /**
+     * Claims this copy as `pending` BEFORE the Email/copy is issued, so a
+     * crash or a database failure between the provider making the copy and
+     * this row being confirmed leaves evidence that it MAY have happened.
+     * Later cycles skip a pending row rather than copying it again.
+     *
+     * A confirmed copy is never demoted (the `where`): a replayed page must
+     * not turn a delivered copy back into an open question.
+     */
+    async beginCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void> {
+      await sql`
+        insert into shared_mailbox_copies (user_id, shared_account_id, email_id, status)
+        values (${userId}, ${sharedAccountId}, ${emailId}, 'pending')
+        on conflict (user_id, shared_account_id, email_id) do update set
+          status = 'pending',
+          updated_at = now()
+        where shared_mailbox_copies.status <> 'copied'
+      `;
+    },
+
+    /** Confirms a copy the provider acknowledged. */
+    async markCopied(userId: string, sharedAccountId: string, emailId: string): Promise<void> {
+      await sql`
+        update shared_mailbox_copies set
+          status = 'copied',
+          last_error = null,
+          copied_at = now(),
+          updated_at = now()
+        where user_id = ${userId}
+          and shared_account_id = ${sharedAccountId}
+          and email_id = ${emailId}
+      `;
+    },
+
+    /**
+     * Records a confirmed copy in one step, for the manual copy route, which
+     * has no cycle around it to claim the row first. Idempotent: a member who
+     * presses the button twice, or presses it for mail a cycle already
+     * delivered, must not get an error.
      */
     async recordCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void> {
       await sql`
-        insert into shared_mailbox_copies (user_id, shared_account_id, email_id)
-        values (${userId}, ${sharedAccountId}, ${emailId})
-        on conflict do nothing
+        insert into shared_mailbox_copies (user_id, shared_account_id, email_id, status)
+        values (${userId}, ${sharedAccountId}, ${emailId}, 'copied')
+        on conflict (user_id, shared_account_id, email_id) do update set
+          status = 'copied',
+          last_error = null,
+          copied_at = now(),
+          updated_at = now()
       `;
     },
 

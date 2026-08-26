@@ -88,8 +88,9 @@ function harness(initial: OptIn[] = [ana, bruno]) {
       getState: async () => ({ emailState: null, lastCycleAt: null }),
       baselineMembers: async () => [],
       setCursor: async () => {},
-      hasCopies: async () => new Set(),
-      recordCopy: async () => {},
+      copyStates: async () => new Map(),
+      beginCopy: async () => {},
+      markCopied: async () => {},
       acquireLease: async () => true,
       renewLease: async () => true,
       releaseLease: async () => {},
@@ -127,7 +128,7 @@ function harness(initial: OptIn[] = [ana, bruno]) {
           });
         } else resolve();
       });
-      return { status: "delivered", copied: 0, skipped: 0, failed: 0, pages: 1, truncated: false };
+      return { status: "delivered", copied: 0, skipped: 0, failed: 0, unresolved: 0, pages: 1, truncated: false };
     },
     openWatcher: (input) => {
       opened.push(input.sharedAccountId);

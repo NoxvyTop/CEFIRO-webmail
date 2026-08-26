@@ -89,10 +89,31 @@ create table shared_mailbox_member_state (
   primary key (user_id, shared_account_id)
 );
 
+-- The ledger row carries a STATUS, and it is written BEFORE the Email/copy,
+-- not after it. Written only afterwards, there was a window in which the
+-- provider had already made the copy and nothing recorded it: a crash — or a
+-- transient database error, which the cycle counted as a failed copy — replayed
+-- the very same copy on the next cycle, and the member got the message twice.
+--
+-- The row is claimed as `pending`, the copy is issued, and only then is it
+-- moved to `copied`. That turns the ambiguous case into a row that stays
+-- `pending`, which later cycles skip and count as unresolved rather than
+-- re-copy: at-most-once, by design, because a duplicated message is the
+-- failure a member notices and a missing one has an obvious recovery — the
+-- manual "copy to my inbox" button.
+--
+-- `failed` is the third state: a copy the provider refused or that threw. Those
+-- ARE retried, up to `attempts` tries, so a transient provider failure does not
+-- cost a member their copy while the cursor moves past it. `last_error` keeps
+-- the last reason for the operator.
 create table shared_mailbox_copies (
   user_id uuid not null references users(id) on delete cascade,
   shared_account_id text not null,
   email_id text not null,
+  status text not null default 'pending' check (status in ('pending', 'copied', 'failed')),
+  attempts int not null default 0,
+  last_error text,
   copied_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   primary key (user_id, shared_account_id, email_id)
 );

@@ -488,11 +488,18 @@ El diseño y las alternativas descartadas están en
    fila se borra, de modo que volver a activarla lo registra de nuevo en lugar
    de rellenarle el hueco.
 5. **Copiar a cada miembro** ya registrado, con la sesión de cada uno (un
-   miembro cuya sesión ya no lista la cuenta se salta con log). Antes de cada copia se consulta el
-   libro `shared_mailbox_copies` en una sola query por página; después de cada
-   copia confirmada (`created`, nunca por ausencia de `notCreated`) se escribe
-   la fila. Un fallo en la copia de un miembro se cuenta, se registra y **no
-   bloquea a los demás**.
+   miembro cuya sesión ya no lista la cuenta se salta con log). El libro
+   `shared_mailbox_copies` se consulta en una sola query por página y **se
+   escribe antes de copiar**: la fila se reserva como `pending`, se emite el
+   `Email/copy` y solo entonces pasa a `copied` (por `created`, nunca por
+   ausencia de `notCreated`). Si el proceso muere —o falla la base de datos—
+   entre la copia ya hecha y su confirmación, la fila se queda en `pending`:
+   los ciclos siguientes la **saltan** y la cuentan como `unresolved` en vez de
+   volver a copiarla. La entrega es *como mucho una vez* a propósito, porque un
+   mensaje duplicado es el fallo que el miembro nota, y para el que falta hay
+   una recuperación evidente: el botón manual de copiar a la bandeja. Un fallo
+   en la copia de un miembro se cuenta, se registra y **no bloquea a los
+   demás**.
 6. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
    Una caída entre la última copia y el avance repite la página en el ciclo
    siguiente, y el libro convierte la repetición en saltos, no en duplicados.

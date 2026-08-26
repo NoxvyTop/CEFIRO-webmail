@@ -141,14 +141,20 @@ export type OutboundSample = {
  * construction, like `OutboundOutcome`: `copied` is a confirmed Email/copy,
  * `failed` a refused or thrown one, `skipped` a message the member already
  * held a copy of (a replayed page after a crash — expected to be rare, and a
- * rising rate means cycles are being cut short).
+ * rising rate means cycles are being cut short), and `unresolved` a copy that
+ * was claimed in the ledger but never confirmed, so the process died or the
+ * database failed between the provider making the copy and the row being
+ * written. Those are deliberately NOT retried — the delivery is at-most-once
+ * and the manual copy button is the recovery — so any `unresolved` at all is
+ * worth an operator's attention.
  */
-export type SharedMailboxCopyResult = "copied" | "failed" | "skipped";
+export type SharedMailboxCopyResult = "copied" | "failed" | "skipped" | "unresolved";
 
 const SHARED_MAILBOX_COPY_RESULTS: readonly SharedMailboxCopyResult[] = [
   "copied",
   "failed",
   "skipped",
+  "unresolved",
 ];
 
 export type Metrics = {

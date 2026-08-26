@@ -48,12 +48,19 @@
  * - one member's copy fails (refused, thrown, no session) → counted, logged,
  *   the next member is served, and the cursor still advances — the LEDGER is
  *   what protects a member's copy across cycles, not the cursor, and pinning
- *   a page behind one member's failure would starve everyone else's mail.
+ *   a page behind one member's failure would starve everyone else's mail;
+ * - a copy claimed in the ledger but never confirmed (this process died, or
+ *   the database failed, between the provider making the copy and the row
+ *   being written) → `unresolved`: counted, logged once per member and page,
+ *   and NEVER re-copied. Delivery is at-most-once by design, because a
+ *   duplicated message is the failure a member notices and a missing one has
+ *   an obvious recovery — their own manual copy-to-inbox button.
  */
 
 import { log as defaultLog } from "../../../core/logger";
-import { recordSharedMailboxCopy } from "../../../core/metrics";
+import { recordSharedMailboxCopy, type SharedMailboxCopyResult } from "../../../core/metrics";
 import { JmapMethodError, type JmapAuth, type JmapClient, type JmapSession } from "../../../infra/jmap/client";
+import type { SharedCopyStatus } from "../../../infra/repos/shared-mailbox-copies";
 import type { MailSessionResult } from "../context";
 import { copyEmailToPersonalInbox } from "./copy";
 
@@ -135,8 +142,16 @@ export type SharedCopyStore = {
     userIds: string[],
     baselinedState: string,
   ): Promise<string[]>;
-  hasCopies(userId: string, sharedAccountId: string, emailIds: string[]): Promise<Set<string>>;
-  recordCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
+  /** Ledger status of the ids this member has a row for, one query per page. */
+  copyStates(
+    userId: string,
+    sharedAccountId: string,
+    emailIds: string[],
+  ): Promise<Map<string, SharedCopyStatus>>;
+  /** Claims the copy as `pending`, before the Email/copy is issued. */
+  beginCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
+  /** Confirms a copy the provider acknowledged. */
+  markCopied(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
   acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   releaseLease(sharedAccountId: string, owner: string): Promise<void>;
@@ -166,7 +181,7 @@ export type DeliveryDeps = {
    * registers a registry — so a unit test records into nowhere unless it
    * injects its own.
    */
-  onCopyResult?(result: "copied" | "failed" | "skipped"): void;
+  onCopyResult?(result: SharedMailboxCopyResult): void;
 };
 
 /**
@@ -190,15 +205,24 @@ export type DeliveryCycleResult =
   | { status: "no_watcher" }
   | { status: "locked" }
   | { status: "baselined"; reason: BaselineReason }
-  | {
+  | ({
       status: "delivered";
-      copied: number;
-      skipped: number;
-      failed: number;
       pages: number;
       /** True when the page cap stopped the cycle with changes still pending. */
       truncated: boolean;
-    };
+    } & DeliveryCounts);
+
+/**
+ * What one cycle did, per attempted copy. `unresolved` counts ledger rows an
+ * earlier attempt claimed and never confirmed: they are left exactly as they
+ * are, because re-copying one risks the duplicate this design refuses.
+ */
+export type DeliveryCounts = {
+  copied: number;
+  skipped: number;
+  failed: number;
+  unresolved: number;
+};
 
 function reaches(session: JmapSession, sharedAccountId: string): boolean {
   return (session.accounts ?? []).some((account) => account.id === sharedAccountId);
@@ -368,57 +392,115 @@ async function inboxOnly(
   return list.filter((email) => email.mailboxIds?.[inboxId] === true).map((email) => email.id);
 }
 
-async function deliverPage(
+/**
+ * One member's copy of one message, ledger and all. Returns nothing: every
+ * outcome is counted and reported here, because "what happened to this copy"
+ * has exactly one place to be decided.
+ */
+async function copyOne(
   deps: DeliveryDeps,
   sharedAccountId: string,
-  members: SharedCopyMember[],
-  emailIds: string[],
-  counts: { copied: number; skipped: number; failed: number },
+  member: SharedCopyMember,
+  resolved: { auth: JmapAuth; session: JmapSession },
+  emailId: string,
+  counts: DeliveryCounts,
 ): Promise<void> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
-  for (const member of members) {
-    const resolved = await resolveMember(deps, sharedAccountId, member);
-    if (!resolved) continue;
-    const already = await deps.copies.hasCopies(member.userId, sharedAccountId, emailIds);
-    for (const emailId of emailIds) {
-      if (already.has(emailId)) {
-        counts.skipped += 1;
-        report("skipped");
-        continue;
-      }
+
+  // Claimed BEFORE the copy: between a confirmed Email/copy and the row that
+  // records it there is a window, and a crash inside it used to replay the
+  // copy on the next cycle and deliver the message twice. A claim that
+  // survives without a confirmation is read as "may have been copied" and
+  // never copied again.
+  await deps.copies.beginCopy(member.userId, sharedAccountId, emailId);
+  try {
+    const result = await copyEmailToPersonalInbox({
+      jmap: deps.jmap,
+      auth: resolved.auth,
+      session: resolved.session,
+      fromAccountId: sharedAccountId,
+      emailId,
+    });
+    if (result.ok) {
       try {
-        const result = await copyEmailToPersonalInbox({
-          jmap: deps.jmap,
-          auth: resolved.auth,
-          session: resolved.session,
-          fromAccountId: sharedAccountId,
-          emailId,
-        });
-        if (result.ok) {
-          await deps.copies.recordCopy(member.userId, sharedAccountId, emailId);
-          counts.copied += 1;
-          report("copied");
-          continue;
-        }
-        counts.failed += 1;
-        report("failed");
-        log("warn", "shared mailbox copy: copy refused", {
-          sharedAccountId,
-          userId: member.userId,
-          emailId,
-          reason: result.reason,
-        });
+        await deps.copies.markCopied(member.userId, sharedAccountId, emailId);
       } catch (error) {
-        counts.failed += 1;
-        report("failed");
-        log("warn", "shared mailbox copy: copy failed", {
+        // The copy IS made — the provider confirmed it — so it counts as
+        // copied and the cycle carries on. The row stays `pending`, which is
+        // what keeps the next cycle from making it a second time.
+        log("error", "shared mailbox copy: ledger confirmation failed after a made copy", {
           sharedAccountId,
           userId: member.userId,
           emailId,
           error: String(error),
         });
       }
+      counts.copied += 1;
+      report("copied");
+      return;
+    }
+    counts.failed += 1;
+    report("failed");
+    log("warn", "shared mailbox copy: copy refused", {
+      sharedAccountId,
+      userId: member.userId,
+      emailId,
+      reason: result.reason,
+    });
+  } catch (error) {
+    counts.failed += 1;
+    report("failed");
+    log("warn", "shared mailbox copy: copy failed", {
+      sharedAccountId,
+      userId: member.userId,
+      emailId,
+      error: String(error),
+    });
+  }
+}
+
+async function deliverPage(
+  deps: DeliveryDeps,
+  sharedAccountId: string,
+  members: SharedCopyMember[],
+  emailIds: string[],
+  counts: DeliveryCounts,
+): Promise<void> {
+  const log = deps.log ?? defaultLog;
+  const report = deps.onCopyResult ?? recordSharedMailboxCopy;
+  for (const member of members) {
+    const resolved = await resolveMember(deps, sharedAccountId, member);
+    if (!resolved) continue;
+    const states = await deps.copies.copyStates(member.userId, sharedAccountId, emailIds);
+    const unresolved: string[] = [];
+    for (const emailId of emailIds) {
+      const state = states.get(emailId);
+      if (state === "copied") {
+        counts.skipped += 1;
+        report("skipped");
+        continue;
+      }
+      if (state === "pending") {
+        // Claimed by an earlier attempt that never confirmed. It may already
+        // be in the member's inbox, so copying it again risks a duplicate —
+        // the one outcome this design refuses. At most once, deliberately.
+        counts.unresolved += 1;
+        report("unresolved");
+        unresolved.push(emailId);
+        continue;
+      }
+      await copyOne(deps, sharedAccountId, member, resolved, emailId, counts);
+    }
+    if (unresolved.length > 0) {
+      // One line per member and page rather than per message: the operator
+      // needs to know it happened and to whom, not to read it N times.
+      log("warn", "shared mailbox copy: unresolved copies left as they are", {
+        sharedAccountId,
+        userId: member.userId,
+        emailIds: unresolved,
+        recovery: "the member's manual copy-to-inbox button",
+      });
     }
   }
 }
@@ -481,7 +563,7 @@ async function deliver(
     });
   }
 
-  const counts = { copied: 0, skipped: 0, failed: 0 };
+  const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0 };
   let pages = 0;
   let truncated = false;
   for (;;) {

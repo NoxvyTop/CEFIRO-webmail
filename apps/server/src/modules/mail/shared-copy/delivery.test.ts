@@ -53,11 +53,13 @@ function sessionFor(email: string, reaches: string[]): JmapSession {
 }
 
 /** In-memory stand-in for infra/repos/shared-mailbox-copies.ts. */
-function fakeCopiesRepo() {
+function fakeCopiesRepo(events: string[]) {
   const cursors = new Map<string, string>();
   const cycledAt = new Map<string, number>();
-  const ledger = new Set<string>();
+  /** (member|account|email) → ledger status, exactly like the real table. */
+  const states = new Map<string, "pending" | "copied" | "failed">();
   const cursorWrites: string[] = [];
+  let failMarkCopied = 0;
   const leases = new Map<string, { owner: string; until: number }>();
   const leaseLog: Array<{ op: "acquire" | "renew" | "release"; owner: string; ok: boolean }> = [];
   /** Members this account has already baselined, per account. */
@@ -66,11 +68,15 @@ function fakeCopiesRepo() {
   return {
     cursors,
     cycledAt,
-    ledger,
+    states,
     cursorWrites,
     leases,
     leaseLog,
     memberState,
+    /** The next markCopied rejects — a database blip after a confirmed copy. */
+    failMarkCopiedOnce() {
+      failMarkCopied += 1;
+    },
     /** Stands in for another replica holding this account's lease. */
     holdLease(accountId: string, owner = "other-replica", ttlMs = 60_000) {
       leases.set(accountId, { owner, until: Date.now() + ttlMs });
@@ -120,9 +126,30 @@ function fakeCopiesRepo() {
         cursorWrites.push(state);
       },
       hasCopies: async (userId: string, accountId: string, ids: string[]) =>
-        new Set(ids.filter((id) => ledger.has(key(userId, accountId, id)))),
+        new Set(ids.filter((id) => states.get(key(userId, accountId, id)) === "copied")),
+      copyStates: async (userId: string, accountId: string, ids: string[]) => {
+        const found = new Map<string, "pending" | "copied" | "failed">();
+        for (const id of ids) {
+          const status = states.get(key(userId, accountId, id));
+          if (status) found.set(id, status);
+        }
+        return found;
+      },
+      beginCopy: async (userId: string, accountId: string, emailId: string) => {
+        events.push(`ledger:begin:${userId}:${emailId}`);
+        if (states.get(key(userId, accountId, emailId)) === "copied") return;
+        states.set(key(userId, accountId, emailId), "pending");
+      },
+      markCopied: async (userId: string, accountId: string, emailId: string) => {
+        events.push(`ledger:copied:${userId}:${emailId}`);
+        if (failMarkCopied > 0) {
+          failMarkCopied -= 1;
+          throw new Error("database unavailable");
+        }
+        states.set(key(userId, accountId, emailId), "copied");
+      },
       recordCopy: async (userId: string, accountId: string, emailId: string) => {
-        ledger.add(key(userId, accountId, emailId));
+        states.set(key(userId, accountId, emailId), "copied");
       },
       acquireLease: async (accountId: string, owner: string, ttlMs: number) => {
         const held = leases.get(accountId);
@@ -166,16 +193,20 @@ type Harness = {
   noCredentialFor: Set<string>;
   /** Which shared accounts each member's session reaches (default: SHARED). */
   reaches: Map<string, string[]>;
+  /** Ledger writes and Email/copy calls, in the order they happened. */
+  events: string[];
   currentState: string;
   changesError?: string;
 };
 
 function harness(): Harness {
-  const copies = fakeCopiesRepo();
+  const events: string[] = [];
+  const copies = fakeCopiesRepo(events);
   const h: Harness = {
     deps: undefined as unknown as DeliveryDeps,
     requests: [],
     copies,
+    events,
     logs: [],
     pages: [],
     inInbox: new Set(),
@@ -239,12 +270,13 @@ function harness(): Harness {
           ];
         }
         if (name === "Email/copy") {
+          const created = params.create as { c: { id: string } };
+          events.push(`jmap:Email/copy:${auth.email}:${created.c.id}`);
           if (h.throwCopyFor.has(auth.email)) throw new DomainError("stalwart_unavailable", 502, "x");
           if (h.refuseCopyFor.has(auth.email)) {
             return ["Email/copy", { notCreated: { c: { type: "overQuota" } } }, callId];
           }
-          const create = params.create as { c: { id: string } };
-          return ["Email/copy", { created: { c: { id: `copy-of-${create.c.id}` } } }, callId];
+          return ["Email/copy", { created: { c: { id: `copy-of-${created.c.id}` } } }, callId];
         }
         throw new Error(`unexpected JMAP method in test stub: ${name}`);
       });
@@ -569,6 +601,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
       copied: 4,
       skipped: 0,
       failed: 0,
+      unresolved: 0,
       pages: 1,
       truncated: false,
     });
@@ -587,6 +620,54 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     await run();
     expect(await h.copies.repo.hasCopies(ana.userId, SHARED, ["e1"])).toEqual(new Set(["e1"]));
     expect(await h.copies.repo.hasCopies(bruno.userId, SHARED, ["e1"])).toEqual(new Set(["e1"]));
+  });
+
+  // GH #313: the ledger row was written only after a confirmed Email/copy, so
+  // between the provider making the copy and the row landing there was a
+  // window in which a crash — or a transient database error, which was counted
+  // as a failed copy — replayed the very same copy on the next cycle. The row
+  // is claimed as `pending` first, so the ambiguous case is at-most-once.
+  it("claims the ledger row before the copy and confirms it after", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    await run([ana]);
+    // The claim precedes the Email/copy, not just the confirmation.
+    expect(h.events).toEqual([
+      `ledger:begin:${ana.userId}:e1`,
+      `jmap:Email/copy:${ana.email}:e1`,
+      `ledger:copied:${ana.userId}:e1`,
+    ]);
+  });
+
+  it("leaves the row pending, and never re-copies it, when confirming the copy fails", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    h.copies.failMarkCopiedOnce();
+
+    // The copy DID happen, so it counts as copied and the cycle carries on.
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1, failed: 0 });
+    expect(h.logs.some((l) => l.level === "error" && l.msg.includes("ledger"))).toBe(true);
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("pending");
+
+    // The next cycle finds the pending row: it counts it as unresolved and
+    // does NOT copy it again. The manual button is the recovery.
+    h.pages = [{ created: ["e1"], newState: "s-3" }];
+    const before = copyCalls(h).length;
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, unresolved: 1, skipped: 0 });
+    expect(copyCalls(h)).toHaveLength(before);
+    expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("unresolved"))).toBe(true);
+  });
+
+  it("counts an unresolved row once per member and reports it to the metric", async () => {
+    const results: string[] = [];
+    h.deps.onCopyResult = (result) => results.push(result);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    await h.copies.repo.beginCopy(ana.userId, SHARED, "e1");
+
+    await expect(run()).resolves.toMatchObject({ copied: 1, unresolved: 1 });
+    expect(results.filter((r) => r === "unresolved")).toHaveLength(1);
+    expect(copyCalls(h).map((c) => c.by)).toEqual([bruno.email]);
   });
 
   it("copies only mail sitting in the shared inbox, resolved with one read batch", async () => {

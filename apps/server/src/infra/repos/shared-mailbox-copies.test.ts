@@ -167,6 +167,52 @@ describe("createSharedMailboxCopiesRepo — dedup ledger (GH #313)", () => {
     const userId = await freshUserId();
     expect(await repo.hasCopies(userId, freshAccountId(), ["e1", "e2"])).toEqual(new Set());
     expect(await repo.hasCopies(userId, freshAccountId(), [])).toEqual(new Set());
+    expect(await repo.copyStates(userId, freshAccountId(), ["e1"])).toEqual(new Map());
+    expect(await repo.copyStates(userId, freshAccountId(), [])).toEqual(new Map());
+  });
+
+  // GH #313: the ledger used to be written only AFTER a confirmed Email/copy,
+  // which left a window in which the provider had made the copy and nothing
+  // recorded it — a crash there delivered the message twice. The row is now
+  // claimed as `pending` BEFORE the copy and only then moved to `copied`, so
+  // the ambiguous case is a row that stays pending: at most once, never twice.
+  it("claims a copy as pending before it is made, then confirms it", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+
+    await repo.beginCopy(member, accountId, "e1");
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "pending"]]));
+    // A pending row is NOT a delivered copy.
+    expect(await repo.hasCopy(member, accountId, "e1")).toBe(false);
+    expect(await repo.hasCopies(member, accountId, ["e1"])).toEqual(new Set());
+
+    await repo.markCopied(member, accountId, "e1");
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "copied"]]));
+    expect(await repo.hasCopy(member, accountId, "e1")).toBe(true);
+  });
+
+  it("never demotes a confirmed copy back to pending", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.recordCopy(member, accountId, "e1");
+    await repo.beginCopy(member, accountId, "e1");
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "copied"]]));
+  });
+
+  it("reads the state of a whole page in one query, per member and account", async () => {
+    const member = await freshUserId();
+    const other = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.recordCopy(member, accountId, "e1");
+    await repo.beginCopy(member, accountId, "e2");
+
+    expect(await repo.copyStates(member, accountId, ["e1", "e2", "e3"])).toEqual(
+      new Map([
+        ["e1", "copied"],
+        ["e2", "pending"],
+      ]),
+    );
+    expect(await repo.copyStates(other, accountId, ["e1", "e2"])).toEqual(new Map());
   });
 
   it("remembers a recorded copy for that member and account only", async () => {
