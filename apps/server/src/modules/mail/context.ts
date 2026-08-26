@@ -93,29 +93,69 @@ export function evictMailSession(userId: string): void {
   mailStreams.closeUser(userId);
 }
 
+/**
+ * Why a member's mailbox cannot be reached right now. Both answer 503 on the
+ * request path (see requireMail); the background worker (GH #313) treats
+ * either as "this member cannot take part in this cycle" and moves on.
+ */
+export type MailSessionFailure = "mail_not_configured" | "mail_credentials_missing";
+
+export type MailSessionResult =
+  | { ok: true; auth: JmapAuth; session: JmapSession }
+  | { ok: false; reason: MailSessionFailure };
+
+/**
+ * The member's JMAP credential and session, resolved from their stored mailbox
+ * credential and the per-user session cache — the exact lookup requireMail
+ * has always performed inline, made callable with no request in flight.
+ *
+ * Extracted for GH #313: the shared-mailbox copy worker needs a member's
+ * session (to learn which shared accounts they can reach, and to copy with
+ * their credential) long after any request of theirs has ended. It could have
+ * kept a cache of its own, but then a member's session would be fetched twice
+ * from the provider, and — worse — `evictMailSession` would only ever clear
+ * one of the two, so a rotated or revoked credential could keep serving the
+ * worker after it stopped serving the user. One cache, one eviction.
+ *
+ * Deliberately a result rather than a throw for the two configuration
+ * failures: requireMail has to answer those with a specific 503 body, and the
+ * worker has to skip the member without treating it as an incident. A failure
+ * from the provider itself (`getSession` rejecting with `mail_auth_failed` or
+ * `stalwart_unavailable`) still propagates as the DomainError it always was.
+ */
+export async function getMailSession(
+  deps: JmapAccessDeps,
+  user: { userId: string; email: string },
+): Promise<MailSessionResult> {
+  if (!deps.jmap) {
+    return { ok: false, reason: "mail_not_configured" };
+  }
+  const password = await deps.mailCredentials.get(user.userId);
+  if (password === null) {
+    return { ok: false, reason: "mail_credentials_missing" };
+  }
+  const auth: JmapAuth = { email: user.email, password };
+  const cached = sessionCache.get(user.userId);
+  let session: JmapSession;
+  if (cached && Date.now() - cached.fetchedAt < SESSION_CACHE_TTL_MS) {
+    session = cached.session;
+  } else {
+    session = await deps.jmap.getSession(auth);
+    sessionCache.set(user.userId, { session, fetchedAt: Date.now() });
+  }
+  return { ok: true, auth, session };
+}
+
 export function requireMail(
   deps: JmapAccessDeps,
 ): MiddlewareHandler<{ Variables: MailVariables }> {
   return async (c, next) => {
-    if (!deps.jmap) {
-      return errorResponse(c, "mail_not_configured", 503);
+    const resolved = await getMailSession(deps, c.get("user"));
+    if (!resolved.ok) {
+      return errorResponse(c, resolved.reason, 503);
     }
-    const user = c.get("user");
-    const password = await deps.mailCredentials.get(user.userId);
-    if (password === null) {
-      return errorResponse(c, "mail_credentials_missing", 503);
-    }
-    const auth: JmapAuth = { email: user.email, password };
-    const cached = sessionCache.get(user.userId);
-    let session: JmapSession;
-    if (cached && Date.now() - cached.fetchedAt < SESSION_CACHE_TTL_MS) {
-      session = cached.session;
-    } else {
-      session = await deps.jmap.getSession(auth);
-      sessionCache.set(user.userId, { session, fetchedAt: Date.now() });
-    }
-    c.set("jmapAuth", auth);
-    c.set("jmapSession", session);
+    c.set("jmapAuth", resolved.auth);
+    c.set("jmapSession", resolved.session);
     await next();
   };
 }
