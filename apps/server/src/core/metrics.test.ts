@@ -4,6 +4,7 @@ import {
   createMetrics,
   methodLabel,
   recordOutbound,
+  recordSharedMailboxCopy,
   registerMetrics,
   routeLabel,
   setOpenStreams,
@@ -234,6 +235,46 @@ describe("outbound metrics (GH #240)", () => {
   });
 });
 
+// GH #313: the automatic shared-mailbox copy worker runs with no request in
+// flight, so nothing above can show whether it is delivering, refusing or
+// idle. One counter, three closed outcomes.
+describe("shared-mailbox copy metrics (GH #313)", () => {
+  it("counts copies by outcome", () => {
+    const metrics = createMetrics();
+    metrics.recordSharedMailboxCopy("copied");
+    metrics.recordSharedMailboxCopy("copied");
+    metrics.recordSharedMailboxCopy("failed");
+    metrics.recordSharedMailboxCopy("skipped");
+    metrics.recordSharedMailboxCopy("unresolved");
+    metrics.recordSharedMailboxCopy("owed");
+    metrics.recordSharedMailboxCopy("dropped");
+
+    const rendered = metrics.render({});
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="copied"}')).toBe("2");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="failed"}')).toBe("1");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="skipped"}')).toBe("1");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="unresolved"}')).toBe("1");
+    // GH #313: a copy the account owes a member it cannot deliver to right
+    // now, recorded so the retry pass hands it over when they are back.
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="owed"}')).toBe("1");
+    // GH #313: a message left out of that trail because the member's owed rows
+    // have reached the cap — the one outcome of this counter that IS a loss.
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="dropped"}')).toBe("1");
+    expect(rendered).toContain("# TYPE cefiro_shared_mailbox_copies_total counter");
+    expect(rendered).toContain("# HELP cefiro_shared_mailbox_copies_total ");
+  });
+
+  it("exposes every outcome at zero from the start, so a dashboard never reads an absent series as no data", () => {
+    const rendered = createMetrics().render({});
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="copied"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="failed"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="skipped"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="unresolved"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="owed"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="dropped"}')).toBe("0");
+  });
+});
+
 describe("process-wide reporting handle (GH #240)", () => {
   it("routes observations from far-away modules into the registered registry", () => {
     // core/deadline.ts and modules/mail/streams.ts are imported by half the
@@ -245,12 +286,14 @@ describe("process-wide reporting handle (GH #240)", () => {
 
     recordOutbound({ dependency: "stalwart", outcome: "error", durationMs: 4 });
     setOpenStreams(2);
+    recordSharedMailboxCopy("copied");
 
     const rendered = metrics.render({});
     expect(rendered).toContain(
       'cefiro_outbound_requests_total{dependency="stalwart",outcome="error"} 1',
     );
     expect(sample(rendered, "cefiro_sse_streams_open")).toBe("2");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="copied"}')).toBe("1");
   });
 
   it("sends observations to the registry built most recently", () => {

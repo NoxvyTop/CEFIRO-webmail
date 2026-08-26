@@ -330,7 +330,7 @@
     "enter": "Entrar",
     "copyLabel": "Recibir copia en mi bandeja",
     "copyToggle": "Recibir copia de {{name}} en mi bandeja",
-    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja. La entrega automática se activa en una próxima actualización; por ahora podés copiar correos manualmente desde el buzón.",
+    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja.",
     "copyError": "No se pudo cambiar la preferencia. Inténtalo de nuevo.",
     "activeIndicator": "Buzón compartido: {{name}}",
     "backToPersonal": "Volver a mi buzón"

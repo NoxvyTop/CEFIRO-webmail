@@ -22,9 +22,11 @@ const SHARED_ACCOUNTS_QUERY_KEY = ["mail", "shared-accounts"] as const;
  *    `account` URL param and land on the mailbox at `/`, the same mechanism the
  *    old header AccountSelector used.
  *  - toggle the copy opt-in (G-3): persist whether they want copies of new mail
- *    from that mailbox in their own inbox. HONEST COPY: the toggle only records
- *    intent; automatic delivery is deferred (see docs/design/shared-mailboxes.md),
- *    so the helper text says so and points at the manual copy that already works.
+ *    from that mailbox in their own inbox. Since GH #313 the server acts on it:
+ *    a background worker copies each new message of the shared mailbox into the
+ *    inbox of every member who opted in (see docs/design/shared-mailboxes.md),
+ *    so the helper text describes exactly that. The manual "copy to my inbox"
+ *    action on a message remains for mail that predates the opt-in.
  */
 export function SharedMailboxesPage() {
   const { t } = useTranslation();

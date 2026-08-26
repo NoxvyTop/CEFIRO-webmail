@@ -7,6 +7,10 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
+import {
+  createSharedMailboxCopiesRepo,
+  type SharedMailboxCopiesRepo,
+} from "../../infra/repos/shared-mailbox-copies";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -90,7 +94,7 @@ beforeEach(() => {
   copyResponse = { created: { c: { id: "copy-1" } } };
 });
 
-function makeApp() {
+function makeApp(overrides: { sharedMailboxCopies?: SharedMailboxCopiesRepo } = {}) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -98,16 +102,24 @@ function makeApp() {
       signatures: createSignaturesRepo(sql),
       userPreferences: createUserPreferencesRepo(sql),
       jmap: stubJmap,
+      ...overrides,
     }),
   });
 }
 
-function copyToInbox(id: string, accountId?: string) {
+function copyToInbox(
+  id: string,
+  accountId?: string,
+  overrides: { sharedMailboxCopies?: SharedMailboxCopiesRepo } = {},
+) {
   const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
-  return makeApp().request(`/api/mail/messages/${encodeURIComponent(id)}/copy-to-inbox${query}`, {
-    method: "POST",
-    headers: { cookie: `session=${token}` },
-  });
+  return makeApp(overrides).request(
+    `/api/mail/messages/${encodeURIComponent(id)}/copy-to-inbox${query}`,
+    {
+      method: "POST",
+      headers: { cookie: `session=${token}` },
+    },
+  );
 }
 
 function allCalls(): JmapMethodCall[] {
@@ -232,5 +244,51 @@ describe("POST /api/mail/messages/:id/copy-to-inbox", () => {
     const res = await copyToInbox("e1", "acc-shared");
     expect(res.status).toBe(502);
     expect(((await res.json()) as { code: string }).code).toBe("copy_failed");
+  });
+
+  // GH #313: the automatic delivery cycle and this button copy the same
+  // messages into the same inbox, and only the ledger keeps them from doing it
+  // twice. A manual copy that wrote nothing was invisible to the cycle, which
+  // then delivered its own copy of a message the member already had.
+  describe("shared-mailbox copy ledger (GH #313)", () => {
+    it("records the manual copy so the automatic cycle does not repeat it", async () => {
+      const copies = createSharedMailboxCopiesRepo(sql);
+      const res = await copyToInbox("e1", "acc-shared", { sharedMailboxCopies: copies });
+
+      expect(res.status).toBe(200);
+      expect(await copies.hasCopy(userId, "acc-shared", "e1")).toBe(true);
+      // Recorded against the SHARED account the message came from, not the
+      // personal one it landed in — that is the key the cycle looks up.
+      expect(await copies.hasCopy(userId, "acc-personal", "e1")).toBe(false);
+    });
+
+    it("records nothing when the copy itself failed", async () => {
+      const copies = createSharedMailboxCopiesRepo(sql);
+      copyResponse = { notCreated: { c: { type: "overQuota" } } };
+
+      const res = await copyToInbox("e2", "acc-shared", { sharedMailboxCopies: copies });
+      expect(res.status).toBe(502);
+      expect(await copies.hasCopy(userId, "acc-shared", "e2")).toBe(false);
+    });
+
+    it("still answers ok when the copy was made but the ledger write failed", async () => {
+      const copies = createSharedMailboxCopiesRepo(sql);
+      const failing: SharedMailboxCopiesRepo = {
+        ...copies,
+        recordCopy: () => Promise.reject(new Error("database unavailable")),
+      };
+
+      // The message IS in the member's inbox; answering 502 would invite them
+      // to press the button again and get a second copy.
+      const res = await copyToInbox("e3", "acc-shared", { sharedMailboxCopies: failing });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+    });
+
+    it("copies exactly as before for a deployment that wires no ledger", async () => {
+      const res = await copyToInbox("e4", "acc-shared");
+      expect(res.status).toBe(200);
+      expect(copyCall()).toBeDefined();
+    });
   });
 });

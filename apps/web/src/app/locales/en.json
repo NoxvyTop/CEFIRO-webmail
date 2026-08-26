@@ -330,7 +330,7 @@
     "enter": "Enter",
     "copyLabel": "Receive a copy in my inbox",
     "copyToggle": "Receive a copy of {{name}} in my inbox",
-    "copyHelp": "When new mail arrives in this mailbox, a copy will be delivered to your inbox. Automatic delivery ships in an upcoming update; for now you can copy messages manually from the mailbox.",
+    "copyHelp": "When new mail arrives in this mailbox, a copy will be delivered to your inbox.",
     "copyError": "Couldn't change the preference. Please try again.",
     "activeIndicator": "Shared mailbox: {{name}}",
     "backToPersonal": "Back to my mailbox"

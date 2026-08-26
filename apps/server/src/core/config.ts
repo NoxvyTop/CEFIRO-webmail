@@ -49,6 +49,11 @@ export const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 // option; the runbook says to generate one.
 export const MIN_BOOTSTRAP_PASSWORD_LENGTH = 24;
 
+// Default poll interval of the shared-mailbox copy worker (GH #313) — see the
+// schema entry below. Lives here rather than in the worker module so the
+// config layer does not have to import the mail module to name a number.
+export const DEFAULT_SHARED_MAILBOX_COPY_POLL_MS = 300_000;
+
 // A deadline of 0 or a fraction of a millisecond would abort every outbound
 // call before it started, so those are configuration errors, not tuning.
 const timeoutMsSchema = z.coerce.number().int().positive();
@@ -220,6 +225,41 @@ const configSchema = z.object({
     .int()
     .nonnegative()
     .default(DEFAULT_TRUSTED_PROXY_HOPS),
+  // GH #313: the background worker that copies new shared-mailbox mail into
+  // each opted-in member's inbox (modules/mail/shared-copy/). ON by default,
+  // unlike AI and push, because it is inert without opt-ins: a deployment
+  // where nobody has toggled a copy preference runs no cycle, opens no
+  // subscription and touches nothing. The switch exists for the operator who
+  // wants the toggle to keep recording intent while delivery is paused —
+  // during a provider migration, say — without hiding the setting. It also
+  // only ever matters when a JMAP provider is configured; index.ts builds no
+  // worker otherwise.
+  //
+  // Strictly parsed, like JMAP_URL_MODE (GH #313): the switch used to be "off
+  // only on false/0", so every OTHER word — `off`, `no`, `disabled` — meant
+  // ON. An operator pausing delivery with `SHARED_MAILBOX_COPY_ENABLED=off`
+  // got delivery, with nothing in the log to say so. Unset and empty still
+  // mean the default (on), because a deployment that never heard of the knob
+  // must keep the feature and one that wrote `SHARED_MAILBOX_COPY_ENABLED=`
+  // must not silently switch it off; anything else is either a spelling this
+  // understands or a boot failure.
+  sharedMailboxCopyEnabled: z
+    .enum(["true", "1", "false", "0"], {
+      errorMap: () => ({
+        message:
+          "SHARED_MAILBOX_COPY_ENABLED must be `true`/`1` or `false`/`0` " +
+          "(unset or empty means true)",
+      }),
+    })
+    .default("true")
+    .transform((value) => value === "true" || value === "1"),
+  // How often the worker polls every watched shared mailbox for changes, as
+  // the safety net under its push subscription (see the module header of
+  // modules/mail/shared-copy/worker.ts for why both). Five minutes: a push
+  // that is missed costs at most this much latency, while the poll itself is
+  // one cheap `Email/changes` per account per interval. Same shape as every
+  // other duration knob — zero, negative or fractional is a misconfiguration.
+  sharedMailboxCopyPollMs: positiveIntSchema.default(DEFAULT_SHARED_MAILBOX_COPY_POLL_MS),
 }).superRefine((config, ctx) => {
   // GH #223: MASTER_KEY was only ever checked for LENGTH, so the key shipped in
   // docker-compose.dev.yml (`dev-master-key-dev-master-key-01`, base64) passed
@@ -474,6 +514,14 @@ export function loadConfig(
     // get the endpoint unlocked by whitespace.
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
     trustedProxyHops: env.TRUSTED_PROXY_HOPS || undefined,
+    // Trimmed and lower-cased before the enum, exactly like JMAP_URL_MODE
+    // above, so ` FALSE ` is the off an operator plainly meant. An unknown
+    // word is NOT normalised into a default: it fails the enum and refuses
+    // the boot, because "I switched the worker off and it kept delivering" is
+    // the silent misconfiguration this replaces. Empty falls back to
+    // undefined, i.e. the schema default (on).
+    sharedMailboxCopyEnabled: env.SHARED_MAILBOX_COPY_ENABLED?.trim().toLowerCase() || undefined,
+    sharedMailboxCopyPollMs: env.SHARED_MAILBOX_COPY_POLL_MS || undefined,
   });
   return { ...parsed, deprecations };
 }

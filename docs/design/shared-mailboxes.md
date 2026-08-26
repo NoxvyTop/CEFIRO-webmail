@@ -213,15 +213,73 @@ miembro a la cuenta compartida por Basic, y copia real grupo→personal). Detall
   grupo) y para copias **retroactivas/selectivas**.
 
 **El PUSH/daemon del diseño original (F2: suscripción al EventSource del grupo +
-credencial potente del grupo) queda DESCARTADO:** el spike demostró que no hace
-falta credencial del grupo; si Céfiro copia, lo hace con la del miembro (PULL).
+credencial potente del grupo) quedó DESCARTADO en 2026-08-03:** el spike
+demostró que no hace falta credencial del grupo; si Céfiro copia, lo hace con la
+del miembro (PULL).
+
+> **Reabierto en #313 (entrega automática).** El argumento en contra del daemon
+> era la **credencial del grupo**: una credencial más potente que la de
+> cualquier miembro, custodiada por el BFF y con radio de impacto sobre todos
+> los buzones. Ese argumento no aplica al diseño que se entregó: la suscripción
+> al EventSource del buzón compartido la abre el BFF con la credencial de **un
+> miembro con opt-in** (el "watcher", elegido y re-elegido en cada ciclo entre
+> los miembros que alcanzan la cuenta), exactamente la misma credencial y la
+> misma sesión que ese miembro usa desde su navegador en `GET /api/mail/events`.
+> En el proceso no existe nada más potente que un miembro, y las copias siguen
+> haciéndose una a una con la credencial del miembro destinatario. Lo que se
+> mantiene del análisis original es la mitigación del riesgo "suscripción
+> huérfana" (sección 6): la suscripción tiene su propio watchdog de silencio
+> (90 s) y reconexión con backoff, pero **no** se registra en `mailStreams`
+> (`streams.ts`), porque ese registro está indexado por usuario y se cierra en
+> el logout del usuario — y el logout de un miembro no debe apagar el buzón
+> para los demás. Detalle en `apps/server/src/modules/mail/shared-copy/` y en
+> `docs/ARCHITECTURE.md` ("Copias automáticas de buzones compartidos").
 
 **Sub-fork del modelo APP (cuándo copia):**
-- **Manual (primer slice recomendado):** el miembro pulsa "copiar a mi bandeja"
-  en un mensaje del grupo. Trivial, el miembro controla, sin job de fondo.
-- **Automático de fondo:** un job del BFF recorre miembros y usa la credencial
-  cifrada de cada uno para copiar el correo nuevo del grupo. Automático, pero es
-  infra nueva y usa credenciales de miembros offline.
+- **Manual (primer slice, entregado en G-2):** el miembro pulsa "copiar a mi
+  bandeja" en un mensaje del grupo. Trivial, el miembro controla, sin job de
+  fondo. Sigue existiendo: sirve para el correo **anterior** al opt-in, que la
+  entrega automática no toca.
+- **Automático de fondo — ENTREGADO en #313.** Un worker del BFF sigue cada
+  buzón compartido con opt-ins mediante un **cursor** sobre `Email/changes`
+  (estado JMAP persistido en `shared_mailbox_copy_state`) y copia cada mensaje
+  nuevo de la **bandeja de entrada** del buzón a cada miembro con opt-in, con
+  la credencial cifrada de ese miembro y el mismo `Email/copy` del botón manual.
+  Un libro de copias (`shared_mailbox_copies`, clave miembro+cuenta+mensaje)
+  impide duplicados si una página se repite tras una caída. **Disparador
+  híbrido (decisión del owner):** (1) la suscripción EventSource descrita
+  arriba lanza un ciclo en cuanto cambia el estado `Email` de la cuenta
+  compartida; (2) un sondeo pasivo cada `SHARED_MAILBOX_COPY_POLL_MS` (5 min
+  por defecto) corre el ciclo para cada buzón como red de seguridad. Un sondeo
+  puro se descartó por latencia; un push puro, por lo que pierde en una
+  reconexión o con una réplica caída. **`PushSubscription` de JMAP (RFC 8620
+  §7.2, webhook real desde el proveedor) queda como opción futura**: eliminaría
+  el socket sostenido, pero exige un endpoint HTTPS entrante alcanzable desde
+  el proveedor y su handshake de verificación. Sin backfill: el opt-in es hacia
+  adelante (el primer ciclo solo fija el cursor; a cada miembro nuevo lo
+  registra su primer ciclo con la hora, `baselined_at`, y desde ese ciclo
+  recibe solo lo que el buzón recibió a partir de esa hora —`receivedAt`, con
+  60 s de margen de reloj—, nunca el atraso anterior, tarde lo que tarde el
+  cursor en drenarlo), y el correo previo se copia a mano. Al desactivar la
+  opción —y solo por la preferencia: un miembro desactivado o sin credencial
+  sigue siendo miembro, no recibe pero tampoco se poda—, el worker borra en el
+  siguiente sondeo —no en
+  el siguiente ciclo, que un buzón sin miembros ya no tiene— el registro del
+  miembro y las copias que le quedaban pendientes o fallidas de ese buzón,
+  conservando las ya entregadas como historial anti-duplicado; volver a
+  activarla lo registra de nuevo, sin rellenar el hueco.
+- **Alcance exacto de "correo nuevo" (#313).** Se entregan **solo** los ids que
+  `Email/changes` marca como `created`, y la pertenencia a la bandeja se
+  evalúa **cuando corre el ciclo**. Dos consecuencias buscadas: un mensaje que
+  llega a otra carpeta y **se mueve después** a la bandeja compartida no se
+  copia (para el proveedor es `updated`, no `created`), y un mensaje creado en
+  la bandeja que se **mueve o se borra antes** de que corra el ciclo tampoco
+  (ya no está ahí cuando se filtra). Tratar `updated` como entregable haría
+  que cada marca de leído, cada etiqueta y cada movimiento dentro del buzón
+  compartido dispararan copias, y separar "movido a la bandeja" de "marcado
+  como leído" exigiría recordar el estado anterior de cada mensaje en un
+  segundo libro. Los dos casos los cubre el botón manual **"copiar a mi
+  bandeja"**, que no depende ni del cursor ni del momento de llegada.
 
 **Decisiones de producto (owner) — recomendaciones**
 - **Opt-in:** toggle por buzón compartido, **default OFF** (opt-in explícito).
@@ -236,7 +294,9 @@ falta credencial del grupo; si Céfiro copia, lo hace con la del miembro (PULL).
 **Decisión (2026-08-03): modelo APP.** Confirmado que el nativo no está
 disponible, G-2 va por `Email/copy` con la credencial del miembro. **Primer
 slice = copia manual** ("copiar a mi bandeja"); el automático de fondo, solo si
-se pide después. Opt-in por buzón (default OFF), sin cascada en el MVP.
+se pide después — **se pidió y se entregó en #313** (ver el sub-fork arriba).
+Opt-in por buzón (default OFF), sin cascada en el MVP. La retención y la purga
+de las copias siguen fuera de alcance.
 
 ---
 
@@ -488,7 +548,8 @@ el spike (F0) el cross-account resulta inviable o inaceptable (D-50.5), F1
 | **La purga toca la retención global** | `DataRetention` de Stalwart es **server-wide**; usarlo purgaría todo, no solo el grupo. | El script debe operar **por JMAP scopeado a la cuenta grupal** (`Email/query` con su `accountId`), **nunca** tocar `DataRetention`. Test que verifique el scope. |
 | **Cascada por `Message-ID` frágil si cambia el header** | La cascada matchea por `Message-ID`; solo se preserva porque la copia es `Email/copy` (JMAP), no reenvío SMTP. | Prohibir cualquier ruta de copia vía SMTP/forward para este flujo; test que confirme `Message-ID` idéntico tras `Email/copy`. |
 | **Authz del buzón compartido (#13)** | Un usuario no autorizado no debe poder abrir `info@`. | Verificación server-side en **cada** petición contra `shared_mailbox_access`; 403 si no está. Nunca confiar en el frontend (variante de `requireMail`, `mail/context.ts`). |
-| **Suscripción persistente huérfana (#50 F2)** | El daemon que escucha el EventSource del grupo puede colgarse (Stalwart deja de pinguear) o duplicarse. | Reutilizar el watchdog de silencio y el bookkeeping de `streams.ts`; una sola suscripción por cuenta grupal; reconexión controlada. |
+| **Suscripción persistente huérfana (#50 F2)** | El daemon que escucha el EventSource del grupo puede colgarse (Stalwart deja de pinguear) o duplicarse. | Entregado en #313 (`shared-copy/watcher.ts`): watchdog de silencio propio de 90 s (mismo presupuesto que `streams.ts`, pero **fuera** de `mailStreams` porque ese registro se cierra con el logout del usuario), reconexión con backoff exponencial 5 s → 60 s, una suscripción por cuenta y por réplica. Con varias réplicas las suscripciones se duplican a propósito; la entrega la serializa el arrendamiento (lease) por cuenta del ciclo, y el libro de copias impide duplicados. |
+| **Respuesta perdida tras una copia ya hecha (#313)** | Un `Email/copy` que el proveedor confirma pero cuya respuesta se pierde (corte, timeout) queda registrado `failed`, idéntico a uno que nunca ocurrió: el reintento entregaba el mensaje dos veces. | Entregado en #313: la reserva guarda el `Message-ID` del origen y el reintento pregunta por él en la bandeja del miembro (`Email/query` con `header` e `inMailbox`, `limit: 1`) antes de copiar; si está, marca `copied` sin copiar. Sin `Message-ID` en el origen se reintenta como antes; si la consulta falla —o no se puede resolver la bandeja personal del miembro—, no se copia, pero la fila **sí gasta un intento** (`last_error = "verification unavailable: …"`): dejarla intacta la hacía inmortal y ocupaba para siempre la cabeza del lote de reintentos, hasta dejar sin sitio a las demás. Solo en el camino de reintento y sobre copias que el propio servidor reservó: no sustituye al libro de copias. |
 | **Purga de blobs prematura** | Disparar la purga de blobs por CLI antes de destruir todas las referencias libera disco pero puede dejar huérfanos. | Destruir **todas** las referencias (grupo + copias) y confirmar `destroyed[]` antes de la purga de blobs. |
 
 ---
