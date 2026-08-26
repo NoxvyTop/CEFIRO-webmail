@@ -200,6 +200,32 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
     void drain();
   }
 
+  /**
+   * Brings every account the state store knows about into line with the
+   * opt-ins just listed, BEFORE any cycle runs.
+   *
+   * The prune used to live inside the delivery cycle, and a cycle only runs
+   * for an account that still has members — so the last member to opt out kept
+   * their baseline row and their open ledger rows indefinitely: opting back in
+   * resumed across the gap instead of starting fresh, and the retry pass
+   * back-filled them from copies that had failed before they left. Asking the
+   * store which accounts it holds state for is what reaches those accounts;
+   * the worker's own membership map cannot, because an account nobody opts
+   * into is not in it.
+   *
+   * Idempotent by construction: an account whose members did not change has
+   * nothing to prune, so this is a no-op statement per account per poll.
+   */
+  async function reconcileMembers(): Promise<void> {
+    for (const accountId of await delivery.copies.listAccountIds()) {
+      const members = membership.get(accountId) ?? [];
+      await delivery.copies.pruneMembers(
+        accountId,
+        members.map((member) => member.userId),
+      );
+    }
+  }
+
   function reconcileWatchers(): void {
     for (const [accountId, watcher] of watchers) {
       if (membership.has(accountId)) continue;
@@ -230,6 +256,14 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
     if (stopped) return;
     try {
       membership = membersByAccount(await input.listOptIns());
+      try {
+        await reconcileMembers();
+      } catch (error) {
+        // Its own catch: a prune that fails is a member who keeps a baseline
+        // row for another five minutes, which must not also cost this poll its
+        // watchers and its cycles.
+        log("error", "shared mailbox copy: membership reconcile failed", { error: String(error) });
+      }
       reconcileWatchers();
       for (const accountId of membership.keys()) queue.add(accountId);
       await drain();

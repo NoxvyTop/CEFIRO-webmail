@@ -140,6 +140,14 @@ export type SharedCopyStore = {
    */
   markCycleAttempt(sharedAccountId: string): Promise<void>;
   setCursor(sharedAccountId: string, emailState: string): Promise<void>;
+  /** Shared accounts this deployment holds any state for (./worker.ts). */
+  listAccountIds(): Promise<string[]>;
+  /**
+   * Forgets the members this account no longer has, along with their open
+   * ledger rows. Called by the cycle through `baselineMembers` and, for the
+   * accounts no cycle runs for any more, by ./worker.ts directly.
+   */
+  pruneMembers(sharedAccountId: string, userIds: string[]): Promise<void>;
   /**
    * Records the members this account had not seen before at `baselinedState`,
    * forgets the ones no longer listed, and answers with the newly recorded
@@ -167,10 +175,13 @@ export type SharedCopyStore = {
     emailId: string,
     lastError: string,
   ): Promise<void>;
-  /** This account's failed copies still worth another try, oldest first. */
+  /**
+   * This account's failed copies still worth another try, oldest first,
+   * restricted to the members this cycle can deliver to.
+   */
   listRetryable(
     sharedAccountId: string,
-    options: { maxAttempts: number; limit: number },
+    options: { userIds: string[]; maxAttempts: number; limit: number },
   ): Promise<Array<{ userId: string; emailId: string; attempts: number }>>;
   acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
@@ -584,6 +595,10 @@ async function recordFailure(
  * and each retry goes through the same copy path as a fresh one, ledger
  * included, so a retry that succeeds is a confirmed copy and one that fails
  * again just spends another attempt.
+ *
+ * The restriction is pushed into the QUERY, not applied to its answer: the
+ * batch is the oldest hundred failed rows of the account, so rows nobody can
+ * deliver used to fill it and starve the members being served.
  */
 async function retryFailed(
   deps: DeliveryDeps,
@@ -594,6 +609,7 @@ async function retryFailed(
   if (members.length === 0) return;
   const log = deps.log ?? defaultLog;
   const retryable = await deps.copies.listRetryable(sharedAccountId, {
+    userIds: members.map((member) => member.userId),
     maxAttempts: DELIVERY_RETRY_MAX_ATTEMPTS,
     limit: DELIVERY_RETRY_LIMIT,
   });

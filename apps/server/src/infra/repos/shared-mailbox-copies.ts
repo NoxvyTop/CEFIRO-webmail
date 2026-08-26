@@ -14,6 +14,28 @@ export type SharedCopyStatus = "pending" | "copied" | "failed";
  * migrations/0015_shared_mailbox_copies.sql for what each table is for.
  */
 export function createSharedMailboxCopiesRepo(sql: Db) {
+  /**
+   * Shared by the repo's own `pruneMembers` and by `baselineMembers`, as a
+   * plain function rather than through `this`: the repo is handed around as a
+   * bag of methods (see modules/mail/shared-copy/delivery.ts SharedCopyStore)
+   * and a destructured method must not lose the other one.
+   */
+  async function pruneMembers(sharedAccountId: string, userIds: string[]): Promise<void> {
+    await sql`
+      with pruned as (
+        delete from shared_mailbox_member_state
+        where shared_account_id = ${sharedAccountId}
+          and not (user_id = any(${userIds}::uuid[]))
+        returning user_id
+      )
+      delete from shared_mailbox_copies
+      using pruned
+      where shared_mailbox_copies.shared_account_id = ${sharedAccountId}
+        and shared_mailbox_copies.user_id = pruned.user_id
+        and shared_mailbox_copies.status in ('pending', 'failed')
+    `;
+  }
+
   return {
     /** The last processed Email state of the shared account, or null if never baselined. */
     async getCursor(sharedAccountId: string): Promise<string | null> {
@@ -79,14 +101,49 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
+     * Every shared account this deployment holds state for, whether that state
+     * is a cursor/lease row or only member rows. The worker reconciles
+     * membership against this list on every poll, because the prune below has
+     * to reach an account NOBODY opts into any more — and such an account
+     * never gets another cycle to carry it.
+     */
+    async listAccountIds(): Promise<string[]> {
+      const rows = await sql<{ shared_account_id: string }[]>`
+        select shared_account_id from shared_mailbox_copy_state
+        union
+        select distinct shared_account_id from shared_mailbox_member_state
+      `;
+      return rows.map((row) => row.shared_account_id);
+    },
+
+    /**
+     * Forgets every member of this account that is not in `userIds`, which is
+     * what makes an opt-out → opt-in round trip a fresh baseline rather than a
+     * resume across the gap. An empty list is legitimate and means "nobody
+     * opts into this account any more".
+     *
+     * Their OPEN ledger rows go with the baseline: a `pending` or `failed` row
+     * describes a copy that was never delivered, and keeping it let the retry
+     * pass hand a re-joiner mail from before they left — the very back-fill the
+     * baseline exists to prevent — while orphan rows of members who never came
+     * back sat at the head of `listRetryable` starving everyone else. The
+     * `copied` rows stay: they are the dedup history of mail the member really
+     * did receive, and losing it would deliver those messages twice.
+     *
+     * One statement, so the two deletes cannot disagree about who was pruned:
+     * the ledger delete reads the member rows the first delete removed.
+     */
+    pruneMembers,
+
+    /**
      * Records every member of `userIds` that this account had not seen before,
      * at `baselinedState`, and answers with exactly those ids — the members
      * that must NOT receive copies this cycle. Everyone else in the list is
      * deliverable.
      *
-     * Also forgets members who are no longer in the list, which is what makes
-     * an opt-out → opt-in round trip a fresh baseline rather than a back-fill
-     * of everything that arrived while they were away.
+     * Prunes first, through the same `pruneMembers` the worker calls out of
+     * cycle: a cycle is one of the two places membership can shrink, not the
+     * only one, and both must leave exactly the same state behind.
      *
      * Two statements rather than one: the prune and the insert touch disjoint
      * rows (out of the list vs. in it), so there is nothing to make atomic
@@ -97,11 +154,7 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
       userIds: string[],
       baselinedState: string,
     ): Promise<string[]> {
-      await sql`
-        delete from shared_mailbox_member_state
-        where shared_account_id = ${sharedAccountId}
-          and not (user_id = any(${userIds}::uuid[]))
-      `;
+      await pruneMembers(sharedAccountId, userIds);
       if (userIds.length === 0) return [];
       const rows = await sql<{ user_id: string }[]>`
         insert into shared_mailbox_member_state (user_id, shared_account_id, baselined_state)
@@ -229,8 +282,15 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
-     * The failed copies of this account still worth another try: fewer than
-     * `maxAttempts` behind them, oldest first, at most `limit` of them.
+     * The failed copies of this account still worth another try, for the
+     * members named in `userIds`: fewer than `maxAttempts` behind them, oldest
+     * first, at most `limit` of them.
+     *
+     * Scoped to the members the caller can actually deliver to, because the
+     * batch is a queue with a head: rows belonging to somebody who opted out —
+     * or whom the current cycle is only baselining — used to fill the oldest
+     * hundred and starve the members being served. An empty list retries
+     * nothing, which is the honest reading of "nobody is deliverable".
      *
      * Bounded on both axes on purpose. `maxAttempts` is what keeps a copy that
      * cannot succeed — a message destroyed at the source, a member permanently
@@ -242,11 +302,13 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
      */
     async listRetryable(
       sharedAccountId: string,
-      options: { maxAttempts: number; limit: number },
+      options: { userIds: string[]; maxAttempts: number; limit: number },
     ): Promise<Array<{ userId: string; emailId: string; attempts: number }>> {
+      if (options.userIds.length === 0) return [];
       const rows = await sql<{ user_id: string; email_id: string; attempts: number }[]>`
         select user_id, email_id, attempts from shared_mailbox_copies
         where shared_account_id = ${sharedAccountId}
+          and user_id = any(${options.userIds}::uuid[])
           and status = 'failed'
           and attempts < ${options.maxAttempts}
         order by updated_at asc

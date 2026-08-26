@@ -524,7 +524,16 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    estaba en el buzón compartido —ni siquiera el de ese mismo ciclo—, que es
    justo lo que cubre el botón manual. Si el miembro desactiva la opción, su
    fila se borra, de modo que volver a activarla lo registra de nuevo en lugar
-   de rellenarle el hueco.
+   de rellenarle el hueco. La limpieza la hace el **worker en cada sondeo**,
+   sobre todas las cuentas con estado guardado, no el ciclo: un buzón que se
+   queda sin ningún miembro no vuelve a tener ciclo, y su última baja se
+   quedaba registrada para siempre. Con la fila se van también sus copias
+   **pendientes y fallidas** de ese buzón (las `copied` se conservan como
+   historial anti-duplicado): eran correo que ya no se le puede entregar, el
+   reintento se las habría repartido al volver —justo el hueco que la línea
+   base evita— y, siendo el lote de reintentos las 100 filas más antiguas de la
+   cuenta, ocupaban sitio que necesitan los miembros vivos. Por lo mismo, el
+   lote de reintentos se pide **acotado a los miembros entregables** del ciclo.
 5. **Copiar a cada miembro** ya registrado, con la sesión de cada uno (un
    miembro cuya sesión ya no lista la cuenta se salta con log). El libro
    `shared_mailbox_copies` se consulta en una sola query por página y **se

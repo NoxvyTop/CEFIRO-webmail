@@ -66,6 +66,10 @@ function harness(initial: OptIn[] = [ana, bruno]) {
   const timers = fakeTimers();
   let optIns = initial;
   let listFailure: Error | null = null;
+  /** Accounts the state store already knows about, and the prunes it received. */
+  let knownAccounts: string[] = ["acc-a", "acc-b"];
+  let pruneFailure: Error | null = null;
+  const prunes: Array<{ accountId: string; userIds: string[] }> = [];
   const logs: Array<{ level: string; msg: string; fields: Record<string, unknown> }> = [];
   const cycles: Array<{ sharedAccountId: string; members: SharedCopyMember[] }> = [];
   const blocked = new Map<string, () => void>();
@@ -87,6 +91,11 @@ function harness(initial: OptIn[] = [ana, bruno]) {
     copies: {
       getState: async () => ({ emailState: null, lastCycleAt: null }),
       markCycleAttempt: async () => {},
+      listAccountIds: async () => knownAccounts,
+      pruneMembers: async (accountId, userIds) => {
+        if (pruneFailure) throw pruneFailure;
+        prunes.push({ accountId, userIds });
+      },
       baselineMembers: async () => [],
       setCursor: async () => {},
       copyStates: async () => new Map(),
@@ -152,11 +161,18 @@ function harness(initial: OptIn[] = [ana, bruno]) {
     opened,
     watchers,
     throwFor,
+    prunes,
     setOptIns(next: OptIn[]) {
       optIns = next;
     },
+    setKnownAccounts(next: string[]) {
+      knownAccounts = next;
+    },
     failListWith(error: Error | null) {
       listFailure = error;
+    },
+    failPruneWith(error: Error | null) {
+      pruneFailure = error;
     },
     /** Makes the next cycle for `accountId` hang until `release()` is called. */
     block(accountId: string): () => void {
@@ -279,6 +295,77 @@ describe("createSharedCopyWorker — start and poll (GH #313)", () => {
     await settle();
     const electedA2 = (await h.watchers.get("acc-a")!.resolveWatcher()) as { member: SharedCopyMember };
     expect(electedA2.member).toEqual({ userId: bruno.userId, email: bruno.email });
+    await h.worker.stop();
+  });
+});
+
+// GH #313: the member prune lived inside the delivery cycle, and a cycle only
+// runs for an account that still has members. The last member to opt out kept
+// their baseline row and their open ledger rows for ever: opting back in
+// resumed across the gap instead of starting fresh, and the retry pass
+// back-filled them from copies that failed before they left. Reconciling every
+// account the state store knows about, on every poll, is what makes the prune
+// reach an account nobody is cycling any more.
+describe("createSharedCopyWorker — membership reconcile (GH #313)", () => {
+  it("prunes every account it holds state for against the current opt-ins", async () => {
+    const h = harness();
+    h.worker.start();
+    await settle();
+
+    expect(h.prunes).toEqual([
+      { accountId: "acc-a", userIds: [ana.userId, bruno.userId] },
+      { accountId: "acc-b", userIds: [ana.userId] },
+    ]);
+    await h.worker.stop();
+  });
+
+  it("prunes an account whose last member opted out, with no cycle to do it", async () => {
+    const h = harness();
+    h.worker.start();
+    await settle();
+    h.prunes.length = 0;
+    const cyclesBefore = h.cycles.length;
+
+    // Nobody opts into acc-b any more: no cycle will ever run for it again.
+    h.setOptIns([{ ...ana, accountIds: ["acc-a"] }, bruno]);
+    h.timers.fireNext();
+    await settle();
+
+    expect(h.prunes).toContainEqual({ accountId: "acc-b", userIds: [] });
+    expect(h.cycles.slice(cyclesBefore).map((c) => c.sharedAccountId)).toEqual(["acc-a"]);
+    await h.worker.stop();
+  });
+
+  it("reconciles before the cycles, so a departed member is gone by the time one runs", async () => {
+    const h = harness();
+    h.worker.start();
+    await settle();
+    expect(h.prunes).toHaveLength(2);
+    expect(h.cycles).toHaveLength(2);
+    // Both prunes landed before either cycle: the prune list is complete at
+    // the moment the first cycle is queued.
+    expect(h.prunes.map((p) => p.accountId)).toEqual(["acc-a", "acc-b"]);
+    await h.worker.stop();
+  });
+
+  it("logs a failing reconcile and still runs the cycles and the next poll", async () => {
+    const h = harness();
+    h.failPruneWith(new Error("db away"));
+    h.worker.start();
+    await settle();
+
+    expect(h.logs.some((l) => l.level === "error" && l.msg.includes("reconcile"))).toBe(true);
+    expect(h.cycles.map((c) => c.sharedAccountId)).toEqual(["acc-a", "acc-b"]);
+    expect(h.timers.delays()).toEqual([300_000]);
+    await h.worker.stop();
+  });
+
+  it("reconciles nothing when the state store knows no account", async () => {
+    const h = harness([]);
+    h.setKnownAccounts([]);
+    h.worker.start();
+    await settle();
+    expect(h.prunes).toEqual([]);
     await h.worker.stop();
   });
 });

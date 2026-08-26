@@ -258,7 +258,11 @@ del miembro (PULL).
   el proveedor y su handshake de verificación. Sin backfill: el opt-in es hacia
   adelante (el primer ciclo solo fija el cursor, y a cada miembro nuevo lo
   registra su primer ciclo sin copiarle nada), y el correo previo se copia a
-  mano.
+  mano. Al desactivar la opción, el worker borra en el siguiente sondeo —no en
+  el siguiente ciclo, que un buzón sin miembros ya no tiene— el registro del
+  miembro y las copias que le quedaban pendientes o fallidas de ese buzón,
+  conservando las ya entregadas como historial anti-duplicado; volver a
+  activarla lo registra de nuevo, sin rellenar el hueco.
 - **Alcance exacto de "correo nuevo" (#313).** Se entregan **solo** los ids que
   `Email/changes` marca como `created`, y la pertenencia a la bandeja se
   evalúa **cuando corre el ciclo**. Dos consecuencias buscadas: un mensaje que

@@ -191,6 +191,76 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
   it("tolerates an account with no members at all", async () => {
     expect(await repo.baselineMembers(freshAccountId(), [], "s-1")).toEqual([]);
   });
+
+  // GH #313: the prune only ever ran inside a delivery cycle, and a cycle only
+  // runs for an account that still has members — so the last member to opt out
+  // kept their baseline row for ever, and opting back in was a resume across
+  // the gap instead of a fresh baseline. It is its own operation now, callable
+  // with no cycle and with an empty member list.
+  it("prunes the members an account no longer has, down to the last one", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    const bruno = await freshUserId();
+    await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+
+    await repo.pruneMembers(accountId, [ana]);
+    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-2")).toEqual([bruno]);
+
+    // Nobody opts in any more: the account keeps no member state at all.
+    await repo.pruneMembers(accountId, []);
+    const rows = await sql`
+      select 1 from shared_mailbox_member_state where shared_account_id = ${accountId}
+    `;
+    expect(rows).toHaveLength(0);
+    expect(new Set(await repo.baselineMembers(accountId, [ana, bruno], "s-3"))).toEqual(
+      new Set([ana, bruno]),
+    );
+  });
+
+  // GH #313: a departed member's open ledger rows outlived them. The retry
+  // pass back-filled a re-joiner from copies that failed before they opted
+  // out, and orphan rows of members who never came back sat at the head of
+  // `listRetryable` (oldest first, 100 at a time) starving live members.
+  it("drops the pruned member's open ledger rows and keeps their delivered ones", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    const bruno = await freshUserId();
+    await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+    await repo.recordCopy(bruno, accountId, "delivered");
+    await repo.beginCopy(bruno, accountId, "claimed");
+    await repo.beginCopy(bruno, accountId, "broken");
+    await repo.markFailed(bruno, accountId, "broken", "copy_failed");
+    await repo.beginCopy(ana, accountId, "ana-broken");
+    await repo.markFailed(ana, accountId, "ana-broken", "copy_failed");
+
+    await repo.pruneMembers(accountId, [ana]);
+
+    // The dedup history of what he actually received survives, so a manual
+    // copy or a later opt-in is still not delivered twice.
+    expect(await repo.copyStates(bruno, accountId, ["delivered", "claimed", "broken"])).toEqual(
+      new Map([["delivered", "copied"]]),
+    );
+    // ...and the member who stayed is untouched.
+    expect(await repo.copyStates(ana, accountId, ["ana-broken"])).toEqual(
+      new Map([["ana-broken", "failed"]]),
+    );
+  });
+
+  it("lists the accounts it holds state for, so a worker can reconcile them", async () => {
+    const accountId = freshAccountId();
+    const ana = await freshUserId();
+    await repo.setCursor(accountId, "s-1");
+    await repo.baselineMembers(accountId, [ana], "s-1");
+
+    const accounts = await repo.listAccountIds();
+    expect(accounts).toContain(accountId);
+    // An account known only by its member rows is listed too: the cursor row
+    // is what a lease creates, and a prune must reach both.
+    const memberOnly = freshAccountId();
+    await repo.baselineMembers(memberOnly, [ana], "s-1");
+    expect(await repo.listAccountIds()).toContain(memberOnly);
+    expect(new Set(await repo.listAccountIds()).size).toBe((await repo.listAccountIds()).length);
+  });
 });
 
 describe("createSharedMailboxCopiesRepo — dedup ledger (GH #313)", () => {
@@ -317,14 +387,14 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     await repo.beginCopy(member, accountId, "e1");
     await repo.markFailed(member, accountId, "e1", "copy_failed");
 
-    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).toEqual([
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([
       { userId: member, emailId: "e1", attempts: 1 },
     ]);
     // A pending or a copied row is not a retry candidate.
     await repo.beginCopy(member, accountId, "e2");
     await repo.recordCopy(member, accountId, "e3");
     expect(
-      (await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).map((r) => r.emailId),
+      (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).map((r) => r.emailId),
     ).toEqual(["e1"]);
   });
 
@@ -335,7 +405,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
       await repo.beginCopy(member, accountId, "e1");
       await repo.markFailed(member, accountId, "e1", "copy_failed");
     }
-    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).toEqual([]);
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([]);
     // The row stays, as the record of a copy that will not be delivered.
     expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "failed"]]));
   });
@@ -351,10 +421,36 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     await repo.beginCopy(member, other, "e9");
     await repo.markFailed(member, other, "e9", "copy_failed");
 
-    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 2 })).toHaveLength(2);
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 2 })).toHaveLength(2);
     expect(
-      (await repo.listRetryable(other, { maxAttempts: 5, limit: 100 })).map((r) => r.emailId),
+      (await repo.listRetryable(other, { userIds: [member], maxAttempts: 5, limit: 100 })).map((r) => r.emailId),
     ).toEqual(["e9"]);
+  });
+
+  // GH #313: the batch is the oldest 100 failed rows of the account, and it
+  // used to be taken without asking WHOSE. Rows belonging to members who had
+  // opted out — or whom the current cycle is only baselining — sat at the head
+  // of it for ever, so a live member's failed copy could never reach the
+  // batch at all.
+  it("lists only the members the caller can deliver to right now", async () => {
+    const accountId = freshAccountId();
+    const departed = await freshUserId();
+    const member = await freshUserId();
+    for (const [userId, emailId] of [
+      [departed, "e-old"],
+      [member, "e-mine"],
+    ] as const) {
+      await repo.beginCopy(userId, accountId, emailId);
+      await repo.markFailed(userId, accountId, emailId, "copy_failed");
+    }
+
+    expect(
+      await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }),
+    ).toEqual([{ userId: member, emailId: "e-mine", attempts: 1 }]);
+    // Nobody deliverable is not "everybody": an empty list retries nothing.
+    expect(await repo.listRetryable(accountId, { userIds: [], maxAttempts: 5, limit: 100 })).toEqual(
+      [],
+    );
   });
 
   it("stops listing a failed copy once it finally succeeds", async () => {
@@ -365,7 +461,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     await repo.beginCopy(member, accountId, "e1");
     await repo.markCopied(member, accountId, "e1");
 
-    expect(await repo.listRetryable(accountId, { maxAttempts: 5, limit: 100 })).toEqual([]);
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([]);
     expect(await repo.hasCopy(member, accountId, "e1")).toBe(true);
   });
 });

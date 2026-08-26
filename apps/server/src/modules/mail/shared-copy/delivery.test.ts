@@ -65,12 +65,36 @@ function fakeCopiesRepo(events: string[]) {
   const cursorWrites: string[] = [];
   /** Accounts whose cycle stamped an attempt, in order. */
   const cycleAttempts: string[] = [];
+  /** The member ids each listRetryable call was scoped to. */
+  const retryQueries: string[][] = [];
   let failMarkCopied = 0;
   const leases = new Map<string, { owner: string; until: number }>();
   const leaseLog: Array<{ op: "acquire" | "renew" | "release"; owner: string; ok: boolean }> = [];
   /** Members this account has already baselined, per account. */
   const memberState = new Map<string, Map<string, string>>();
   const key = (u: string, a: string, e: string) => `${u}|${a}|${e}`;
+  /**
+   * The real prune, in miniature (see infra/repos/shared-mailbox-copies.ts):
+   * a member this account no longer has loses their baseline row AND their
+   * open ledger rows, while the confirmed ones stay as dedup history. Shared
+   * by `pruneMembers` and `baselineMembers` exactly as the repo shares it.
+   */
+  function prune(accountId: string, userIds: string[]): void {
+    const seen = memberState.get(accountId) ?? new Map<string, string>();
+    memberState.set(accountId, seen);
+    for (const known of [...seen.keys()]) {
+      if (userIds.includes(known)) continue;
+      seen.delete(known);
+      for (const id of [...states.keys()]) {
+        const [userId, account] = id.split("|") as [string, string];
+        if (userId !== known || account !== accountId) continue;
+        if (states.get(id) === "copied") continue;
+        states.delete(id);
+        attempts.delete(id);
+        errors.delete(id);
+      }
+    }
+  }
   return {
     cursors,
     cycledAt,
@@ -79,6 +103,7 @@ function fakeCopiesRepo(events: string[]) {
     errors,
     cursorWrites,
     cycleAttempts,
+    retryQueries,
     /** A copy an earlier cycle failed `attemptCount` times. */
     seedFailed(userId: string, accountId: string, emailId: string, attemptCount: number) {
       const id = key(userId, accountId, emailId);
@@ -131,12 +156,14 @@ function fakeCopiesRepo(events: string[]) {
         cycleAttempts.push(accountId);
         cycledAt.set(accountId, Date.now());
       },
+      listAccountIds: async () => [...new Set([...cursors.keys(), ...memberState.keys()])],
+      pruneMembers: async (accountId: string, userIds: string[]) => {
+        prune(accountId, userIds);
+      },
       baselineMembers: async (accountId: string, userIds: string[], state: string) => {
+        prune(accountId, userIds);
         const seen = memberState.get(accountId) ?? new Map<string, string>();
         memberState.set(accountId, seen);
-        for (const known of [...seen.keys()]) {
-          if (!userIds.includes(known)) seen.delete(known);
-        }
         const baselined: string[] = [];
         for (const userId of userIds) {
           if (seen.has(userId)) continue;
@@ -188,13 +215,15 @@ function fakeCopiesRepo(events: string[]) {
       },
       listRetryable: async (
         accountId: string,
-        options: { maxAttempts: number; limit: number },
+        options: { userIds: string[]; maxAttempts: number; limit: number },
       ) => {
+        retryQueries.push(options.userIds);
         const rows: Array<{ userId: string; emailId: string; attempts: number }> = [];
         for (const id of failedOrder) {
           if (rows.length >= options.limit) break;
           const [userId, account, emailId] = id.split("|") as [string, string, string];
           if (account !== accountId) continue;
+          if (!options.userIds.includes(userId)) continue;
           if (states.get(id) !== "failed") continue;
           const tries = attempts.get(id) ?? 0;
           if (tries >= options.maxAttempts) continue;
@@ -862,17 +891,31 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
   });
 
-  it("counts a retry that fails again and does not touch a member who is no longer opted in", async () => {
+  it("counts a retry that fails again, and prunes the open rows of a member who left", async () => {
     h.copies.seedFailed(ana.userId, SHARED, "e1", 1);
     h.copies.seedFailed(bruno.userId, SHARED, "e9", 1);
     h.refuseCopyFor.add(ana.email);
     h.pages = [{ created: [], newState: "s-2" }];
 
-    // Bruno is not in this cycle's member list, so his failed row waits.
     await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1 });
     expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
     expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(2);
-    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e9`)).toBe(1);
+    // Bruno is not in this cycle's member list — he opted out — so the
+    // baseline prune drops his open row with his baseline. Nothing can ever
+    // deliver it, and left behind it would sit at the head of the retry batch.
+    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e9`)).toBeUndefined();
+  });
+
+  // GH #313: the batch is the oldest failed rows of the ACCOUNT, capped at
+  // 100. Asking for it without naming the deliverable members let the rows of
+  // members who had left — or whom this cycle is only baselining — fill it and
+  // starve the members the cycle can actually serve.
+  it("asks for the retry batch of the deliverable members only", async () => {
+    h.copies.memberState.get(SHARED)?.delete(bruno.userId);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await run();
+    expect(h.copies.retryQueries).toEqual([[ana.userId]]);
   });
 
   it("does not retry for a member this cycle only just baselined", async () => {
