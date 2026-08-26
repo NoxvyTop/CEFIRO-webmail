@@ -1123,6 +1123,54 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(copyCalls(h).map((c) => c.by)).toEqual([bruno.email]);
   });
 
+  // GH #313: a page is replayed whenever the cursor did not advance — a lease
+  // lost mid-page, a crash before setCursor — and a `failed` row on it read
+  // exactly like an id nobody had attempted: the page re-copied it WITHOUT the
+  // Message-ID verification and outside the attempt cap, which is the
+  // duplicate the verification exists to prevent. The retry pass owns both, so
+  // a `failed` row is now the retry pass's alone.
+  it("leaves a failed row on a replayed page to the retry pass instead of copying it again", async () => {
+    // Attempts spent, so the retry pass leaves it alone: the page is the only
+    // thing that could touch this row in this cycle.
+    h.copies.seedFailed(ana.userId, SHARED, "e1", DELIVERY_RETRY_MAX_ATTEMPTS);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await expect(run([ana])).resolves.toMatchObject({ status: "delivered", copied: 0, skipped: 1 });
+    expect(copyCalls(h)).toEqual([]);
+    // Left exactly as it was: not re-copied, not re-claimed as `pending`, and
+    // its spent attempts still the record that the copy was not delivered.
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(DELIVERY_RETRY_MAX_ATTEMPTS);
+  });
+
+  it("does not copy behind the retry pass a row whose verification could not be answered", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1);
+    // The retry pass asks the member's inbox for the Message-ID and cannot be
+    // answered, so it holds off and spends the attempt instead of copying.
+    h.queryThrowsFor.add(ana.email);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1, skipped: 1 });
+    // The page must not then make the very copy the retry pass refused to make
+    // blind: that is the lost-response duplicate, one step later.
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(2);
+  });
+
+  it("hands a replayed page's failed ids to the retry pass, which verifies before it copies", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1, skipped: 1 });
+    // Asked for in the member's own inbox first, then copied exactly once —
+    // by the retry pass, with the page finding the row already `copied`.
+    expect(h.verifications.map((v) => v.messageId)).toEqual(["<mid-e1>"]);
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
+  });
+
   it("skips a member whose session no longer reaches the shared account, with a log line", async () => {
     h.pages = [{ created: ["e1"], newState: "s-2" }];
     h.inInbox.add("e1");

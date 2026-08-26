@@ -139,9 +139,11 @@ export type OutboundSample = {
 /**
  * How one automatic shared-mailbox copy ended (GH #313). Closed by
  * construction, like `OutboundOutcome`: `copied` is a confirmed Email/copy,
- * `failed` a refused or thrown one, `skipped` a message the member already
- * held a copy of (a replayed page after a crash — expected to be rare, and a
- * rising rate means cycles are being cut short), and `unresolved` a copy that
+ * `failed` a refused or thrown one, `skipped` a message of a replayed page the
+ * cycle must not copy — the member already holds a confirmed copy, or the row
+ * is `failed` and belongs to the retry pass, which owns the verification and
+ * the attempt cap (expected to be rare, and a rising rate means cycles are
+ * being cut short) — and `unresolved` a copy that
  * was claimed in the ledger but never confirmed, so the process died or the
  * database failed between the provider making the copy and the row being
  * written. Those are deliberately NOT retried — the delivery is at-most-once

@@ -611,7 +611,13 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    eso, un fallo pasajero del proveedor costaba el mensaje para siempre,
    porque el cursor ya había avanzado por encima de la página que lo traía.
    Agotados los intentos, la fila se queda como registro de una copia que no
-   se entregó.
+   se entregó. Esa fila `failed` es **solo** del paso de reintentos: si una
+   página repetida —el cursor no avanzó por un arrendamiento perdido a mitad o
+   por una caída antes de guardarlo— vuelve a traer ese id, la página lo
+   **salta** (cuenta como `skipped`) en vez de copiarlo. Copiarlo ahí lo
+   trataba como un id que nadie había intentado: sin la comprobación por
+   `Message-ID` y fuera del tope de intentos, que es exactamente el duplicado
+   que esa comprobación existe para evitar.
 
    **Antes de reintentar, se comprueba.** Un `Email/copy` cuya respuesta se
    pierde *después* de que el proveedor la haya hecho queda igual que uno que

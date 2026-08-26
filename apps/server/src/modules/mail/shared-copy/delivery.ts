@@ -71,6 +71,10 @@
  *   before the cursor moves, and the retry pass delivers them when they are
  *   back. Skipping them without a row was the same advance costing them the
  *   page for ever;
+ * - a replayed page carrying an id that already has a `failed` row → skipped
+ *   here and left to the retry pass, which is the only path that re-copies
+ *   one: it verifies against the member's inbox first and it counts the
+ *   attempt, and the page did neither;
  * - a copy claimed in the ledger but never confirmed (this process died, or
  *   the database failed, between the provider making the copy and the row
  *   being written) → `unresolved`: counted, logged once per member and page,
@@ -1123,6 +1127,21 @@ async function deliverPage(
     for (const email of entitled) {
       const state = states.get(email.id);
       if (state === "copied") {
+        counts.skipped += 1;
+        report("skipped");
+        continue;
+      }
+      if (state === "failed") {
+        // A page carrying an id that already has a `failed` row is a REPLAY:
+        // the cursor did not advance last time (a lease lost mid-page, a crash
+        // before setCursor). Copying it here treated it exactly like an id
+        // nobody had attempted — no Message-ID verification, and outside the
+        // attempt cap — so a copy the provider had committed and failed to
+        // acknowledge was delivered a second time, which is the one outcome
+        // this design refuses. The retry pass at the top of every cycle owns
+        // both the verification and the cap, and it is the only path that
+        // re-copies a `failed` row. Counted with the other replay skip above:
+        // a rising `skipped` is what says cycles are being cut short.
         counts.skipped += 1;
         report("skipped");
         continue;
