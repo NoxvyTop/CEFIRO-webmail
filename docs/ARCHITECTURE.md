@@ -490,6 +490,28 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    vuelta a JMAP para dos respuestas que el ciclo ya tenía. Lo filtrado:
    lo enviado por el grupo, los borradores y lo archivado por una regla Sieve
    no es "correo nuevo del buzón".
+
+   **Qué se entrega, exactamente.** Solo los ids que `Email/changes` devuelve
+   como **`created`**; los de `updated` y `destroyed` se ignoran a propósito.
+   De ahí salen dos casos que **no** se copian, ambos deliberados:
+
+   - un mensaje que llega a otra carpeta del buzón compartido y **se mueve
+     después** a la bandeja de entrada: para el proveedor eso es un `updated`,
+     no un `created`, así que ningún ciclo lo verá como correo nuevo;
+   - un mensaje creado en la bandeja compartida que se **mueve o se borra antes
+     de que corra el ciclo**: la pertenencia a la bandeja se evalúa al correr el
+     ciclo, no al llegar el mensaje, así que para entonces ya no está ahí y el
+     filtro del punto 3 lo descarta.
+
+   Tratar `updated` como entregable sería peor: cada marca de leído, cada
+   etiqueta y cada movimiento dentro del buzón compartido son `updated`, y
+   repartirlos convertiría una reorganización de carpetas en una avalancha de
+   copias; distinguir "movido a la bandeja" de "marcado como leído" exigiría
+   leer y recordar el estado anterior de cada mensaje, un segundo libro con su
+   propia deriva. Para los dos casos, la recuperación es la misma y explícita:
+   el botón manual **"copiar a mi bandeja"**, que copia cualquier mensaje que
+   el miembro vea en el buzón compartido, sin importar cuándo llegó ni por
+   dónde pasó.
 4. **Línea base por miembro.** El primer ciclo que ve a un miembro en una
    cuenta solo lo **registra** (`shared_mailbox_member_state`, con el estado
    del que arrancó ese ciclo) y **no le copia nada**; recibe copias a partir

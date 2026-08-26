@@ -256,8 +256,21 @@ del miembro (PULL).
   §7.2, webhook real desde el proveedor) queda como opción futura**: eliminaría
   el socket sostenido, pero exige un endpoint HTTPS entrante alcanzable desde
   el proveedor y su handshake de verificación. Sin backfill: el opt-in es hacia
-  adelante (el primer ciclo solo fija el cursor), y el correo previo se copia a
+  adelante (el primer ciclo solo fija el cursor, y a cada miembro nuevo lo
+  registra su primer ciclo sin copiarle nada), y el correo previo se copia a
   mano.
+- **Alcance exacto de "correo nuevo" (#313).** Se entregan **solo** los ids que
+  `Email/changes` marca como `created`, y la pertenencia a la bandeja se
+  evalúa **cuando corre el ciclo**. Dos consecuencias buscadas: un mensaje que
+  llega a otra carpeta y **se mueve después** a la bandeja compartida no se
+  copia (para el proveedor es `updated`, no `created`), y un mensaje creado en
+  la bandeja que se **mueve o se borra antes** de que corra el ciclo tampoco
+  (ya no está ahí cuando se filtra). Tratar `updated` como entregable haría
+  que cada marca de leído, cada etiqueta y cada movimiento dentro del buzón
+  compartido dispararan copias, y separar "movido a la bandeja" de "marcado
+  como leído" exigiría recordar el estado anterior de cada mensaje en un
+  segundo libro. Los dos casos los cubre el botón manual **"copiar a mi
+  bandeja"**, que no depende ni del cursor ni del momento de llegada.
 
 **Decisiones de producto (owner) — recomendaciones**
 - **Opt-in:** toggle por buzón compartido, **default OFF** (opt-in explícito).
