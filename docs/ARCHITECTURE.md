@@ -669,7 +669,14 @@ y `SHARED_MAILBOX_COPY_ENABLED` no desactivado, arranca **después** de que el
 listener esté escuchando, y sin opt-ins no corre ciclos ni abre suscripciones.
 En el apagado ordenado (#193) se detiene **antes** de drenar el listener
 (`createShutdown.stopWorkers`) para que ningún ciclo empiece una copia contra
-un pool que se está cerrando. Las dos fases comparten **un solo plazo**,
+un pool que se está cerrando. `stop()` espera también al **sondeo en vuelo**, y
+el sondeo vuelve a comprobar `stopped` **tras cada `await`** (listar opt-ins,
+reconciliar miembros, drenar): antes solo lo miraba al empezar, y un `stop()`
+que caía durante el listado o la reconciliación iba seguido igualmente de la
+reconciliación de suscripciones, que volvía a abrir watchers en el mapa que
+`stop()` acababa de vaciar. La reconciliación de miembros captura el fallo
+**por cuenta**, para que una poda que falla no deje sin podar a las cuentas
+siguientes. Las dos fases comparten **un solo plazo**,
 `SHUTDOWN_GRACE_MS`: lo que tarde en pararse el worker se descuenta del
 drenaje, con un suelo de 1 s (`MIN_DRAIN_MS`) para que la petición en vuelo
 pueda terminar aunque el worker se coma el plazo entero. La espera hasta el

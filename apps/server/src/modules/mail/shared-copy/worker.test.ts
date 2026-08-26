@@ -71,9 +71,14 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
   let membership: Membership[] =
     initialMembership ?? initial.map(({ userId, accountIds }) => ({ userId, accountIds }));
   let listFailure: Error | null = null;
+  /** A pending opt-in listing, when the test wants stop() to land during it. */
+  let listGate: Promise<void> | null = null;
   /** Accounts the state store already knows about, and the prunes it received. */
   let knownAccounts: string[] = ["acc-a", "acc-b"];
   let pruneFailure: Error | null = null;
+  const pruneFailFor = new Set<string>();
+  /** A pending prune per account, when the test wants stop() to land during it. */
+  const pruneGates = new Map<string, Promise<void>>();
   const prunes: Array<{ accountId: string; userIds: string[] }> = [];
   const logs: Array<{ level: string; msg: string; fields: Record<string, unknown> }> = [];
   const cycles: Array<{ sharedAccountId: string; members: SharedCopyMember[] }> = [];
@@ -98,7 +103,9 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
       markCycleAttempt: async () => {},
       listAccountIds: async () => knownAccounts,
       pruneMembers: async (accountId, userIds) => {
+        await pruneGates.get(accountId);
         if (pruneFailure) throw pruneFailure;
+        if (pruneFailFor.has(accountId)) throw new Error(`prune ${accountId} blew up`);
         prunes.push({ accountId, userIds });
       },
       baselineMembers: async () => new Map(),
@@ -125,6 +132,7 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
   const worker = createSharedCopyWorker({
     delivery,
     listOptIns: async () => {
+      await listGate;
       if (listFailure) throw listFailure;
       return optIns;
     },
@@ -186,6 +194,34 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
     },
     failPruneWith(error: Error | null) {
       pruneFailure = error;
+    },
+    failPruneFor(accountId: string) {
+      pruneFailFor.add(accountId);
+    },
+    /** Makes the next opt-in listing hang until `release()` is called. */
+    blockList(): () => void {
+      let release!: () => void;
+      listGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        listGate = null;
+        release();
+      };
+    },
+    /** Makes the prune of `accountId` hang until `release()` is called. */
+    blockPrune(accountId: string): () => void {
+      let release!: () => void;
+      pruneGates.set(
+        accountId,
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      );
+      return () => {
+        pruneGates.delete(accountId);
+        release();
+      };
     },
     /** Makes the next cycle for `accountId` hang until `release()` is called. */
     block(accountId: string): () => void {
@@ -413,6 +449,24 @@ describe("createSharedCopyWorker — membership reconcile (GH #313)", () => {
     await h.worker.stop();
   });
 
+  // GH #313: one failing prune aborted the whole reconcile, so the accounts
+  // after it in the listing were not pruned until the next poll.
+  it("logs a prune that fails for one account and still prunes the others", async () => {
+    const h = harness();
+    h.failPruneFor("acc-a");
+    h.worker.start();
+    await settle();
+
+    expect(h.prunes).toEqual([{ accountId: "acc-b", userIds: [ana.userId] }]);
+    expect(
+      h.logs.some(
+        (l) => l.level === "error" && l.msg.includes("reconcile") && l.fields.sharedAccountId === "acc-a",
+      ),
+    ).toBe(true);
+    expect(h.cycles.map((c) => c.sharedAccountId)).toEqual(["acc-a", "acc-b"]);
+    await h.worker.stop();
+  });
+
   it("reconciles nothing when the state store knows no account", async () => {
     const h = harness([]);
     h.setKnownAccounts([]);
@@ -517,6 +571,51 @@ describe("createSharedCopyWorker — stop (GH #313)", () => {
     h.worker.start();
     await settle();
     expect(h.cycles).toHaveLength(before);
+    expect(h.timers.pending.size).toBe(0);
+  });
+
+  // GH #313: `poll()` checked `stopped` only at the top. A stop() that landed
+  // while the opt-ins were being listed, or while membership was being
+  // reconciled, was followed by `reconcileWatchers()` regardless — which
+  // reopened watchers into the map stop() had just emptied, and left sockets
+  // and reconnect timers behind a "stopped" worker.
+  it("opens no watcher and runs no cycle when stop() lands while the opt-ins are being listed", async () => {
+    const h = harness();
+    const release = h.blockList();
+    h.worker.start();
+    await settle();
+
+    let stopped = false;
+    const stopping = h.worker.stop().then(() => {
+      stopped = true;
+    });
+    await settle();
+    // stop() waits for the poll in flight rather than returning under it.
+    expect(stopped).toBe(false);
+
+    release();
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(h.opened).toEqual([]);
+    expect(h.worker.watching).toEqual([]);
+    expect(h.cycles).toEqual([]);
+    expect(h.timers.pending.size).toBe(0);
+  });
+
+  it("opens no watcher and runs no cycle when stop() lands during the membership reconcile", async () => {
+    const h = harness();
+    const release = h.blockPrune("acc-a");
+    h.worker.start();
+    await settle();
+
+    const stopping = h.worker.stop();
+    release();
+    await stopping;
+    // Whatever the released poll still does, it must not reopen anything.
+    await settle();
+    expect(h.opened).toEqual([]);
+    expect(h.worker.watching).toEqual([]);
+    expect(h.cycles).toEqual([]);
     expect(h.timers.pending.size).toBe(0);
   });
 

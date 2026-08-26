@@ -39,9 +39,14 @@
  * and the lease plus the ledger are what keep a message from being copied
  * twice. The lease is taken under one id per process, minted here.
  *
- * `stop()` closes every watcher, cancels the poll and waits for the cycle in
- * flight, so the shutdown path (core/shutdown.ts stopWorkers) never drains the
- * listener under a half-finished page.
+ * `stop()` closes every watcher, cancels the poll timer and waits for the poll
+ * and the cycle in flight, so the shutdown path (core/shutdown.ts stopWorkers)
+ * never drains the listener under a half-finished page. A poll re-checks
+ * `stopped` after every await: it used to check only at the top, so a stop()
+ * that landed while the opt-ins were being listed or membership reconciled was
+ * followed by the watcher reconcile regardless, which reopened watchers into
+ * the map stop() had just emptied and left sockets and reconnect timers behind
+ * a "stopped" worker.
  *
  * Timers, the cycle and the watcher factory are injected so all of the above
  * runs under test with no clock, no JMAP and no sockets.
@@ -180,6 +185,8 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   const watchers = new Map<string, Pick<SharedMailboxWatcher, "stop">>();
   const queue = new Set<string>();
   let draining: Promise<void> | null = null;
+  /** The poll in flight, for stop() to wait on; null between polls. */
+  let polling: Promise<void> | null = null;
   let pollTimer: unknown;
 
   async function cycleFor(sharedAccountId: string): Promise<void> {
@@ -251,11 +258,47 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   async function reconcileMembers(): Promise<void> {
     const members = membershipByAccount(await input.listOptInMembership());
     for (const accountId of await delivery.copies.listAccountIds()) {
-      await delivery.copies.pruneMembers(accountId, members.get(accountId) ?? []);
+      if (stopped) return;
+      try {
+        await delivery.copies.pruneMembers(accountId, members.get(accountId) ?? []);
+      } catch (error) {
+        // Per account: one prune that fails is one member who keeps a
+        // baseline row for another five minutes, and it must not also cost
+        // every account after it in the listing its prune.
+        log("error", "shared mailbox copy: membership reconcile failed", {
+          sharedAccountId: accountId,
+          error: String(error),
+        });
+      }
     }
   }
 
+  /**
+   * Opens a watcher for `accountId` into the map — unless the worker is
+   * stopped, in which case nothing may be opened: a watcher opened after
+   * stop() emptied the map would be a socket and a reconnect timer nobody
+   * closes.
+   */
+  function openWatcherFor(accountId: string): void {
+    if (stopped) return;
+    watchers.set(
+      accountId,
+      openWatcher({
+        sharedAccountId: accountId,
+        // Reads the CURRENT membership on every election, so a watcher that
+        // outlives a member's opt-in never needs rebuilding.
+        resolveWatcher: () =>
+          electWatcher(delivery, {
+            sharedAccountId: accountId,
+            members: membership.get(accountId) ?? [],
+          }),
+        onChange: enqueue,
+      }),
+    );
+  }
+
   function reconcileWatchers(): void {
+    if (stopped) return;
     for (const [accountId, watcher] of watchers) {
       if (membership.has(accountId)) continue;
       watcher.stop();
@@ -264,35 +307,29 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
     }
     for (const accountId of membership.keys()) {
       if (watchers.has(accountId)) continue;
-      watchers.set(
-        accountId,
-        openWatcher({
-          sharedAccountId: accountId,
-          // Reads the CURRENT membership on every election, so a watcher that
-          // outlives a member's opt-in never needs rebuilding.
-          resolveWatcher: () =>
-            electWatcher(delivery, {
-              sharedAccountId: accountId,
-              members: membership.get(accountId) ?? [],
-            }),
-          onChange: enqueue,
-        }),
-      );
+      openWatcherFor(accountId);
     }
   }
 
-  async function poll(): Promise<void> {
-    if (stopped) return;
+  /**
+   * One pass: list, reconcile, cycle, schedule the next. `stopped` is
+   * re-checked after EVERY await, because stop() can land under any of them
+   * and everything after it must then be a no-op.
+   */
+  async function pollOnce(): Promise<void> {
     try {
-      membership = membersByAccount(await input.listOptIns());
+      const optIns = await input.listOptIns();
+      if (stopped) return;
+      membership = membersByAccount(optIns);
       try {
         await reconcileMembers();
       } catch (error) {
-        // Its own catch: a prune that fails is a member who keeps a baseline
-        // row for another five minutes, which must not also cost this poll its
-        // watchers and its cycles.
+        // The membership listing itself failed (a prune that fails is caught
+        // per account): a member keeps a baseline row for another five
+        // minutes, which must not also cost this poll its watchers and cycles.
         log("error", "shared mailbox copy: membership reconcile failed", { error: String(error) });
       }
+      if (stopped) return;
       reconcileWatchers();
       for (const accountId of membership.keys()) queue.add(accountId);
       await drain();
@@ -307,6 +344,15 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
       pollTimer = undefined;
       void poll();
     }, input.pollMs);
+  }
+
+  function poll(): Promise<void> {
+    if (stopped) return Promise.resolve();
+    const run = pollOnce().finally(() => {
+      if (polling === run) polling = null;
+    });
+    polling = run;
+    return run;
   }
 
   return {
@@ -326,6 +372,10 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
         watchers.delete(accountId);
       }
       queue.clear();
+      // The poll in flight first — it may still be listing or reconciling,
+      // and every step after its next await is a no-op now — then whatever
+      // a push started draining outside a poll.
+      if (polling) await polling;
       if (draining) await draining;
       if (started) log("info", "shared mailbox copy: worker stopped", {});
     },
