@@ -13,6 +13,15 @@ import { extractSentRecipients, type HarvestEmail } from "./contacts-harvest";
 // arrival harvest keep the store current from then on).
 export const SENT_RECIPIENTS_BACKFILL_LIMIT = 200;
 
+// GH #314: how long a FAILED pass suppresses the next one. This runs inline on
+// the thread route's critical path, so a user whose backfill keeps failing (a
+// Sent mailbox the JMAP server errors on, a permission problem, a store that
+// keeps throwing) would otherwise pay the whole bounded pass — a Mailbox/get
+// plus a 200-message Email/query + Email/get — on EVERY thread they open, with
+// no ceiling, for a cosmetic feature. 24 h is far longer than any transient
+// hiccup lasts and far shorter than a user's patience for a missing badge.
+export const SENT_RECIPIENTS_BACKFILL_RETRY_MS = 24 * 60 * 60 * 1000;
+
 type BackfillMailbox = { id: string; role?: string | null };
 
 /**
@@ -27,12 +36,22 @@ type BackfillMailbox = { id: string; role?: string | null };
  * thread reads racing) both run the same idempotent upsert — harmless, and
  * cheaper than a lock on a path that executes once in a user's lifetime.
  *
- * Never throws, and does NOT mark the user on failure: the thread route
- * calls this before answering, so an exception here would turn a JMAP or
- * database hiccup into a broken reader for a cosmetic feature. A failed pass
- * is logged and retried on the next thread read; only a completed pass (or an
- * account with no Sent mailbox at all, where there is nothing to backfill and
- * retrying would only repeat the role lookup forever) marks the user done.
+ * Never throws, and does NOT mark the user backfilled on failure: the thread
+ * route calls this before answering, so an exception here would turn a JMAP or
+ * database hiccup into a broken reader for a cosmetic feature. Only a completed
+ * pass (or an account with no Sent mailbox at all, where there is nothing to
+ * backfill and retrying would only repeat the role lookup forever) marks the
+ * user done.
+ *
+ * A failure IS bounded, though (GH #314, JD-2). Every pass writes
+ * `sentRecipientsBackfillAttemptedAt` BEFORE it does any work, and a user who
+ * is not yet backfilled but whose last attempt is younger than
+ * SENT_RECIPIENTS_BACKFILL_RETRY_MS is skipped. Without that marker a failure
+ * left no trace, so a persistently failing backfill re-ran the whole bounded
+ * pass inline on EVERY thread read that user made, indefinitely — the retry was
+ * unbounded in frequency even though each pass was bounded in size. Marking
+ * before rather than after is deliberate: a pass that never returns at all
+ * (a hang, a crashed process) must still cost the next read nothing.
  *
  * Two JMAP batches rather than one: the Mailbox/get role lookup is separate
  * from the Email/query + Email/get page for the same reason contacts-harvest.ts
@@ -48,9 +67,24 @@ export async function backfillSentRecipients(input: {
   ownerEmails: string[];
   sentRecipients: SentRecipientsRepo;
   userPreferences: UserPreferencesRepo;
+  /** Injectable clock for the retry window; defaults to the real one. */
+  now?: () => Date;
 }): Promise<void> {
   try {
     if ((await input.userPreferences.getSentRecipientsBackfilledAt(input.userId)) !== null) return;
+
+    const now = (input.now ?? (() => new Date()))();
+    const attemptedAt = await input.userPreferences.getSentRecipientsBackfillAttemptedAt(input.userId);
+    if (attemptedAt !== null) {
+      const previous = Date.parse(attemptedAt);
+      // An unparseable marker reads as "never attempted" rather than as
+      // "attempted at NaN", which would suppress the backfill forever.
+      if (Number.isFinite(previous) && now.getTime() - previous < SENT_RECIPIENTS_BACKFILL_RETRY_MS) {
+        return;
+      }
+    }
+    // Before any work: see the retry-window paragraph above.
+    await input.userPreferences.markSentRecipientsBackfillAttempted(input.userId, now.toISOString());
 
     const accountId = input.session.accountId;
     const roleLookup = await input.jmap.request(input.auth, input.session, [

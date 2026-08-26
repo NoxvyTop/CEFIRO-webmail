@@ -7,7 +7,11 @@ import { createUsersRepo } from "../../infra/repos/users";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
 import { createSentRecipientsRepo, type SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/jmap/client";
-import { backfillSentRecipients, SENT_RECIPIENTS_BACKFILL_LIMIT } from "./sent-recipients-backfill";
+import {
+  backfillSentRecipients,
+  SENT_RECIPIENTS_BACKFILL_LIMIT,
+  SENT_RECIPIENTS_BACKFILL_RETRY_MS,
+} from "./sent-recipients-backfill";
 
 const sql = createDb(testDatabaseUrl());
 let users: ReturnType<typeof createUsersRepo>;
@@ -71,7 +75,13 @@ function makeStubJmap(input: {
   };
 }
 
-function run(user: { userId: string; email: string }, jmap: JmapClient, repo = sentRecipients) {
+function run(
+  user: { userId: string; email: string },
+  jmap: JmapClient,
+  repo = sentRecipients,
+  // GH #314 (JD-2): the injectable clock the retry window is measured against.
+  now?: () => Date,
+) {
   return backfillSentRecipients({
     jmap,
     auth,
@@ -80,7 +90,21 @@ function run(user: { userId: string; email: string }, jmap: JmapClient, repo = s
     ownerEmails: [user.email],
     sentRecipients: repo,
     userPreferences,
+    now,
   });
+}
+
+/** Runs `fn` with the logger's console writers silenced. */
+async function quietly(fn: () => Promise<void>) {
+  const spies = [
+    vi.spyOn(console, "log").mockImplementation(() => {}),
+    vi.spyOn(console, "warn").mockImplementation(() => {}),
+  ];
+  try {
+    await fn();
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
 }
 
 // GH #314: the one-time, bounded pass over the Sent mailbox that seeds the
@@ -166,7 +190,7 @@ describe("backfillSentRecipients (GH #314)", () => {
     expect(await userPreferences.getSentRecipientsBackfilledAt(user.userId)).not.toBeNull();
   });
 
-  it("swallows a JMAP failure, logs it, and leaves the user un-backfilled so it is retried later", async () => {
+  it("swallows a JMAP failure, logs it, and leaves the user un-backfilled so it is retried after the window", async () => {
     const user = await freshUser();
     const jmap = makeStubJmap({ calls: [], throws: true });
     // The logger writes JSON lines through console.log/console.warn depending
@@ -209,5 +233,72 @@ describe("backfillSentRecipients (GH #314)", () => {
       for (const spy of spies) spy.mockRestore();
     }
     expect(await userPreferences.getSentRecipientsBackfilledAt(user.userId)).toBeNull();
+  });
+
+  // GH #314 (JD-2): a failure used to leave NO trace, so a user whose backfill
+  // fails persistently (a Sent mailbox the JMAP server errors on, a permission
+  // problem, a repo that keeps throwing) re-ran the whole bounded pass —
+  // Mailbox/get plus a 200-message Email/query + Email/get — inline on EVERY
+  // thread read they made, for a cosmetic feature, forever. The attempt marker
+  // bounds it to one pass per retry window.
+  describe("bounded retry after a failure (JD-2)", () => {
+    const T0 = new Date("2026-08-01T10:00:00.000Z");
+
+    it("makes no JMAP request at all on a read inside the retry window", async () => {
+      const user = await freshUser();
+      await quietly(async () => {
+        await run(user, makeStubJmap({ calls: [], throws: true }), sentRecipients, () => T0);
+      });
+      expect(await userPreferences.getSentRecipientsBackfilledAt(user.userId)).toBeNull();
+
+      const calls: JmapMethodCall[][] = [];
+      const working = makeStubJmap({ emails: [{ id: "s1", to: [{ email: "ana@partner.test" }] }], calls });
+      // One millisecond short of the window: still the same attempt.
+      await run(user, working, sentRecipients, () => new Date(T0.getTime() + SENT_RECIPIENTS_BACKFILL_RETRY_MS - 1));
+
+      expect(calls).toHaveLength(0);
+      expect(await userPreferences.getSentRecipientsBackfilledAt(user.userId)).toBeNull();
+    });
+
+    it("retries once the window has elapsed, and then marks the user backfilled", async () => {
+      const user = await freshUser();
+      await quietly(async () => {
+        await run(user, makeStubJmap({ calls: [], throws: true }), sentRecipients, () => T0);
+      });
+
+      const calls: JmapMethodCall[][] = [];
+      const working = makeStubJmap({ emails: [{ id: "s1", to: [{ email: "ana@partner.test" }] }], calls });
+      await run(user, working, sentRecipients, () => new Date(T0.getTime() + SENT_RECIPIENTS_BACKFILL_RETRY_MS));
+
+      expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
+      expect(await sentRecipients.has(user.userId, ["ana@partner.test"])).toEqual(
+        new Set(["ana@partner.test"]),
+      );
+      expect(await userPreferences.getSentRecipientsBackfilledAt(user.userId)).not.toBeNull();
+    });
+
+    it("records the attempt BEFORE running, so a pass that never returns is still bounded", async () => {
+      const user = await freshUser();
+      await quietly(async () => {
+        await run(user, makeStubJmap({ calls: [], throws: true }), sentRecipients, () => T0);
+      });
+      expect(await userPreferences.getSentRecipientsBackfillAttemptedAt(user.userId)).toBe(
+        T0.toISOString(),
+      );
+    });
+
+    it("keeps the attempt marker out of the preferences a client can read or write", async () => {
+      const user = await freshUser();
+      await quietly(async () => {
+        await run(user, makeStubJmap({ calls: [], throws: true }), sentRecipients, () => T0);
+      });
+      expect(Object.keys(await userPreferences.get(user.userId))).not.toContain(
+        "sentRecipientsBackfillAttemptedAt",
+      );
+    });
+
+    it("bounds the retry at 24 hours", () => {
+      expect(SENT_RECIPIENTS_BACKFILL_RETRY_MS).toBe(24 * 60 * 60 * 1000);
+    });
   });
 });

@@ -752,7 +752,12 @@ describe("GET /api/mail/threads/:threadId — sender trust (GH #314)", () => {
     expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(1);
   });
 
-  it("still serves the thread when the backfill fails, and retries it on the next read", async () => {
+  // GH #314 (JD-2): a failed backfill must not re-run inline on the very next
+  // thread read. It runs on the route's critical path for a cosmetic feature,
+  // so a persistently failing one used to cost every reader a Mailbox/get plus
+  // a 200-message page on every thread they opened, indefinitely. The attempt
+  // marker bounds it to one pass per retry window (see sent-recipients-backfill).
+  it("still serves the thread when the backfill fails, and does NOT re-run it on the next read", async () => {
     const user = await trustUser();
     const calls: JmapMethodCall[][] = [];
     const failing = makeTrustStubJmap({ calls, backfillThrows: true });
@@ -760,10 +765,16 @@ describe("GET /api/mail/threads/:threadId — sender trust (GH #314)", () => {
     const trust = await readTrust(failing, user);
     expect(trust["known-pass"]?.trust).toBe("known");
     expect(trust["backfilled-pass"]?.trust).toBe("none");
+    expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(1);
 
+    // Second read, well inside the retry window: the thread is served exactly
+    // the same way, with no backfill batch at all.
     const working = makeTrustStubJmap({ calls });
     const after = await readTrust(working, user);
-    expect(after["backfilled-pass"]?.trust).toBe("known");
+    expect(after["known-pass"]?.trust).toBe("known");
+    expect(after["backfilled-pass"]?.trust).toBe("none");
+    expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(1);
+    expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(0);
   });
 
   it("does not run the backfill, and asserts no Tier A, when no sent-recipients store is wired", async () => {

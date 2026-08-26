@@ -133,6 +133,27 @@ export function createUserPreferencesRepo(sql: Db) {
     async markSentRecipientsBackfilled(userId: string): Promise<void> {
       await this.merge(userId, { sentRecipientsBackfilledAt: new Date().toISOString() });
     },
+
+    // GH #314 (JD-2): when the backfill was last ATTEMPTED, as opposed to when
+    // it last succeeded. The pair is what bounds a persistently failing pass:
+    // without it, a failure left no trace at all, so the whole bounded pass
+    // re-ran inline on every thread read the user made, forever. Same jsonb
+    // key family and the same deliberate absence from get() and from the shared
+    // update schema as the marker above, for the same reasons — this is
+    // server-owned bookkeeping, never client state. A hand-corrupted non-string
+    // value reads as "never attempted", whose worst outcome is one more pass.
+    async getSentRecipientsBackfillAttemptedAt(userId: string): Promise<string | null> {
+      const rows = await sql<{ at: unknown }[]>`
+        select preferences -> 'sentRecipientsBackfillAttemptedAt' as at
+        from user_preferences where user_id = ${userId}
+      `;
+      const at = rows[0]?.at;
+      return typeof at === "string" && at !== "" ? at : null;
+    },
+
+    async markSentRecipientsBackfillAttempted(userId: string, at: string): Promise<void> {
+      await this.merge(userId, { sentRecipientsBackfillAttemptedAt: at });
+    },
   };
 }
 
