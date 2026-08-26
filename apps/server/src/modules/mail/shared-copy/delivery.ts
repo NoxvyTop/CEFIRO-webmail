@@ -43,6 +43,11 @@
  * - no cursor → record the current state, copy NOTHING (`baselined`): the
  *   opt-in is forward-looking, and historic mail stays reachable through the
  *   manual copy;
+ * - a member the account had not seen before → recorded as baselined NOW and
+ *   served from this very cycle, but only with the messages the shared mailbox
+ *   received from that moment on (`receivedAt >= baselined_at`, less a clock
+ *   skew margin — see DELIVERY_BASELINE_SKEW_MS). The backlog behind the
+ *   cursor, however many cycles it takes to drain, is never theirs;
  * - a cursor left behind by a cycle that ran hours or days ago → resumed like
  *   any other. Time is NOT evidence: an outage, a deploy, an account nobody
  *   could watch and a cycle whose error was swallowed are indistinguishable
@@ -116,6 +121,18 @@ export const DELIVERY_RETRY_MAX_ATTEMPTS = 5;
 export const DELIVERY_RETRY_LIMIT = 100;
 
 /**
+ * How far BEFORE a member's baseline a message may have been received and
+ * still be theirs. The provider stamps `receivedAt` with its clock and this
+ * server's database stamps `baselined_at` with its own; a provider running a
+ * few seconds behind would otherwise withhold the very message that arrived
+ * right after the opt-in, which is the message the member switched the option
+ * on for. The trade is deliberate and bounded: a message received within that
+ * minute BEFORE the opt-in is copied too, and a minute of somebody else's mail
+ * is nothing like the months a back-fill would hand over.
+ */
+export const DELIVERY_BASELINE_SKEW_MS = 60_000;
+
+/**
  * Identifies THIS process as a lease holder when no owner was injected. The
  * worker mints its own (see ./worker.ts) and passes it in; this fallback keeps
  * a directly-called cycle — a test, a one-off script — from having to.
@@ -153,15 +170,11 @@ export type SharedCopyStore = {
    */
   pruneMembers(sharedAccountId: string, userIds: string[]): Promise<void>;
   /**
-   * Records the members this account had not seen before at `baselinedState`,
-   * forgets the ones no longer listed, and answers with the newly recorded
-   * ids — the members this cycle must NOT deliver to.
+   * Records the members this account had not seen before as baselined NOW,
+   * forgets the ones no longer listed, and answers with every listed member's
+   * baseline — the moment from which each is entitled to copies.
    */
-  baselineMembers(
-    sharedAccountId: string,
-    userIds: string[],
-    baselinedState: string,
-  ): Promise<string[]>;
+  baselineMembers(sharedAccountId: string, userIds: string[]): Promise<Map<string, Date>>;
   /** Ledger status of the ids this member has a row for, one query per page. */
   copyStates(
     userId: string,
@@ -170,14 +183,16 @@ export type SharedCopyStore = {
   ): Promise<Map<string, SharedCopyStatus>>;
   /**
    * Claims the copy as `pending`, before the Email/copy is issued, recording
-   * the source's Message-ID when the caller read one — that is what a later
-   * retry checks against the member's inbox.
+   * the source's Message-ID and receivedAt when the caller read them — the
+   * first is what a later retry checks against the member's inbox, the second
+   * what it places against the member's baseline.
    */
   beginCopy(
     userId: string,
     sharedAccountId: string,
     emailId: string,
     messageId?: string | null,
+    receivedAt?: Date | null,
   ): Promise<void>;
   /** Confirms a copy the provider acknowledged. */
   markCopied(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
@@ -196,7 +211,13 @@ export type SharedCopyStore = {
     sharedAccountId: string,
     options: { userIds: string[]; maxAttempts: number; limit: number },
   ): Promise<
-    Array<{ userId: string; emailId: string; attempts: number; messageId: string | null }>
+    Array<{
+      userId: string;
+      emailId: string;
+      attempts: number;
+      messageId: string | null;
+      receivedAt: Date | null;
+    }>
   >;
   acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
   renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
@@ -356,14 +377,12 @@ async function baseline(
 ): Promise<DeliveryCycleResult> {
   const state = await currentEmailState(watcher, deps, sharedAccountId);
   await deps.copies.setCursor(sharedAccountId, state);
-  // The members are baselined at the same state the account is: a cycle that
-  // copies nothing must still leave every member "seen from here", or the
-  // next cycle would baseline them all over again and delay their first copy
-  // by another interval.
+  // The members are baselined alongside the account: a cycle that copies
+  // nothing must still leave every member "entitled from here", so the mail
+  // arriving from this moment on is theirs on the next cycle.
   await deps.copies.baselineMembers(
     sharedAccountId,
     members.map((member) => member.userId),
-    state,
   );
   (deps.log ?? defaultLog)(reason === "no_cursor" ? "info" : "warn", "shared mailbox copy: baselined", {
     sharedAccountId,
@@ -378,15 +397,26 @@ type ChangesPage = { newState: string; hasMoreChanges: boolean; created: string[
 
 /**
  * A message of the page that is deliverable, with what the copy needs of it:
- * its keywords (carried into the copy) and its RFC 5322 Message-ID (recorded
- * with the claim, so a retry can ask whether the copy already exists). Null
- * when the source has no Message-ID header — rare, but legal.
+ * its keywords (carried into the copy), its RFC 5322 Message-ID (recorded
+ * with the claim, so a retry can ask whether the copy already exists — null
+ * when the source has no Message-ID header, rare but legal) and when the
+ * shared mailbox received it (what each member's baseline is compared with).
  */
 type DeliverableEmail = {
   id: string;
   keywords: Record<string, boolean>;
   messageId: string | null;
+  receivedAt: Date;
 };
+
+/**
+ * Whether a message received at `receivedAt` is OLDER than what a member
+ * baselined at `baselinedAt` is entitled to — the one rule that keeps an
+ * opt-in from back-filling, applied to pages and retries alike.
+ */
+function predatesBaseline(receivedAt: Date, baselinedAt: Date): boolean {
+  return receivedAt.getTime() < baselinedAt.getTime() - DELIVERY_BASELINE_SKEW_MS;
+}
 
 async function fetchChanges(
   deps: DeliveryDeps,
@@ -437,14 +467,19 @@ async function inboxOnly(
     watcher.session,
     [
       ["Mailbox/query", { accountId: sharedAccountId, filter: { role: "inbox" } }, "mbx"],
-      // `keywords` and `messageId` ride along with the `mailboxIds` this read
-      // needs anyway: the first carries the source's flags into each copy, the
-      // second is recorded with the claim so a retry can ask whether the copy
-      // already exists. Without them, every (member, message) pair paid a round
-      // trip for answers that are identical for all of them.
+      // `keywords`, `messageId` and `receivedAt` ride along with the
+      // `mailboxIds` this read needs anyway: the first carries the source's
+      // flags into each copy, the second is recorded with the claim so a retry
+      // can ask whether the copy already exists, the third is what every
+      // member's baseline is compared with. Without them, every (member,
+      // message) pair paid a round trip for answers identical for all of them.
       [
         "Email/get",
-        { accountId: sharedAccountId, ids, properties: ["mailboxIds", "keywords", "messageId"] },
+        {
+          accountId: sharedAccountId,
+          ids,
+          properties: ["mailboxIds", "keywords", "messageId", "receivedAt"],
+        },
         "src",
       ],
     ],
@@ -476,9 +511,27 @@ async function inboxOnly(
        * provider does not return the property at all.
        */
       messageId?: string[] | null;
+      /** RFC 8621 §4.1.1 UTCDate, server-set and mandatory. */
+      receivedAt?: unknown;
     }>;
   }).list ?? [];
   const deliverable = list.filter((email) => email.mailboxIds?.[inboxId] === true);
+  const receivedAts = new Map<string, Date>();
+  for (const email of deliverable) {
+    const receivedAt =
+      typeof email.receivedAt === "string" ? new Date(email.receivedAt) : new Date(Number.NaN);
+    if (Number.isNaN(receivedAt.getTime())) {
+      // Without it no message on the page can be placed against any member's
+      // baseline, and guessing either way is wrong: delivering would hand a
+      // joiner the backlog, withholding would lose the mail for everybody.
+      // Like an unresolvable inbox, this fails the cycle and keeps the cursor,
+      // so the page is retried rather than skipped.
+      throw new Error(
+        `shared mailbox copy: Email/get returned no receivedAt for ${email.id} in account ${sharedAccountId}`,
+      );
+    }
+    receivedAts.set(email.id, receivedAt);
+  }
   if (!warned.noMessageId && deliverable.some((email) => email.messageId === undefined)) {
     // Absent, not null: the provider refused or ignored the property. Every
     // claim of this cycle records no Message-ID, so a retry of any of them
@@ -494,6 +547,7 @@ async function inboxOnly(
     id: email.id,
     keywords: email.keywords ?? {},
     messageId: email.messageId?.[0] ?? null,
+    receivedAt: receivedAts.get(email.id)!,
   }));
 }
 
@@ -551,12 +605,14 @@ async function copyOne(
   emailId: string,
   counts: DeliveryCounts,
   /**
-   * The source's RFC 5322 Message-ID, read with the page, recorded on the
-   * claim so a retry can ask whether this copy already exists. Null when the
-   * source has none, and on the retry pass — which has the row's own value
-   * already and must not overwrite it.
+   * The source's RFC 5322 Message-ID and receivedAt, read with the page and
+   * recorded on the claim so a retry can ask whether this copy already exists
+   * and place it against the member's baseline. Null when the source has no
+   * Message-ID, and both null on the retry pass — which has the row's own
+   * values already and must not overwrite them.
    */
   messageId: string | null,
+  receivedAt: Date | null,
   /**
    * What the cycle already knows about this copy: the member's inbox (resolved
    * once per cycle) and the source's keywords (read with the page). Absent on
@@ -573,7 +629,7 @@ async function copyOne(
   // copy on the next cycle and deliver the message twice. A claim that
   // survives without a confirmation is read as "may have been copied" and
   // never copied again.
-  await deps.copies.beginCopy(member.userId, sharedAccountId, emailId, messageId);
+  await deps.copies.beginCopy(member.userId, sharedAccountId, emailId, messageId, receivedAt);
   try {
     const result = await copyEmailToPersonalInbox({
       jmap: deps.jmap,
@@ -679,14 +735,18 @@ async function renewLeaseOrLose(
  * carried it.
  *
  * Only members this cycle is delivering to are retried — someone who opted
- * out, or whom this cycle only just baselined, is left exactly as they are —
- * and each retry goes through the same copy path as a fresh one, ledger
- * included, so a retry that succeeds is a confirmed copy and one that fails
- * again just spends another attempt.
+ * out is left exactly as they are — and each retry goes through the same copy
+ * path as a fresh one, ledger included, so a retry that succeeds is a
+ * confirmed copy and one that fails again just spends another attempt.
  *
  * The restriction is pushed into the QUERY, not applied to its answer: the
  * batch is the oldest hundred failed rows of the account, so rows nobody can
  * deliver used to fill it and starve the members being served.
+ *
+ * The member baseline rule applies here exactly as on a page: a row whose
+ * source predates the member's baseline (a re-joiner's leftover, or a row
+ * written by hand) is not delivered and spends an attempt instead, so it ages
+ * out rather than holding the head of the batch.
  *
  * Every retry that CAN be verified is verified first (see `alreadyCopied`): a
  * copy the provider committed and then failed to acknowledge is recorded
@@ -696,6 +756,7 @@ async function retryFailed(
   deps: DeliveryDeps,
   sharedAccountId: string,
   members: SharedCopyMember[],
+  baselines: Map<string, Date>,
   counts: DeliveryCounts,
   owner: string,
   inboxes: Map<string, string | null>,
@@ -710,11 +771,12 @@ async function retryFailed(
   });
   if (retryable.length === 0) return true;
 
-  const byMember = new Map<string, Array<{ emailId: string; messageId: string | null }>>();
+  type RetryRow = { emailId: string; messageId: string | null; receivedAt: Date | null };
+  const byMember = new Map<string, RetryRow[]>();
   for (const row of retryable) {
     byMember.set(row.userId, [
       ...(byMember.get(row.userId) ?? []),
-      { emailId: row.emailId, messageId: row.messageId },
+      { emailId: row.emailId, messageId: row.messageId, receivedAt: row.receivedAt },
     ]);
   }
   for (const member of members) {
@@ -727,7 +789,19 @@ async function retryFailed(
       userId: member.userId,
       emailIds: rows.length,
     });
+    const baselinedAt = baselineOf(baselines, member);
     for (const row of rows) {
+      if (row.receivedAt && predatesBaseline(row.receivedAt, baselinedAt)) {
+        await recordFailure(
+          deps,
+          sharedAccountId,
+          member,
+          row.emailId,
+          "predates the member's opt-in baseline",
+          counts,
+        );
+        continue;
+      }
       const verdict = await alreadyCopied(deps, member, resolved, row.messageId, inboxes);
       if (verdict === "unknown") {
         // The provider could not answer, so nothing is known about whether the
@@ -752,7 +826,7 @@ async function retryFailed(
         }
         continue;
       }
-      await copyOne(deps, sharedAccountId, member, resolved, row.emailId, counts, null);
+      await copyOne(deps, sharedAccountId, member, resolved, row.emailId, counts, null, null);
     }
     if (!(await renewLeaseOrLose(deps, sharedAccountId, owner, { userId: member.userId }))) {
       return false;
@@ -818,6 +892,17 @@ async function alreadyCopied(
 }
 
 /**
+ * The moment this member became entitled to copies. Every member of a cycle
+ * has one by construction — `baselineMembers` answers for every id it was
+ * given — so a missing entry can only be a store that answered less than it
+ * was asked; treated as "baselined now", the direction that back-fills
+ * nothing.
+ */
+function baselineOf(baselines: Map<string, Date>, member: SharedCopyMember): Date {
+  return baselines.get(member.userId) ?? new Date();
+}
+
+/**
  * One page's copies for every deliverable member. Answers whether the cycle
  * still holds the account's lease: false means another replica took the
  * account over mid-page and this one stopped where it was, with the cursor
@@ -827,6 +912,7 @@ async function deliverPage(
   deps: DeliveryDeps,
   sharedAccountId: string,
   members: SharedCopyMember[],
+  baselines: Map<string, Date>,
   emails: DeliverableEmail[],
   counts: DeliveryCounts,
   inboxes: Map<string, string | null>,
@@ -834,14 +920,32 @@ async function deliverPage(
 ): Promise<boolean> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
-  const emailIds = emails.map((email) => email.id);
   for (const member of members) {
+    // The member's share of the page: what the shared mailbox received from
+    // their baseline on. The rest is the backlog their opt-in never covered,
+    // and it is filtered BEFORE the ledger is asked, so a message they are not
+    // entitled to costs neither a query nor a row.
+    const baselinedAt = baselineOf(baselines, member);
+    const entitled = emails.filter((email) => !predatesBaseline(email.receivedAt, baselinedAt));
+    if (entitled.length < emails.length) {
+      log("debug", "shared mailbox copy: messages before the member's baseline withheld", {
+        sharedAccountId,
+        userId: member.userId,
+        withheld: emails.length - entitled.length,
+        baselinedAt: baselinedAt.toISOString(),
+      });
+    }
+    if (entitled.length === 0) continue;
     const resolved = await resolveMember(deps, sharedAccountId, member);
     if (!resolved) continue;
-    const states = await deps.copies.copyStates(member.userId, sharedAccountId, emailIds);
+    const states = await deps.copies.copyStates(
+      member.userId,
+      sharedAccountId,
+      entitled.map((email) => email.id),
+    );
     const unresolved: string[] = [];
     let personalInboxId: string | null | undefined;
-    for (const email of emails) {
+    for (const email of entitled) {
       const state = states.get(email.id);
       if (state === "copied") {
         counts.skipped += 1;
@@ -870,6 +974,7 @@ async function deliverPage(
         email.id,
         counts,
         email.messageId,
+        email.receivedAt,
         personalInboxId === null ? undefined : { personalInboxId, keywords: email.keywords },
       );
     }
@@ -923,25 +1028,17 @@ async function deliver(
   // five pages a cycle — it never cancels it.
   let cursor = state.emailState;
 
-  // Members this account had never seen are recorded at the state this cycle
-  // starts from and served from the NEXT one: an opt-in is forward-looking,
-  // and delivering to a member who joined mid-cycle would hand them every
-  // message the account has seen since it was first baselined.
-  const joining = new Set(
-    await deps.copies.baselineMembers(
-      sharedAccountId,
-      members.map((member) => member.userId),
-      cursor,
-    ),
+  // Members this account had never seen are recorded as baselined NOW, and
+  // every member — new or not — is served this cycle with exactly the messages
+  // received from their own baseline on. An opt-in is forward-looking, and the
+  // timestamp is what makes it so: not a one-cycle exclusion, which let the
+  // backlog reach a joiner from the second cycle and cost them the mail that
+  // arrived during the first.
+  const baselines = await deps.copies.baselineMembers(
+    sharedAccountId,
+    members.map((member) => member.userId),
   );
-  const deliverTo = members.filter((member) => !joining.has(member.userId));
-  if (joining.size > 0) {
-    log("info", "shared mailbox copy: members baselined, deliverable next cycle", {
-      sharedAccountId,
-      baselined: joining.size,
-      state: cursor,
-    });
-  }
+  const deliverTo = members;
 
   const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0 };
   // One personal-inbox lookup per member for the whole cycle, pages included.
@@ -953,7 +1050,15 @@ async function deliver(
   // cursor has already moved past the pages that carried them, so this pass is
   // the only thing that still can deliver them — and doing it first keeps a
   // transient failure from ageing out behind a busy mailbox.
-  let leaseLost = !(await retryFailed(deps, sharedAccountId, deliverTo, counts, owner, inboxes));
+  let leaseLost = !(await retryFailed(
+    deps,
+    sharedAccountId,
+    deliverTo,
+    baselines,
+    counts,
+    owner,
+    inboxes,
+  ));
 
   let pages = 0;
   let truncated = false;
@@ -973,7 +1078,16 @@ async function deliver(
       const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created, warned);
       if (
         deliverable.length > 0 &&
-        !(await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts, inboxes, owner))
+        !(await deliverPage(
+          deps,
+          sharedAccountId,
+          deliverTo,
+          baselines,
+          deliverable,
+          counts,
+          inboxes,
+          owner,
+        ))
       ) {
         // The lease went mid-page, so this page is only half delivered — and
         // the cursor deliberately stays where it is. Whoever holds the account

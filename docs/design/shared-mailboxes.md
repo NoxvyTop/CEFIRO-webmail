@@ -256,9 +256,12 @@ del miembro (PULL).
   §7.2, webhook real desde el proveedor) queda como opción futura**: eliminaría
   el socket sostenido, pero exige un endpoint HTTPS entrante alcanzable desde
   el proveedor y su handshake de verificación. Sin backfill: el opt-in es hacia
-  adelante (el primer ciclo solo fija el cursor, y a cada miembro nuevo lo
-  registra su primer ciclo sin copiarle nada), y el correo previo se copia a
-  mano. Al desactivar la opción, el worker borra en el siguiente sondeo —no en
+  adelante (el primer ciclo solo fija el cursor; a cada miembro nuevo lo
+  registra su primer ciclo con la hora, `baselined_at`, y desde ese ciclo
+  recibe solo lo que el buzón recibió a partir de esa hora —`receivedAt`, con
+  60 s de margen de reloj—, nunca el atraso anterior, tarde lo que tarde el
+  cursor en drenarlo), y el correo previo se copia a mano. Al desactivar la
+  opción, el worker borra en el siguiente sondeo —no en
   el siguiente ciclo, que un buzón sin miembros ya no tiene— el registro del
   miembro y las copias que le quedaban pendientes o fallidas de ese buzón,
   conservando las ya entregadas como historial anti-duplicado; volver a

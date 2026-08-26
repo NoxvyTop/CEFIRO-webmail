@@ -11,6 +11,7 @@ import {
 } from "../../../infra/jmap/client";
 import type { MailSessionResult } from "../context";
 import {
+  DELIVERY_BASELINE_SKEW_MS,
   DELIVERY_MAX_PAGES,
   DELIVERY_RETRY_MAX_ATTEMPTS,
   electWatcher,
@@ -63,6 +64,8 @@ function fakeCopiesRepo(events: string[]) {
   const errors = new Map<string, string>();
   /** The source Message-ID each ledger row carries, exactly like the column. */
   const messageIds = new Map<string, string | null>();
+  /** The source receivedAt each ledger row carries, exactly like the column. */
+  const receivedAts = new Map<string, Date | null>();
   /** Insertion order of the failed rows, standing in for `order by updated_at`. */
   const failedOrder: string[] = [];
   const cursorWrites: string[] = [];
@@ -73,8 +76,8 @@ function fakeCopiesRepo(events: string[]) {
   let failMarkCopied = 0;
   const leases = new Map<string, { owner: string; until: number }>();
   const leaseLog: Array<{ op: "acquire" | "renew" | "release"; owner: string; ok: boolean }> = [];
-  /** Members this account has already baselined, per account. */
-  const memberState = new Map<string, Map<string, string>>();
+  /** Members this account has already baselined, per account, and from when. */
+  const memberState = new Map<string, Map<string, Date>>();
   const key = (u: string, a: string, e: string) => `${u}|${a}|${e}`;
   /**
    * The real prune, in miniature (see infra/repos/shared-mailbox-copies.ts):
@@ -83,7 +86,7 @@ function fakeCopiesRepo(events: string[]) {
    * by `pruneMembers` and `baselineMembers` exactly as the repo shares it.
    */
   function prune(accountId: string, userIds: string[]): void {
-    const seen = memberState.get(accountId) ?? new Map<string, string>();
+    const seen = memberState.get(accountId) ?? new Map<string, Date>();
     memberState.set(accountId, seen);
     for (const known of [...seen.keys()]) {
       if (userIds.includes(known)) continue;
@@ -108,9 +111,11 @@ function fakeCopiesRepo(events: string[]) {
     cycleAttempts,
     retryQueries,
     messageIds,
+    receivedAts,
     /**
      * A copy an earlier cycle failed `attemptCount` times, with the source's
-     * Message-ID as that cycle recorded it (null when the source had none).
+     * Message-ID as that cycle recorded it (null when the source had none) and
+     * its receivedAt (default: just now, i.e. after any seeded baseline).
      */
     seedFailed(
       userId: string,
@@ -118,12 +123,14 @@ function fakeCopiesRepo(events: string[]) {
       emailId: string,
       attemptCount: number,
       messageId: string | null = `<mid-${emailId}>`,
+      receivedAt: Date | null = new Date(),
     ) {
       const id = key(userId, accountId, emailId);
       states.set(id, "failed");
       attempts.set(id, attemptCount);
       errors.set(id, "copy_failed");
       messageIds.set(id, messageId);
+      receivedAts.set(id, receivedAt);
       if (!failedOrder.includes(id)) failedOrder.push(id);
     },
     leases,
@@ -154,11 +161,18 @@ function fakeCopiesRepo(events: string[]) {
     baselined(accountId: string): string[] {
       return [...(memberState.get(accountId)?.keys() ?? [])];
     },
-    /** Members baselined by an earlier cycle, i.e. deliverable from now on. */
-    seedMembers(accountId: string, userIds: string[], state = "s-0") {
-      const seen = memberState.get(accountId) ?? new Map<string, string>();
+    /** When this member was baselined for the account, if at all. */
+    baselineOf(accountId: string, userId: string): Date | undefined {
+      return memberState.get(accountId)?.get(userId);
+    },
+    /**
+     * Members baselined by an earlier cycle at `at` (default: a minute ago, so
+     * a message received "now" is theirs to receive).
+     */
+    seedMembers(accountId: string, userIds: string[], at = new Date(Date.now() - 60_000)) {
+      const seen = memberState.get(accountId) ?? new Map<string, Date>();
       memberState.set(accountId, seen);
-      for (const userId of userIds) seen.set(userId, state);
+      for (const userId of userIds) seen.set(userId, at);
     },
     repo: {
       getCursor: async (accountId: string) => cursors.get(accountId) ?? null,
@@ -174,17 +188,17 @@ function fakeCopiesRepo(events: string[]) {
       pruneMembers: async (accountId: string, userIds: string[]) => {
         prune(accountId, userIds);
       },
-      baselineMembers: async (accountId: string, userIds: string[], state: string) => {
+      baselineMembers: async (accountId: string, userIds: string[]) => {
         prune(accountId, userIds);
-        const seen = memberState.get(accountId) ?? new Map<string, string>();
+        const seen = memberState.get(accountId) ?? new Map<string, Date>();
         memberState.set(accountId, seen);
-        const baselined: string[] = [];
+        const now = new Date();
+        const baselines = new Map<string, Date>();
         for (const userId of userIds) {
-          if (seen.has(userId)) continue;
-          seen.set(userId, state);
-          baselined.push(userId);
+          if (!seen.has(userId)) seen.set(userId, now);
+          baselines.set(userId, seen.get(userId)!);
         }
-        return baselined;
+        return baselines;
       },
       setCursor: async (accountId: string, state: string) => {
         cursors.set(accountId, state);
@@ -206,11 +220,13 @@ function fakeCopiesRepo(events: string[]) {
         accountId: string,
         emailId: string,
         messageId?: string | null,
+        receivedAt?: Date | null,
       ) => {
         events.push(`ledger:begin:${userId}:${emailId}`);
         const id = key(userId, accountId, emailId);
-        // Never erased by a claim that does not know it (the retry pass).
+        // Never erased by a claim that does not know them (the retry pass).
         if (messageId != null || !messageIds.has(id)) messageIds.set(id, messageId ?? null);
+        if (receivedAt != null || !receivedAts.has(id)) receivedAts.set(id, receivedAt ?? null);
         if (states.get(id) === "copied") return;
         states.set(id, "pending");
       },
@@ -245,6 +261,7 @@ function fakeCopiesRepo(events: string[]) {
           emailId: string;
           attempts: number;
           messageId: string | null;
+          receivedAt: Date | null;
         }> = [];
         for (const id of failedOrder) {
           if (rows.length >= options.limit) break;
@@ -254,7 +271,13 @@ function fakeCopiesRepo(events: string[]) {
           if (states.get(id) !== "failed") continue;
           const tries = attempts.get(id) ?? 0;
           if (tries >= options.maxAttempts) continue;
-          rows.push({ userId, emailId, attempts: tries, messageId: messageIds.get(id) ?? null });
+          rows.push({
+            userId,
+            emailId,
+            attempts: tries,
+            messageId: messageIds.get(id) ?? null,
+            receivedAt: receivedAts.get(id) ?? null,
+          });
         }
         return rows;
       },
@@ -311,6 +334,10 @@ type Harness = {
   messageIdFor: Map<string, string[] | null>;
   /** A provider that never returns `messageId`, however it is asked. */
   omitMessageId: boolean;
+  /** When the shared account received each message (default: now, at read time). */
+  receivedAtFor: Map<string, Date>;
+  /** A provider that answers the page read without `receivedAt` (an RFC 8621 violation). */
+  omitReceivedAt: boolean;
   /** `${member email}|${Message-ID}` pairs already sitting in that member's inbox. */
   personalCopies: Set<string>;
   /** Members whose personal Email/query throws. */
@@ -343,6 +370,8 @@ function harness(): Harness {
     noPersonalInboxFor: new Set(),
     messageIdFor: new Map(),
     omitMessageId: false,
+    receivedAtFor: new Map(),
+    omitReceivedAt: false,
     personalCopies: new Set(),
     queryThrowsFor: new Set(),
     verifications: [],
@@ -397,6 +426,9 @@ function harness(): Harness {
                     : {}),
                   ...(properties.includes("messageId") && !h.omitMessageId
                     ? { messageId: h.messageIdFor.has(id) ? h.messageIdFor.get(id) : [`<mid-${id}>`] }
+                    : {}),
+                  ...(properties.includes("receivedAt") && !h.omitReceivedAt
+                    ? { receivedAt: (h.receivedAtFor.get(id) ?? new Date()).toISOString() }
                     : {}),
                 })),
               },
@@ -737,22 +769,79 @@ describe("runDeliveryCycle — resuming after a gap and per-member baseline (GH 
     expect(h.copies.cycleAttempts).toEqual([]);
   });
 
-  it("gives a member who joined an active account nothing this cycle and everything the next", async () => {
+  // GH #313: the joiner's baseline used to be an opaque Email state that was
+  // recorded and never compared, so it only ever excluded the joiner from ONE
+  // cycle — and an account with a backlog longer than that cycle's page cap
+  // handed them the rest of the pre-opt-in mail from the next cycle on. The
+  // baseline is a timestamp now, compared against every message's receivedAt.
+  it("gives a joiner only the mail received after their opt-in, across a backlog of several cycles", async () => {
+    const now = Date.now();
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId], new Date(now - 4 * 3_600_000));
+    // Bruno opts in right now, with three hours of undelivered backlog behind
+    // the cursor: two pages this cycle, one more (plus fresh mail) the next.
+    h.receivedAtFor.set("e1", new Date(now - 3 * 3_600_000));
+    h.receivedAtFor.set("e2", new Date(now - 2 * 3_600_000));
+    h.receivedAtFor.set("e3", new Date(now - 3_600_000));
+    h.receivedAtFor.set("e4", new Date(now + 5_000));
+    h.inInbox.add("e1").add("e2").add("e3").add("e4");
+    h.pages = [
+      { created: ["e1"], newState: "s-2", hasMoreChanges: true },
+      { created: ["e2"], newState: "s-3" },
+    ];
+
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 2, pages: 2 });
+    expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email, ana.email]);
+    expect(h.copies.baselineOf(SHARED, bruno.userId)!.getTime()).toBeGreaterThanOrEqual(now);
+
+    h.pages = [{ created: ["e3", "e4"], newState: "s-4" }];
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 3 });
+    expect(copyCalls(h).filter((c) => c.by === bruno.email).map((c) => c.emailId)).toEqual(["e4"]);
+    expect(copyCalls(h).filter((c) => c.by === ana.email).map((c) => c.emailId)).toEqual([
+      "e1",
+      "e2",
+      "e3",
+      "e4",
+    ]);
+  });
+
+  it("delivers mail that arrives during the very cycle a member joins", async () => {
     h.copies.seedCursor(SHARED, "s-1");
     h.copies.seedMembers(SHARED, [ana.userId]); // bruno opts in right now
+    h.receivedAtFor.set("e1", new Date(Date.now() + 1_000));
     h.pages = [{ created: ["e1"], newState: "s-2" }];
     h.inInbox.add("e1");
 
-    // The joining cycle delivers to ana only, and records bruno's baseline.
-    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 1 });
-    expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email]);
-    expect(new Set(h.copies.baselined(SHARED))).toEqual(new Set([ana.userId, bruno.userId]));
-
-    // The next cycle treats him like everybody else.
-    h.pages = [{ created: ["e2"], newState: "s-3" }];
-    h.inInbox.add("e2");
+    // No one-cycle exclusion: it would cost the joiner exactly this message.
     await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 2 });
-    expect(copyCalls(h).filter((c) => c.by === bruno.email).map((c) => c.emailId)).toEqual(["e2"]);
+    expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email, bruno.email]);
+  });
+
+  it("allows a minute of clock skew between the provider and the database", async () => {
+    const now = Date.now();
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId], new Date(now));
+    h.receivedAtFor.set("e-skew", new Date(now - DELIVERY_BASELINE_SKEW_MS + 5_000));
+    h.receivedAtFor.set("e-older", new Date(now - DELIVERY_BASELINE_SKEW_MS - 5_000));
+    h.pages = [{ created: ["e-skew", "e-older"], newState: "s-2" }];
+    h.inInbox.add("e-skew").add("e-older");
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e-skew"]);
+  });
+
+  it("fails the cycle, keeping the cursor, when the provider returns no receivedAt", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId]);
+    h.omitReceivedAt = true;
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    // Without it no message can be placed against any baseline, so — like an
+    // unresolvable inbox — the page is retried rather than guessed at.
+    await expect(run([ana])).rejects.toThrow(/receivedAt/);
+    expect(copyCalls(h)).toEqual([]);
+    expect(h.copies.cursors.get(SHARED)).toBe("s-1");
   });
 
   it("baselines every member of an account whose first cycle only recorded the state", async () => {
@@ -766,8 +855,9 @@ describe("runDeliveryCycle — resuming after a gap and per-member baseline (GH 
   });
 
   it("re-baselines a member who opted out and back in, instead of back-filling the gap", async () => {
+    const now = Date.now();
     h.copies.seedCursor(SHARED, "s-1");
-    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId], new Date(now - 3_600_000));
 
     // Bruno opts out: the cycle runs for ana alone and forgets him.
     h.pages = [{ created: ["e1"], newState: "s-2" }];
@@ -775,16 +865,14 @@ describe("runDeliveryCycle — resuming after a gap and per-member baseline (GH 
     await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
     expect(h.copies.baselined(SHARED)).toEqual([ana.userId]);
 
-    // He opts back in: this cycle only re-baselines him, so the mail that
-    // arrived while he was out is not copied to him.
-    h.pages = [{ created: ["e2"], newState: "s-3" }];
-    h.inInbox.add("e2");
-    await expect(run()).resolves.toMatchObject({ copied: 1 });
-    expect(copyCalls(h).filter((c) => c.by === bruno.email)).toEqual([]);
-
-    h.pages = [{ created: ["e3"], newState: "s-4" }];
-    h.inInbox.add("e3");
-    await expect(run()).resolves.toMatchObject({ copied: 2 });
+    // He opts back in with a fresh baseline: the mail that arrived while he
+    // was out is not copied to him, the mail arriving from now on is.
+    h.receivedAtFor.set("e2", new Date(now - 1_800_000));
+    h.receivedAtFor.set("e3", new Date(now + 1_000));
+    h.pages = [{ created: ["e2", "e3"], newState: "s-3" }];
+    h.inInbox.add("e2").add("e3");
+    await expect(run()).resolves.toMatchObject({ copied: 3 });
+    expect(h.copies.baselineOf(SHARED, bruno.userId)!.getTime()).toBeGreaterThanOrEqual(now);
     expect(copyCalls(h).filter((c) => c.by === bruno.email).map((c) => c.emailId)).toEqual(["e3"]);
   });
 });
@@ -899,8 +987,9 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
       ids: ["e-inbox", "e-sent", "e-draft"],
       // `keywords` rides along with the classification read, so no copy needs
       // a read of its own to preserve the source's flags; `messageId` is what
-      // lets a retry ask whether the copy was already made.
-      properties: ["mailboxIds", "keywords", "messageId"],
+      // lets a retry ask whether the copy was already made; `receivedAt` is
+      // what each member's baseline is compared against.
+      properties: ["mailboxIds", "keywords", "messageId", "receivedAt"],
     });
   });
 
@@ -1125,26 +1214,29 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
   });
 
   // GH #313: the batch is the oldest failed rows of the ACCOUNT, capped at
-  // 100. Asking for it without naming the deliverable members let the rows of
-  // members who had left — or whom this cycle is only baselining — fill it and
-  // starve the members the cycle can actually serve.
-  it("asks for the retry batch of the deliverable members only", async () => {
-    h.copies.memberState.get(SHARED)?.delete(bruno.userId);
+  // 100. Asking for it without naming this cycle's members let the rows of
+  // members who had left fill it and starve the members the cycle can
+  // actually serve.
+  it("asks for the retry batch of this cycle's members only", async () => {
     h.pages = [{ created: [], newState: "s-2" }];
 
-    await run();
+    await run([ana]);
     expect(h.copies.retryQueries).toEqual([[ana.userId]]);
   });
 
-  it("does not retry for a member this cycle only just baselined", async () => {
-    // A member who opted out and back in: their old failed rows are not a
-    // reason to deliver to them during the cycle that re-baselines them.
-    h.copies.memberState.get(SHARED)?.delete(bruno.userId);
-    h.copies.seedFailed(bruno.userId, SHARED, "e9", 1);
+  it("spends an attempt instead of retrying a copy that predates the member's baseline", async () => {
+    // The same timestamp rule as the page: a failed row for a message the
+    // shared mailbox received before this member's opt-in is not delivered,
+    // and it ages out like any other row rather than sitting at the head of
+    // the batch for ever.
+    h.copies.seedFailed(bruno.userId, SHARED, "e9", 1, "<old@shared.test>", new Date(Date.now() - 3_600_000));
     h.pages = [{ created: [], newState: "s-2" }];
 
-    await expect(run()).resolves.toMatchObject({ copied: 0, failed: 0 });
+    await expect(run()).resolves.toMatchObject({ copied: 0, failed: 1 });
     expect(copyCalls(h)).toEqual([]);
+    expect(h.verifications).toEqual([]);
+    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e9`)).toBe(2);
+    expect(h.copies.errors.get(`${bruno.userId}|${SHARED}|e9`)).toMatch(/opt-in|baseline/);
   });
 
   // GH #313: every copy used to cost its own lookup batch — a Mailbox/query
@@ -1174,6 +1266,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
       "mailboxIds",
       "keywords",
       "messageId",
+      "receivedAt",
     ]);
   });
 

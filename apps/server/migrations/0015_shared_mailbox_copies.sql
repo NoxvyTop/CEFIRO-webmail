@@ -88,16 +88,28 @@ create table shared_mailbox_copy_state (
 -- message that arrived since the account was first baselined — possibly months
 -- of somebody else's mail, copied into their inbox in one burst.
 --
--- A member first seen for an account is written here with the state that cycle
--- started from and receives copies only from the NEXT cycle onwards. The row
--- is removed when the member stops opting in, so opting back in baselines them
--- again rather than back-filling the gap: the opt-in is forward-looking, in
--- exactly the same sense as the account baseline above.
+-- `baselined_at` is WHEN the member was first seen opted into the account, and
+-- the rule is a comparison: a member receives a message only if the shared
+-- mailbox received it (`Email` `receivedAt`, RFC 8621 §4.1.1) at or after
+-- `baselined_at`, less a 60 s clock-skew margin (the provider stamps the
+-- message, this database stamps the baseline, and the two clocks are not the
+-- same clock). Everything older is never copied, however many pages of backlog
+-- the account cursor still has to drain.
+--
+-- It replaced an opaque JMAP Email STATE recorded per member: a state can be
+-- compared with nothing but itself, so it only ever excluded the joiner from
+-- the one cycle that recorded it, and an account with a backlog longer than
+-- that cycle's page cap handed the joiner the rest of the pre-opt-in mail from
+-- the next cycle on. A one-cycle exclusion is also harmful under the timestamp
+-- rule: it would cost the joiner exactly the mail arriving during that cycle.
+--
+-- The row is removed when the member stops opting in, so opting back in
+-- baselines them again — now — rather than back-filling the gap: the opt-in is
+-- forward-looking, in exactly the same sense as the account baseline above.
 create table shared_mailbox_member_state (
   user_id uuid not null references users(id) on delete cascade,
   shared_account_id text not null,
-  baselined_state text not null,
-  first_seen_at timestamptz not null default now(),
+  baselined_at timestamptz not null default now(),
   primary key (user_id, shared_account_id)
 );
 
@@ -134,6 +146,12 @@ create table shared_mailbox_member_state (
 -- button; a source with no Message-ID (nullable for that reason) is retried
 -- exactly as it was before. The ledger row, not this column, remains the
 -- record of what was delivered.
+--
+-- `received_at` is the SOURCE message's `receivedAt`, recorded with the claim
+-- for the same reason: the retry pass works from these rows, not from a page,
+-- and it applies the member baseline rule above exactly as the page does. A
+-- failed row that predates the member's `baselined_at` spends an attempt
+-- instead of being delivered. Nullable only for rows written by hand.
 create table shared_mailbox_copies (
   user_id uuid not null references users(id) on delete cascade,
   shared_account_id text not null,
@@ -142,6 +160,7 @@ create table shared_mailbox_copies (
   attempts int not null default 0,
   last_error text,
   message_id text,
+  received_at timestamptz,
   copied_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (user_id, shared_account_id, email_id)

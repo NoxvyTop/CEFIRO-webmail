@@ -125,63 +125,78 @@ describe("createSharedMailboxCopiesRepo — cursor (GH #313)", () => {
   });
 });
 
-// GH #313: who is allowed to receive copies for an account, and from when. A
-// member first seen in a cycle is BASELINED in it — the row records the state
-// that cycle started from — and only the NEXT cycle delivers to them, so
-// opting in never back-fills the mail that was already in the shared mailbox.
+/** Moves a member's baseline back by `ms`, standing in for an opt-in that long ago. */
+async function ageBaseline(userId: string, accountId: string, ms: number): Promise<void> {
+  await sql`
+    update shared_mailbox_member_state
+    set baselined_at = now() - make_interval(secs => ${ms}::double precision / 1000)
+    where user_id = ${userId} and shared_account_id = ${accountId}
+  `;
+}
+
+// GH #313: who is allowed to receive copies for an account, and from WHEN. A
+// member first seen in a cycle is baselined at that moment, and receives only
+// the messages the shared mailbox received from then on — so opting in never
+// back-fills the mail that was already there, however many pages of backlog
+// the cursor still has to drain.
+//
+// This replaced an opaque per-member Email STATE: the state was recorded but
+// never compared, so it only ever excluded the joiner from one cycle, and a
+// backlog longer than that cycle's page cap reached them from the next one.
 describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
-  it("baselines every member the first time it sees them, and nobody twice", async () => {
+  it("baselines every member the first time it sees them, now, and nobody twice", async () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     const bruno = await freshUserId();
+    const before = Date.now();
 
-    const first = await repo.baselineMembers(accountId, [ana, bruno], "s-1");
-    expect(new Set(first)).toEqual(new Set([ana, bruno]));
+    const first = await repo.baselineMembers(accountId, [ana, bruno]);
+    expect(new Set(first.keys())).toEqual(new Set([ana, bruno]));
+    for (const at of first.values()) {
+      expect(at.getTime()).toBeGreaterThanOrEqual(before - 1_000);
+      expect(at.getTime()).toBeLessThanOrEqual(Date.now() + 1_000);
+    }
 
-    // The second cycle knows them: they are deliverable now.
-    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-2")).toEqual([]);
+    // The second cycle answers the same baselines: nothing was re-recorded.
+    expect(await repo.baselineMembers(accountId, [ana, bruno])).toEqual(first);
   });
 
   it("baselines only the member who joined an account already being cycled", async () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     const bruno = await freshUserId();
-    await repo.baselineMembers(accountId, [ana], "s-1");
+    const first = await repo.baselineMembers(accountId, [ana]);
+    await ageBaseline(ana, accountId, 3_600_000);
 
-    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-2")).toEqual([bruno]);
-    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-3")).toEqual([]);
+    const second = await repo.baselineMembers(accountId, [ana, bruno]);
+    expect(new Set(second.keys())).toEqual(new Set([ana, bruno]));
+    // Ana keeps her hour-old baseline; bruno's is fresh.
+    expect(Date.now() - second.get(ana)!.getTime()).toBeGreaterThan(3_500_000);
+    expect(Date.now() - second.get(bruno)!.getTime()).toBeLessThan(60_000);
+    expect(second.get(ana)!.getTime()).toBeLessThan(first.get(ana)!.getTime());
   });
 
-  it("keeps the state the member was baselined at", async () => {
-    const accountId = freshAccountId();
-    const ana = await freshUserId();
-    await repo.baselineMembers(accountId, [ana], "s-1");
-    await repo.baselineMembers(accountId, [ana], "s-2");
-    const rows = await sql<{ baselined_state: string }[]>`
-      select baselined_state from shared_mailbox_member_state
-      where user_id = ${ana} and shared_account_id = ${accountId}
-    `;
-    expect(rows[0]?.baselined_state).toBe("s-1");
-  });
-
-  it("forgets a member who opted out, so opting back in baselines them again", async () => {
+  it("forgets a member who opted out, so opting back in baselines them afresh", async () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     const bruno = await freshUserId();
-    await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+    await repo.baselineMembers(accountId, [ana, bruno]);
+    await ageBaseline(bruno, accountId, 3_600_000);
 
     // Bruno opted out: he is no longer in the account's member list.
-    expect(await repo.baselineMembers(accountId, [ana], "s-2")).toEqual([]);
-    // ...and coming back does not back-fill what arrived while he was away.
-    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-3")).toEqual([bruno]);
+    expect([...(await repo.baselineMembers(accountId, [ana])).keys()]).toEqual([ana]);
+    // ...and coming back does not back-fill what arrived while he was away:
+    // his baseline is now, not the hour-old one.
+    const rejoined = await repo.baselineMembers(accountId, [ana, bruno]);
+    expect(Date.now() - rejoined.get(bruno)!.getTime()).toBeLessThan(60_000);
   });
 
   it("keeps the baseline per account and drops it with the user", async () => {
     const a = freshAccountId();
     const b = freshAccountId();
     const ana = await freshUserId();
-    await repo.baselineMembers(a, [ana], "s-1");
-    expect(await repo.baselineMembers(b, [ana], "s-1")).toEqual([ana]);
+    await repo.baselineMembers(a, [ana]);
+    expect([...(await repo.baselineMembers(b, [ana])).keys()]).toEqual([ana]);
 
     await sql`delete from users where id = ${ana}`;
     const rows = await sql`select 1 from shared_mailbox_member_state where user_id = ${ana}`;
@@ -189,7 +204,7 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
   });
 
   it("tolerates an account with no members at all", async () => {
-    expect(await repo.baselineMembers(freshAccountId(), [], "s-1")).toEqual([]);
+    expect(await repo.baselineMembers(freshAccountId(), [])).toEqual(new Map());
   });
 
   // GH #313: the prune only ever ran inside a delivery cycle, and a cycle only
@@ -201,10 +216,12 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     const bruno = await freshUserId();
-    await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+    await repo.baselineMembers(accountId, [ana, bruno]);
+    await ageBaseline(bruno, accountId, 3_600_000);
 
     await repo.pruneMembers(accountId, [ana]);
-    expect(await repo.baselineMembers(accountId, [ana, bruno], "s-2")).toEqual([bruno]);
+    const rejoined = await repo.baselineMembers(accountId, [ana, bruno]);
+    expect(Date.now() - rejoined.get(bruno)!.getTime()).toBeLessThan(60_000);
 
     // Nobody opts in any more: the account keeps no member state at all.
     await repo.pruneMembers(accountId, []);
@@ -212,9 +229,6 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
       select 1 from shared_mailbox_member_state where shared_account_id = ${accountId}
     `;
     expect(rows).toHaveLength(0);
-    expect(new Set(await repo.baselineMembers(accountId, [ana, bruno], "s-3"))).toEqual(
-      new Set([ana, bruno]),
-    );
   });
 
   // GH #313: a departed member's open ledger rows outlived them. The retry
@@ -225,7 +239,7 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     const bruno = await freshUserId();
-    await repo.baselineMembers(accountId, [ana, bruno], "s-1");
+    await repo.baselineMembers(accountId, [ana, bruno]);
     await repo.recordCopy(bruno, accountId, "delivered");
     await repo.beginCopy(bruno, accountId, "claimed");
     await repo.beginCopy(bruno, accountId, "broken");
@@ -250,14 +264,14 @@ describe("createSharedMailboxCopiesRepo — member baseline (GH #313)", () => {
     const accountId = freshAccountId();
     const ana = await freshUserId();
     await repo.setCursor(accountId, "s-1");
-    await repo.baselineMembers(accountId, [ana], "s-1");
+    await repo.baselineMembers(accountId, [ana]);
 
     const accounts = await repo.listAccountIds();
     expect(accounts).toContain(accountId);
     // An account known only by its member rows is listed too: the cursor row
     // is what a lease creates, and a prune must reach both.
     const memberOnly = freshAccountId();
-    await repo.baselineMembers(memberOnly, [ana], "s-1");
+    await repo.baselineMembers(memberOnly, [ana]);
     expect(await repo.listAccountIds()).toContain(memberOnly);
     expect(new Set(await repo.listAccountIds()).size).toBe((await repo.listAccountIds()).length);
   });
@@ -406,7 +420,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     await repo.markFailed(member, accountId, "e1", "copy_failed");
 
     expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([
-      { userId: member, emailId: "e1", attempts: 1, messageId: null },
+      { userId: member, emailId: "e1", attempts: 1, messageId: null, receivedAt: null },
     ]);
     // A pending or a copied row is not a retry candidate.
     await repo.beginCopy(member, accountId, "e2");
@@ -462,7 +476,9 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     await repo.markFailed(member, accountId, "e1", "copy_failed");
     expect(
       await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }),
-    ).toEqual([{ userId: member, emailId: "e1", attempts: 1, messageId: "<abc@shared.test>" }]);
+    ).toEqual([
+      { userId: member, emailId: "e1", attempts: 1, messageId: "<abc@shared.test>", receivedAt: null },
+    ]);
 
     // The retry claims the row again without knowing the Message-ID — it works
     // from the ledger, not from a page — and must not erase it.
@@ -472,6 +488,30 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
       (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]
         ?.messageId,
     ).toBe("<abc@shared.test>");
+  });
+
+  // GH #313: the per-member baseline is a timestamp compared against each
+  // message's receivedAt. The retry pass works from ledger rows, not from a
+  // page, so the claim keeps the source's receivedAt for it to apply the same
+  // rule — and, like the Message-ID, a retry's own claim must not erase it.
+  it("keeps the source's receivedAt on the claim, for the retry to apply the baseline rule", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    const receivedAt = new Date("2026-08-20T10:00:00.000Z");
+
+    await repo.beginCopy(member, accountId, "e1", "<abc@shared.test>", receivedAt);
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(
+      (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]
+        ?.receivedAt,
+    ).toEqual(receivedAt);
+
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(
+      (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]
+        ?.receivedAt,
+    ).toEqual(receivedAt);
   });
 
   it("records no Message-ID for a source that carries none", async () => {
@@ -499,7 +539,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
 
     expect(
       await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }),
-    ).toEqual([{ userId: member, emailId: "e-mine", attempts: 1, messageId: null }]);
+    ).toEqual([{ userId: member, emailId: "e-mine", attempts: 1, messageId: null, receivedAt: null }]);
     // Nobody deliverable is not "everybody": an empty list retries nothing.
     expect(await repo.listRetryable(accountId, { userIds: [], maxAttempts: 5, limit: 100 })).toEqual(
       [],
@@ -645,7 +685,12 @@ describe("runDeliveryCycle against the real repo with a pool of one (GH #313)", 
                 name,
                 {
                   state: "s-1",
-                  list: ids.map((id) => ({ id, mailboxIds: { "inbox-1": true }, keywords: {} })),
+                  list: ids.map((id) => ({
+                    id,
+                    mailboxIds: { "inbox-1": true },
+                    keywords: {},
+                    receivedAt: new Date(Date.now() + 1_000).toISOString(),
+                  })),
                 },
                 callId,
               ];

@@ -26,15 +26,16 @@ export const sharedAccountSchema = z.object({
   // response from a server that predates the field — and the account selector,
   // which reads only id/name — still parses. Since GH #313 the server's copy
   // worker consumes it, and the rule is exact: the first delivery cycle that
-  // sees a member for an account only RECORDS them (at the state that cycle
-  // started from), and copies reach them from the NEXT cycle onwards. So mail
-  // already in the shared mailbox when they opted in — including anything that
-  // arrived during the very cycle they joined — is never copied; the manual
-  // "copy to my inbox" button is what reaches it. Opting out drops the
-  // member's record for that mailbox as soon as the server next lists the
-  // opt-ins — it does not wait for a delivery cycle, which a mailbox nobody
-  // opts into never gets — along with the copies that were still owed to
-  // them, so opting back in records them afresh and the gap is not
+  // sees a member for an account records the moment as their baseline, and
+  // from then on they receive every new inbox message the shared mailbox
+  // RECEIVED at or after that moment (with a one-minute clock-skew margin),
+  // starting with that very cycle. Mail the shared mailbox received before
+  // they opted in is never copied, however long the worker takes to catch up
+  // with it; the manual "copy to my inbox" button is what reaches it. Opting
+  // out drops the member's record for that mailbox as soon as the server next
+  // lists the opt-ins — it does not wait for a delivery cycle, which a mailbox
+  // nobody opts into never gets — along with the copies that were still owed
+  // to them, so opting back in baselines them afresh and the gap is not
   // back-filled. What they already received is remembered, so nothing is
   // delivered to them twice. See docs/design/shared-mailboxes.md.
   copyOptIn: z.boolean().default(false),

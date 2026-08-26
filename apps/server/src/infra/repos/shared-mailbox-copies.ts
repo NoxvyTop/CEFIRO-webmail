@@ -136,34 +136,36 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     pruneMembers,
 
     /**
-     * Records every member of `userIds` that this account had not seen before,
-     * at `baselinedState`, and answers with exactly those ids — the members
-     * that must NOT receive copies this cycle. Everyone else in the list is
-     * deliverable.
+     * Records every member of `userIds` that this account had not seen before
+     * as baselined NOW, and answers with the baseline of every member listed
+     * — the moment from which each of them is entitled to copies. The cycle
+     * compares each message's `receivedAt` against it (see the migration
+     * header); nobody is excluded from a cycle for being new.
      *
      * Prunes first, through the same `pruneMembers` the worker calls out of
      * cycle: a cycle is one of the two places membership can shrink, not the
      * only one, and both must leave exactly the same state behind.
      *
-     * Two statements rather than one: the prune and the insert touch disjoint
-     * rows (out of the list vs. in it), so there is nothing to make atomic
-     * between them, and the cycle deliberately spans no transaction.
+     * Three statements rather than one: the prune and the insert touch
+     * disjoint rows (out of the list vs. in it), the read afterwards is what
+     * makes a member's baseline the one recorded — not the one this call would
+     * have written — and the cycle deliberately spans no transaction.
      */
-    async baselineMembers(
-      sharedAccountId: string,
-      userIds: string[],
-      baselinedState: string,
-    ): Promise<string[]> {
+    async baselineMembers(sharedAccountId: string, userIds: string[]): Promise<Map<string, Date>> {
       await pruneMembers(sharedAccountId, userIds);
-      if (userIds.length === 0) return [];
-      const rows = await sql<{ user_id: string }[]>`
-        insert into shared_mailbox_member_state (user_id, shared_account_id, baselined_state)
-        select id, ${sharedAccountId}, ${baselinedState}
+      if (userIds.length === 0) return new Map();
+      await sql`
+        insert into shared_mailbox_member_state (user_id, shared_account_id)
+        select id, ${sharedAccountId}
         from unnest(${userIds}::uuid[]) as id
         on conflict (user_id, shared_account_id) do nothing
-        returning user_id
       `;
-      return rows.map((row) => row.user_id);
+      const rows = await sql<{ user_id: string; baselined_at: Date }[]>`
+        select user_id, baselined_at from shared_mailbox_member_state
+        where shared_account_id = ${sharedAccountId}
+          and user_id = any(${userIds}::uuid[])
+      `;
+      return new Map(rows.map((row) => [row.user_id, row.baselined_at]));
     },
 
     /** Whether this member holds a CONFIRMED copy of that message. */
@@ -231,24 +233,32 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
      * A confirmed copy is never demoted (the `where`): a replayed page must
      * not turn a delivered copy back into an open question.
      *
-     * `messageId` is the SOURCE message's RFC 5322 Message-ID, which the cycle
-     * reads with the page. It is what lets a later retry ask whether the copy
-     * was already made (see the migration header). Kept with `coalesce`: the
-     * retry pass claims the row again without knowing it, and that claim must
-     * not erase the answer it is about to depend on.
+     * `messageId` is the SOURCE message's RFC 5322 Message-ID and `receivedAt`
+     * the moment the shared mailbox received it, both read with the page. The
+     * first lets a later retry ask whether the copy was already made, the
+     * second lets it apply the member baseline rule (see the migration
+     * header). Kept with `coalesce`: the retry pass claims the row again
+     * without knowing either, and that claim must not erase the answers it is
+     * about to depend on.
      */
     async beginCopy(
       userId: string,
       sharedAccountId: string,
       emailId: string,
       messageId?: string | null,
+      receivedAt?: Date | null,
     ): Promise<void> {
       await sql`
-        insert into shared_mailbox_copies (user_id, shared_account_id, email_id, status, message_id)
-        values (${userId}, ${sharedAccountId}, ${emailId}, 'pending', ${messageId ?? null})
+        insert into shared_mailbox_copies
+          (user_id, shared_account_id, email_id, status, message_id, received_at)
+        values (
+          ${userId}, ${sharedAccountId}, ${emailId}, 'pending',
+          ${messageId ?? null}, ${receivedAt ?? null}
+        )
         on conflict (user_id, shared_account_id, email_id) do update set
           status = 'pending',
           message_id = coalesce(excluded.message_id, shared_mailbox_copies.message_id),
+          received_at = coalesce(excluded.received_at, shared_mailbox_copies.received_at),
           updated_at = now()
         where shared_mailbox_copies.status <> 'copied'
       `;
@@ -324,13 +334,25 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
       sharedAccountId: string,
       options: { userIds: string[]; maxAttempts: number; limit: number },
     ): Promise<
-      Array<{ userId: string; emailId: string; attempts: number; messageId: string | null }>
+      Array<{
+        userId: string;
+        emailId: string;
+        attempts: number;
+        messageId: string | null;
+        receivedAt: Date | null;
+      }>
     > {
       if (options.userIds.length === 0) return [];
       const rows = await sql<
-        { user_id: string; email_id: string; attempts: number; message_id: string | null }[]
+        {
+          user_id: string;
+          email_id: string;
+          attempts: number;
+          message_id: string | null;
+          received_at: Date | null;
+        }[]
       >`
-        select user_id, email_id, attempts, message_id from shared_mailbox_copies
+        select user_id, email_id, attempts, message_id, received_at from shared_mailbox_copies
         where shared_account_id = ${sharedAccountId}
           and user_id = any(${options.userIds}::uuid[])
           and status = 'failed'
@@ -343,6 +365,7 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
         emailId: row.email_id,
         attempts: row.attempts,
         messageId: row.message_id,
+        receivedAt: row.received_at,
       }));
     },
 

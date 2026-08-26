@@ -323,7 +323,7 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
 | `sent_recipients` | direcciones a las que el usuario ha escrito (nivel "remitente conocido" del indicador de confianza, #314); separada de `contacts` a propósito |
 | `shared_mailbox_copy_state` | cursor de las copias automáticas de buzones compartidos (#313): último estado `Email` JMAP procesado (nulo = nunca fijado) y el arrendamiento de entrega por cuenta (`lease_owner`, `lease_until`), una fila por cuenta compartida |
-| `shared_mailbox_member_state` | línea base por miembro (#313): desde qué estado recibe copias cada miembro de cada cuenta compartida; se borra al desactivar la opción |
+| `shared_mailbox_member_state` | línea base por miembro (#313): desde qué momento (`baselined_at`) recibe copias cada miembro de cada cuenta compartida, comparado con el `receivedAt` de cada mensaje; se borra al desactivar la opción |
 | `shared_mailbox_copies` | libro de copias entregadas (#313): (miembro, cuenta compartida, mensaje origen), lo que impide duplicados al repetir una página |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
@@ -487,9 +487,18 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    propaga **sin mover el cursor**, para reintentar la misma página en el
    siguiente sondeo o push.
 3. **Solo bandeja de entrada.** Un lote de lectura (`Mailbox/query role=inbox`
-   + `Email/get mailboxIds, keywords`) sobre la cuenta compartida filtra los ids
-   creados y, de paso, trae las `keywords` de cada mensaje, que se pasan a la
-   copia para conservar las marcas sin una lectura por copia. La bandeja
+   + `Email/get mailboxIds, keywords, messageId, receivedAt`) sobre la cuenta
+   compartida filtra los ids creados y, de paso, trae las `keywords` de cada
+   mensaje (se pasan a la copia para conservar las marcas sin una lectura por
+   copia), su `Message-ID` (punto 5) y su `receivedAt` (punto 4). Esa lectura
+   se hace **fuera del cerrojo compartido de degradación** del cliente JMAP
+   (`request(…, { degradation: "isolated" })`): `messageId` es una propiedad
+   degradable, y el cerrojo es por proceso, así que en cuanto cualquier vista
+   de conversación lo activaba la lectura de página perdía `messageId` sin
+   avisar, cada reserva guardaba `null` y la verificación del reintento quedaba
+   desactivada para el resto del proceso. Aislada, la lectura pide lo que
+   necesita y un `messageId` **ausente** (no `null`, que es "sin cabecera")
+   significa que el proveedor no lo devuelve: se avisa una vez por ciclo. La bandeja
    personal de cada miembro se resuelve **una vez por ciclo**, no una vez por
    mensaje: antes, cada par (miembro, mensaje) costaba dos viajes de ida y
    vuelta a JMAP para dos respuestas que el ciclo ya tenía. Lo filtrado:
@@ -518,13 +527,30 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    el miembro vea en el buzón compartido, sin importar cuándo llegó ni por
    dónde pasó.
 4. **Línea base por miembro.** El primer ciclo que ve a un miembro en una
-   cuenta solo lo **registra** (`shared_mailbox_member_state`, con el estado
-   del que arrancó ese ciclo) y **no le copia nada**; recibe copias a partir
-   del ciclo siguiente. Así, activar la opción nunca reparte el correo que ya
-   estaba en el buzón compartido —ni siquiera el de ese mismo ciclo—, que es
-   justo lo que cubre el botón manual. Si el miembro desactiva la opción, su
-   fila se borra, de modo que volver a activarla lo registra de nuevo en lugar
-   de rellenarle el hueco. La limpieza la hace el **worker en cada sondeo**,
+   cuenta lo **registra con la hora** (`shared_mailbox_member_state.baselined_at`)
+   y desde ese mismo ciclo le copia **solo** los mensajes que el buzón
+   compartido recibió (`receivedAt`, RFC 8621) **a partir de esa hora**, con un
+   margen de 60 s de desfase de reloj (`DELIVERY_BASELINE_SKEW_MS`: el
+   proveedor sella el mensaje con su reloj y la base de datos sella la línea
+   base con el suyo; sin margen, un proveedor unos segundos atrasado retendría
+   justo el mensaje que llegó nada más activar la opción, y un minuto de
+   correo ajeno no se parece a los meses de un backfill). Todo lo anterior a
+   esa hora **nunca** se le copia, por muchas páginas de atraso que el cursor
+   tenga aún por drenar: activar la opción no reparte el correo que ya estaba
+   en el buzón, que es justo lo que cubre el botón manual. Antes la línea base
+   era un estado `Email` opaco que se guardaba y **no se comparaba con nada**,
+   así que solo excluía al recién llegado durante un ciclo, y un atraso mayor
+   que el tope de páginas de ese ciclo le llegaba entero desde el siguiente;
+   además, con la regla por hora esa exclusión de un ciclo sería dañina, porque
+   le costaría el correo que llega durante el ciclo en que se une. La misma
+   regla se aplica en el **paso de reintentos** (la reserva guarda el
+   `receivedAt` del origen): una fila `failed` anterior a la línea base del
+   miembro gasta un intento en vez de entregarse. Si el proveedor no devuelve
+   `receivedAt`, el ciclo falla sin mover el cursor —como con una bandeja
+   irresoluble—, porque sin él ningún mensaje se puede situar frente a ninguna
+   línea base. Si el miembro desactiva la opción, su fila se borra, de modo que
+   volver a activarla lo registra de nuevo —con hora nueva— en lugar de
+   rellenarle el hueco. La limpieza la hace el **worker en cada sondeo**,
    sobre todas las cuentas con estado guardado, no el ciclo: un buzón que se
    queda sin ningún miembro no vuelve a tener ciclo, y su última baja se
    quedaba registrada para siempre. Con la fila se van también sus copias

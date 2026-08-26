@@ -96,7 +96,7 @@ function harness(initial: OptIn[] = [ana, bruno]) {
         if (pruneFailure) throw pruneFailure;
         prunes.push({ accountId, userIds });
       },
-      baselineMembers: async () => [],
+      baselineMembers: async () => new Map(),
       setCursor: async () => {},
       copyStates: async () => new Map(),
       beginCopy: async () => {},
