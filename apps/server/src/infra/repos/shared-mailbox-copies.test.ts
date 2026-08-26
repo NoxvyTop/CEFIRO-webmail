@@ -472,12 +472,12 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     const member = await freshUserId();
     const accountId = freshAccountId();
 
-    await repo.beginCopy(member, accountId, "e1", "<abc@shared.test>");
+    await repo.beginCopy(member, accountId, "e1", "abc@shared.test");
     await repo.markFailed(member, accountId, "e1", "copy_failed");
     expect(
       await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }),
     ).toEqual([
-      { userId: member, emailId: "e1", attempts: 1, messageId: "<abc@shared.test>", receivedAt: null },
+      { userId: member, emailId: "e1", attempts: 1, messageId: "abc@shared.test", receivedAt: null },
     ]);
 
     // The retry claims the row again without knowing the Message-ID — it works
@@ -487,7 +487,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     expect(
       (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]
         ?.messageId,
-    ).toBe("<abc@shared.test>");
+    ).toBe("abc@shared.test");
   });
 
   // GH #313: the per-member baseline is a timestamp compared against each
@@ -499,7 +499,7 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     const accountId = freshAccountId();
     const receivedAt = new Date("2026-08-20T10:00:00.000Z");
 
-    await repo.beginCopy(member, accountId, "e1", "<abc@shared.test>", receivedAt);
+    await repo.beginCopy(member, accountId, "e1", "abc@shared.test", receivedAt);
     await repo.markFailed(member, accountId, "e1", "copy_failed");
     expect(
       (await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 }))[0]

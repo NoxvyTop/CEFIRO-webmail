@@ -410,6 +410,19 @@ type DeliverableEmail = {
 };
 
 /**
+ * A Message-ID as this module stores it: the bare `id-left@id-right`, with no
+ * angle brackets. RFC 8621 §4.1.3 `asMessageIds` — what the `messageId`
+ * property carries — is already bare, and the strip is defensive, for a
+ * provider (or a hand-written row) that hands over the raw header form. The
+ * bracketed form is rebuilt in exactly one place, the `header` filter of
+ * `alreadyCopied`, which compares against the raw header value.
+ */
+function bareMessageId(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1) : trimmed;
+}
+
+/**
  * Whether a message received at `receivedAt` is OLDER than what a member
  * baselined at `baselinedAt` is entitled to — the one rule that keeps an
  * opt-in from back-filling, applied to pages and retries alike.
@@ -543,12 +556,15 @@ async function inboxOnly(
       sharedAccountId,
     });
   }
-  return deliverable.map((email) => ({
-    id: email.id,
-    keywords: email.keywords ?? {},
-    messageId: email.messageId?.[0] ?? null,
-    receivedAt: receivedAts.get(email.id)!,
-  }));
+  return deliverable.map((email) => {
+    const messageId = email.messageId?.[0];
+    return {
+      id: email.id,
+      keywords: email.keywords ?? {},
+      messageId: typeof messageId === "string" && messageId !== "" ? bareMessageId(messageId) : null,
+      receivedAt: receivedAts.get(email.id)!,
+    };
+  });
 }
 
 /**
@@ -867,6 +883,16 @@ async function retryFailed(
  *   to answer `absent`, against this very contract, so one cached lookup
  *   failure made every retry for that member copy WITHOUT verification.
  *
+ * The two forms of a Message-ID meet here, and only here. The `messageId`
+ * property the page read stores is RFC 8621 `asMessageIds`: the bare
+ * `left@right`, no angle brackets. The `header` filter (RFC 8621 §4.4.1)
+ * compares against the RAW header value, which is `<left@right>`. Querying
+ * the bare id against the bracketed header never matched, so this check
+ * found nothing every time and every lost-response retry delivered its
+ * duplicate anyway. The stored value is normalised bare (`bareMessageId`, for
+ * a row that carries brackets from before) and wrapped exactly once for the
+ * query.
+ *
  * It is NOT a second dedup store. A member who deleted their copy is asked to
  * receive it again — the same answer the manual button gives — and the ledger
  * row stays the record of what was delivered.
@@ -887,7 +913,10 @@ async function alreadyCopied(
         "Email/query",
         {
           accountId: resolved.session.accountId,
-          filter: { inMailbox: personalInboxId, header: ["Message-ID", messageId] },
+          filter: {
+            inMailbox: personalInboxId,
+            header: ["Message-ID", `<${bareMessageId(messageId)}>`],
+          },
           limit: 1,
         },
         "q",

@@ -586,12 +586,20 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    veces. Por eso la reserva guarda el `Message-ID` del mensaje de origen (lo
    trae la misma lectura de la página) y el reintento pregunta primero por él
    en la bandeja del miembro (`Email/query { inMailbox, header: ["Message-ID",
-   …], limit: 1 }`, con su propia sesión): si aparece, la fila pasa a `copied`
-   **sin copiar**; si no, se copia. Si el origen no trae `Message-ID` —raro,
-   pero legal— se reintenta como antes, asumiendo el duplicado para ese caso.
-   Si la consulta falla, no se copia nada: no gasta intento y el ciclo
-   siguiente vuelve a preguntar, porque copiar a ciegas es lo único que no
-   tiene vuelta atrás. No es un segundo libro de dedupe: solo se usa en el
+   "<id>"], limit: 1 }`, con su propia sesión): si aparece, la fila pasa a
+   `copied` **sin copiar**; si no, se copia. Ojo con las dos formas del id: la
+   propiedad `messageId` de JMAP (`asMessageIds`, RFC 8621) viene **sin**
+   ángulos y así se guarda (`message_id`, normalizado por si acaso), mientras
+   que el filtro `header` compara contra el valor **crudo** de la cabecera, que
+   los lleva; la consulta envuelve el id guardado en `<…>` exactamente una vez.
+   Si el origen no trae `Message-ID` —raro, pero legal— se reintenta como
+   antes, asumiendo el duplicado para ese caso. Si la consulta falla, o la
+   bandeja personal del miembro no se puede resolver, no se copia nada
+   —copiar a ciegas es lo único que no tiene vuelta atrás—, pero la fila
+   **gasta un intento** (`last_error = "verification unavailable: …"`): dejarla
+   intacta la hacía inmortal, y ocupaba para siempre la cabeza del lote de
+   reintentos (las 100 más antiguas por `updated_at`) hasta dejar sin sitio a
+   las demás. No es un segundo libro de dedupe: solo se usa en el
    camino de reintento, sobre una copia que este servidor reservó, y si el
    miembro borró la copia se le vuelve a entregar, igual que con el botón
    manual.

@@ -122,7 +122,7 @@ function fakeCopiesRepo(events: string[]) {
       accountId: string,
       emailId: string,
       attemptCount: number,
-      messageId: string | null = `<mid-${emailId}>`,
+      messageId: string | null = `mid-${emailId}`,
       receivedAt: Date | null = new Date(),
     ) {
       const id = key(userId, accountId, emailId);
@@ -334,7 +334,12 @@ type Harness = {
   keywordsFor: Map<string, Record<string, boolean>>;
   /** Members whose PERSONAL inbox the provider cannot resolve. */
   noPersonalInboxFor: Set<string>;
-  /** The Message-ID the shared account reports for a message (default: one per id; null = no header). */
+  /**
+   * The `messageId` the shared account reports for a message — RFC 8621
+   * `asMessageIds`, i.e. WITHOUT the angle brackets, exactly as the
+   * inReplyTo/references fixtures of send.test.ts (default: one per id; null =
+   * no header).
+   */
   messageIdFor: Map<string, string[] | null>;
   /** A provider that never returns `messageId`, however it is asked. */
   omitMessageId: boolean;
@@ -342,7 +347,11 @@ type Harness = {
   receivedAtFor: Map<string, Date>;
   /** A provider that answers the page read without `receivedAt` (an RFC 8621 violation). */
   omitReceivedAt: boolean;
-  /** `${member email}|${Message-ID}` pairs already sitting in that member's inbox. */
+  /**
+   * `${member email}|<Message-ID>` pairs already sitting in that member's
+   * inbox, keyed by the RAW header value (brackets included), which is what a
+   * `header` filter compares against.
+   */
   personalCopies: Set<string>;
   /** Members whose personal Email/query throws. */
   queryThrowsFor: Set<string>;
@@ -432,7 +441,7 @@ function harness(): Harness {
                     ? { keywords: h.keywordsFor.get(id) ?? { $seen: true } }
                     : {}),
                   ...(properties.includes("messageId") && !h.omitMessageId
-                    ? { messageId: h.messageIdFor.has(id) ? h.messageIdFor.get(id) : [`<mid-${id}>`] }
+                    ? { messageId: h.messageIdFor.has(id) ? h.messageIdFor.get(id) : [`mid-${id}`] }
                     : {}),
                   ...(properties.includes("receivedAt") && !h.omitReceivedAt
                     ? { receivedAt: (h.receivedAtFor.get(id) ?? new Date()).toISOString() }
@@ -451,7 +460,9 @@ function harness(): Harness {
         }
         if (name === "Email/query") {
           // The retry pass looking for a copy it may already have made, by the
-          // source's Message-ID, in the member's own inbox.
+          // source's Message-ID, in the member's own inbox. A `header` filter
+          // (RFC 8621 §4.4.1) compares against the RAW header value — with the
+          // angle brackets — so `messageId` here is the bracketed form.
           const filter = params.filter as { inMailbox: string; header: [string, string] };
           const messageId = filter.header[1];
           h.verifications.push({ by: auth.email, messageId, inMailbox: filter.inMailbox });
@@ -1090,13 +1101,21 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
   // delivered the message a second time. The claim now carries the source's
   // Message-ID, and the retry pass looks for that message in the member's own
   // inbox before copying anything.
-  it("records the source Message-ID with the claim, for a later retry to check", async () => {
-    h.pages = [{ created: ["e1"], newState: "s-2" }];
-    h.inInbox.add("e1");
-    h.messageIdFor.set("e1", ["<abc@shared.test>"]);
+  // GH #313: JMAP `messageId` values come WITHOUT angle brackets (RFC 8621
+  // §4.1.3 `asMessageIds`), while a `header` filter compares against the raw
+  // header value, which HAS them. The bare id was being queried against the
+  // bracketed header, so the verification never found the copy it was
+  // looking for and every lost-response retry delivered a duplicate anyway.
+  it("records the source Message-ID bare, as the provider returns it", async () => {
+    h.pages = [{ created: ["e1", "e2"], newState: "s-2" }];
+    h.inInbox.add("e1").add("e2");
+    h.messageIdFor.set("e1", ["abc@shared.test"]);
+    // Defensive: a provider that returns the raw form is normalised too.
+    h.messageIdFor.set("e2", ["<def@shared.test>"]);
 
     await run([ana]);
-    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e1`)).toBe("<abc@shared.test>");
+    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e1`)).toBe("abc@shared.test");
+    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e2`)).toBe("def@shared.test");
   });
 
   // GH #313: `messageId` is a degradable property, and the client's latch is
@@ -1148,13 +1167,14 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
   });
 
   it("marks a retry copied, without copying, when the member's inbox already holds it", async () => {
-    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<lost@shared.test>");
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "lost@shared.test");
     h.personalCopies.add(`${ana.email}|<lost@shared.test>`);
     h.pages = [{ created: [], newState: "s-2" }];
 
     await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 0, skipped: 1 });
     expect(copyCalls(h)).toEqual([]);
     expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("copied");
+    // The query carries the header's raw form: the bare id wrapped in `<>`.
     expect(h.verifications).toEqual([
       {
         by: ana.email,
@@ -1164,8 +1184,17 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     ]);
   });
 
+  it("brackets a stored id exactly once, even one recorded with its brackets", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<legacy@shared.test>");
+    h.personalCopies.add(`${ana.email}|<legacy@shared.test>`);
+    h.pages = [{ created: [], newState: "s-2" }];
+
+    await expect(run([ana])).resolves.toMatchObject({ skipped: 1 });
+    expect(h.verifications.map((v) => v.messageId)).toEqual(["<legacy@shared.test>"]);
+  });
+
   it("copies on retry when the verification finds nothing in the member's inbox", async () => {
-    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<absent@shared.test>");
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "absent@shared.test");
     h.pages = [{ created: [], newState: "s-2" }];
 
     await expect(run([ana])).resolves.toMatchObject({ copied: 1 });
@@ -1188,7 +1217,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
   // oldest-first retry batch on every cycle, and with enough of them the
   // batch never reached anybody else's copy.
   it("spends an attempt, without copying, when the verification cannot be answered", async () => {
-    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<unknown@shared.test>");
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "unknown@shared.test");
     h.queryThrowsFor.add(ana.email);
     h.pages = [{ created: [], newState: "s-2" }];
 
@@ -1207,7 +1236,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
   // lookup failure made every retry for that member copy WITHOUT verification.
   // An inbox that cannot be named is a question that cannot be asked.
   it("holds off, spending an attempt, when the member's inbox cannot be resolved for the verification", async () => {
-    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<lost@shared.test>");
+    h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "lost@shared.test");
     h.noPersonalInboxFor.add(ana.email);
     h.pages = [{ created: [], newState: "s-2" }];
 
@@ -1221,7 +1250,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
   });
 
   it("ages out a copy whose verification never answers, so it stops holding the head of the batch", async () => {
-    h.copies.seedFailed(ana.userId, SHARED, "e-stuck", 0, "<stuck@shared.test>");
+    h.copies.seedFailed(ana.userId, SHARED, "e-stuck", 0, "stuck@shared.test");
     h.queryThrowsForMessageId.add("<stuck@shared.test>");
 
     for (let cycle = 0; cycle < DELIVERY_RETRY_MAX_ATTEMPTS; cycle += 1) {
@@ -1235,7 +1264,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
 
     // Out of attempts: the row is no longer retryable, and a copy that failed
     // after it is reached and delivered instead of waiting behind it.
-    h.copies.seedFailed(ana.userId, SHARED, "e-live", 1, "<live@shared.test>");
+    h.copies.seedFailed(ana.userId, SHARED, "e-live", 1, "live@shared.test");
     h.verifications.length = 0;
     h.pages = [{ created: [], newState: "s-99" }];
     await expect(run([ana])).resolves.toMatchObject({ copied: 1, failed: 0 });
@@ -1283,7 +1312,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     // shared mailbox received before this member's opt-in is not delivered,
     // and it ages out like any other row rather than sitting at the head of
     // the batch for ever.
-    h.copies.seedFailed(bruno.userId, SHARED, "e9", 1, "<old@shared.test>", new Date(Date.now() - 3_600_000));
+    h.copies.seedFailed(bruno.userId, SHARED, "e9", 1, "old@shared.test", new Date(Date.now() - 3_600_000));
     h.pages = [{ created: [], newState: "s-2" }];
 
     await expect(run()).resolves.toMatchObject({ copied: 0, failed: 1 });
