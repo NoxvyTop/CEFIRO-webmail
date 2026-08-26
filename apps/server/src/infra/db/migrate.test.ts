@@ -81,6 +81,26 @@ describe("migrate", () => {
       expect(names).toContain(expected);
     }
   });
+
+  // GH #313: every delivery cycle asks `shared_mailbox_copies` for the
+  // account's failed copies, oldest first. The table is never purged and grows
+  // with every message delivered to every member, so without an index that
+  // query is a full scan of the whole ledger on every cycle of every account.
+  // Partial, because the rows it looks for are the small minority: a delivered
+  // copy is not a retry candidate and does not belong in the index.
+  it("indexes the retry scan of the shared-mailbox copy ledger", async () => {
+    await migrate(sql, dir);
+    const rows = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+      where schemaname = 'public'
+        and tablename = 'shared_mailbox_copies'
+        and indexname = 'shared_mailbox_copies_retry_idx'
+    `;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.indexdef).toContain("shared_account_id");
+    expect(rows[0]!.indexdef).toContain("updated_at");
+    expect(rows[0]!.indexdef).toContain("WHERE (status = 'failed'::text)");
+  });
 });
 
 // GH #207. Two replicas booting at the same time each run migrate() against the

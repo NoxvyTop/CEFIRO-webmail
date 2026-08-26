@@ -118,3 +118,18 @@ create table shared_mailbox_copies (
   updated_at timestamptz not null default now(),
   primary key (user_id, shared_account_id, email_id)
 );
+
+-- Every delivery cycle opens by asking this table for the account's failed
+-- copies, oldest first — and the primary key leads with `user_id`, so that
+-- query has no index to use. The table is never purged and holds a row per
+-- (member, message) ever delivered, so the scan grows without limit while the
+-- rows it looks for stay a small minority: an account with a million delivered
+-- copies and no failures still paid a full scan on every cycle.
+--
+-- PARTIAL on purpose. Only `failed` rows are retry candidates, so the index
+-- carries only those: it stays small, and the `copied` rows that dominate the
+-- table cost nothing to keep out of it. The columns are the query's own —
+-- `shared_account_id` to find the account, `updated_at` for its `order by`.
+create index shared_mailbox_copies_retry_idx
+  on shared_mailbox_copies (shared_account_id, updated_at)
+  where status = 'failed';
