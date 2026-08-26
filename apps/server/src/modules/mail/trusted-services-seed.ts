@@ -6,7 +6,7 @@
 // authenticated stranger, and a recognised domain without DMARC pass is
 // exactly what a spoofed message looks like. See sender-trust.ts.
 //
-// Admission rule for this list — every entry must satisfy all three:
+// Admission rule for this list — every entry must satisfy all four:
 //
 //  1. A large provider whose transactional/security mail (password resets,
 //     sign-in alerts, invoices, 2FA codes) is a common phishing target, so
@@ -19,6 +19,26 @@
 //  3. The provider actually sends user-facing mail from that organisational
 //     domain or its subdomains. A brand that sends from a separate
 //     marketing-only domain does not belong here under its brand domain.
+//  4. No domain whose notifications carry content authored by arbitrary third
+//     parties (share invitations, social messages, workspace invites).
+//
+// Rule 4 is the one that removed nine otherwise-qualifying entries (GH #314,
+// JD-5: google.com, dropbox.com, linkedin.com, slack.com, atlassian.com,
+// facebook.com, instagram.com, x.com, meta.com). Rules 1–3 are about whether a
+// DMARC pass on the domain is TRUSTWORTHY; rule 4 is about what that pass
+// actually proves. On these providers, anyone with a free account can make the
+// provider's own infrastructure send a DMARC-aligned message whose subject,
+// display name and body they wrote — a Drive share invitation, a LinkedIn
+// message, a Slack or Workspace invite. The pass is genuine, the domain is
+// genuine, and the badge would vouch for an attacker's text. That is worse
+// than no badge: it is the platform's reputation lent to the lure.
+//
+// The precise sign-in/security surface of such a provider is still admissible
+// where the organisational domain is not — hence `accounts.google.com`, which
+// carries sign-in alerts and no user-authored invitations, rather than
+// `google.com`. Note the compare is exact-or-SUBDOMAIN (sender-trust.ts), so
+// listing the organisational domain would also have covered every relay
+// subdomain under it.
 //
 // Deliberately not BIMI (RFC draft-brand-indicators): BIMI would fetch a logo
 // from a sender-published DNS record, which means an outbound request per
@@ -38,22 +58,14 @@
 
 const SEED_DOMAINS = [
   "github.com",
-  "google.com",
+  "accounts.google.com",
   "microsoft.com",
   "apple.com",
   "cloudflare.com",
   "amazon.com",
   "paypal.com",
   "stripe.com",
-  "atlassian.com",
-  "slack.com",
   "zoom.us",
-  "dropbox.com",
-  "linkedin.com",
-  "x.com",
-  "meta.com",
-  "facebook.com",
-  "instagram.com",
   "netflix.com",
   "spotify.com",
   "digitalocean.com",
