@@ -139,4 +139,65 @@ describe("copyEmailToPersonalInbox (GH #313)", () => {
     copyResponse = {};
     await expect(copy()).resolves.toEqual({ ok: false, reason: "copy_failed" });
   });
+
+  // GH #313: the lookup batch answers two questions the delivery cycle already
+  // knows — where this member's inbox is (once per cycle, not once per
+  // message) and what the source's keywords are (already read to classify the
+  // page). Handing them in turns two round trips per (member, message) into
+  // one; the manual route, which knows neither, keeps the lookup path.
+  describe("with the inbox and keywords already known", () => {
+    it("issues the copy alone, with the given inbox and keywords", async () => {
+      await expect(
+        copyEmailToPersonalInbox({
+          jmap,
+          auth,
+          session,
+          fromAccountId: "acc-shared",
+          emailId: "e1",
+          personalInboxId: "mb-inbox-precomputed",
+          keywords: { $flagged: true },
+        }),
+      ).resolves.toEqual({ ok: true, createdId: "copy-1" });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.map(([name]) => name)).toEqual(["Email/copy"]);
+      const params = copyCall()?.[1] as { create: { c: Record<string, unknown> } };
+      expect(params.create.c).toEqual({
+        id: "e1",
+        mailboxIds: { "mb-inbox-precomputed": true },
+        keywords: { $flagged: true },
+      });
+    });
+
+    it("still refuses a same-account copy", async () => {
+      await expect(
+        copyEmailToPersonalInbox({
+          jmap,
+          auth,
+          session,
+          fromAccountId: "acc-personal",
+          emailId: "e1",
+          personalInboxId: "mb-inbox-precomputed",
+          keywords: {},
+        }),
+      ).resolves.toEqual({ ok: false, reason: "invalid_account" });
+      expect(requests).toHaveLength(0);
+    });
+
+    it("falls back to the lookup when only one of the two is known", async () => {
+      await expect(
+        copyEmailToPersonalInbox({
+          jmap,
+          auth,
+          session,
+          fromAccountId: "acc-shared",
+          emailId: "e1",
+          personalInboxId: "mb-inbox-precomputed",
+        }),
+      ).resolves.toEqual({ ok: true, createdId: "copy-1" });
+      expect(requests).toHaveLength(2);
+      const params = copyCall()?.[1] as { create: { c: { mailboxIds: Record<string, boolean> } } };
+      expect(params.create.c.mailboxIds).toEqual({ "mb-inbox-personal": true });
+    });
+  });
 });

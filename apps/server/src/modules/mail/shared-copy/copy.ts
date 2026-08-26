@@ -33,8 +33,14 @@ export type CopyResult =
  *
  * The original is left in place (onSuccessDestroyOriginal:false); the source
  * email's own keywords are carried into the create so flags survive (spike
- * caveat). The copy counts against the member's personal quota — a documented
- * spike caveat with nothing to do about it, so this makes no attempt to.
+ * caveat). A caller that ALREADY knows the member's inbox id and the source
+ * keywords passes both and the lookup batch is skipped entirely — that is the
+ * delivery cycle, which resolves the inbox once per member per cycle and reads
+ * the keywords with the page it already fetches; the manual route knows
+ * neither and keeps the lookup.
+ *
+ * The copy counts against the member's personal quota — a documented spike
+ * caveat with nothing to do about it, so this makes no attempt to.
  *
  * Never throws for a JMAP-level *answer* (a missing inbox, a missing message,
  * a refused copy): those are the `ok: false` reasons. A transport or auth
@@ -49,6 +55,18 @@ export async function copyEmailToPersonalInbox(input: {
   session: JmapSession;
   fromAccountId: string;
   emailId: string;
+  /**
+   * The member's personal Inbox id, when the caller already knows it. The
+   * delivery cycle resolves it ONCE per member per cycle instead of once per
+   * message (GH #313); the manual route knows nothing about it and omits it.
+   */
+  personalInboxId?: string;
+  /**
+   * The source message's keywords, when the caller already read them — the
+   * cycle's page `Email/get` fetches them alongside `mailboxIds`, which it
+   * needs anyway to tell inbox mail apart.
+   */
+  keywords?: Record<string, boolean>;
 }): Promise<CopyResult> {
   const { jmap, auth, session, fromAccountId, emailId } = input;
   const personalAccountId = session.accountId;
@@ -61,39 +79,50 @@ export async function copyEmailToPersonalInbox(input: {
     return { ok: false, reason: "invalid_account" };
   }
 
-  // One request resolves the member's personal Inbox (role=inbox on their OWN
-  // account) and, alongside it, the source email's keywords so the copy
-  // preserves its flags. The Email/get is scoped to the shared account, where
-  // the message lives; the Mailbox/query to the personal one, where it lands.
-  // Both reach through the member's own credential.
-  //
-  // Kept as its own batch, apart from the Email/copy below: JmapClient.request
-  // fails the WHOLE batch on any method error and retries a batch only when it
-  // mutates nothing, so a read folded in with the copy would either lose the
-  // retry or risk re-running the copy.
-  const lookup = await jmap.request(auth, session, [
-    ["Mailbox/query", { accountId: personalAccountId, filter: { role: "inbox" } }, "mbx"],
-    ["Email/get", { accountId: fromAccountId, ids: [emailId], properties: ["keywords"] }, "src"],
-  ]);
+  // Both answers already in hand — the delivery cycle's case — is the whole
+  // lookup batch skipped: it exists to learn exactly these two things, and
+  // paying a round trip per (member, message) to re-learn what the cycle read
+  // once is the difference between one Email/copy and three calls per copy.
+  // BOTH are required to skip it: a caller holding only one of the two still
+  // has to ask, and asking for one while assuming the other would make the
+  // manual and automatic copies disagree about a message that moved.
+  let personalInboxId = input.personalInboxId;
+  let keywords = input.keywords;
+  if (personalInboxId === undefined || keywords === undefined) {
+    // One request resolves the member's personal Inbox (role=inbox on their OWN
+    // account) and, alongside it, the source email's keywords so the copy
+    // preserves its flags. The Email/get is scoped to the shared account, where
+    // the message lives; the Mailbox/query to the personal one, where it lands.
+    // Both reach through the member's own credential.
+    //
+    // Kept as its own batch, apart from the Email/copy below: JmapClient.request
+    // fails the WHOLE batch on any method error and retries a batch only when it
+    // mutates nothing, so a read folded in with the copy would either lose the
+    // retry or risk re-running the copy.
+    const lookup = await jmap.request(auth, session, [
+      ["Mailbox/query", { accountId: personalAccountId, filter: { role: "inbox" } }, "mbx"],
+      ["Email/get", { accountId: fromAccountId, ids: [emailId], properties: ["keywords"] }, "src"],
+    ]);
 
-  const inboxResult = (lookup[0]?.[1] ?? {}) as { ids?: string[] };
-  const personalInboxId = (inboxResult.ids ?? [])[0];
-  if (!personalInboxId) {
-    return { ok: false, reason: "mailbox_roles_missing" };
-  }
+    const inboxResult = (lookup[0]?.[1] ?? {}) as { ids?: string[] };
+    personalInboxId = (inboxResult.ids ?? [])[0];
+    if (!personalInboxId) {
+      return { ok: false, reason: "mailbox_roles_missing" };
+    }
 
-  // Email/get is scoped to the shared account, so an id that isn't a message
-  // there comes back as an empty list — indistinguishable from "no such
-  // message" and refused the same way, never leaking whether the id exists
-  // elsewhere.
-  const sourceResult = (lookup[1]?.[1] ?? {}) as {
-    list?: Array<{ keywords?: Record<string, boolean> }>;
-  };
-  const source = (sourceResult.list ?? [])[0];
-  if (!source) {
-    return { ok: false, reason: "not_found" };
+    // Email/get is scoped to the shared account, so an id that isn't a message
+    // there comes back as an empty list — indistinguishable from "no such
+    // message" and refused the same way, never leaking whether the id exists
+    // elsewhere.
+    const sourceResult = (lookup[1]?.[1] ?? {}) as {
+      list?: Array<{ keywords?: Record<string, boolean> }>;
+    };
+    const source = (sourceResult.list ?? [])[0];
+    if (!source) {
+      return { ok: false, reason: "not_found" };
+    }
+    keywords = source.keywords ?? {};
   }
-  const keywords = source.keywords ?? {};
 
   const responses = await jmap.request(auth, session, [
     [

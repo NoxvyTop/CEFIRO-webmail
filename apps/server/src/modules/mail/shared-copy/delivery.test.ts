@@ -237,6 +237,10 @@ type Harness = {
   noCredentialFor: Set<string>;
   /** Which shared accounts each member's session reaches (default: SHARED). */
   reaches: Map<string, string[]>;
+  /** Keywords the shared account reports for a message (default: $seen). */
+  keywordsFor: Map<string, Record<string, boolean>>;
+  /** Members whose PERSONAL inbox the provider cannot resolve. */
+  noPersonalInboxFor: Set<string>;
   /** Ledger writes and Email/copy calls, in the order they happened. */
   events: string[];
   currentState: string;
@@ -259,6 +263,8 @@ function harness(): Harness {
     sessionThrowsFor: new Set(),
     noCredentialFor: new Set(),
     reaches: new Map(),
+    keywordsFor: new Map(),
+    noPersonalInboxFor: new Set(),
     currentState: "s-now",
   };
   const jmap: JmapClient = {
@@ -288,6 +294,10 @@ function harness(): Harness {
         }
         if (name === "Mailbox/query") {
           const accountId = params.accountId as string;
+          const owner = accountId.startsWith("personal-") ? accountId.slice("personal-".length) : "";
+          if (owner && h.noPersonalInboxFor.has(owner)) {
+            return ["Mailbox/query", { ids: [] }, callId];
+          }
           return ["Mailbox/query", { ids: [`inbox-${accountId}`] }, callId];
         }
         if (name === "Email/get") {
@@ -301,6 +311,9 @@ function harness(): Harness {
                 list: ids.map((id) => ({
                   id,
                   mailboxIds: { [h.inInbox.has(id) ? `inbox-${SHARED}` : "elsewhere"]: true },
+                  ...(properties.includes("keywords")
+                    ? { keywords: h.keywordsFor.get(id) ?? { $seen: true } }
+                    : {}),
                 })),
               },
               callId,
@@ -728,7 +741,9 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(lookup.calls[1]![1]).toEqual({
       accountId: SHARED,
       ids: ["e-inbox", "e-sent", "e-draft"],
-      properties: ["mailboxIds"],
+      // `keywords` rides along with the classification read, so no copy needs
+      // a read of its own to preserve the source's flags.
+      properties: ["mailboxIds", "keywords"],
     });
   });
 
@@ -848,6 +863,61 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
 
     await expect(run()).resolves.toMatchObject({ copied: 0, failed: 0 });
     expect(copyCalls(h)).toEqual([]);
+  });
+
+  // GH #313: every copy used to cost its own lookup batch — a Mailbox/query
+  // for the member's inbox and an Email/get for the source's keywords — so a
+  // page of 100 messages for 5 members was 500 extra round trips for two
+  // answers the cycle already had.
+  it("issues one lookup per member per cycle, not one per message", async () => {
+    h.pages = [{ created: ["e1", "e2", "e3"], newState: "s-2" }];
+    h.inInbox.add("e1").add("e2").add("e3");
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 3 });
+
+    const calls = h.requests.flatMap(({ calls: batch }) => batch);
+    const personalInboxQueries = calls.filter(
+      ([name, params]) =>
+        name === "Mailbox/query" && (params as { accountId: string }).accountId !== SHARED,
+    );
+    expect(personalInboxQueries).toHaveLength(1);
+    expect(calls.filter(([name]) => name === "Email/copy")).toHaveLength(3);
+    // The page's own Email/get carries the keywords, so no per-message read.
+    const shared = calls.filter(
+      ([name, params]) =>
+        name === "Email/get" && (params as { accountId: string }).accountId === SHARED,
+    );
+    expect(shared).toHaveLength(1);
+    expect((shared[0]![1] as { properties: string[] }).properties).toEqual([
+      "mailboxIds",
+      "keywords",
+    ]);
+  });
+
+  it("carries the source keywords from the page read into each copy", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    h.keywordsFor.set("e1", { $flagged: true });
+
+    await run([ana]);
+    const copyParams = h.requests
+      .flatMap(({ calls }) => calls)
+      .find(([name]) => name === "Email/copy")![1] as {
+      create: { c: { keywords: Record<string, boolean> } };
+    };
+    expect(copyParams.create.c.keywords).toEqual({ $flagged: true });
+  });
+
+  it("falls back to the lookup path for a member whose inbox cannot be resolved", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    h.noPersonalInboxFor.add(ana.email);
+
+    // Not silently skipped: it is a failed copy, exactly as before.
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1 });
+    expect(h.logs.some((l) => l.level === "warn" && l.fields.reason === "mailbox_roles_missing")).toBe(
+      true,
+    );
   });
 
   it("advances the cursor after each page and follows hasMoreChanges", async () => {

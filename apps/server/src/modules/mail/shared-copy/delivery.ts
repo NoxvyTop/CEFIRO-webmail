@@ -363,6 +363,9 @@ async function baseline(
 
 type ChangesPage = { newState: string; hasMoreChanges: boolean; created: string[] };
 
+/** A message of the page that is deliverable, with what the copy needs of it. */
+type DeliverableEmail = { id: string; keywords: Record<string, boolean> };
+
 async function fetchChanges(
   deps: DeliveryDeps,
   watcher: ElectedWatcher,
@@ -404,10 +407,18 @@ async function inboxOnly(
   watcher: ElectedWatcher,
   sharedAccountId: string,
   ids: string[],
-): Promise<string[]> {
+): Promise<DeliverableEmail[]> {
   const responses = await deps.jmap.request(watcher.auth, watcher.session, [
     ["Mailbox/query", { accountId: sharedAccountId, filter: { role: "inbox" } }, "mbx"],
-    ["Email/get", { accountId: sharedAccountId, ids, properties: ["mailboxIds"] }, "src"],
+    // `keywords` rides along with the `mailboxIds` this read needs anyway, so
+    // each copy carries the source's flags without a read of its own. Without
+    // it, every (member, message) pair paid a round trip to fetch keywords
+    // that are identical for all of them.
+    [
+      "Email/get",
+      { accountId: sharedAccountId, ids, properties: ["mailboxIds", "keywords"] },
+      "src",
+    ],
   ]);
   const inboxId = ((responses[0]?.[1] ?? {}) as { ids?: string[] }).ids?.[0];
   if (!inboxId) {
@@ -418,9 +429,56 @@ async function inboxOnly(
     throw new Error(`shared mailbox copy: cannot resolve the inbox of account ${sharedAccountId}`);
   }
   const list = ((responses[1]?.[1] ?? {}) as {
-    list?: Array<{ id: string; mailboxIds?: Record<string, boolean> }>;
+    list?: Array<{
+      id: string;
+      mailboxIds?: Record<string, boolean>;
+      keywords?: Record<string, boolean>;
+    }>;
   }).list ?? [];
-  return list.filter((email) => email.mailboxIds?.[inboxId] === true).map((email) => email.id);
+  return list
+    .filter((email) => email.mailboxIds?.[inboxId] === true)
+    .map((email) => ({ id: email.id, keywords: email.keywords ?? {} }));
+}
+
+/**
+ * The member's personal Inbox id, resolved ONCE per member per cycle and kept
+ * in `inboxes`. It is the same id for every message on every page, so asking
+ * per copy was a round trip per (member, message) for an answer that cannot
+ * change mid-cycle.
+ *
+ * `null` means the provider could not name it; the copy then falls back to the
+ * lookup path inside ./copy.ts, which answers `mailbox_roles_missing` exactly
+ * as it always did rather than the cycle inventing a new failure of its own.
+ */
+async function personalInboxOf(
+  deps: DeliveryDeps,
+  member: SharedCopyMember,
+  resolved: { auth: JmapAuth; session: JmapSession },
+  inboxes: Map<string, string | null>,
+): Promise<string | null> {
+  const cached = inboxes.get(member.userId);
+  if (cached !== undefined) return cached;
+  let inboxId: string | null = null;
+  try {
+    const responses = await deps.jmap.request(resolved.auth, resolved.session, [
+      [
+        "Mailbox/query",
+        { accountId: resolved.session.accountId, filter: { role: "inbox" } },
+        "mbx",
+      ],
+    ]);
+    inboxId = ((responses[0]?.[1] ?? {}) as { ids?: string[] }).ids?.[0] ?? null;
+  } catch (error) {
+    // Not fatal here: the per-copy lookup will hit the same provider and
+    // produce the failure — counted, logged and retried — that this cycle
+    // would otherwise have to duplicate.
+    (deps.log ?? defaultLog)("warn", "shared mailbox copy: personal inbox lookup failed", {
+      userId: member.userId,
+      error: String(error),
+    });
+  }
+  inboxes.set(member.userId, inboxId);
+  return inboxId;
 }
 
 /**
@@ -435,6 +493,13 @@ async function copyOne(
   resolved: { auth: JmapAuth; session: JmapSession },
   emailId: string,
   counts: DeliveryCounts,
+  /**
+   * What the cycle already knows about this copy: the member's inbox (resolved
+   * once per cycle) and the source's keywords (read with the page). Absent on
+   * the retry pass, which works from ledger rows rather than a page and lets
+   * ./copy.ts look both up.
+   */
+  known?: { personalInboxId: string; keywords: Record<string, boolean> },
 ): Promise<void> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
@@ -452,6 +517,7 @@ async function copyOne(
       session: resolved.session,
       fromAccountId: sharedAccountId,
       emailId,
+      ...known,
     });
     if (result.ok) {
       try {
@@ -570,18 +636,21 @@ async function deliverPage(
   deps: DeliveryDeps,
   sharedAccountId: string,
   members: SharedCopyMember[],
-  emailIds: string[],
+  emails: DeliverableEmail[],
   counts: DeliveryCounts,
+  inboxes: Map<string, string | null>,
 ): Promise<void> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
+  const emailIds = emails.map((email) => email.id);
   for (const member of members) {
     const resolved = await resolveMember(deps, sharedAccountId, member);
     if (!resolved) continue;
     const states = await deps.copies.copyStates(member.userId, sharedAccountId, emailIds);
     const unresolved: string[] = [];
-    for (const emailId of emailIds) {
-      const state = states.get(emailId);
+    let personalInboxId: string | null | undefined;
+    for (const email of emails) {
+      const state = states.get(email.id);
       if (state === "copied") {
         counts.skipped += 1;
         report("skipped");
@@ -593,10 +662,25 @@ async function deliverPage(
         // the one outcome this design refuses. At most once, deliberately.
         counts.unresolved += 1;
         report("unresolved");
-        unresolved.push(emailId);
+        unresolved.push(email.id);
         continue;
       }
-      await copyOne(deps, sharedAccountId, member, resolved, emailId, counts);
+      // Resolved lazily and at most once per cycle: a member with nothing to
+      // receive never costs the lookup at all.
+      if (personalInboxId === undefined) {
+        personalInboxId = await personalInboxOf(deps, member, resolved, inboxes);
+      }
+      await copyOne(
+        deps,
+        sharedAccountId,
+        member,
+        resolved,
+        email.id,
+        counts,
+        personalInboxId === null
+          ? undefined
+          : { personalInboxId, keywords: email.keywords },
+      );
     }
     if (unresolved.length > 0) {
       // One line per member and page rather than per message: the operator
@@ -670,6 +754,8 @@ async function deliver(
   }
 
   const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0 };
+  // One personal-inbox lookup per member for the whole cycle, pages included.
+  const inboxes = new Map<string, string | null>();
 
   // Before any new page: the copies an earlier cycle could not make. The
   // cursor has already moved past the pages that carried them, so this pass is
@@ -694,7 +780,7 @@ async function deliver(
     if (page.created.length > 0 && deliverTo.length > 0) {
       const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created);
       if (deliverable.length > 0) {
-        await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts);
+        await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts, inboxes);
       }
     }
     // After the page's copies, never before: a crash in between replays the

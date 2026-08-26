@@ -482,7 +482,12 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    duplicados. Cualquier otro error del proveedor se propaga **sin mover el
    cursor**, para reintentar la misma página en el siguiente sondeo o push.
 3. **Solo bandeja de entrada.** Un lote de lectura (`Mailbox/query role=inbox`
-   + `Email/get mailboxIds`) sobre la cuenta compartida filtra los ids creados:
+   + `Email/get mailboxIds, keywords`) sobre la cuenta compartida filtra los ids
+   creados y, de paso, trae las `keywords` de cada mensaje, que se pasan a la
+   copia para conservar las marcas sin una lectura por copia. La bandeja
+   personal de cada miembro se resuelve **una vez por ciclo**, no una vez por
+   mensaje: antes, cada par (miembro, mensaje) costaba dos viajes de ida y
+   vuelta a JMAP para dos respuestas que el ciclo ya tenía. Lo filtrado:
    lo enviado por el grupo, los borradores y lo archivado por una regla Sieve
    no es "correo nuevo del buzón".
 4. **Línea base por miembro.** El primer ciclo que ve a un miembro en una
