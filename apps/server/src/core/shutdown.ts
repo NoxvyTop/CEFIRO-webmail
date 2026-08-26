@@ -42,6 +42,15 @@ export interface ShutdownDeps {
   dbTimeoutMs?: number;
   /** Injectable for tests; defaults to `process.exit`. */
   exit?: (code: number) => void;
+  /**
+   * Stops background work BEFORE the listener drains (GH #313): the
+   * shared-mailbox copy worker holds upstream EventSource sockets and may be
+   * mid-cycle, and a cycle that starts a copy while the pool is closing ends
+   * with a half-recorded page. Bounded by `graceMs` like the drain itself, and
+   * a rejection or an overrun is logged and stepped over — a stuck worker must
+   * not keep a deploy from finishing any more than a stuck request may.
+   */
+  stopWorkers?: () => Promise<void>;
 }
 
 // Exported so core/config.ts can default SHUTDOWN_GRACE_MS /
@@ -62,6 +71,19 @@ export function createShutdown(deps: ShutdownDeps): (reason: ShutdownReason) => 
   const { server, sql, log } = deps;
 
   let started = false;
+
+  async function stopWorkers(): Promise<void> {
+    if (!deps.stopWorkers) return;
+    const stopping = deps.stopWorkers().catch((error) => {
+      log("error", "background worker stop failed", { error: String(error) });
+    });
+    const timedOut = await raceTimeout(stopping, graceMs);
+    if (timedOut) {
+      log("warn", "background worker stop timed out; continuing shutdown", { graceMs });
+    } else {
+      log("info", "background workers stopped", {});
+    }
+  }
 
   async function drainServer(): Promise<void> {
     // Bun drains at the connection level: stop(false) stops accepting new
@@ -105,6 +127,7 @@ export function createShutdown(deps: ShutdownDeps): (reason: ShutdownReason) => 
       signal: reason.kind === "signal" ? reason.signal : undefined,
     });
 
+    await stopWorkers();
     await drainServer();
     await closeDb();
 

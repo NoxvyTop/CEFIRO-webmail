@@ -117,6 +117,79 @@ describe("createShutdown", () => {
     expect(lines.some((l) => l.level === "error")).toBe(true);
     expect(exit).toHaveBeenCalledWith(0);
   });
+
+  // GH #313: background workers (the shared-mailbox copy worker) hold upstream
+  // sockets and may be mid-cycle when SIGTERM arrives. They stop FIRST, before
+  // the listener drains, so a cycle cannot start a copy against a pool that
+  // is about to close.
+  describe("stopWorkers hook (GH #313)", () => {
+    it("stops the workers before draining the server and closing the database", async () => {
+      const order: string[] = [];
+      const { sql } = fakeSql();
+      const server = {
+        pendingRequests: 0,
+        stop: vi.fn(() => {
+          order.push("server");
+          return Promise.resolve();
+        }),
+      };
+      const stopWorkers = vi.fn(async () => {
+        order.push("workers");
+      });
+      const { log } = recordingLog();
+      const exit = vi.fn();
+
+      const shutdown = createShutdown({ server, sql, log, graceMs: 50, exit, stopWorkers });
+      await shutdown({ kind: "signal", signal: "SIGTERM" });
+
+      expect(order).toEqual(["workers", "server"]);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it("carries on when stopping the workers rejects", async () => {
+      const { server, calls } = fakeServer();
+      const { sql, end } = fakeSql();
+      const { log, lines } = recordingLog();
+      const exit = vi.fn();
+
+      const shutdown = createShutdown({
+        server,
+        sql,
+        log,
+        graceMs: 50,
+        exit,
+        stopWorkers: () => Promise.reject(new Error("watcher stuck")),
+      });
+      await shutdown({ kind: "signal", signal: "SIGTERM" });
+
+      expect(lines.some((l) => l.level === "error" && l.msg.includes("worker"))).toBe(true);
+      expect(calls).toEqual([false]);
+      expect(end).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it("does not let a worker that never stops block the shutdown past the grace period", async () => {
+      const { server, calls } = fakeServer();
+      const { sql, end } = fakeSql();
+      const { log, lines } = recordingLog();
+      const exit = vi.fn();
+
+      const shutdown = createShutdown({
+        server,
+        sql,
+        log,
+        graceMs: 20,
+        exit,
+        stopWorkers: () => new Promise<void>(() => {}),
+      });
+      await shutdown({ kind: "signal", signal: "SIGTERM" });
+
+      expect(lines.some((l) => l.level === "warn" && l.msg.includes("worker"))).toBe(true);
+      expect(calls).toEqual([false]);
+      expect(end).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+  });
 });
 
 describe("installProcessHandlers", () => {

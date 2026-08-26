@@ -49,6 +49,11 @@ export const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 // option; the runbook says to generate one.
 export const MIN_BOOTSTRAP_PASSWORD_LENGTH = 24;
 
+// Default poll interval of the shared-mailbox copy worker (GH #313) — see the
+// schema entry below. Lives here rather than in the worker module so the
+// config layer does not have to import the mail module to name a number.
+export const DEFAULT_SHARED_MAILBOX_COPY_POLL_MS = 300_000;
+
 // A deadline of 0 or a fraction of a millisecond would abort every outbound
 // call before it started, so those are configuration errors, not tuning.
 const timeoutMsSchema = z.coerce.number().int().positive();
@@ -220,6 +225,23 @@ const configSchema = z.object({
     .int()
     .nonnegative()
     .default(DEFAULT_TRUSTED_PROXY_HOPS),
+  // GH #313: the background worker that copies new shared-mailbox mail into
+  // each opted-in member's inbox (modules/mail/shared-copy/). ON by default,
+  // unlike AI and push, because it is inert without opt-ins: a deployment
+  // where nobody has toggled a copy preference runs no cycle, opens no
+  // subscription and touches nothing. The switch exists for the operator who
+  // wants the toggle to keep recording intent while delivery is paused —
+  // during a provider migration, say — without hiding the setting. It also
+  // only ever matters when a JMAP provider is configured; index.ts builds no
+  // worker otherwise.
+  sharedMailboxCopyEnabled: z.boolean().default(true),
+  // How often the worker polls every watched shared mailbox for changes, as
+  // the safety net under its push subscription (see the module header of
+  // modules/mail/shared-copy/worker.ts for why both). Five minutes: a push
+  // that is missed costs at most this much latency, while the poll itself is
+  // one cheap `Email/changes` per account per interval. Same shape as every
+  // other duration knob — zero, negative or fractional is a misconfiguration.
+  sharedMailboxCopyPollMs: positiveIntSchema.default(DEFAULT_SHARED_MAILBOX_COPY_POLL_MS),
 }).superRefine((config, ctx) => {
   // GH #223: MASTER_KEY was only ever checked for LENGTH, so the key shipped in
   // docker-compose.dev.yml (`dev-master-key-dev-master-key-01`, base64) passed
@@ -474,6 +496,15 @@ export function loadConfig(
     // get the endpoint unlocked by whitespace.
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
     trustedProxyHops: env.TRUSTED_PROXY_HOPS || undefined,
+    // Off only on an explicit `false`/`0`; unset and empty both mean the
+    // default (on), so a deployment that never heard of the knob gets the
+    // feature and one that wrote `SHARED_MAILBOX_COPY_ENABLED=` did not
+    // silently switch it off.
+    sharedMailboxCopyEnabled: !(
+      env.SHARED_MAILBOX_COPY_ENABLED?.trim().toLowerCase() === "false" ||
+      env.SHARED_MAILBOX_COPY_ENABLED?.trim() === "0"
+    ),
+    sharedMailboxCopyPollMs: env.SHARED_MAILBOX_COPY_POLL_MS || undefined,
   });
   return { ...parsed, deprecations };
 }

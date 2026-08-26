@@ -51,6 +51,7 @@
  */
 
 import { log as defaultLog } from "../../../core/logger";
+import { recordSharedMailboxCopy } from "../../../core/metrics";
 import { JmapMethodError, type JmapAuth, type JmapClient, type JmapSession } from "../../../infra/jmap/client";
 import type { MailSessionResult } from "../context";
 import { copyEmailToPersonalInbox } from "./copy";
@@ -89,7 +90,12 @@ export type DeliveryDeps = {
   /** ../context.ts getMailSession, bound to its deps. */
   getMailSession(member: SharedCopyMember): Promise<MailSessionResult>;
   log?: LogFn;
-  /** Observed once per attempted copy — the `/metrics` counter (GH #313). */
+  /**
+   * Observed once per attempted copy. Defaults to the `/metrics` facade
+   * (core/metrics.ts recordSharedMailboxCopy), which is a no-op until an app
+   * registers a registry — so a unit test records into nowhere unless it
+   * injects its own.
+   */
   onCopyResult?(result: "copied" | "failed" | "skipped"): void;
 };
 
@@ -278,6 +284,7 @@ async function deliverPage(
   counts: { copied: number; skipped: number; failed: number },
 ): Promise<void> {
   const log = deps.log ?? defaultLog;
+  const report = deps.onCopyResult ?? recordSharedMailboxCopy;
   for (const member of members) {
     const resolved = await resolveMember(deps, sharedAccountId, member);
     if (!resolved) continue;
@@ -285,7 +292,7 @@ async function deliverPage(
     for (const emailId of emailIds) {
       if (already.has(emailId)) {
         counts.skipped += 1;
-        deps.onCopyResult?.("skipped");
+        report("skipped");
         continue;
       }
       try {
@@ -299,11 +306,11 @@ async function deliverPage(
         if (result.ok) {
           await deps.copies.recordCopy(member.userId, sharedAccountId, emailId);
           counts.copied += 1;
-          deps.onCopyResult?.("copied");
+          report("copied");
           continue;
         }
         counts.failed += 1;
-        deps.onCopyResult?.("failed");
+        report("failed");
         log("warn", "shared mailbox copy: copy refused", {
           sharedAccountId,
           userId: member.userId,
@@ -312,7 +319,7 @@ async function deliverPage(
         });
       } catch (error) {
         counts.failed += 1;
-        deps.onCopyResult?.("failed");
+        report("failed");
         log("warn", "shared mailbox copy: copy failed", {
           sharedAccountId,
           userId: member.userId,
