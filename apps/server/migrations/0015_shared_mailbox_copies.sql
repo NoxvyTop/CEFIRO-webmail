@@ -3,7 +3,12 @@
 -- follow a shared mailbox over time and to copy each new message to every
 -- opted-in member exactly once.
 --
--- Two tables, deliberately separate:
+-- THREE tables, deliberately separate, because they answer three different
+-- questions: `shared_mailbox_copy_state` says where the ACCOUNT was last read
+-- from (and who is delivering it right now), `shared_mailbox_member_state` says
+-- from when each MEMBER is entitled to copies, and `shared_mailbox_copies` says
+-- what has already been claimed or delivered for each (member, message). Each
+-- is defined below, next to its own reasoning.
 --
 -- `shared_mailbox_copy_state` is the CURSOR: the last JMAP Email state of the
 -- shared account this deployment has processed, one row per shared account.
@@ -17,12 +22,13 @@
 -- mail stays reachable through the manual copy button.
 --
 -- `shared_mailbox_copies` is the DEDUP LEDGER: one row per (member, shared
--- account, source email) that has been copied. Advancing the cursor is not
--- enough on its own, because a page's copies are not atomic with the cursor
--- write — a crash between the last Email/copy and the cursor advance replays
--- the page on the next cycle, and without this ledger every member would get
--- the page twice. The ledger is checked before every copy and written right
--- after a confirmed one, so a replay costs a query, never a duplicate. It is
+-- account, source email) a copy has been CLAIMED for, whatever became of it.
+-- Advancing the cursor is not enough on its own, because a page's copies are
+-- not atomic with the cursor write — a crash between the last Email/copy and
+-- the cursor advance replays the page on the next cycle, and without this
+-- ledger every member would get the page twice. The row is claimed BEFORE the
+-- Email/copy and confirmed after it (see the `status` note further down, next
+-- to the table itself), so a replay costs a query, never a duplicate. It is
 -- keyed by the SOURCE id, not the copy's id, since the source is the only
 -- thing both the changes feed and a replay agree on.
 --
@@ -37,7 +43,12 @@
 -- foreign key — the accounts live in the provider, not here. There is no
 -- retention of these rows and no purge of the copies they describe: both are
 -- explicitly out of scope (docs/design/shared-mailboxes.md), and a ledger row
--- is a few dozen bytes per delivered message.
+-- is a few dozen bytes per delivered message. The one deletion is the member
+-- prune: a member who stops opting in loses their `pending` and `failed` rows
+-- for that account along with their baseline, because those describe copies
+-- that will now never be delivered. Their `copied` rows stay, since that is
+-- the history which keeps a re-joiner from being sent the same mail twice.
+--
 -- The state row also carries the per-account delivery LEASE (`lease_owner`,
 -- `lease_until`), which is what keeps two replicas from delivering the same
 -- page. It replaced a transaction-scoped advisory lock: that lock held a

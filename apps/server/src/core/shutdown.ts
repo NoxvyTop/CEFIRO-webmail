@@ -146,8 +146,9 @@ export function createShutdown(deps: ShutdownDeps): (reason: ShutdownReason) => 
 
     // ONE deadline for both bounded phases (GH #313): whatever stopping the
     // workers spends comes off the drain's share, so the wait before the
-    // forced close is graceMs — never graceMs twice — with MIN_DRAIN_MS as
-    // the drain's floor.
+    // forced close is at most graceMs + MIN_DRAIN_MS — never graceMs twice.
+    // The floor is what adds that second, and only when the workers used the
+    // whole budget: the request in flight still gets a moment to finish.
     const deadline = Date.now() + graceMs;
     await stopWorkers(graceMs);
     await drainServer(Math.max(MIN_DRAIN_MS, deadline - Date.now()));
