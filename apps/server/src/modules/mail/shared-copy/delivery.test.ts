@@ -6,6 +6,7 @@ import {
   type JmapClient,
   type JmapMethodCall,
   type JmapMethodResponse,
+  type JmapRequestOptions,
   type JmapSession,
 } from "../../../infra/jmap/client";
 import type { MailSessionResult } from "../context";
@@ -285,7 +286,7 @@ function fakeCopiesRepo(events: string[]) {
 
 type Harness = {
   deps: DeliveryDeps;
-  requests: Array<{ auth: JmapAuth; calls: JmapMethodCall[] }>;
+  requests: Array<{ auth: JmapAuth; calls: JmapMethodCall[]; options?: JmapRequestOptions }>;
   copies: ReturnType<typeof fakeCopiesRepo>;
   logs: Array<{ level: string; msg: string; fields: Record<string, unknown> }>;
   /** Pages `Email/changes` answers with, consumed in order. */
@@ -306,8 +307,10 @@ type Harness = {
   keywordsFor: Map<string, Record<string, boolean>>;
   /** Members whose PERSONAL inbox the provider cannot resolve. */
   noPersonalInboxFor: Set<string>;
-  /** The Message-ID the shared account reports for a message (default: one per id). */
-  messageIdFor: Map<string, string[]>;
+  /** The Message-ID the shared account reports for a message (default: one per id; null = no header). */
+  messageIdFor: Map<string, string[] | null>;
+  /** A provider that never returns `messageId`, however it is asked. */
+  omitMessageId: boolean;
   /** `${member email}|${Message-ID}` pairs already sitting in that member's inbox. */
   personalCopies: Set<string>;
   /** Members whose personal Email/query throws. */
@@ -339,6 +342,7 @@ function harness(): Harness {
     keywordsFor: new Map(),
     noPersonalInboxFor: new Set(),
     messageIdFor: new Map(),
+    omitMessageId: false,
     personalCopies: new Set(),
     queryThrowsFor: new Set(),
     verifications: [],
@@ -348,8 +352,8 @@ function harness(): Harness {
     getSession: async () => {
       throw new Error("not used: sessions come from getMailSession");
     },
-    request: async (auth, _session, calls) => {
-      h.requests.push({ auth, calls });
+    request: async (auth, _session, calls, _extraUsing, options) => {
+      h.requests.push({ auth, calls, options });
       return calls.map(([name, params, callId]): JmapMethodResponse => {
         if (name === "Email/changes") {
           if (h.changesError) throw new JmapMethodError(h.changesError);
@@ -391,8 +395,8 @@ function harness(): Harness {
                   ...(properties.includes("keywords")
                     ? { keywords: h.keywordsFor.get(id) ?? { $seen: true } }
                     : {}),
-                  ...(properties.includes("messageId")
-                    ? { messageId: h.messageIdFor.get(id) ?? [`<mid-${id}>`] }
+                  ...(properties.includes("messageId") && !h.omitMessageId
+                    ? { messageId: h.messageIdFor.has(id) ? h.messageIdFor.get(id) : [`<mid-${id}>`] }
                     : {}),
                 })),
               },
@@ -997,6 +1001,54 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
 
     await run([ana]);
     expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e1`)).toBe("<abc@shared.test>");
+  });
+
+  // GH #313: `messageId` is a degradable property, and the client's latch is
+  // per process. Once any conversation view had tripped it, the page read was
+  // silently stripped of `messageId` too: every claim stored null and the
+  // retry verification was disabled with nothing in the log. The page read
+  // now keeps out of the shared latch, so an absent value means the PROVIDER
+  // does not return it — and that is said once per cycle.
+  it("reads the page outside the shared degradation latch", async () => {
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await run([ana]);
+    const pageRead = h.requests.find(({ calls }) =>
+      calls.some(([name, params]) => name === "Email/get" && Array.isArray(params.ids) && params.ids.length > 0),
+    )!;
+    expect(pageRead.options).toEqual({ degradation: "isolated" });
+    // The copy and the personal-inbox lookup are ordinary shared requests.
+    const others = h.requests.filter((request) => request !== pageRead);
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((request) => request.options === undefined)).toBe(true);
+  });
+
+  it("warns once per cycle, and records no Message-ID, when the provider does not return messageId", async () => {
+    h.omitMessageId = true;
+    h.pages = [
+      { created: ["e1"], newState: "s-2", hasMoreChanges: true },
+      { created: ["e2"], newState: "s-3" },
+    ];
+    h.inInbox.add("e1").add("e2");
+
+    await expect(run([ana])).resolves.toMatchObject({ copied: 2, pages: 2 });
+    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e1`)).toBeNull();
+    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e2`)).toBeNull();
+    const warnings = h.logs.filter((l) => l.level === "warn" && l.msg.includes("messageId"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.fields).toMatchObject({ sharedAccountId: SHARED });
+
+    // A source that HAS no Message-ID header (null, not absent) is not the
+    // provider's fault and warns nothing.
+    h.omitMessageId = false;
+    h.logs.length = 0;
+    h.messageIdFor.set("e3", null);
+    h.pages = [{ created: ["e3"], newState: "s-4" }];
+    h.inInbox.add("e3");
+    await run([ana]);
+    expect(h.copies.messageIds.get(`${ana.userId}|${SHARED}|e3`)).toBeNull();
+    expect(h.logs.filter((l) => l.level === "warn" && l.msg.includes("messageId"))).toEqual([]);
   });
 
   it("marks a retry copied, without copying, when the member's inbox already holds it", async () => {

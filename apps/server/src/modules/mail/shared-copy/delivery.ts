@@ -429,20 +429,34 @@ async function inboxOnly(
   watcher: ElectedWatcher,
   sharedAccountId: string,
   ids: string[],
+  /** Once per cycle, not per page: whether the provider was already reported for it. */
+  warned: { noMessageId: boolean },
 ): Promise<DeliverableEmail[]> {
-  const responses = await deps.jmap.request(watcher.auth, watcher.session, [
-    ["Mailbox/query", { accountId: sharedAccountId, filter: { role: "inbox" } }, "mbx"],
-    // `keywords` and `messageId` ride along with the `mailboxIds` this read
-    // needs anyway: the first carries the source's flags into each copy, the
-    // second is recorded with the claim so a retry can ask whether the copy
-    // already exists. Without them, every (member, message) pair paid a round
-    // trip for answers that are identical for all of them.
+  const responses = await deps.jmap.request(
+    watcher.auth,
+    watcher.session,
     [
-      "Email/get",
-      { accountId: sharedAccountId, ids, properties: ["mailboxIds", "keywords", "messageId"] },
-      "src",
+      ["Mailbox/query", { accountId: sharedAccountId, filter: { role: "inbox" } }, "mbx"],
+      // `keywords` and `messageId` ride along with the `mailboxIds` this read
+      // needs anyway: the first carries the source's flags into each copy, the
+      // second is recorded with the claim so a retry can ask whether the copy
+      // already exists. Without them, every (member, message) pair paid a round
+      // trip for answers that are identical for all of them.
+      [
+        "Email/get",
+        { accountId: sharedAccountId, ids, properties: ["mailboxIds", "keywords", "messageId"] },
+        "src",
+      ],
     ],
-  ]);
+    [],
+    // `messageId` is one of the client's degradable properties, and its latch
+    // is per process: once any conversation view had tripped it, this read
+    // was silently stripped of `messageId` too, every claim stored null, and
+    // the retry verification was disabled for the rest of the process with
+    // nothing in the log. Isolated, the read asks for exactly what it needs
+    // and an absent answer means THIS provider does not return it.
+    { degradation: "isolated" },
+  );
   const inboxId = ((responses[0]?.[1] ?? {}) as { ids?: string[] }).ids?.[0];
   if (!inboxId) {
     // Without the inbox nothing on the page can be classified. Failing the
@@ -456,17 +470,31 @@ async function inboxOnly(
       id: string;
       mailboxIds?: Record<string, boolean>;
       keywords?: Record<string, boolean>;
-      /** RFC 8621 §4.1.1: the header's value is a LIST of ids. */
+      /**
+       * RFC 8621 §4.1.1: the header's value is a LIST of ids, `null` when the
+       * message has no Message-ID header. ABSENT (undefined) is different: the
+       * provider does not return the property at all.
+       */
       messageId?: string[] | null;
     }>;
   }).list ?? [];
-  return list
-    .filter((email) => email.mailboxIds?.[inboxId] === true)
-    .map((email) => ({
-      id: email.id,
-      keywords: email.keywords ?? {},
-      messageId: email.messageId?.[0] ?? null,
-    }));
+  const deliverable = list.filter((email) => email.mailboxIds?.[inboxId] === true);
+  if (!warned.noMessageId && deliverable.some((email) => email.messageId === undefined)) {
+    // Absent, not null: the provider refused or ignored the property. Every
+    // claim of this cycle records no Message-ID, so a retry of any of them
+    // cannot be verified against the member's inbox first. Said once per
+    // cycle — the operator needs to know it is this provider, not read it per
+    // page.
+    warned.noMessageId = true;
+    (deps.log ?? defaultLog)("warn", "shared mailbox copy: provider does not return messageId; retry verification disabled", {
+      sharedAccountId,
+    });
+  }
+  return deliverable.map((email) => ({
+    id: email.id,
+    keywords: email.keywords ?? {},
+    messageId: email.messageId?.[0] ?? null,
+  }));
 }
 
 /**
@@ -918,6 +946,8 @@ async function deliver(
   const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0 };
   // One personal-inbox lookup per member for the whole cycle, pages included.
   const inboxes = new Map<string, string | null>();
+  // What the page read has already reported about the provider this cycle.
+  const warned = { noMessageId: false };
 
   // Before any new page: the copies an earlier cycle could not make. The
   // cursor has already moved past the pages that carried them, so this pass is
@@ -940,7 +970,7 @@ async function deliver(
     pages += 1;
 
     if (page.created.length > 0 && deliverTo.length > 0) {
-      const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created);
+      const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created, warned);
       if (
         deliverable.length > 0 &&
         !(await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts, inboxes, owner))

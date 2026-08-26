@@ -577,6 +577,78 @@ describe("jmap client", () => {
       });
       expect(sentProperties(fetchFn, 2)).toContain("messageId");
     });
+
+    // GH #313: `messageId` is degradable, and the latch is per client — so once
+    // ANY conversation view tripped it, the shared-mailbox delivery page read
+    // silently lost `messageId` too, stored `message_id = null` for every
+    // claim, and the retry verification that depends on it was disabled for
+    // the rest of the process. A caller that must know whether the provider
+    // returns a property can now ask with the latch kept out of it.
+    describe("isolated degradation (GH #313)", () => {
+      const pageCalls: JmapMethodCall[] = [
+        ["Mailbox/query", { accountId: "acc-1", filter: { role: "inbox" } }, "m"],
+        [
+          "Email/get",
+          { accountId: "acc-1", ids: ["e1"], properties: ["mailboxIds", "messageId"] },
+          "g",
+        ],
+      ];
+      const pageOk = {
+        methodResponses: [
+          ["Mailbox/query", { ids: ["inbox"] }, "m"],
+          ["Email/get", { list: [{ id: "e1", mailboxIds: { inbox: true } }] }, "g"],
+        ],
+      };
+
+      it("asks for every property even after the shared latch tripped", async () => {
+        const fetchFn = fetchSequence([invalidArguments, threadOk, pageOk]);
+        const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+        await client.request(auth, session, threadCalls);
+
+        await client.request(auth, session, pageCalls, [], { degradation: "isolated" });
+
+        expect(sentProperties(fetchFn, 2)).toEqual(["mailboxIds", "messageId"]);
+      });
+
+      it("retries once without the degradable properties for that call only, and leaves the latch alone", async () => {
+        const fetchFn = fetchSequence([invalidArguments, pageOk, threadOk]);
+        const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+        const responses = await client.request(auth, session, pageCalls, [], {
+          degradation: "isolated",
+        });
+
+        expect(responses[1]?.[1]).toEqual({ list: [{ id: "e1", mailboxIds: { inbox: true } }] });
+        expect(sentProperties(fetchFn, 0)).toEqual(["mailboxIds", "messageId"]);
+        expect(sentProperties(fetchFn, 1)).toEqual(["mailboxIds"]);
+        // The next SHARED request still asks for everything: an isolated
+        // refusal is not evidence the rest of the process acts on.
+        await client.request(auth, session, threadCalls);
+        expect(sentProperties(fetchFn, 2)).toContain("messageId");
+        expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+      });
+
+      it("still fails an isolated call whose degraded retry is refused too", async () => {
+        const fetchFn = fetchSequence([invalidArguments, invalidArguments]);
+        const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+        await expect(
+          client.request(auth, session, pageCalls, [], { degradation: "isolated" }),
+        ).rejects.toMatchObject({ code: "jmap_error" });
+        expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
+      });
+
+      it("is byte-identical to the default for a shared request", async () => {
+        const fetchFn = fetchSequence([invalidArguments, threadOk]);
+        const client = createJmapClient({ baseUrl: "https://mail.test", fetchFn });
+
+        await client.request(auth, session, threadCalls, [], { degradation: "shared" });
+        await client.request(auth, session, threadCalls);
+
+        expect((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+        expect(sentProperties(fetchFn, 2)).toEqual(["id", "subject"]);
+      });
+    });
   });
 
   describe("transport failure (GH #187)", () => {
