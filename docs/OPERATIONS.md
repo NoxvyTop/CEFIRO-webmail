@@ -103,6 +103,8 @@ Stalwart es el proveedor que usamos, no una dependencia dura.
 | `JMAP_AUTH_MODE` | `basic` | Cómo se presenta la credencial de buzón: `basic` (HTTP Basic `email:contraseña`, Stalwart y casi todo servidor autoalojado) o `bearer` (`Authorization: Bearer <credencial>`, proveedores con token/OAuth). |
 | `JMAP_AUTHSERV_ID` | — | authserv-id (RFC 8601 §5) de **tu** MTA receptor: el primer token de la cabecera `Authentication-Results` que Stalwart añade. Solo se confía en esa cabecera para la tilde de "remitente verificado". Vacío = a prueba de fallos, todos los veredictos en `unknown`. Ver [Autenticidad del remitente](#autenticidad-del-remitente-jmap_authserv_id-152). |
 | `JMAP_TIMEOUT_MS` | `10000` | Plazo de las llamadas salientes al proveedor. |
+| `SHARED_MAILBOX_COPY_ENABLED` | `true` | Copias automáticas de buzones compartidos (#313): el servidor copia el correo nuevo de un buzón compartido a la bandeja de cada miembro que activó la opción. Activo por defecto porque sin opt-ins no hace nada; solo aplica con `JMAP_URL`. `false` o `0` pausa la entrega sin ocultar la opción. Ver [Copias automáticas](ARCHITECTURE.md#copias-automáticas-de-buzones-compartidos-313). |
+| `SHARED_MAILBOX_COPY_POLL_MS` | `300000` | Cada cuánto el worker sondea cada buzón compartido con opt-ins, como red de seguridad bajo su suscripción EventSource. Un push perdido cuesta como mucho este retraso; el sondeo en sí es un `Email/changes` por buzón. |
 | `NODE_EXTRA_CA_CERTS` | — | **No es una perilla de Céfiro**: la respetan Bun y Node. Ruta a un bundle PEM para confiar en un proveedor con certificado privado o CA interna. No existe ningún modo `insecure`. |
 
 **Nombres retirados (#33/#34).** Los viejos siguen funcionando salvo uno, y el
@@ -735,6 +737,7 @@ ver una variable cuyo nombre nunca se escribió**: eso lo caza la alerta
 | `cefiro_outbound_requests_total{dependency,outcome}` | contador | Llamadas **salientes** por dependencia (`stalwart`\|`oidc`\|`ai`) y desenlace (`ok`\|`error`\|`timeout`). |
 | `cefiro_outbound_request_duration_seconds{dependency}` | histograma | Latencia saliente hasta las cabeceras de respuesta. |
 | `cefiro_sse_streams_open` | gauge | Streams SSE (`/api/mail/events`) abiertos ahora mismo. |
+| `cefiro_shared_mailbox_copies_total{result}` | contador | Copias automáticas de buzones compartidos (#313) intentadas, por desenlace: `copied`, `failed` (rechazada o con error del proveedor; el detalle va al log como `shared mailbox copy: copy refused/failed`, con `userId` y `emailId`) y `skipped` (el miembro ya tenía la copia; una tasa que sube indica ciclos que se cortan a medias). Las tres series existen desde el primer scrape, en cero. |
 | `cefiro_dependency_up{dependency}` | gauge | `1`/`0` por dependencia, del último chequeo de salud. |
 | `cefiro_process_start_time_seconds` | gauge | Arranque del proceso. Delata un bucle de reinicios y explica un contador que vuelve a cero. |
 

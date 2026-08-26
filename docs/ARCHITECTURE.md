@@ -322,6 +322,8 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `sso_config` | proveedor OIDC: issuer, client_id, client_secret (cifrado), scopes |
 | `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
 | `sent_recipients` | direcciones a las que el usuario ha escrito (nivel "remitente conocido" del indicador de confianza, #314); separada de `contacts` a propósito |
+| `shared_mailbox_copy_state` | cursor de las copias automáticas de buzones compartidos (#313): último estado `Email` JMAP procesado, una fila por cuenta compartida |
+| `shared_mailbox_copies` | libro de copias entregadas (#313): (miembro, cuenta compartida, mensaje origen), lo que impide duplicados al repetir una página |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
 descifrada no se persiste nunca — se re-descifra bajo demanda y se cachea
@@ -433,6 +435,94 @@ No es BIMI: no se consulta DNS del remitente ni se descarga ningún logotipo;
 la marca es un icono fijo junto al dominio real. No requiere variables de
 entorno nuevas; sin `JMAP_AUTHSERV_ID` todo queda en `none`, igual que la
 insignia de autenticidad queda en `unknown`.
+
+### Copias automáticas de buzones compartidos (#313)
+
+Un miembro de un buzón compartido puede pedir, desde Ajustes → Buzones
+compartidos, que el correo nuevo de ese buzón le llegue también a su propia
+bandeja (`user_preferences.preferences.sharedMailboxCopyOptIn`). Desde #313 el
+servidor actúa sobre esa preferencia con **el único trabajo de fondo que tiene
+este proceso**: `apps/server/src/modules/mail/shared-copy/`. Es el mismo
+`Email/copy` del botón manual "copiar a mi bandeja" (`shared-copy/copy.ts`, con
+la credencial del miembro destinatario), ejecutado sin que nadie pulse nada.
+El diseño y las alternativas descartadas están en
+`docs/design/shared-mailboxes.md` (G-2); aquí va cómo funciona.
+
+**Ciclo de entrega** (`delivery.ts`, uno por cuenta compartida):
+
+1. **Elegir un watcher.** No existe credencial del grupo (un principal de grupo
+   no puede iniciar sesión), así que la cuenta compartida se lee a través de la
+   sesión de un miembro: el primero de los miembros con opt-in (orden por
+   email) cuya sesión JMAP alcanza la cuenta. Se re-elige en cada ciclo; un
+   miembro dado de baja o con credencial revocada solo cuesta una línea de
+   log. Sin candidato, el ciclo no toca nada.
+2. **Cursor.** El servidor guarda el último estado `Email` de la cuenta
+   compartida que procesó (`shared_mailbox_copy_state`). Sin fila, el primer
+   ciclo **solo fija el estado actual, sin copiar**: el opt-in es hacia
+   adelante, y el correo anterior sigue disponible con el botón manual. Con
+   fila, pide `Email/changes { sinceState, maxChanges: 100 }` y recorre como
+   mucho cinco páginas por ciclo; lo que quede lo termina el siguiente. Si el
+   proveedor responde `cannotCalculateChanges` (el cursor es más viejo que su
+   historial), se vuelve a fijar el estado y se avisa en el log: el correo de
+   ese hueco es incognoscible, y un barrido "los N más recientes" repartiría
+   duplicados. Cualquier otro error del proveedor se propaga **sin mover el
+   cursor**, para reintentar la misma página en el siguiente sondeo o push.
+3. **Solo bandeja de entrada.** Un lote de lectura (`Mailbox/query role=inbox`
+   + `Email/get mailboxIds`) sobre la cuenta compartida filtra los ids creados:
+   lo enviado por el grupo, los borradores y lo archivado por una regla Sieve
+   no es "correo nuevo del buzón".
+4. **Copiar a cada miembro**, con la sesión de cada uno (un miembro cuya sesión
+   ya no lista la cuenta se salta con log). Antes de cada copia se consulta el
+   libro `shared_mailbox_copies` en una sola query por página; después de cada
+   copia confirmada (`created`, nunca por ausencia de `notCreated`) se escribe
+   la fila. Un fallo en la copia de un miembro se cuenta, se registra y **no
+   bloquea a los demás**.
+5. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
+   Una caída entre la última copia y el avance repite la página en el ciclo
+   siguiente, y el libro convierte la repetición en saltos, no en duplicados.
+   El cursor avanza aunque la copia de un miembro haya fallado: lo que protege
+   la copia de ese miembro entre ciclos es el libro, y clavar una página por el
+   fallo de uno dejaría sin correo a todos.
+
+**Disparador híbrido** (`worker.ts` + `watcher.ts`, decisión del owner): por
+cada cuenta con opt-ins el servidor mantiene **una suscripción EventSource**
+propia (`{types}=Email`, `{closeafter}=no`, `{ping}=30`) abierta con la
+credencial del watcher, y un cambio del estado `Email` de la cuenta lanza un
+ciclo al momento. Como red de seguridad, un **sondeo pasivo** cada
+`SHARED_MAILBOX_COPY_POLL_MS` (5 min) vuelve a listar los opt-ins, corre el
+ciclo de cada cuenta y reconcilia las suscripciones (abre las de cuentas
+nuevas, cierra las que ya nadie pide). Los pushes de una misma cuenta se
+pliegan en un solo ciclo en vuelo más, como mucho, uno de seguimiento. La
+suscripción tiene watchdog de silencio de 90 s y reconexión con backoff
+exponencial (5 s → 60 s), y **no** se registra en `mailStreams`: ese registro
+es por usuario, tiene tope de 8 y se cierra con el logout del usuario, y el
+logout de un miembro no debe apagar el buzón para los demás. Una credencial
+rotada o revocada aparece como 401 en la siguiente conexión o elección, y se
+elige a otro miembro. `PushSubscription` de JMAP (webhook real) queda como
+opción futura: quitaría el socket sostenido a cambio de un endpoint HTTPS
+entrante y su handshake.
+
+**Varias réplicas.** Cada réplica mantiene sus propias suscripciones y su
+propio sondeo, a propósito: la duplicación de suscripciones es barata y evita
+coordinar quién escucha. Lo que **no** se duplica es la entrega: el ciclo corre
+dentro de una transacción que toma `pg_try_advisory_xact_lock` por cuenta
+(clase 313 + `hashtext(accountId)`), y quien no lo consigue cede sin esperar —
+el poseedor está haciendo el mismo trabajo. El lock *xact* se libera al
+confirmar y al abortar, así que una réplica que muere a medio ciclo no deja la
+cuenta bloqueada; la transacción solo sostiene el lock, y las escrituras de
+cursor y libro confirman por su cuenta.
+
+**Arranque y apagado.** El worker se construye solo con `JMAP_URL` configurado
+y `SHARED_MAILBOX_COPY_ENABLED` no desactivado, arranca **después** de que el
+listener esté escuchando, y sin opt-ins no corre ciclos ni abre suscripciones.
+En el apagado ordenado (#193) se detiene **antes** de drenar el listener
+(`createShutdown.stopWorkers`), acotado por `SHUTDOWN_GRACE_MS`, para que
+ningún ciclo empiece una copia contra un pool que se está cerrando. Cada copia
+intentada suma en `cefiro_shared_mailbox_copies_total{result}`.
+
+**Fuera de alcance, a propósito:** retención o purga de las copias, borrado en
+cascada, backfill del correo anterior al opt-in y la UI más allá del texto de
+ayuda.
 
 ### Papelera con retención
 
