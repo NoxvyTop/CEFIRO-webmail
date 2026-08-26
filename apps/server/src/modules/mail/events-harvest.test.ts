@@ -456,6 +456,46 @@ describe("sent-recipient harvest on the mail-arrival event stream (GH #314)", ()
     expect(list.some((c) => c.email === `alice-${user.userId}@x.com`)).toBe(true);
   });
 
+  // GH #314 (JD-4): both harvests read the same account's mailbox roles from
+  // the same arrival, so asking JMAP twice is a duplicate round trip per
+  // delivery for an answer that cannot have changed between the two calls.
+  it("looks the mailbox roles up ONCE per arrival, not once per harvest", async () => {
+    const user = await createTestUser();
+    const calls: JmapMethodCall[][] = [];
+    const jmap = makeStubJmap({
+      emails: [
+        {
+          id: "e-sent",
+          mailboxIds: { "mb-sent": true },
+          from: [{ email: user.email }],
+          to: [{ email: `both-${user.userId}@x.com` }],
+        },
+        {
+          id: "e-received",
+          mailboxIds: { "mb-inbox": true },
+          from: [{ name: "Alice", email: `alice-both-${user.userId}@x.com` }],
+        },
+      ],
+      calls,
+    });
+
+    const res = await makeApp(jmap, sseFetch(arrival), contacts, sentRecipients).request(
+      "/api/mail/events",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(1);
+    expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
+    // Both harvests still ran off that one lookup.
+    expect(await sentRecipients.has(user.userId, [`both-${user.userId}@x.com`])).toEqual(
+      new Set([`both-${user.userId}@x.com`]),
+    );
+    const list = await contacts.list(user.userId);
+    expect(list.some((c) => c.email === `alice-both-${user.userId}@x.com`)).toBe(true);
+  });
+
   it("never records the owner's own address from a message they sent to themselves", async () => {
     const user = await createTestUser();
     const other = `other-${user.userId}@x.com`;

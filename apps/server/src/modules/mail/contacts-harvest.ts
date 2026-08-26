@@ -106,34 +106,47 @@ export function extractSentRecipients(
 }
 
 /**
- * Best-effort contact harvest from an already-fetched page of messages.
- * Resolves mailbox roles with its own JMAP round trip — deliberately kept
- * separate from the Email/query + Email/get call that produced `emails`,
- * because JmapClient.request() throws for the whole batch if ANY call in it
- * comes back as a JMAP-level error. Folding the role lookup into the same
- * batch would mean a harvest-only failure could take the caller's own work
- * down with it, which is exactly what this must never do. Never throws: a
- * failure here (JMAP hiccup, DB hiccup, anything) is logged and swallowed so
- * the caller is unaffected.
+ * Resolves the account's `{id, role}` mailbox list in its OWN JMAP round trip
+ * — deliberately kept separate from the Email/query + Email/get call that
+ * produced the arrival page, because JmapClient.request() throws for the whole
+ * batch if ANY call in it comes back as a JMAP-level error. Folding the role
+ * lookup into the same batch would mean a harvest-only failure could take the
+ * caller's own work down with it, which is exactly what this must never do.
+ *
+ * GH #314 (JD-4): called ONCE per arrival by harvestOnMailArrival and handed to
+ * both harvests below. Each used to make this call for itself, so a delivery
+ * with both stores wired asked JMAP twice for the same answer — an answer that
+ * cannot have changed between the two calls. Throws on failure; the callers
+ * decide what a failed lookup means for them.
+ */
+async function lookupMailboxRoles(
+  jmap: JmapClient,
+  auth: JmapAuth,
+  session: JmapSession,
+): Promise<HarvestMailbox[]> {
+  const responses = await jmap.request(auth, session, [
+    ["Mailbox/get", { accountId: session.accountId, properties: ["id", "role"] }, "mb"],
+  ]);
+  return ((responses[0]?.[1] ?? {}) as { list?: HarvestMailbox[] }).list ?? [];
+}
+
+/**
+ * Best-effort contact harvest from an already-fetched page of messages and an
+ * already-resolved mailbox role list. Never throws: a failure here (DB hiccup,
+ * anything) is logged and swallowed so the caller is unaffected.
  *
  * Invoked once per delivery from harvestOnMailArrival (GH #180), not on every
  * mail read as it originally was (GH #124).
  */
 export async function harvestContacts(input: {
   contacts: ContactsRepo;
-  jmap: JmapClient;
-  auth: JmapAuth;
-  session: JmapSession;
+  mailboxes: HarvestMailbox[];
   userId: string;
   ownerEmail: string;
   emails: HarvestEmail[];
 }): Promise<void> {
   try {
-    const responses = await input.jmap.request(input.auth, input.session, [
-      ["Mailbox/get", { accountId: input.session.accountId, properties: ["id", "role"] }, "mb"],
-    ]);
-    const mailboxes = ((responses[0]?.[1] ?? {}) as { list?: HarvestMailbox[] }).list ?? [];
-    const candidates = extractHarvestCandidates(input.emails, mailboxes, input.ownerEmail);
+    const candidates = extractHarvestCandidates(input.emails, input.mailboxes, input.ownerEmail);
     if (candidates.length === 0) return;
     await input.contacts.harvestSenders(input.userId, candidates);
   } catch (error) {
@@ -142,26 +155,20 @@ export async function harvestContacts(input: {
 }
 
 /**
- * GH #314: best-effort sent-recipient harvest from the same arrival page.
- * Its own Mailbox/get round trip for the same reason harvestContacts has one
- * — a failure in either harvest must not take the other, or the caller's
- * stream, down with it — and never throws.
+ * GH #314: best-effort sent-recipient harvest from the same arrival page and
+ * the same mailbox role list. Swallows its own failures for the same reason
+ * harvestContacts does — a failure in either harvest must not take the other,
+ * or the caller's stream, down with it.
  */
 export async function harvestSentRecipients(input: {
   sentRecipients: SentRecipientsRepo;
-  jmap: JmapClient;
-  auth: JmapAuth;
-  session: JmapSession;
+  mailboxes: HarvestMailbox[];
   userId: string;
   ownerEmail: string;
   emails: HarvestEmail[];
 }): Promise<void> {
   try {
-    const responses = await input.jmap.request(input.auth, input.session, [
-      ["Mailbox/get", { accountId: input.session.accountId, properties: ["id", "role"] }, "mb"],
-    ]);
-    const mailboxes = ((responses[0]?.[1] ?? {}) as { list?: HarvestMailbox[] }).list ?? [];
-    const recipients = extractSentRecipients(input.emails, mailboxes, [input.ownerEmail]);
+    const recipients = extractSentRecipients(input.emails, input.mailboxes, [input.ownerEmail]);
     if (recipients.size === 0) return;
     await input.sentRecipients.record(input.userId, [...recipients]);
   } catch (error) {
@@ -186,6 +193,10 @@ export async function harvestSentRecipients(input: {
  * optional in MailDeps); the sender harvest runs exactly as before whether or
  * not the other is present, and the page's `to`/`cc`/`bcc` properties are
  * requested unconditionally so the two paths never diverge in what they read.
+ *
+ * GH #314 (JD-4): the mailbox role lookup is likewise made ONCE, here, and
+ * handed to both. It is skipped entirely when neither store is wired, so an
+ * arrival that has nothing to harvest still costs no round trip at all.
  */
 export async function harvestOnMailArrival(input: {
   contacts?: ContactsRepo;
@@ -221,12 +232,13 @@ export async function harvestOnMailArrival(input: {
     ]);
     const emails = ((responses[1]?.[1] ?? {}) as { list?: HarvestEmail[] }).list ?? [];
     if (emails.length === 0) return;
+    if (!input.contacts && !input.sentRecipients) return;
+
+    const mailboxes = await lookupMailboxRoles(input.jmap, input.auth, input.session);
     if (input.contacts) {
       await harvestContacts({
         contacts: input.contacts,
-        jmap: input.jmap,
-        auth: input.auth,
-        session: input.session,
+        mailboxes,
         userId: input.userId,
         ownerEmail: input.ownerEmail,
         emails,
@@ -235,9 +247,7 @@ export async function harvestOnMailArrival(input: {
     if (input.sentRecipients) {
       await harvestSentRecipients({
         sentRecipients: input.sentRecipients,
-        jmap: input.jmap,
-        auth: input.auth,
-        session: input.session,
+        mailboxes,
         userId: input.userId,
         ownerEmail: input.ownerEmail,
         emails,
