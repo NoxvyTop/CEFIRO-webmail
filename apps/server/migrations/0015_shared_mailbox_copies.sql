@@ -140,6 +140,20 @@ create table shared_mailbox_member_state (
 -- passed. Written with `on conflict do nothing`, so it can never reopen a
 -- `copied` row, answer a `pending` one, or reset the attempts of a `failed` one.
 --
+-- That trail is BOUNDED, on both of the axes along which it used to grow. A
+-- member the cycle cannot serve is usually back within a cycle or two, but a
+-- credential revoked at the provider — or a session that stops listing the
+-- shared account — is a permanent state nothing here can end, and for such a
+-- member these rows grew by one per message per page for ever, in a table with
+-- no retention, for mail that will never be handed over. So the cycle stops
+-- writing them once the member holds DELIVERY_OWED_CAP (1000) of them
+-- outstanding for the account — counted by exactly the three conditions above —
+-- and the messages past the cap are counted `dropped` and logged rather than
+-- silently discarded. It also ROTATES them (`updated_at = now()`, `attempts`
+-- untouched) whenever the retry pass finds that member still unreachable: they
+-- are ordered oldest-first by the index below, and rows nobody can attempt and
+-- nobody ever touches owned the head of the whole account's retry queue.
+--
 -- `message_id` is the SOURCE message's RFC 5322 Message-ID, recorded with the
 -- claim, and it exists for exactly one question: a retry has to know whether
 -- the copy it is about to make was already made. An Email/copy whose response

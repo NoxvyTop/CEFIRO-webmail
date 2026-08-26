@@ -13,6 +13,8 @@ import type { MailSessionResult } from "../context";
 import {
   DELIVERY_BASELINE_SKEW_MS,
   DELIVERY_MAX_PAGES,
+  DELIVERY_OWED_CAP,
+  DELIVERY_RETRY_LIMIT,
   DELIVERY_RETRY_MAX_ATTEMPTS,
   electWatcher,
   runDeliveryCycle,
@@ -303,6 +305,31 @@ function fakeCopiesRepo(events: string[]) {
           receivedAts.set(id, row.receivedAt);
           if (!failedOrder.includes(id)) failedOrder.push(id);
         }
+      },
+      touchRows: async (userId: string, accountId: string, emailIds: string[]) => {
+        for (const emailId of emailIds) {
+          const id = key(userId, accountId, emailId);
+          if (states.get(id) !== "failed") continue;
+          const at = failedOrder.indexOf(id);
+          if (at < 0) continue;
+          // `updated_at = now()` and nothing else: the row moves to the tail of
+          // the oldest-first batch with its attempts exactly as they were.
+          failedOrder.splice(at, 1);
+          failedOrder.push(id);
+          events.push(`ledger:touch:${userId}:${emailId}`);
+        }
+      },
+      countOwed: async (userId: string, accountId: string) => {
+        let outstanding = 0;
+        for (const [id, status] of states) {
+          const [user, account] = id.split("|") as [string, string];
+          if (user !== userId || account !== accountId) continue;
+          if (status !== "failed") continue;
+          if ((attempts.get(id) ?? 0) !== 0) continue;
+          if (errors.get(id) !== "member unavailable") continue;
+          outstanding += 1;
+        }
+        return outstanding;
       },
       recordCopy: async (userId: string, accountId: string, emailId: string) => {
         states.set(key(userId, accountId, emailId), "copied");
@@ -997,6 +1024,109 @@ describe("runDeliveryCycle — the trail for members it cannot deliver to (GH #3
   });
 });
 
+// GH #313: the trail above is written for a member the cycle cannot serve, and
+// "cannot serve" is not always temporary — a credential revoked at the
+// provider, or a session that stops listing the shared account, is a permanent
+// state nothing in this server can end. Unbounded, that member cost everybody
+// else their mail twice over: the retry pass reached their rows, `resolveMember`
+// answered null and it `continue`d WITHOUT spending an attempt or touching
+// `updated_at`, so ordered `updated_at asc limit 100` those rows owned the
+// batch for ever and no other member of the account was retried again; and the
+// page trail kept writing more of them, one per message per page, without end.
+// Two bounds answer it — rotation for the batch, a cap for the row set.
+describe("runDeliveryCycle — bounding the trail of a member who never comes back (GH #313)", () => {
+  /** `count` owed rows for this member, written exactly as a cycle writes them. */
+  function seedOwed(userId: string, count: number, prefix: string) {
+    return h.copies.repo.recordOwed(
+      userId,
+      SHARED,
+      Array.from({ length: count }, (_, n) => ({
+        emailId: `${prefix}-${n}`,
+        messageId: `mid-${prefix}-${n}`,
+        receivedAt: new Date(),
+      })),
+    );
+  }
+
+  it("rotates an unreachable member's rows to the tail, so the members it can serve are retried again", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    // Bruno is on the deliverable listing, but his session fails every cycle
+    // and he already holds a whole batch of owed rows.
+    await seedOwed(bruno.userId, DELIVERY_RETRY_LIMIT, "e-bruno");
+    // Ana's own failed copy is the youngest row of the account, so it reaches
+    // the oldest-first batch only if bruno's stop owning the head of it.
+    h.copies.seedFailed(ana.userId, SHARED, "e-ana", 1);
+    h.sessionThrowsFor.add(bruno.email);
+
+    for (const state of ["s-2", "s-3", "s-4"]) {
+      h.pages = [{ created: [], newState: state }];
+      await run();
+    }
+
+    expect(copyCalls(h).map((c) => `${c.by}:${c.emailId}`)).toContain(`${ana.email}:e-ana`);
+    expect(h.copies.states.get(`${ana.userId}|${SHARED}|e-ana`)).toBe("copied");
+    // Rotation is not a failure: nothing was attempted on bruno's behalf, so
+    // nothing is charged to his rows and they stay retryable for his return.
+    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e-bruno-0`)).toBe(0);
+    expect(h.copies.errors.get(`${bruno.userId}|${SHARED}|e-bruno-0`)).toBe("member unavailable");
+    expect(h.logs.some((l) => l.msg.includes("rotated"))).toBe(true);
+  });
+
+  it("stops writing the owed trail at the cap and counts what it drops", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    await seedOwed(bruno.userId, DELIVERY_OWED_CAP, "e-old");
+    h.sessionThrowsFor.add(bruno.email);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    const results: string[] = [];
+    h.deps.onCopyResult = (result) => results.push(result);
+
+    await expect(run()).resolves.toMatchObject({ copied: 1, owed: 0, dropped: 1 });
+    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e1`)).toBeUndefined();
+    expect(results.filter((r) => r === "dropped")).toHaveLength(1);
+    expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("owed trail capped"))).toBe(true);
+    // Capping the trail is not pinning the page: everybody else's mail moves.
+    expect(h.copies.cursors.get(SHARED)).toBe("s-2");
+  });
+
+  it("caps the trail of an owed member the deliverable listing leaves out too", async () => {
+    const carla = member("carla");
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, carla.userId]);
+    await seedOwed(carla.userId, DELIVERY_OWED_CAP, "e-old");
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await expect(run([ana], [carla.userId])).resolves.toMatchObject({ owed: 0, dropped: 1 });
+    expect(h.copies.states.get(`${carla.userId}|${SHARED}|e1`)).toBeUndefined();
+  });
+
+  it("hands the owed rows over with their attempts intact once the member's session recovers", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    h.sessionThrowsFor.add(bruno.email);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    await expect(run()).resolves.toMatchObject({ owed: 1, dropped: 0 });
+
+    // Two more cycles with the session still down: the row rotates, and
+    // rotating it must not spend an attempt nobody made.
+    for (const state of ["s-3", "s-4"]) {
+      h.pages = [{ created: [], newState: state }];
+      await run();
+    }
+    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e1`)).toBe(0);
+
+    h.sessionThrowsFor.clear();
+    h.pages = [{ created: [], newState: "s-5" }];
+    await expect(run()).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).slice(-1)).toMatchObject([{ by: bruno.email, emailId: "e1" }]);
+    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e1`)).toBe("copied");
+  });
+});
+
 describe("runDeliveryCycle — delivery (GH #313)", () => {
   beforeEach(() => {
     h.copies.seedCursor(SHARED, "s-1");
@@ -1024,6 +1154,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
       failed: 0,
       unresolved: 0,
       owed: 0,
+      dropped: 0,
       pages: 1,
       truncated: false,
     });

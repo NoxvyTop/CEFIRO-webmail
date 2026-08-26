@@ -157,8 +157,23 @@ export type OutboundSample = {
  * its page, and the retry pass hands it over when the member is back. A
  * sustained rate means somebody has been undeliverable for a while, not that
  * anything was lost.
+ *
+ * `dropped` is the sixth, and the only one of the six that IS a loss: a message
+ * left out of that trail because the member's outstanding owed rows have
+ * reached DELIVERY_OWED_CAP (modules/mail/shared-copy/delivery.ts). It means
+ * somebody has been unreachable for so long — a credential revoked at the
+ * provider, an account their session no longer lists — that the account stopped
+ * writing them a trail rather than grow one without end. Anything other than
+ * zero is a membership to fix, and the mail behind it is reachable only through
+ * the shared mailbox itself.
  */
-export type SharedMailboxCopyResult = "copied" | "failed" | "skipped" | "unresolved" | "owed";
+export type SharedMailboxCopyResult =
+  | "copied"
+  | "failed"
+  | "skipped"
+  | "unresolved"
+  | "owed"
+  | "dropped";
 
 const SHARED_MAILBOX_COPY_RESULTS: readonly SharedMailboxCopyResult[] = [
   "copied",
@@ -166,6 +181,7 @@ const SHARED_MAILBOX_COPY_RESULTS: readonly SharedMailboxCopyResult[] = [
   "skipped",
   "unresolved",
   "owed",
+  "dropped",
 ];
 
 export type Metrics = {

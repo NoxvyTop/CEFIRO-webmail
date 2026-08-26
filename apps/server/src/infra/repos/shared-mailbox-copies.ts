@@ -418,6 +418,65 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
+     * Moves this member's `failed` rows for `emailIds` to the TAIL of the
+     * oldest-first retry batch (`updated_at = now()`) without counting an
+     * attempt (GH #313).
+     *
+     * It exists for one member: the one on the deliverable listing whose
+     * session cannot be resolved cycle after cycle — a credential revoked at
+     * the provider, or an account their session no longer lists. The retry pass
+     * reaches their rows, finds no session to attempt anything with, and moves
+     * on; nothing was tried, so nothing may be charged to the row. But
+     * `listRetryable` is `order by updated_at asc limit 100`, so rows nobody
+     * ever touches own the head of the batch for ever and every OTHER member of
+     * the account stops being retried. Rotating them costs the unreachable
+     * member nothing (their attempts, reason and Message-ID are exactly as they
+     * were, and their turn comes round again) and gives everyone else theirs.
+     *
+     * `status = 'failed'` scopes it deliberately: a `copied` row is history and
+     * a `pending` one is an open question, and neither is in the retry batch
+     * this reorders. An id with no row is silently nothing to move.
+     */
+    async touchRows(userId: string, sharedAccountId: string, emailIds: string[]): Promise<void> {
+      if (emailIds.length === 0) return;
+      await sql`
+        update shared_mailbox_copies set updated_at = now()
+        where user_id = ${userId}
+          and shared_account_id = ${sharedAccountId}
+          and email_id = any(${emailIds}::text[])
+          and status = 'failed'
+      `;
+    },
+
+    /**
+     * How many copies this account still OWES this member: the rows `recordOwed`
+     * wrote and nothing has answered yet (`failed`, no attempt spent, the reason
+     * it writes). What bounds the trail (GH #313).
+     *
+     * The trail grows by one row per message per page for as long as a member
+     * cannot be served, and "cannot be served" is not always temporary — a
+     * revoked credential is a permanent state nothing here can end. Without a
+     * bound that is unlimited growth in a table with no retention, for mail
+     * that will never be handed over. The cycle stops writing at
+     * DELIVERY_OWED_CAP outstanding rows (see the delivery module).
+     *
+     * The three conditions are exactly `recordOwed`'s own signature, so a row
+     * the retry pass has since spent an attempt on stops counting: it is an
+     * ordinary failed copy from that moment, ageing out under the attempt cap.
+     */
+    async countOwed(userId: string, sharedAccountId: string): Promise<number> {
+      const rows = await sql<{ owed: string }[]>`
+        select count(*) as owed from shared_mailbox_copies
+        where user_id = ${userId}
+          and shared_account_id = ${sharedAccountId}
+          and status = 'failed'
+          and attempts = 0
+          and last_error = 'member unavailable'
+      `;
+      return Number(rows[0]?.owed ?? 0);
+    },
+
+    /**
      * Records a confirmed copy in one step, for the manual copy route, which
      * has no cycle around it to claim the row first. Idempotent: a member who
      * presses the button twice, or presses it for mail a cycle already

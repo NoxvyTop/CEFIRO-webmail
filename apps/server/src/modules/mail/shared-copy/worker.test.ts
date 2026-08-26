@@ -119,6 +119,8 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
       markCopied: async () => {},
       markFailed: async () => {},
       recordOwed: async () => {},
+      touchRows: async () => {},
+      countOwed: async () => 0,
       listRetryable: async () => [],
       acquireLease: async () => true,
       renewLease: async () => true,
@@ -166,6 +168,7 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
         failed: 0,
         unresolved: 0,
         owed: 0,
+        dropped: 0,
         pages: 1,
         truncated: false,
       };

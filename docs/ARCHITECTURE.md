@@ -592,6 +592,31 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    base** igual que a los entregables, para que su rastro sea igual de hacia
    adelante que la entrega: volver no le trae el correo anterior a ser
    miembro. Cada fila así escrita suma en la métrica como `owed`.
+
+   **Y ese rastro está acotado.** "No se puede servir este ciclo" no siempre es
+   pasajero: una credencial revocada en el proveedor, o una sesión que deja de
+   listar la cuenta compartida, es un estado permanente que este servidor no
+   puede terminar. Sin cota, ese miembro costaba el correo de los demás por dos
+   caminos. Uno es el **lote de reintentos**: sus filas llegan al paso de
+   reintentos, no hay sesión con la que intentar nada y el paso sigue adelante
+   sin gastar intento ni tocar `updated_at`, así que —siendo el lote
+   `order by updated_at asc limit 100`— unas filas que nadie mueve se quedaban
+   con la cabeza de la cola de toda la cuenta para siempre y **ningún otro
+   miembro volvía a reintentarse**. Por eso, cuando la sesión de un miembro no
+   se resuelve, sus filas del lote **rotan al final de la cola** (`touchRows`,
+   solo `updated_at = now()`): **sin gastar intento**, porque no se intentó nada
+   y nada se le puede cobrar, y con una línea por miembro y ciclo. El otro es el
+   **conjunto de filas**: el rastro crecía una fila por mensaje y por página, sin
+   fin, en una tabla sin retención y para correo que nadie va a entregar. Por eso
+   solo se escribe mientras ese miembro tenga menos de `DELIVERY_OWED_CAP`
+   (1000) filas debidas pendientes en esa cuenta (`countOwed`: `failed`,
+   `attempts = 0`, `last_error = "member unavailable"`); pasada la cota la
+   página no se le escribe, sus mensajes se cuentan como `dropped` y se avisa
+   una vez por miembro y ciclo. La cota es la misma para el miembro al que la
+   lista entregable no incluye. `dropped` es el único desenlace de ese contador
+   que **sí** es una pérdida: el correo sigue en el buzón compartido, con su
+   botón manual de copiar a la bandeja, y lo que hay que arreglar es la
+   membresía.
 5. **Copiar a cada miembro** ya registrado, con la sesión de cada uno (un
    miembro cuya sesión no se puede resolver —o que ya no lista la cuenta— se
    salta con log, dejándole el rastro `owed` del punto 4). El libro

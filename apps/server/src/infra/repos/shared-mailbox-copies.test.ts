@@ -636,6 +636,93 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([]);
   });
 
+  // GH #313: the owed rows of a member who never comes back — a credential
+  // revoked at the provider — are `failed` with no attempt spent, and the retry
+  // pass cannot spend one for them either: it has no session to attempt with.
+  // Ordered `updated_at asc limit 100`, they owned the batch of the whole
+  // account for ever and nobody else was ever retried. `touchRows` is the
+  // rotation that answers it: the tail of the queue, at no cost to the member.
+  it("moves a member's failed rows to the tail of the batch without spending an attempt", async () => {
+    const accountId = freshAccountId();
+    const stuck = await freshUserId();
+    const served = await freshUserId();
+    await repo.recordOwed(stuck, accountId, [
+      { emailId: "e-stuck", messageId: "stuck@shared.test", receivedAt: new Date() },
+    ]);
+    await repo.beginCopy(served, accountId, "e-mine");
+    await repo.markFailed(served, accountId, "e-mine", "copy_failed");
+    const batch = { userIds: [stuck, served], maxAttempts: 5, limit: 100 };
+    expect((await repo.listRetryable(accountId, batch)).map((r) => r.emailId)).toEqual([
+      "e-stuck",
+      "e-mine",
+    ]);
+
+    await repo.touchRows(stuck, accountId, ["e-stuck"]);
+
+    expect((await repo.listRetryable(accountId, batch)).map((r) => r.emailId)).toEqual([
+      "e-mine",
+      "e-stuck",
+    ]);
+    // Rotation is not an attempt: the row keeps everything the retry pass will
+    // need when the member is reachable again.
+    expect(await repo.listRetryable(accountId, batch)).toContainEqual(
+      expect.objectContaining({ userId: stuck, emailId: "e-stuck", attempts: 0 }),
+    );
+  });
+
+  it("rotates only the failed rows it was given", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.recordCopy(member, accountId, "e-copied");
+    await repo.beginCopy(member, accountId, "e-pending");
+
+    await repo.touchRows(member, accountId, ["e-copied", "e-pending", "e-absent"]);
+
+    expect(await repo.copyStates(member, accountId, ["e-copied", "e-pending"])).toEqual(
+      new Map([
+        ["e-copied", "copied"],
+        ["e-pending", "pending"],
+      ]),
+    );
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual(
+      [],
+    );
+    await expect(repo.touchRows(member, accountId, [])).resolves.toBeUndefined();
+  });
+
+  // GH #313: the trail of a member nothing can reach grows by a row per message
+  // per page, for ever. `countOwed` is what bounds it: the cycle stops writing
+  // once this many are outstanding for that member and that account.
+  it("counts the outstanding owed rows of one member and account", async () => {
+    const member = await freshUserId();
+    const other = await freshUserId();
+    const accountId = freshAccountId();
+    const elsewhere = freshAccountId();
+    expect(await repo.countOwed(member, accountId)).toBe(0);
+
+    await repo.recordOwed(member, accountId, [
+      { emailId: "e1", messageId: null, receivedAt: new Date() },
+      { emailId: "e2", messageId: null, receivedAt: new Date() },
+    ]);
+    await repo.recordOwed(other, accountId, [
+      { emailId: "e1", messageId: null, receivedAt: new Date() },
+    ]);
+    await repo.recordOwed(member, elsewhere, [
+      { emailId: "e1", messageId: null, receivedAt: new Date() },
+    ]);
+    expect(await repo.countOwed(member, accountId)).toBe(2);
+
+    // A row the retry pass has spent an attempt on is no longer owed: it is an
+    // ordinary failed copy, ageing out under the attempt cap.
+    await repo.beginCopy(member, accountId, "e1");
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(await repo.countOwed(member, accountId)).toBe(1);
+
+    // Neither is one that was finally delivered.
+    await repo.recordCopy(member, accountId, "e2");
+    expect(await repo.countOwed(member, accountId)).toBe(0);
+  });
+
   it("stops listing a failed copy once it finally succeeds", async () => {
     const member = await freshUserId();
     const accountId = freshAccountId();

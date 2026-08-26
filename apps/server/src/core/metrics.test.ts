@@ -247,6 +247,7 @@ describe("shared-mailbox copy metrics (GH #313)", () => {
     metrics.recordSharedMailboxCopy("skipped");
     metrics.recordSharedMailboxCopy("unresolved");
     metrics.recordSharedMailboxCopy("owed");
+    metrics.recordSharedMailboxCopy("dropped");
 
     const rendered = metrics.render({});
     expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="copied"}')).toBe("2");
@@ -256,6 +257,9 @@ describe("shared-mailbox copy metrics (GH #313)", () => {
     // GH #313: a copy the account owes a member it cannot deliver to right
     // now, recorded so the retry pass hands it over when they are back.
     expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="owed"}')).toBe("1");
+    // GH #313: a message left out of that trail because the member's owed rows
+    // have reached the cap — the one outcome of this counter that IS a loss.
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="dropped"}')).toBe("1");
     expect(rendered).toContain("# TYPE cefiro_shared_mailbox_copies_total counter");
     expect(rendered).toContain("# HELP cefiro_shared_mailbox_copies_total ");
   });
@@ -267,6 +271,7 @@ describe("shared-mailbox copy metrics (GH #313)", () => {
     expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="skipped"}')).toBe("0");
     expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="unresolved"}')).toBe("0");
     expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="owed"}')).toBe("0");
+    expect(sample(rendered, 'cefiro_shared_mailbox_copies_total{result="dropped"}')).toBe("0");
   });
 });
 

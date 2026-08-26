@@ -132,6 +132,23 @@ export const DELIVERY_RETRY_MAX_ATTEMPTS = 5;
 export const DELIVERY_RETRY_LIMIT = 100;
 
 /**
+ * How many copies one member may be OWED for one account before the cycle
+ * stops writing them a trail (`recordOwed`).
+ *
+ * The trail exists for a member the cycle cannot serve TODAY, and most of them
+ * are back within a cycle or two. Some never are: a credential revoked at the
+ * provider, or a session that stops listing the shared account, is a permanent
+ * state nothing in this server can end — and for that member the trail grew by
+ * a row per message per page, for ever, in a table with no retention, for mail
+ * nobody will ever hand over. A thousand rows is far more than any real absence
+ * needs (a busy shared mailbox is a few hundred messages a week) and it is
+ * bounded: at most this many, plus the one page whose write was still permitted.
+ * Past it the messages are counted `dropped` and logged, because a bound that
+ * hides what it is discarding is worse than the growth it prevents.
+ */
+export const DELIVERY_OWED_CAP = 1000;
+
+/**
  * How far BEFORE a member's baseline a message may have been received and
  * still be theirs. The provider stamps `receivedAt` with its clock and this
  * server's database stamps `baselined_at` with its own; a provider running a
@@ -225,6 +242,14 @@ export type SharedCopyStore = {
     rows: Array<{ emailId: string; messageId: string | null; receivedAt: Date }>,
   ): Promise<void>;
   /**
+   * Moves this member's `failed` rows for these ids to the tail of the
+   * oldest-first retry batch, spending no attempt. What keeps the rows of a
+   * member nothing can reach from owning the batch of the whole account.
+   */
+  touchRows(userId: string, sharedAccountId: string, emailIds: string[]): Promise<void>;
+  /** How many copies this account still owes this member, for the cap below. */
+  countOwed(userId: string, sharedAccountId: string): Promise<number>;
+  /**
    * This account's failed copies still worth another try, oldest first,
    * restricted to the members this cycle can deliver to.
    */
@@ -303,7 +328,10 @@ export type DeliveryCycleResult =
  * earlier attempt claimed and never confirmed: they are left exactly as they
  * are, because re-copying one risks the duplicate this design refuses.
  * `owed` counts the rows written for members this cycle could not deliver to
- * at all, which nothing attempted and the retry pass will pick up.
+ * at all, which nothing attempted and the retry pass will pick up. `dropped`
+ * counts the messages that trail did NOT record because the member's owed rows
+ * had reached DELIVERY_OWED_CAP — the one count here that is a loss, and the
+ * reason the cap is logged and metered rather than silent.
  */
 export type DeliveryCounts = {
   copied: number;
@@ -311,6 +339,19 @@ export type DeliveryCounts = {
   failed: number;
   unresolved: number;
   owed: number;
+  dropped: number;
+};
+
+/**
+ * What this cycle knows about the trails it is writing, shared by every page:
+ * how many copies each member is already owed for the account, and which
+ * members have already been reported as capped. Per cycle, deliberately — the
+ * count is a query, and asking it per member per page would be one round trip
+ * for an answer that only this cycle's own writes can move.
+ */
+type OwedTrail = {
+  outstanding: Map<string, number>;
+  capped: Set<string>;
 };
 
 function reaches(session: JmapSession, sharedAccountId: string): boolean {
@@ -771,6 +812,15 @@ async function recordFailure(
  * and receivedAt like any claim, so the retry pass — which owns the
  * verification and the attempt cap — delivers it as soon as the member is
  * deliverable again.
+ *
+ * And it is BOUNDED, by DELIVERY_OWED_CAP outstanding rows for that member and
+ * account. Most absences end within a cycle or two, but a credential revoked at
+ * the provider does not end at all, and the trail for such a member grew by a
+ * row per message per page for ever — in a table with no retention, for mail
+ * that will never be handed over. Past the cap the page's messages are counted
+ * `dropped`, metered and logged once per member per cycle: the mail stays in
+ * the shared mailbox, reachable through it and through the manual copy button,
+ * and what the operator has to fix is the membership.
  */
 async function recordOwed(
   deps: DeliveryDeps,
@@ -779,8 +829,31 @@ async function recordOwed(
   emails: DeliverableEmail[],
   counts: DeliveryCounts,
   reason: string,
+  trail: OwedTrail,
 ): Promise<void> {
   if (emails.length === 0) return;
+  const report = deps.onCopyResult ?? recordSharedMailboxCopy;
+  const outstanding = await outstandingOwed(deps, sharedAccountId, userId, trail);
+  if (outstanding >= DELIVERY_OWED_CAP) {
+    for (let dropped = 0; dropped < emails.length; dropped += 1) {
+      counts.dropped += 1;
+      report("dropped");
+    }
+    if (!trail.capped.has(userId)) {
+      // Once per member per cycle, like every other line of this path: a
+      // member nothing can reach is one operator problem, not one per page.
+      trail.capped.add(userId);
+      (deps.log ?? defaultLog)("warn", "shared mailbox copy: owed trail capped; member unreachable", {
+        sharedAccountId,
+        userId,
+        outstanding,
+        cap: DELIVERY_OWED_CAP,
+        reason,
+        recovery: "the shared mailbox itself, and the member's manual copy-to-inbox button",
+      });
+    }
+    return;
+  }
   try {
     await deps.copies.recordOwed(
       userId,
@@ -804,7 +877,10 @@ async function recordOwed(
     });
     return;
   }
-  const report = deps.onCopyResult ?? recordSharedMailboxCopy;
+  // An upper bound of what the insert added — `on conflict do nothing` may have
+  // written fewer — and an upper bound is the right side to err on for a cap:
+  // it can only make the trail stop sooner, never grow past its bound.
+  trail.outstanding.set(userId, outstanding + emails.length);
   for (let recorded = 0; recorded < emails.length; recorded += 1) {
     counts.owed += 1;
     report("owed");
@@ -817,6 +893,38 @@ async function recordOwed(
     emailIds: emails.length,
     reason,
   });
+}
+
+/**
+ * How many copies this account already owes the member, asked ONCE per member
+ * per cycle and kept up to date by this cycle's own writes.
+ *
+ * A count that cannot be read is answered as "room": the cap only ever prevents
+ * growth, while refusing to write is the very loss the trail exists to stop, so
+ * a failing database must not also cost the member their page. The answer is
+ * cached either way, so a broken count is one query per member per cycle rather
+ * than one per page.
+ */
+async function outstandingOwed(
+  deps: DeliveryDeps,
+  sharedAccountId: string,
+  userId: string,
+  trail: OwedTrail,
+): Promise<number> {
+  const known = trail.outstanding.get(userId);
+  if (known !== undefined) return known;
+  let outstanding = 0;
+  try {
+    outstanding = await deps.copies.countOwed(userId, sharedAccountId);
+  } catch (error) {
+    (deps.log ?? defaultLog)("warn", "shared mailbox copy: could not count the copies owed", {
+      sharedAccountId,
+      userId,
+      error: String(error),
+    });
+  }
+  trail.outstanding.set(userId, outstanding);
+  return outstanding;
 }
 
 /**
@@ -896,7 +1004,38 @@ async function retryFailed(
     const rows = byMember.get(member.userId);
     if (!rows || rows.length === 0) continue;
     const resolved = await resolveMember(deps, sharedAccountId, member);
-    if (!resolved) continue;
+    if (!resolved) {
+      // On the deliverable listing, and still unreachable: a credential revoked
+      // at the provider, or a session that no longer lists the account. Nothing
+      // can be attempted for them, so nothing may be CHARGED to their rows —
+      // but left untouched those rows never move, and the batch is
+      // `order by updated_at asc limit 100`, so enough of them own the head of
+      // the account's queue for ever and no other member is ever retried again.
+      // Rotated to the tail instead: the member keeps their attempts and their
+      // turn, everybody else gets theirs back.
+      const emailIds = rows.map((row) => row.emailId);
+      try {
+        await deps.copies.touchRows(member.userId, sharedAccountId, emailIds);
+      } catch (error) {
+        // The batch stays as it was for another cycle — worse than a rotation,
+        // and nothing this cycle can do about a database that is failing.
+        log("error", "shared mailbox copy: could not rotate an unreachable member's rows", {
+          sharedAccountId,
+          userId: member.userId,
+          emailIds: emailIds.length,
+          error: String(error),
+        });
+        continue;
+      }
+      // Once per member per cycle — this loop runs once per cycle — so a
+      // member nobody can reach is one line, not one per row.
+      log("info", "shared mailbox copy: retry batch rotated past an unreachable member", {
+        sharedAccountId,
+        userId: member.userId,
+        emailIds: emailIds.length,
+      });
+      continue;
+    }
     log("info", "shared mailbox copy: retrying failed copies", {
       sharedAccountId,
       userId: member.userId,
@@ -1074,6 +1213,7 @@ async function deliverPage(
   counts: DeliveryCounts,
   inboxes: Map<string, string | null>,
   owner: string,
+  trail: OwedTrail,
 ): Promise<boolean> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
@@ -1089,6 +1229,7 @@ async function deliverPage(
       entitledTo(emails, baselines, userId),
       counts,
       "not deliverable this cycle",
+      trail,
     );
   }
   for (const member of members) {
@@ -1114,6 +1255,7 @@ async function deliverPage(
         entitled,
         counts,
         "member session unavailable",
+        trail,
       );
       continue;
     }
@@ -1239,9 +1381,18 @@ async function deliver(
   ]);
   const deliverTo = members;
 
-  const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0, owed: 0 };
+  const counts: DeliveryCounts = {
+    copied: 0,
+    skipped: 0,
+    failed: 0,
+    unresolved: 0,
+    owed: 0,
+    dropped: 0,
+  };
   // One personal-inbox lookup per member for the whole cycle, pages included.
   const inboxes = new Map<string, string | null>();
+  // One owed-count query per member for the whole cycle, and one capped line.
+  const trail: OwedTrail = { outstanding: new Map(), capped: new Set() };
   // What the page read has already reported about the provider this cycle.
   const warned = { noMessageId: false };
 
@@ -1294,6 +1445,7 @@ async function deliver(
           counts,
           inboxes,
           owner,
+          trail,
         ))
       ) {
         // The lease went mid-page, so this page is only half delivered — and
