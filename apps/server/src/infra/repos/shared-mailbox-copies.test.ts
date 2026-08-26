@@ -381,6 +381,24 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     expect(second[0]).toMatchObject({ attempts: 2, last_error: "over_quota" });
   });
 
+  // GH #313: `markFailed` matched on the key alone, so a row that had reached
+  // `copied` in between — the member's own manual copy-to-inbox, or a
+  // concurrent cycle's confirmation — could be demoted to `failed` by a losing
+  // attempt and then re-copied by the retry pass. A confirmed copy is final.
+  it("never demotes a confirmed copy to failed", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.recordCopy(member, accountId, "e1");
+
+    await repo.markFailed(member, accountId, "e1", "copy_failed");
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "copied"]]));
+    const rows = await sql<{ attempts: number; last_error: string | null }[]>`
+      select attempts, last_error from shared_mailbox_copies
+      where user_id = ${member} and shared_account_id = ${accountId} and email_id = 'e1'
+    `;
+    expect(rows[0]).toMatchObject({ attempts: 0, last_error: null });
+  });
+
   it("lists the failed copies of an account that are still worth retrying", async () => {
     const member = await freshUserId();
     const accountId = freshAccountId();

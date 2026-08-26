@@ -262,6 +262,13 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
      * page pinned behind one member's failure would starve everyone else's
      * mail), and the next cycle's retry pass picks this up instead of the
      * message being lost with nothing but a log line behind it.
+     *
+     * A confirmed copy is never demoted (the `status <> 'copied'`), for the
+     * same reason `beginCopy` never demotes one: the row may have reached
+     * `copied` in between — the member's own manual copy-to-inbox, or another
+     * holder of the account confirming the very same copy — and turning that
+     * into `failed` would put a delivered message back in the retry batch and
+     * deliver it twice.
      */
     async markFailed(
       userId: string,
@@ -278,6 +285,7 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
         where user_id = ${userId}
           and shared_account_id = ${sharedAccountId}
           and email_id = ${emailId}
+          and status <> 'copied'
       `;
     },
 

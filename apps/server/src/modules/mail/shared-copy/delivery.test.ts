@@ -505,22 +505,48 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
     expect(h.copies.leases.has(SHARED)).toBe(false);
   });
 
-  it("renews the lease after each page, and stops delivering once it is lost", async () => {
+  // GH #313: the lease was renewed only BETWEEN pages, so a page that took
+  // longer than the ten-minute TTL let another replica acquire the account
+  // mid-page and copy the very same messages — the ledger is read once per
+  // member per page, so neither cycle could see the other's claims in time.
+  // Every member's batch renews now.
+  it("renews the lease after every member's batch, not only between pages", async () => {
     h.copies.seedCursor(SHARED, "s-1");
-    h.copies.seedMembers(SHARED, [ana.userId]);
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
     h.pages = [
-      { created: [], newState: "s-2", hasMoreChanges: true },
-      { created: ["e1"], newState: "s-3" },
+      { created: ["e1"], newState: "s-2", hasMoreChanges: true },
+      { created: ["e2"], newState: "s-3" },
     ];
-    h.inInbox.add("e1");
-    await expect(run([ana])).resolves.toMatchObject({ pages: 2, copied: 1 });
-    expect(h.copies.leaseLog.filter((entry) => entry.op === "renew")).toEqual([
-      { op: "renew", owner: OWNER, ok: true },
-    ]);
+    h.inInbox.add("e1").add("e2");
 
-    // Another replica takes the account over between pages: this cycle stops
-    // rather than delivering the same pages alongside it.
-    h = harness();
+    await expect(run()).resolves.toMatchObject({ pages: 2, copied: 4 });
+    // Two members on each of two pages, plus the one between the pages.
+    expect(h.copies.leaseLog.filter((entry) => entry.op === "renew")).toHaveLength(5);
+    expect(h.copies.leaseLog.every((entry) => entry.owner === OWNER)).toBe(true);
+  });
+
+  it("stops copying the rest of the page the moment the lease is lost", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    // Another replica takes the account over while ana's batch is running.
+    const original = h.deps.copies.renewLease;
+    h.deps.copies.renewLease = async (accountId, owner, ttl) => {
+      h.copies.holdLease(accountId, "other-replica");
+      return original(accountId, owner, ttl);
+    };
+
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 1 });
+    // Bruno's copy belongs to whoever owns the account now, not to this cycle.
+    expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email]);
+    // The cursor stays put: the new holder re-reads this page, and the ledger
+    // turns the copy this cycle did make into a skip rather than a duplicate.
+    expect(h.copies.cursors.get(SHARED)).toBe("s-1");
+    expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("lease lost"))).toBe(true);
+  });
+
+  it("stops delivering when the lease is lost between pages", async () => {
     h.copies.seedCursor(SHARED, "s-1");
     h.copies.seedMembers(SHARED, [ana.userId]);
     h.pages = [
@@ -534,8 +560,28 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
       return original(accountId, owner, ttl);
     };
     await expect(run([ana])).resolves.toMatchObject({ pages: 1, copied: 0 });
+    // This page's copies were made before the loss, so its cursor stands.
     expect(h.copies.cursors.get(SHARED)).toBe("s-2");
     expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("lease lost"))).toBe(true);
+  });
+
+  it("stops before any new page when the lease is lost during the retry pass", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    h.copies.seedFailed(ana.userId, SHARED, "e-old", 1);
+    h.copies.seedFailed(bruno.userId, SHARED, "e-old-b", 1);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    const original = h.deps.copies.renewLease;
+    h.deps.copies.renewLease = async (accountId, owner, ttl) => {
+      h.copies.holdLease(accountId, "other-replica");
+      return original(accountId, owner, ttl);
+    };
+
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 1, pages: 0 });
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e-old"]);
+    expect(changesCalls(h)).toEqual([]);
+    expect(h.copies.cursors.get(SHARED)).toBe("s-1");
   });
 
   it("baselines the current Email state without copying when there is no cursor yet", async () => {

@@ -36,6 +36,10 @@
  * - no member can reach the account → `no_watcher`, nothing touched;
  * - another replica (or this one) holds the account's lease → `locked`,
  *   nothing touched;
+ * - the lease is lost DURING a cycle (a renewal refused because another
+ *   replica took the account over) → the cycle stops copying at once and
+ *   leaves the page's cursor where it is, so the new holder re-reads that page
+ *   and the ledger turns what was already copied into skips;
  * - no cursor → record the current state, copy NOTHING (`baselined`): the
  *   opt-in is forward-looking, and historic mail stays reachable through the
  *   manual copy;
@@ -83,12 +87,12 @@ export const DELIVERY_PAGE_SIZE = 100;
 
 /**
  * How long a cycle's lease on an account is good for, renewed after every
- * page. Ten minutes: far longer than any healthy cycle (five pages of a
- * hundred messages), so a live cycle is never taken over mid-flight, and short
- * enough that an account whose holder was SIGKILLed is delivered again within
- * a couple of poll intervals rather than staying wedged. Nothing waits on it —
- * a cycle that finds the lease taken yields, because whoever holds it is doing
- * the same work.
+ * member's batch and between pages. Ten minutes: far longer than any healthy
+ * cycle (five pages of a hundred messages), so a live cycle is never taken
+ * over mid-flight, and short enough that an account whose holder was SIGKILLed
+ * is delivered again within a couple of poll intervals rather than staying
+ * wedged. Nothing waits on it — a cycle that finds the lease taken yields,
+ * because whoever holds it is doing the same work.
  */
 export const DELIVERY_LEASE_TTL_MS = 600_000;
 
@@ -585,6 +589,28 @@ async function recordFailure(
 }
 
 /**
+ * Pushes this account's lease out by another TTL, answering whether the cycle
+ * still holds it. False means another replica took the account over and this
+ * cycle must copy nothing more: it is called after every member's batch, not
+ * only between pages, because a page longer than the TTL used to let a second
+ * holder start copying the very same messages — the ledger is read once per
+ * member per page, so neither cycle could see the other's claims in time.
+ */
+async function renewLeaseOrLose(
+  deps: DeliveryDeps,
+  sharedAccountId: string,
+  owner: string,
+  fields: Record<string, unknown>,
+): Promise<boolean> {
+  if (await deps.copies.renewLease(sharedAccountId, owner, DELIVERY_LEASE_TTL_MS)) return true;
+  (deps.log ?? defaultLog)("warn", "shared mailbox copy: lease lost mid-cycle", {
+    sharedAccountId,
+    ...fields,
+  });
+  return false;
+}
+
+/**
  * Re-attempts a bounded batch of this account's failed copies, before the
  * cycle looks at new pages: a transient provider failure must not cost a
  * member their message, and the cursor has already moved past the page that
@@ -605,15 +631,16 @@ async function retryFailed(
   sharedAccountId: string,
   members: SharedCopyMember[],
   counts: DeliveryCounts,
-): Promise<void> {
-  if (members.length === 0) return;
+  owner: string,
+): Promise<boolean> {
+  if (members.length === 0) return true;
   const log = deps.log ?? defaultLog;
   const retryable = await deps.copies.listRetryable(sharedAccountId, {
     userIds: members.map((member) => member.userId),
     maxAttempts: DELIVERY_RETRY_MAX_ATTEMPTS,
     limit: DELIVERY_RETRY_LIMIT,
   });
-  if (retryable.length === 0) return;
+  if (retryable.length === 0) return true;
 
   const byMember = new Map<string, string[]>();
   for (const row of retryable) {
@@ -632,9 +659,19 @@ async function retryFailed(
     for (const emailId of emailIds) {
       await copyOne(deps, sharedAccountId, member, resolved, emailId, counts);
     }
+    if (!(await renewLeaseOrLose(deps, sharedAccountId, owner, { userId: member.userId }))) {
+      return false;
+    }
   }
+  return true;
 }
 
+/**
+ * One page's copies for every deliverable member. Answers whether the cycle
+ * still holds the account's lease: false means another replica took the
+ * account over mid-page and this one stopped where it was, with the cursor
+ * deliberately left behind (see the caller).
+ */
 async function deliverPage(
   deps: DeliveryDeps,
   sharedAccountId: string,
@@ -642,7 +679,8 @@ async function deliverPage(
   emails: DeliverableEmail[],
   counts: DeliveryCounts,
   inboxes: Map<string, string | null>,
-): Promise<void> {
+  owner: string,
+): Promise<boolean> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
   const emailIds = emails.map((email) => email.id);
@@ -695,7 +733,14 @@ async function deliverPage(
         recovery: "the member's manual copy-to-inbox button",
       });
     }
+    // After this member's batch, not merely after the page: a page of a
+    // hundred messages for a dozen members can outlive the TTL, and the next
+    // member's copies must not be made under a lease somebody else now holds.
+    if (!(await renewLeaseOrLose(deps, sharedAccountId, owner, { userId: member.userId }))) {
+      return false;
+    }
   }
+  return true;
 }
 
 /** The cycle proper, with this account's lease already held by `owner`. */
@@ -756,11 +801,11 @@ async function deliver(
   // cursor has already moved past the pages that carried them, so this pass is
   // the only thing that still can deliver them — and doing it first keeps a
   // transient failure from ageing out behind a busy mailbox.
-  await retryFailed(deps, sharedAccountId, deliverTo, counts);
+  let leaseLost = !(await retryFailed(deps, sharedAccountId, deliverTo, counts, owner));
 
   let pages = 0;
   let truncated = false;
-  for (;;) {
+  while (!leaseLost) {
     let page: ChangesPage;
     try {
       page = await fetchChanges(deps, watcher, sharedAccountId, cursor);
@@ -774,8 +819,17 @@ async function deliver(
 
     if (page.created.length > 0 && deliverTo.length > 0) {
       const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created);
-      if (deliverable.length > 0) {
-        await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts, inboxes);
+      if (
+        deliverable.length > 0 &&
+        !(await deliverPage(deps, sharedAccountId, deliverTo, deliverable, counts, inboxes, owner))
+      ) {
+        // The lease went mid-page, so this page is only half delivered — and
+        // the cursor deliberately stays where it is. Whoever holds the account
+        // now re-reads the same page, and the ledger turns the copies this
+        // cycle did make into skips instead of duplicates. Advancing here
+        // would cost the members this cycle never reached their mail.
+        leaseLost = true;
+        break;
       }
     }
     // After the page's copies, never before: a crash in between replays the
@@ -788,14 +842,13 @@ async function deliver(
       truncated = true;
       break;
     }
-    // Pushed out page by page rather than taken for the whole cycle at once:
-    // the TTL that survives a long burst is the same TTL that has to expire
-    // before a killed holder's account is delivered again, and renewing keeps
-    // those two apart. Losing it means another replica already took the
-    // account over, so this cycle stops rather than delivering the same pages
-    // alongside it.
-    if (!(await deps.copies.renewLease(sharedAccountId, owner, DELIVERY_LEASE_TTL_MS))) {
-      log("warn", "shared mailbox copy: lease lost mid-cycle", { sharedAccountId, pages });
+    // Pushed out page by page as well as per member: the TTL that survives a
+    // long burst is the same TTL that has to expire before a killed holder's
+    // account is delivered again, and renewing keeps those two apart. Losing
+    // it means another replica already took the account over, so this cycle
+    // stops rather than delivering the same pages alongside it.
+    if (!(await renewLeaseOrLose(deps, sharedAccountId, owner, { pages }))) {
+      leaseLost = true;
       break;
     }
   }
@@ -805,6 +858,7 @@ async function deliver(
     ...counts,
     pages,
     truncated,
+    leaseLost,
   });
   return { status: "delivered", ...counts, pages, truncated };
 }

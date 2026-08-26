@@ -587,9 +587,19 @@ poseedor está haciendo el mismo trabajo. El titular es un `crypto.randomUUID()`
 por proceso, así que cada réplica es un titular distinto. Se toma con un único
 `insert … on conflict do update … where` atómico (el `where` corre bajo el
 bloqueo de fila del insert, así que dos réplicas compitiendo se serializan y
-solo una recibe fila), se renueva tras cada página y se libera en el `finally`;
-si el titular muere a medio ciclo, la cuenta se recupera sola al vencer
-`lease_until` (TTL de 10 min). **Ninguna transacción abarca el ciclo**: el
+solo una recibe fila), se renueva **tras el lote de cada miembro** (y también
+entre páginas) y se libera en el `finally`; si el titular muere a medio ciclo,
+la cuenta se recupera sola al vencer `lease_until` (TTL de 10 min). Renovarlo
+solo entre páginas dejaba que una página más larga que el TTL —cien mensajes
+por una docena de miembros— fuese adquirida por otra réplica **a mitad de
+página**, y las dos copiaban los mismos mensajes: el libro se lee una vez por
+miembro y por página, así que ninguna de las dos veía a tiempo las reservas de
+la otra. Si una renovación falla, el ciclo **deja de copiar en el acto** y no
+avanza el cursor de esa página: quien tenga ahora la cuenta la vuelve a leer, y
+el libro convierte en saltos lo que este ciclo ya había copiado. Por la misma
+razón, marcar una copia como `failed` **nunca degrada una fila ya `copied`**
+(una copia manual simultánea, o la confirmación de otro titular): degradarla la
+devolvería al lote de reintentos y la entregaría dos veces. **Ninguna transacción abarca el ciclo**: el
 advisory lock anterior mantenía una conexión del pool dentro de una transacción
 durante todo el ciclo mientras cada query de ese mismo ciclo pedía otra
 conexión al mismo pool — bloqueo mutuo garantizado con `DB_POOL_MAX=1` y una
