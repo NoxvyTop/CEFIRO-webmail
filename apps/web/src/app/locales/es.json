@@ -226,6 +226,7 @@
       "invalid_account": "Ese buzón no admite copiar a tu bandeja",
       "invalid_domain": "El dominio de ese remitente no se puede añadir como servicio de confianza",
       "trusted_service_seed": "Ese servicio es de confianza por defecto y no se puede quitar",
+      "trusted_services_limit": "Tu lista de servicios de confianza está llena. Quita uno antes de añadir otro",
       "copy_failed": "No se pudo copiar el mensaje a tu bandeja",
       "generic": "No se pudo cargar el correo"
     },

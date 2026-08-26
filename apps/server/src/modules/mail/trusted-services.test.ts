@@ -7,7 +7,7 @@ import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
-import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
+import { createUserPreferencesRepo, MAX_TRUSTED_SERVICES } from "../../infra/repos/user-preferences";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -135,6 +135,42 @@ describe("PUT /api/mail/trusted-services/:domain (GH #314)", () => {
     const body = trustedServicesSchema.parse(await res.json());
     expect(body.user).toEqual([]);
     expect(body.seed).toContain("github.com");
+  });
+
+  // GH #314 (JD-3): the repo's parse drops everything past MAX_TRUSTED_SERVICES,
+  // so a PUT at the cap wrote a list that read back one entry shorter — the
+  // route still answered 200 and the reader's "Trust this service" affordance
+  // toasted success while nothing had been stored. A limit the user cannot see
+  // is worse than no limit: the badge simply never appears and there is nothing
+  // to explain it.
+  it("answers 409 trusted_services_limit at the cap instead of silently storing nothing", async () => {
+    const full = Array.from({ length: MAX_TRUSTED_SERVICES }, (_, i) => `svc-${i}.example`);
+    await userPreferences.merge(userId, { trustedServices: full });
+
+    const res = await request("/one-too-many.example", "PUT");
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("trusted_services_limit");
+    expect((await userPreferences.get(userId)).trustedServices).toEqual(full);
+  });
+
+  it("stays idempotent at the cap: re-trusting a domain already on the full list still answers 200", async () => {
+    const full = Array.from({ length: MAX_TRUSTED_SERVICES }, (_, i) => `svc-${i}.example`);
+    await userPreferences.merge(userId, { trustedServices: full });
+
+    const res = await request("/svc-0.example", "PUT");
+    expect(res.status).toBe(200);
+    expect(trustedServicesSchema.parse(await res.json()).user).toEqual(full);
+  });
+
+  it("accepts the last free slot — the cap refuses the one AFTER it, not the one at it", async () => {
+    const nearlyFull = Array.from({ length: MAX_TRUSTED_SERVICES - 1 }, (_, i) => `svc-${i}.example`);
+    await userPreferences.merge(userId, { trustedServices: nearlyFull });
+
+    const res = await request("/last-slot.example", "PUT");
+    expect(res.status).toBe(200);
+    const stored = (await userPreferences.get(userId)).trustedServices;
+    expect(stored).toHaveLength(MAX_TRUSTED_SERVICES);
+    expect(stored).toContain("last-slot.example");
   });
 
   it("requires a session", async () => {

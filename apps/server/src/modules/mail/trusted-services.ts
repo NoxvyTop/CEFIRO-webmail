@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { trustedServicesSchema, type TrustedServices } from "@webmail/shared";
 import { normalizeDomainName } from "../../core/domain-name";
 import { errorResponse } from "../../core/error-response";
-import type { UserPreferencesRepo } from "../../infra/repos/user-preferences";
+import { MAX_TRUSTED_SERVICES, type UserPreferencesRepo } from "../../infra/repos/user-preferences";
 import type { MailVariables } from "./context";
 import { TRUSTED_SERVICES_SEED } from "./trusted-services-seed";
 
@@ -25,8 +25,10 @@ import { TRUSTED_SERVICES_SEED } from "./trusted-services-seed";
 // merge the repo performs is SHALLOW — writing `{ trustedServices: [...] }`
 // replaces the whole array, it does not append — so the route reads the
 // current list, edits it in memory and writes the full result back. A
-// separate table would buy nothing here: the list is small (capped at 200 by
-// the repo's parse), only ever read whole, and never joined.
+// separate table would buy nothing here: the list is small (capped at
+// MAX_TRUSTED_SERVICES, which the PUT below enforces with a 409 rather than
+// letting the repo's parse silently truncate), only ever read whole, and never
+// joined.
 //
 // The `:domain` parameter is untrusted input. It is normalised through
 // normalizeDomainName (lowercase, trim, strict hostname shape) BEFORE it is
@@ -66,6 +68,16 @@ export function createTrustedServicesRouter(deps: { userPreferences: UserPrefere
     const current = await deps.userPreferences.get(user.userId);
     if (TRUSTED_SERVICES_SEED.has(domain) || current.trustedServices.includes(domain)) {
       return c.json(respond(current.trustedServices));
+    }
+    // GH #314 (JD-3): at the cap, the write below would go through and the
+    // repo's parse would then drop the new entry on the way back out — a 200
+    // and a success toast over a list that never grew. The refusal is explicit
+    // and its own code, so the reader can be told WHY the domain it just
+    // trusted is not trusted. Checked after the idempotent branch above, so a
+    // domain already on a full list still answers 200: the state it asks for
+    // already holds.
+    if (current.trustedServices.length >= MAX_TRUSTED_SERVICES) {
+      return errorResponse(c, "trusted_services_limit", 409);
     }
     const updated = await deps.userPreferences.merge(user.userId, {
       trustedServices: [...current.trustedServices, domain],

@@ -15,7 +15,13 @@ const DEFAULTS = {
 // a row that somehow grew without bound would tax every message the user
 // opens. 200 is far above what a person confirms by hand and small enough
 // that the Set is free.
-const MAX_TRUSTED_SERVICES = 200;
+//
+// Exported because the PUT route has to REFUSE at the cap (GH #314, JD-3)
+// rather than write a list this parse then silently truncates: a limit the
+// user cannot see is worse than no limit — the badge simply never appears and
+// nothing explains it. The parse below stays as the defensive backstop for
+// rows written before that check existed or edited by hand.
+export const MAX_TRUSTED_SERVICES = 200;
 
 type StoredPreferences = {
   groupMailInMainInbox: boolean;

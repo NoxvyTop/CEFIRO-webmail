@@ -226,6 +226,7 @@
       "invalid_account": "That mailbox can't be copied to your inbox",
       "invalid_domain": "That sender's domain can't be added as a trusted service",
       "trusted_service_seed": "That service is trusted by default and can't be removed",
+      "trusted_services_limit": "Your trusted services list is full. Remove one before adding another",
       "copy_failed": "Could not copy the message to your inbox",
       "generic": "Mail could not be loaded"
     },
