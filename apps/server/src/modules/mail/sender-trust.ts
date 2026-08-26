@@ -21,6 +21,18 @@ import type { SenderAuthVerdict, SenderTrust } from "@webmail/shared";
 //    job, already done, and re-deriving it from raw DKIM results would let a
 //    DKIM pass on an unrelated domain count (see senderAuthVerdictSchema).
 //
+//  - The pass must be BOUND to the address the reader sees. "dmarc=pass" is
+//    evidence about the domain DMARC evaluated — the trusted header's own
+//    `header.from=` propspec (deriveSenderAuthFacts in sender-auth.ts) — and
+//    nothing else. Two rules follow, and both are gates, not refinements:
+//    `dmarcFromDomain` must equal the domain of the From address the tier is
+//    resolved from, and the message must carry exactly ONE From address.
+//    Without the first, a genuine, correctly-signed newsletter from one domain
+//    would vouch for a spoofed address at another on the same message. Without
+//    the second, RFC 5322's multi-address From (which DMARC evaluates only one
+//    of) turns "which address the reader is shown" into a rendering accident —
+//    so no tier may be asserted at all.
+//
 //  - Tier A ("known") requires the EXACT From address to be one the user has
 //    written to. Not the domain: a colleague's domain is also every other
 //    colleague's, and the spoofed "same company, different mailbox" message is
@@ -85,14 +97,26 @@ export function matchesTrustedDomain(domain: string, trusted: ReadonlySet<string
 export function resolveSenderTrust(input: {
   senderAuth: SenderAuthVerdict;
   fromEmail: string | undefined | null;
+  /** How many addresses the message's From header carries (`email.from.length`). */
+  fromCount: number;
+  /** The domain the trusted DMARC result was ABOUT — deriveSenderAuthFacts. */
+  dmarcFromDomain: string | null;
   knownRecipients: ReadonlySet<string>;
   trustedDomains: ReadonlySet<string>;
 }): SenderTrust {
   // The gate: nothing below runs unless DMARC unambiguously passed.
   if (input.senderAuth !== "pass") return "none";
 
+  // The binding gate. A "pass" says a domain was authenticated; it does not say
+  // WHICH, and the tiers below are tied to from[0] — the one address the reader
+  // is shown. Exactly one From address, and a DMARC result that names that
+  // address's own domain, or no tier at all.
+  if (input.fromCount !== 1) return "none";
+
   const domain = domainOf(input.fromEmail);
   if (domain === null) return "none";
+  if (input.dmarcFromDomain === null) return "none";
+  if (input.dmarcFromDomain.trim().toLowerCase() !== domain) return "none";
 
   if (matchesTrustedDomain(domain, input.trustedDomains)) return "trusted-service";
 

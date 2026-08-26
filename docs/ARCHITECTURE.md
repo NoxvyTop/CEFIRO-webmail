@@ -396,6 +396,15 @@ Si aplican los dos, gana `trusted-service`. Reglas que no se negocian:
   negativa y nunca se contradice con una marca positiva. Un `pass` solo, sin
   coincidencia, tampoco da confianza. No se parsea DKIM `d=`: DMARC ya exige
   alineación con el dominio del `From` (RFC 7489 §6.6.2).
+- **El `pass` debe estar ligado a la dirección que se muestra.** Un `dmarc=pass`
+  es evidencia sobre el dominio que DMARC evaluó, no sobre cualquier dirección
+  del mensaje: `deriveSenderAuthFacts` lee el propspec `header.from=` del
+  `dmarc=` de esa misma cabecera de confianza y el nivel solo se asigna si ese
+  dominio coincide exactamente con el de `from[0]`. Además el mensaje debe
+  llevar **una sola** dirección en `From` (RFC 5322 permite varias y DMARC
+  evalúa una); con varias, cuál ve el lector es un accidente de representación
+  y no se afirma ningún nivel. Sin `header.from=` legible, o con dos entradas
+  `dmarc=` que nombran dominios distintos, el resultado es `none`.
 - **La interfaz muestra siempre la dirección o el dominio real** junto a la
   insignia (`SenderTrustBadge`, con el `from[0]` que devuelve el servidor en
   su nombre accesible), para que el lector compruebe a quién se avala.

@@ -53,7 +53,12 @@ import type { SenderAuthVerdict } from "@webmail/shared";
 
 type HeaderEntry = { name: string; value: string };
 
-type ResInfoEntry = { method: string; result: string };
+// `properties` is the raw remainder of the resinfo segment after "method=result"
+// — the propspec run (RFC 8601 §2.2: `ptype "." property "=" pvalue`) plus any
+// CFWS. Kept verbatim rather than parsed eagerly because only one propspec is
+// read today (`header.from`, for the GH #314 binding below) and every other one
+// is still deliberately ignored by the verdict.
+type ResInfoEntry = { method: string; result: string; properties: string };
 
 // RFC 5322 header folding: a continuation line begins with CRLF followed by
 // whitespace (WSP), and unfolding replaces that run with a single space.
@@ -122,7 +127,11 @@ function parseResInfoEntries(headerValue: string): ResInfoEntry[] {
     if (/^none$/i.test(segment)) continue;
     const match = RESINFO_PATTERN.exec(segment);
     if (!match) continue;
-    entries.push({ method: match[1]!.toLowerCase(), result: match[2]!.toLowerCase() });
+    entries.push({
+      method: match[1]!.toLowerCase(),
+      result: match[2]!.toLowerCase(),
+      properties: segment.slice(match[0].length),
+    });
   }
   return entries;
 }
@@ -178,6 +187,105 @@ function extractAuthServId(headerValue: string): string | null {
   return token ? token.toLowerCase() : null;
 }
 
+// GH #314: reads the `header.from=` propspec (RFC 8601 §2.3) out of one
+// resinfo entry's property run, lowercased and trimmed, with a trailing root
+// dot removed ("partner.test." and "partner.test" are the same domain), or
+// null when the entry carries none. Comments are stripped first — exactly as
+// extractAuthServId does for the authserv-id — so a value hidden inside "(...)"
+// can neither be read nor shadow the real one. Two DIFFERING values inside one
+// entry also yield null: an ambiguous binding is no binding.
+const HEADER_FROM_PATTERN = /(?:^|[\s;])header\.from\s*=\s*([^\s;()]+)/gi;
+
+function headerFromDomain(properties: string): string | null {
+  const found = new Set<string>();
+  for (const match of stripComments(properties).matchAll(HEADER_FROM_PATTERN)) {
+    const value = match[1]!.trim().toLowerCase().replace(/\.$/, "");
+    if (value !== "") found.add(value);
+  }
+  return found.size === 1 ? [...found][0]! : null;
+}
+
+// The domain DMARC actually evaluated on this header, or null when the header's
+// `dmarc=` entries do not agree on exactly one — including the case where one
+// names a domain and another names none. Same discipline as verdictFromEntries:
+// anything short of an unambiguous single answer is null, never a guess, since
+// resolveSenderTrust turns a null straight into "none".
+function dmarcFromDomainFromEntries(entries: ResInfoEntry[]): string | null {
+  const domains = new Set<string | null>();
+  for (const entry of entries) {
+    if (entry.method !== "dmarc") continue;
+    domains.add(headerFromDomain(entry.properties));
+  }
+  if (domains.size !== 1) return null;
+  return [...domains][0] ?? null;
+}
+
+/**
+ * GH #314: everything the trusted Authentication-Results header says that the
+ * reader's indicators depend on — the DMARC verdict AND the domain that verdict
+ * is ABOUT.
+ */
+export type SenderAuthFacts = {
+  verdict: SenderAuthVerdict;
+  dmarcFromDomain: string | null;
+};
+
+/** A fresh "assert nothing" result, so no caller can share or mutate one. */
+function unknownFacts(): SenderAuthFacts {
+  return { verdict: "unknown", dmarcFromDomain: null };
+}
+
+/**
+ * The full reading of the trusted Authentication-Results header (GH #314):
+ * the same verdict deriveSenderAuthVerdict returns, plus the `header.from=`
+ * domain of that header's own `dmarc=` resinfo.
+ *
+ * The verdict alone says "DMARC passed", not "DMARC passed for the domain this
+ * reader is looking at". The positive trust tiers (sender-trust.ts) are tied to
+ * `from[0]`, so binding them to a pass that evaluated some OTHER domain would
+ * let a genuine, correctly-signed message vouch for an address it never
+ * covered. `dmarcFromDomain` is what makes that binding checkable; it is null
+ * whenever the header does not name exactly one domain, and null resolves to
+ * "none" downstream.
+ *
+ * Header selection, the authserv-id trust rule and the fail-safes are exactly
+ * those documented on deriveSenderAuthVerdict below, which is now a thin
+ * wrapper over this.
+ */
+export function deriveSenderAuthFacts(
+  headers: HeaderEntry[] | undefined | null,
+  authServId: string | undefined | null,
+): SenderAuthFacts {
+  if (!headers) return unknownFacts();
+
+  // Fail-safe: with no authserv-id configured, no header can be attributed to
+  // this deployment's own MTA, so none is trustworthy — every verdict is
+  // "unknown" and no "verified sender" badge is ever asserted.
+  const configured = authServId?.trim().toLowerCase();
+  if (!configured) return unknownFacts();
+
+  const header = headers.find(
+    (entry) =>
+      entry.name.toLowerCase() === "authentication-results" &&
+      typeof entry.value === "string" &&
+      extractAuthServId(entry.value) === configured,
+  );
+  if (!header) return unknownFacts();
+
+  try {
+    const entries = parseResInfoEntries(header.value);
+    return {
+      verdict: verdictFromEntries(entries),
+      dmarcFromDomain: dmarcFromDomainFromEntries(entries),
+    };
+  } catch {
+    // Defense in depth: parseResInfoEntries is written to never throw, but a
+    // malformed header must degrade to "unknown", not crash the thread
+    // endpoint or, worse, propagate into a false verdict.
+    return unknownFacts();
+  }
+}
+
 /**
  * Given a message's full, ordered `headers` list (RFC 8621 §4.1.1 shape) and
  * this deployment's own configured authserv-id (JMAP_AUTHSERV_ID), returns the
@@ -197,28 +305,5 @@ export function deriveSenderAuthVerdict(
   headers: HeaderEntry[] | undefined | null,
   authServId: string | undefined | null,
 ): SenderAuthVerdict {
-  if (!headers) return "unknown";
-
-  // Fail-safe: with no authserv-id configured, no header can be attributed to
-  // this deployment's own MTA, so none is trustworthy — every verdict is
-  // "unknown" and no "verified sender" badge is ever asserted.
-  const configured = authServId?.trim().toLowerCase();
-  if (!configured) return "unknown";
-
-  const header = headers.find(
-    (entry) =>
-      entry.name.toLowerCase() === "authentication-results" &&
-      typeof entry.value === "string" &&
-      extractAuthServId(entry.value) === configured,
-  );
-  if (!header) return "unknown";
-
-  try {
-    return verdictFromEntries(parseResInfoEntries(header.value));
-  } catch {
-    // Defense in depth: parseResInfoEntries is written to never throw, but a
-    // malformed header must degrade to "unknown", not crash the thread
-    // endpoint or, worse, propagate into a false verdict.
-    return "unknown";
-  }
+  return deriveSenderAuthFacts(headers, authServId).verdict;
 }

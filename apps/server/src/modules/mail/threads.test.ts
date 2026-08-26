@@ -544,10 +544,17 @@ describe("GET /api/mail/threads/:threadId — truncated bodies (GH #140)", () =>
 // also answer the one-time Sent backfill's Mailbox/get + Email/query batches)
 // and own user per test, so the per-user sent_recipients store and the
 // backfill marker start empty every time.
-const PASS_HEADER = {
-  name: "Authentication-Results",
-  value: " mail.cefiro.test; dmarc=pass (p=reject) header.from=partner.test",
-};
+// GH #314 (JD-1): a DMARC pass is evidence about the domain DMARC evaluated —
+// the `header.from=` propspec — so every positive fixture below stamps the
+// domain of its OWN From address. A fixture that reused one shared
+// `header.from=partner.test` for every sender would assert exactly the binding
+// bug this pins: a genuine pass for one domain vouching for another.
+function passHeader(headerFromDomain: string) {
+  return {
+    name: "Authentication-Results",
+    value: ` mail.cefiro.test; dmarc=pass (p=reject) header.from=${headerFromDomain}`,
+  };
+}
 const FAIL_HEADER = {
   name: "Authentication-Results",
   value: " mail.cefiro.test; dmarc=fail (p=reject) header.from=partner.test",
@@ -556,13 +563,17 @@ const NONE_HEADER = {
   name: "Authentication-Results",
   value: " mail.cefiro.test; dmarc=none header.from=partner.test",
 };
+const PASS_HEADER_NO_FROM = {
+  name: "Authentication-Results",
+  value: " mail.cefiro.test; dmarc=pass (p=reject)",
+};
 
-function trustEmail(id: string, from: string, header: { name: string; value: string } | null) {
+function trustEmail(id: string, from: string | string[], header: { name: string; value: string } | null) {
   return {
     id,
     threadId: "t5",
     mailboxIds: { mb1: true },
-    from: [{ name: null, email: from }],
+    from: (Array.isArray(from) ? from : [from]).map((email) => ({ name: null, email })),
     to: [],
     subject: id,
     receivedAt: "2026-07-06T10:00:00Z",
@@ -578,16 +589,21 @@ function trustEmail(id: string, from: string, header: { name: string; value: str
 }
 
 const TRUST_THREAD = [
-  trustEmail("known-pass", "Ana@Partner.Test", PASS_HEADER),
+  trustEmail("known-pass", "Ana@Partner.Test", passHeader("partner.test")),
   trustEmail("known-fail", "ana@partner.test", FAIL_HEADER),
-  trustEmail("sibling-pass", "bob@partner.test", PASS_HEADER),
-  trustEmail("seed-pass", "notifications@noreply.github.com", PASS_HEADER),
+  trustEmail("sibling-pass", "bob@partner.test", passHeader("partner.test")),
+  trustEmail("seed-pass", "notifications@noreply.github.com", passHeader("noreply.github.com")),
   trustEmail("seed-none", "noreply@github.com", NONE_HEADER),
   trustEmail("seed-no-header", "noreply@github.com", null),
-  trustEmail("lookalike-pass", "noreply@githiib.com", PASS_HEADER),
-  trustEmail("user-domain-pass", "billing@invoices.acme-partner.test", PASS_HEADER),
-  trustEmail("both-pass", "support@github.com", PASS_HEADER),
-  trustEmail("backfilled-pass", "carla@backfilled.test", PASS_HEADER),
+  trustEmail("lookalike-pass", "noreply@githiib.com", passHeader("githiib.com")),
+  trustEmail("user-domain-pass", "billing@invoices.acme-partner.test", passHeader("invoices.acme-partner.test")),
+  trustEmail("both-pass", "support@github.com", passHeader("github.com")),
+  trustEmail("backfilled-pass", "carla@backfilled.test", passHeader("backfilled.test")),
+  // The binding cases: each carries a genuine, trusted DMARC pass that says
+  // nothing about the address the reader is shown.
+  trustEmail("mismatched-from-pass", "ana@partner.test", passHeader("attacker.test")),
+  trustEmail("no-header-from-pass", "ana@partner.test", PASS_HEADER_NO_FROM),
+  trustEmail("two-from-pass", ["ana@partner.test", "evil@attacker.test"], passHeader("partner.test")),
 ];
 
 function makeTrustStubJmap(input: {
@@ -676,6 +692,21 @@ describe("GET /api/mail/threads/:threadId — sender trust (GH #314)", () => {
     });
     // Both tiers apply: trusted-service wins.
     expect(trust["both-pass"]).toEqual({ trust: "trusted-service", from: "support@github.com" });
+  });
+
+  // GH #314 (JD-1): the tier is tied to `from[0]`, so the DMARC pass behind it
+  // must be tied to that same address. Each case below carries a genuine pass
+  // from our own authserv-id that simply does not vouch for what the reader sees.
+  it("asserts no tier when the trusted DMARC pass is not bound to the visible From address", async () => {
+    const user = await trustUser();
+    const trust = await readTrust(makeTrustStubJmap({ calls: [] }), user);
+
+    // DMARC evaluated attacker.test; the reader is shown a known correspondent.
+    expect(trust["mismatched-from-pass"]).toEqual({ trust: "none", from: "ana@partner.test" });
+    // No header.from at all: the pass names no domain, so it binds to none.
+    expect(trust["no-header-from-pass"]).toEqual({ trust: "none", from: "ana@partner.test" });
+    // Two From addresses: DMARC evaluated one, the reader is shown another.
+    expect(trust["two-from-pass"]).toEqual({ trust: "none", from: "ana@partner.test" });
   });
 
   it("keeps every tier at 'none' when no authserv-id is configured (fail-safe, like senderAuth)", async () => {

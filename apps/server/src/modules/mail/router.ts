@@ -28,7 +28,7 @@ import { currentLogContext, log, withLogContext } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
-import { deriveSenderAuthVerdict } from "./sender-auth";
+import { deriveSenderAuthFacts } from "./sender-auth";
 import { resolveSenderTrust } from "./sender-trust";
 import { backfillSentRecipients } from "./sent-recipients-backfill";
 import { guardStream, mailStreams } from "./streams";
@@ -239,7 +239,10 @@ function toEmailDetail(
 ): EmailDetail {
   const html = collectBodyValues(email.htmlBody, email.bodyValues);
   const text = collectBodyValues(email.textBody, email.bodyValues);
-  const senderAuth = deriveSenderAuthVerdict(email.headers, authServId);
+  // GH #314: the verdict AND the domain that verdict is about, read from the
+  // same trusted header in one pass, so the tier below can be bound to the
+  // address the reader is shown rather than to "some domain passed DMARC".
+  const { verdict: senderAuth, dmarcFromDomain } = deriveSenderAuthFacts(email.headers, authServId);
   return {
     ...toEmailSummary(email),
     cc: toEmailAddresses(email.cc),
@@ -262,11 +265,16 @@ function toEmailDetail(
     // GH #314: the positive-only tier above senderAuth, resolved from the
     // FIRST From address — the same one the reader renders next to the badge
     // (ThreadView shows `from[0]`), so the mark is always tied to the address
-    // the user can see. Gated on senderAuth inside resolveSenderTrust.
+    // the user can see. Gated on senderAuth inside resolveSenderTrust, and on
+    // the DMARC binding it needs `fromCount`/`dmarcFromDomain` for: a pass that
+    // evaluated another domain, or a From header carrying more than one
+    // address, asserts nothing about `from[0]`.
     senderTrust: trust
       ? resolveSenderTrust({
           senderAuth,
           fromEmail: email.from?.[0]?.email,
+          fromCount: email.from?.length ?? 0,
+          dmarcFromDomain,
           knownRecipients: trust.knownRecipients,
           trustedDomains: trust.trustedDomains,
         })
