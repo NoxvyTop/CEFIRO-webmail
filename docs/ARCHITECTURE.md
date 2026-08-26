@@ -322,7 +322,7 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `sso_config` | proveedor OIDC: issuer, client_id, client_secret (cifrado), scopes |
 | `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
 | `sent_recipients` | direcciones a las que el usuario ha escrito (nivel "remitente conocido" del indicador de confianza, #314); separada de `contacts` a propósito |
-| `shared_mailbox_copy_state` | cursor de las copias automáticas de buzones compartidos (#313): último estado `Email` JMAP procesado, una fila por cuenta compartida |
+| `shared_mailbox_copy_state` | cursor de las copias automáticas de buzones compartidos (#313): último estado `Email` JMAP procesado (nulo = nunca fijado) y el arrendamiento de entrega por cuenta (`lease_owner`, `lease_until`), una fila por cuenta compartida |
 | `shared_mailbox_copies` | libro de copias entregadas (#313): (miembro, cuenta compartida, mensaje origen), lo que impide duplicados al repetir una página |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
@@ -504,13 +504,21 @@ entrante y su handshake.
 
 **Varias réplicas.** Cada réplica mantiene sus propias suscripciones y su
 propio sondeo, a propósito: la duplicación de suscripciones es barata y evita
-coordinar quién escucha. Lo que **no** se duplica es la entrega: el ciclo corre
-dentro de una transacción que toma `pg_try_advisory_xact_lock` por cuenta
-(clase 313 + `hashtext(accountId)`), y quien no lo consigue cede sin esperar —
-el poseedor está haciendo el mismo trabajo. El lock *xact* se libera al
-confirmar y al abortar, así que una réplica que muere a medio ciclo no deja la
-cuenta bloqueada; la transacción solo sostiene el lock, y las escrituras de
-cursor y libro confirman por su cuenta.
+coordinar quién escucha. Lo que **no** se duplica es la entrega: cada ciclo
+toma un **arrendamiento (lease) por cuenta** en la propia fila de estado
+(`lease_owner`, `lease_until`), y quien no lo consigue cede sin esperar — el
+poseedor está haciendo el mismo trabajo. El titular es un `crypto.randomUUID()`
+por proceso, así que cada réplica es un titular distinto. Se toma con un único
+`insert … on conflict do update … where` atómico (el `where` corre bajo el
+bloqueo de fila del insert, así que dos réplicas compitiendo se serializan y
+solo una recibe fila), se renueva tras cada página y se libera en el `finally`;
+si el titular muere a medio ciclo, la cuenta se recupera sola al vencer
+`lease_until` (TTL de 10 min). **Ninguna transacción abarca el ciclo**: el
+advisory lock anterior mantenía una conexión del pool dentro de una transacción
+durante todo el ciclo mientras cada query de ese mismo ciclo pedía otra
+conexión al mismo pool — bloqueo mutuo garantizado con `DB_POOL_MAX=1` y una
+conexión *idle in transaction* de minutos en cualquier otro caso, además de
+posibles colisiones de `hashtext` entre cuentas distintas.
 
 **Arranque y apagado.** El worker se construye solo con `JMAP_URL` configurado
 y `SHARED_MAILBOX_COPY_ENABLED` no desactivado, arranca **después** de que el

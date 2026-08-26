@@ -24,6 +24,8 @@ import {
 // every copy, and one member's failure never costing another their copy.
 
 const SHARED = "acc-shared";
+/** This "replica" — the per-process id a cycle takes the account's lease under. */
+const OWNER = "replica-under-test";
 
 type Page = {
   created?: string[];
@@ -54,14 +56,18 @@ function fakeCopiesRepo() {
   const cursors = new Map<string, string>();
   const ledger = new Set<string>();
   const cursorWrites: string[] = [];
-  let lockHeld = false;
+  const leases = new Map<string, { owner: string; until: number }>();
+  const leaseLog: Array<{ op: "acquire" | "renew" | "release"; owner: string; ok: boolean }> = [];
   const key = (u: string, a: string, e: string) => `${u}|${a}|${e}`;
   return {
     cursors,
     ledger,
     cursorWrites,
-    holdLock() {
-      lockHeld = true;
+    leases,
+    leaseLog,
+    /** Stands in for another replica holding this account's lease. */
+    holdLease(accountId: string, owner = "other-replica", ttlMs = 60_000) {
+      leases.set(accountId, { owner, until: Date.now() + ttlMs });
     },
     repo: {
       getCursor: async (accountId: string) => cursors.get(accountId) ?? null,
@@ -74,8 +80,25 @@ function fakeCopiesRepo() {
       recordCopy: async (userId: string, accountId: string, emailId: string) => {
         ledger.add(key(userId, accountId, emailId));
       },
-      withAccountLock: async <T>(_accountId: string, fn: () => Promise<T>) =>
-        lockHeld ? null : fn(),
+      acquireLease: async (accountId: string, owner: string, ttlMs: number) => {
+        const held = leases.get(accountId);
+        const ok = !held || held.until <= Date.now() || held.owner === owner;
+        if (ok) leases.set(accountId, { owner, until: Date.now() + ttlMs });
+        leaseLog.push({ op: "acquire", owner, ok });
+        return ok;
+      },
+      renewLease: async (accountId: string, owner: string, ttlMs: number) => {
+        const held = leases.get(accountId);
+        const ok = held?.owner === owner;
+        if (ok) leases.set(accountId, { owner, until: Date.now() + ttlMs });
+        leaseLog.push({ op: "renew", owner, ok });
+        return ok;
+      },
+      releaseLease: async (accountId: string, owner: string) => {
+        const ok = leases.get(accountId)?.owner === owner;
+        if (ok) leases.delete(accountId);
+        leaseLog.push({ op: "release", owner, ok });
+      },
     },
   };
 }
@@ -187,6 +210,7 @@ function harness(): Harness {
   h.deps = {
     jmap,
     copies: copies.repo,
+    leaseOwner: OWNER,
     getMailSession: async (m): Promise<MailSessionResult> => {
       if (h.sessionThrowsFor.has(m.email)) throw new DomainError("mail_auth_failed", 502, "x");
       if (h.noCredentialFor.has(m.email)) return { ok: false, reason: "mail_credentials_missing" };
@@ -279,10 +303,65 @@ describe("runDeliveryCycle — gates (GH #313)", () => {
     expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("watcher"))).toBe(true);
   });
 
-  it("yields with locked when another replica holds the account lock", async () => {
-    h.copies.holdLock();
+  it("yields with locked when another replica holds the account lease", async () => {
+    h.copies.holdLease(SHARED);
     await expect(run()).resolves.toEqual({ status: "locked" });
     expect(h.requests).toHaveLength(0);
+    // The other replica's lease is left exactly as it was — not stolen, and
+    // not released by the cycle that failed to take it.
+    expect(h.copies.leases.get(SHARED)?.owner).toBe("other-replica");
+    expect(h.copies.leaseLog.filter((entry) => entry.op === "release")).toEqual([]);
+  });
+
+  // GH #313: the lease replaced a transaction-scoped advisory lock that held a
+  // pooled connection open in a transaction for the whole cycle while every
+  // query of that cycle asked the same pool for another one.
+  it("takes the account lease before anything else and releases it at the end", async () => {
+    h.copies.cursors.set(SHARED, "s-1");
+    h.pages = [{ created: [], newState: "s-2" }];
+    await run([ana]);
+    expect(h.copies.leaseLog[0]).toEqual({ op: "acquire", owner: OWNER, ok: true });
+    expect(h.copies.leaseLog.at(-1)).toEqual({ op: "release", owner: OWNER, ok: true });
+    // Released, so the next push or poll delivers without waiting out the TTL.
+    expect(h.copies.leases.has(SHARED)).toBe(false);
+  });
+
+  it("releases the account lease when the cycle throws", async () => {
+    h.copies.cursors.set(SHARED, "s-1");
+    h.changesError = "serverUnavailable";
+    await expect(run([ana])).rejects.toMatchObject({ code: "jmap_error" });
+    expect(h.copies.leases.has(SHARED)).toBe(false);
+  });
+
+  it("renews the lease after each page, and stops delivering once it is lost", async () => {
+    h.copies.cursors.set(SHARED, "s-1");
+    h.pages = [
+      { created: [], newState: "s-2", hasMoreChanges: true },
+      { created: ["e1"], newState: "s-3" },
+    ];
+    h.inInbox.add("e1");
+    await expect(run([ana])).resolves.toMatchObject({ pages: 2, copied: 1 });
+    expect(h.copies.leaseLog.filter((entry) => entry.op === "renew")).toEqual([
+      { op: "renew", owner: OWNER, ok: true },
+    ]);
+
+    // Another replica takes the account over between pages: this cycle stops
+    // rather than delivering the same pages alongside it.
+    h = harness();
+    h.copies.cursors.set(SHARED, "s-1");
+    h.pages = [
+      { created: [], newState: "s-2", hasMoreChanges: true },
+      { created: ["e1"], newState: "s-3" },
+    ];
+    h.inInbox.add("e1");
+    const original = h.deps.copies.renewLease;
+    h.deps.copies.renewLease = async (accountId, owner, ttl) => {
+      h.copies.holdLease(accountId, "other-replica");
+      return original(accountId, owner, ttl);
+    };
+    await expect(run([ana])).resolves.toMatchObject({ pages: 1, copied: 0 });
+    expect(h.copies.cursors.get(SHARED)).toBe("s-2");
+    expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("lease lost"))).toBe(true);
   });
 
   it("baselines the current Email state without copying when there is no cursor yet", async () => {

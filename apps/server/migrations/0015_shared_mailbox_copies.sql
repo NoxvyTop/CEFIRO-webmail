@@ -38,9 +38,25 @@
 -- retention of these rows and no purge of the copies they describe: both are
 -- explicitly out of scope (docs/design/shared-mailboxes.md), and a ledger row
 -- is a few dozen bytes per delivered message.
+-- The state row also carries the per-account delivery LEASE (`lease_owner`,
+-- `lease_until`), which is what keeps two replicas from delivering the same
+-- page. It replaced a transaction-scoped advisory lock: that lock held a
+-- transaction open on one pooled connection for the WHOLE cycle while every
+-- query of the cycle asked the pool for another one — a guaranteed deadlock at
+-- DB_POOL_MAX=1 and a minutes-long idle-in-transaction connection otherwise,
+-- and its `hashtext(accountId)` int4 key could collide between two unrelated
+-- accounts. A lease is a row: taken with one atomic upsert, renewed after each
+-- page, released in a `finally`, and self-healing after `lease_until` for a
+-- replica that died mid-cycle. No transaction spans the cycle.
+--
+-- `email_state` is NULLABLE, and null means "never baselined": taking the
+-- lease is what creates the row, so an account can legitimately have a lease
+-- (and, later, a `last_cycle_at`) before it has a cursor.
 create table shared_mailbox_copy_state (
   shared_account_id text primary key,
-  email_state text not null,
+  email_state text,
+  lease_owner text,
+  lease_until timestamptz,
   updated_at timestamptz not null default now()
 );
 

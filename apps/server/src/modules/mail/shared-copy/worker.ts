@@ -34,9 +34,10 @@
  * arrives while that account's cycle is running marks it for ONE follow-up
  * cycle, however many changes arrive meanwhile — the cycle reads everything
  * since its cursor anyway, so the follow-up picks all of them up. Across
- * replicas the cycle's own advisory lock serialises delivery; watchers may be
- * duplicated per replica by design (each replica holds its own sockets), and
- * the lock plus the ledger are what keep a message from being copied twice.
+ * replicas the cycle's own per-account lease serialises delivery; watchers may
+ * be duplicated per replica by design (each replica holds its own sockets),
+ * and the lease plus the ledger are what keep a message from being copied
+ * twice. The lease is taken under one id per process, minted here.
  *
  * `stop()` closes every watcher, cancels the poll and waits for the cycle in
  * flight, so the shutdown path (core/shutdown.ts stopWorkers) never drains the
@@ -93,6 +94,14 @@ export type SharedCopyWorkerInput = {
   ) => Promise<DeliveryCycleResult>;
   /** Injectable for tests; defaults to a started ../watcher.ts subscription. */
   openWatcher?: (input: WatcherFactoryInput) => Pick<SharedMailboxWatcher, "stop">;
+  /**
+   * Who this process is when a cycle takes an account's delivery lease
+   * (../delivery.ts). Defaults to a fresh `crypto.randomUUID()` per worker,
+   * which is per PROCESS — every replica is a different holder, and this
+   * process re-entering its own lease is recognised as the same one.
+   * Injectable so a test can stand in for a second replica.
+   */
+  leaseOwner?: string;
 };
 
 export type SharedCopyWorker = {
@@ -119,6 +128,13 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   const timers = input.timers ?? realTimers;
   const log = input.log ?? defaultLog;
   const runCycle = input.runCycle ?? runDeliveryCycle;
+  // Minted once, here, for the life of the process: every cycle this worker
+  // runs takes its account's lease under the same owner, and any other replica
+  // takes it under a different one.
+  const delivery: DeliveryDeps = {
+    ...input.delivery,
+    leaseOwner: input.leaseOwner ?? input.delivery.leaseOwner ?? crypto.randomUUID(),
+  };
   const openWatcher =
     input.openWatcher ??
     ((factoryInput: WatcherFactoryInput) => {
@@ -147,7 +163,7 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
     // watcher that was closed a moment ago; there is nobody to copy for.
     if (!members || members.length === 0) return;
     try {
-      const result = await runCycle(input.delivery, { sharedAccountId, members });
+      const result = await runCycle(delivery, { sharedAccountId, members });
       log("debug", "shared mailbox copy: cycle result", { sharedAccountId, ...result });
     } catch (error) {
       log("error", "shared mailbox copy: cycle failed", {
@@ -200,7 +216,7 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
           // Reads the CURRENT membership on every election, so a watcher that
           // outlives a member's opt-in never needs rebuilding.
           resolveWatcher: () =>
-            electWatcher(input.delivery, {
+            electWatcher(delivery, {
               sharedAccountId: accountId,
               members: membership.get(accountId) ?? [],
             }),

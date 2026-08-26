@@ -1,18 +1,9 @@
 import type { Db } from "../db/client";
 
-// Advisory-lock class for the per-account delivery lock (GH #313). Same
-// two-int form as the migration lock (infra/db/migrate.ts): the class is a
-// fixed marker that keeps this family apart from every other advisory lock in
-// the database, and the id is the shared account hashed to an int4 with
-// `hashtext`, so each shared account has its own lock and two replicas
-// contend only when they reach for the SAME account. 313 is this issue's
-// number, which is what makes the constant greppable.
-export const SHARED_COPY_LOCK_CLASS = 313;
-
 /**
- * Cursor + dedup ledger + per-account lock for automatic shared-mailbox copies
- * (GH #313). See migrations/0015_shared_mailbox_copies.sql for what each table
- * is for and why they are two.
+ * Cursor + dedup ledger + per-account delivery lease for automatic
+ * shared-mailbox copies (GH #313). See
+ * migrations/0015_shared_mailbox_copies.sql for what each table is for.
  */
 export function createSharedMailboxCopiesRepo(sql: Db) {
   return {
@@ -81,36 +72,79 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
-     * Runs `fn` while holding this account's delivery lock, or returns null
-     * WITHOUT running it when another connection — another replica, or a
-     * still-running cycle on this one — already holds it.
+     * Takes this account's delivery lease for `owner` until `ttlMs` from now,
+     * answering whether it was taken. False means somebody else — another
+     * replica, or a still-running cycle on this one — holds a live lease, and
+     * the caller must not deliver.
      *
-     * A transaction-scoped advisory lock (`pg_try_advisory_xact_lock`) rather
-     * than a session lock or a row lock: it is released on commit AND on
-     * rollback, so a replica killed mid-cycle cannot leave the account wedged,
-     * and it never waits — a cycle that finds the lock taken simply yields,
-     * because whoever holds it is doing the same work and the next poll or
-     * push will run it again. The transaction holds only the lock: the cursor
-     * and ledger writes inside `fn` go through the pool's other connections
-     * and commit on their own, so a crash mid-page keeps what was done (the
-     * ledger makes the replay harmless — see the migration header).
+     * ONE atomic statement, which is what makes it safe without a transaction:
+     * the `on conflict ... do update ... where` runs under the row lock the
+     * insert already took, so two replicas racing for a free lease serialise
+     * on it and exactly one of them gets a row back. A read-then-write pair
+     * would let both read "free" and both write.
      *
-     * `set local statement_timeout = 0` is NOT applied here, unlike the
-     * migration runner: the transaction runs exactly one instant statement
-     * (the try-lock) and then sits idle while `fn` awaits, and an idle
-     * transaction is not a running statement, so the pool's 30s cap never
-     * fires on it.
+     * A lease is taken when there is none, when the previous one has expired
+     * (a replica killed mid-cycle heals itself after `ttlMs` instead of
+     * wedging the account, which is what the advisory lock's rollback used to
+     * give us) or when the asker already owns it (a re-entered cycle).
+     *
+     * The row doubles as the cursor row: an account leased before it was ever
+     * baselined simply has a null `email_state`.
      */
-    async withAccountLock<T>(sharedAccountId: string, fn: () => Promise<T>): Promise<T | null> {
-      return sql.begin(async (tx) => {
-        const rows = await tx<{ locked: boolean }[]>`
-          select pg_try_advisory_xact_lock(
-            ${SHARED_COPY_LOCK_CLASS}::int, hashtext(${sharedAccountId})
-          ) as locked
-        `;
-        if (!rows[0]?.locked) return null;
-        return fn();
-      }) as Promise<T | null>;
+    async acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean> {
+      const rows = await sql`
+        insert into shared_mailbox_copy_state (shared_account_id, lease_owner, lease_until)
+        values (
+          ${sharedAccountId},
+          ${owner},
+          now() + make_interval(secs => ${ttlMs}::double precision / 1000)
+        )
+        on conflict (shared_account_id) do update set
+          lease_owner = excluded.lease_owner,
+          lease_until = excluded.lease_until,
+          updated_at = now()
+        where shared_mailbox_copy_state.lease_until is null
+          or shared_mailbox_copy_state.lease_until < now()
+          or shared_mailbox_copy_state.lease_owner = excluded.lease_owner
+        returning shared_account_id
+      `;
+      return rows.length > 0;
+    },
+
+    /**
+     * Pushes this account's lease out by another `ttlMs`, for its owner only.
+     * Called after every page so a cycle longer than the TTL is not taken over
+     * mid-flight, while a cycle that dies still expires on schedule. False
+     * means the lease is somebody else's now — the caller has lost it and must
+     * stop delivering.
+     */
+    async renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean> {
+      const rows = await sql`
+        update shared_mailbox_copy_state set
+          lease_until = now() + make_interval(secs => ${ttlMs}::double precision / 1000),
+          updated_at = now()
+        where shared_account_id = ${sharedAccountId}
+          and lease_owner = ${owner}
+        returning shared_account_id
+      `;
+      return rows.length > 0;
+    },
+
+    /**
+     * Hands the lease back, so the next push or poll can deliver immediately
+     * instead of waiting out the TTL. Scoped to the owner: a cycle that lost
+     * its lease to an expiry takeover must not free the lease of whoever took
+     * it over.
+     */
+    async releaseLease(sharedAccountId: string, owner: string): Promise<void> {
+      await sql`
+        update shared_mailbox_copy_state set
+          lease_owner = null,
+          lease_until = null,
+          updated_at = now()
+        where shared_account_id = ${sharedAccountId}
+          and lease_owner = ${owner}
+      `;
     },
   };
 }

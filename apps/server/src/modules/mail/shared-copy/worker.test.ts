@@ -89,7 +89,9 @@ function harness(initial: OptIn[] = [ana, bruno]) {
       setCursor: async () => {},
       hasCopies: async () => new Set(),
       recordCopy: async () => {},
-      withAccountLock: async (_id, fn) => fn(),
+      acquireLease: async () => true,
+      renewLease: async () => true,
+      releaseLease: async () => {},
     },
     getMailSession: async (member) => ({
       ok: true,

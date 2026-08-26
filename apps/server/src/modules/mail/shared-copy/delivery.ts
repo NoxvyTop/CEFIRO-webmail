@@ -34,7 +34,8 @@
  *
  * Failure model, in one place:
  * - no member can reach the account → `no_watcher`, nothing touched;
- * - another replica (or this one) is mid-cycle → `locked`, nothing touched;
+ * - another replica (or this one) holds the account's lease → `locked`,
+ *   nothing touched;
  * - no cursor → record the current state, copy NOTHING (`baselined`): the
  *   opt-in is forward-looking, and historic mail stays reachable through the
  *   manual copy;
@@ -67,6 +68,26 @@ export const DELIVERY_MAX_PAGES = 5;
 /** `maxChanges` asked of `Email/changes` per page. */
 export const DELIVERY_PAGE_SIZE = 100;
 
+/**
+ * How long a cycle's lease on an account is good for, renewed after every
+ * page. Ten minutes: far longer than any healthy cycle (five pages of a
+ * hundred messages), so a live cycle is never taken over mid-flight, and short
+ * enough that an account whose holder was SIGKILLed is delivered again within
+ * a couple of poll intervals rather than staying wedged. Nothing waits on it —
+ * a cycle that finds the lease taken yields, because whoever holds it is doing
+ * the same work.
+ */
+export const DELIVERY_LEASE_TTL_MS = 600_000;
+
+/**
+ * Identifies THIS process as a lease holder when no owner was injected. The
+ * worker mints its own (see ./worker.ts) and passes it in; this fallback keeps
+ * a directly-called cycle — a test, a one-off script — from having to.
+ * Per-process, never per-cycle: the same process re-entering its own lease
+ * must be allowed to, and a restarted process must not inherit the old one.
+ */
+const PROCESS_LEASE_OWNER = crypto.randomUUID();
+
 export type SharedCopyMember = { userId: string; email: string };
 
 type LogFn = (
@@ -81,7 +102,9 @@ export type SharedCopyStore = {
   setCursor(sharedAccountId: string, emailState: string): Promise<void>;
   hasCopies(userId: string, sharedAccountId: string, emailIds: string[]): Promise<Set<string>>;
   recordCopy(userId: string, sharedAccountId: string, emailId: string): Promise<void>;
-  withAccountLock<T>(sharedAccountId: string, fn: () => Promise<T>): Promise<T | null>;
+  acquireLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
+  renewLease(sharedAccountId: string, owner: string, ttlMs: number): Promise<boolean>;
+  releaseLease(sharedAccountId: string, owner: string): Promise<void>;
 };
 
 export type DeliveryDeps = {
@@ -89,6 +112,12 @@ export type DeliveryDeps = {
   copies: SharedCopyStore;
   /** ../context.ts getMailSession, bound to its deps. */
   getMailSession(member: SharedCopyMember): Promise<MailSessionResult>;
+  /**
+   * Who this process is when it takes an account's delivery lease. Injected by
+   * ./worker.ts, which mints one id per process; defaults to this module's own
+   * per-process id.
+   */
+  leaseOwner?: string;
   log?: LogFn;
   /**
    * Observed once per attempted copy. Defaults to the `/metrics` facade
@@ -331,80 +360,123 @@ async function deliverPage(
   }
 }
 
+/** The cycle proper, with this account's lease already held by `owner`. */
+async function deliver(
+  deps: DeliveryDeps,
+  input: { sharedAccountId: string; members: SharedCopyMember[] },
+  owner: string,
+): Promise<DeliveryCycleResult> {
+  const { sharedAccountId, members } = input;
+  const log = deps.log ?? defaultLog;
+
+  const watcher = await electWatcher(deps, input);
+  if (!watcher) {
+    log("warn", "shared mailbox copy: no watcher for account", {
+      sharedAccountId,
+      members: members.length,
+    });
+    return { status: "no_watcher" };
+  }
+
+  let cursor = await deps.copies.getCursor(sharedAccountId);
+  if (cursor === null) {
+    return baseline(deps, watcher, sharedAccountId, "no_cursor");
+  }
+
+  const counts = { copied: 0, skipped: 0, failed: 0 };
+  let pages = 0;
+  let truncated = false;
+  for (;;) {
+    let page: ChangesPage;
+    try {
+      page = await fetchChanges(deps, watcher, sharedAccountId, cursor);
+    } catch (error) {
+      if (error instanceof JmapMethodError && error.methodErrorType === "cannotCalculateChanges") {
+        return baseline(deps, watcher, sharedAccountId, "cannot_calculate_changes");
+      }
+      throw error;
+    }
+    pages += 1;
+
+    if (page.created.length > 0) {
+      const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created);
+      if (deliverable.length > 0) {
+        await deliverPage(deps, sharedAccountId, members, deliverable, counts);
+      }
+    }
+    // After the page's copies, never before: a crash in between replays the
+    // page, and the ledger turns the replay into skips instead of doubles.
+    await deps.copies.setCursor(sharedAccountId, page.newState);
+    cursor = page.newState;
+
+    if (!page.hasMoreChanges) break;
+    if (pages >= DELIVERY_MAX_PAGES) {
+      truncated = true;
+      break;
+    }
+    // Pushed out page by page rather than taken for the whole cycle at once:
+    // the TTL that survives a long burst is the same TTL that has to expire
+    // before a killed holder's account is delivered again, and renewing keeps
+    // those two apart. Losing it means another replica already took the
+    // account over, so this cycle stops rather than delivering the same pages
+    // alongside it.
+    if (!(await deps.copies.renewLease(sharedAccountId, owner, DELIVERY_LEASE_TTL_MS))) {
+      log("warn", "shared mailbox copy: lease lost mid-cycle", { sharedAccountId, pages });
+      break;
+    }
+  }
+
+  log(counts.copied + counts.failed > 0 ? "info" : "debug", "shared mailbox copy: cycle finished", {
+    sharedAccountId,
+    ...counts,
+    pages,
+    truncated,
+  });
+  return { status: "delivered", ...counts, pages, truncated };
+}
+
 /**
  * Runs one cycle for `sharedAccountId` on behalf of `members` (every member
  * opted into it, as listed by userPreferences.listSharedMailboxCopyOptIns).
  *
  * Serialised per account twice over: in-process by the worker's single-flight
- * queue, and across replicas by the transaction-scoped advisory lock the repo
- * takes (`locked` when another holder has it). Subscriptions and polls MAY be
- * duplicated across replicas — each replica watches every account — but the
- * lock guarantees only one of them delivers a given page, and the ledger
- * guarantees a page replayed after a crash delivers nothing twice.
+ * queue, and across replicas by the account's delivery LEASE (`locked` when
+ * another holder has it). Subscriptions and polls MAY be duplicated across
+ * replicas — each replica watches every account — but the lease guarantees
+ * only one of them delivers a given page, and the ledger guarantees a page
+ * replayed after a crash delivers nothing twice.
+ *
+ * The lease is a row, taken and released with ordinary statements, and NO
+ * transaction spans the cycle: the advisory lock it replaced held a pooled
+ * connection open in a transaction for the whole cycle while every query of
+ * that cycle asked the same pool for another connection — which deadlocks
+ * outright at DB_POOL_MAX=1 and leaves a minutes-long idle-in-transaction
+ * connection otherwise.
  */
 export async function runDeliveryCycle(
   deps: DeliveryDeps,
   input: { sharedAccountId: string; members: SharedCopyMember[] },
 ): Promise<DeliveryCycleResult> {
-  const { sharedAccountId, members } = input;
+  const { sharedAccountId } = input;
   const log = deps.log ?? defaultLog;
+  const owner = deps.leaseOwner ?? PROCESS_LEASE_OWNER;
 
-  const ran = await deps.copies.withAccountLock(sharedAccountId, async (): Promise<DeliveryCycleResult> => {
-    const watcher = await electWatcher(deps, input);
-    if (!watcher) {
-      log("warn", "shared mailbox copy: no watcher for account", {
+  const leased = await deps.copies.acquireLease(sharedAccountId, owner, DELIVERY_LEASE_TTL_MS);
+  if (!leased) return { status: "locked" };
+
+  try {
+    return await deliver(deps, input, owner);
+  } finally {
+    // Best effort, and deliberately not allowed to mask the cycle's own
+    // outcome: an unreleased lease costs at most one TTL of latency, while a
+    // release that threw over the real error would cost the diagnosis.
+    try {
+      await deps.copies.releaseLease(sharedAccountId, owner);
+    } catch (error) {
+      log("warn", "shared mailbox copy: lease release failed", {
         sharedAccountId,
-        members: members.length,
+        error: String(error),
       });
-      return { status: "no_watcher" };
     }
-
-    let cursor = await deps.copies.getCursor(sharedAccountId);
-    if (cursor === null) {
-      return baseline(deps, watcher, sharedAccountId, "no_cursor");
-    }
-
-    const counts = { copied: 0, skipped: 0, failed: 0 };
-    let pages = 0;
-    let truncated = false;
-    for (;;) {
-      let page: ChangesPage;
-      try {
-        page = await fetchChanges(deps, watcher, sharedAccountId, cursor);
-      } catch (error) {
-        if (error instanceof JmapMethodError && error.methodErrorType === "cannotCalculateChanges") {
-          return baseline(deps, watcher, sharedAccountId, "cannot_calculate_changes");
-        }
-        throw error;
-      }
-      pages += 1;
-
-      if (page.created.length > 0) {
-        const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created);
-        if (deliverable.length > 0) {
-          await deliverPage(deps, sharedAccountId, members, deliverable, counts);
-        }
-      }
-      // After the page's copies, never before: a crash in between replays the
-      // page, and the ledger turns the replay into skips instead of doubles.
-      await deps.copies.setCursor(sharedAccountId, page.newState);
-      cursor = page.newState;
-
-      if (!page.hasMoreChanges) break;
-      if (pages >= DELIVERY_MAX_PAGES) {
-        truncated = true;
-        break;
-      }
-    }
-
-    log(counts.copied + counts.failed > 0 ? "info" : "debug", "shared mailbox copy: cycle finished", {
-      sharedAccountId,
-      ...counts,
-      pages,
-      truncated,
-    });
-    return { status: "delivered", ...counts, pages, truncated };
-  });
-
-  return ran ?? { status: "locked" };
+  }
 }
