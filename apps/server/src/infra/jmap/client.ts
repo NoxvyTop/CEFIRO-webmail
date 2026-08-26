@@ -180,6 +180,31 @@ export function jmapUnavailable(): DomainError {
   return new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
 }
 
+/**
+ * The 502 for "the provider answered the batch with a method-level error"
+ * (RFC 8620 §3.6.2), carrying WHICH error so a caller that can act on one
+ * specific type gets to see it (GH #313).
+ *
+ * The shared-mailbox copy cycle is that caller: `Email/changes` answers
+ * `cannotCalculateChanges` when its cursor is older than the provider keeps
+ * history for, and the correct move is to re-baseline — while every OTHER
+ * method error is a transient failure whose correct move is to keep the
+ * cursor and try again later. Treating both as the one opaque `jmap_error`
+ * the client used to throw would force the cycle to choose between
+ * re-baselining on a blip (silently skipping the mail that arrived during it)
+ * and retrying a cursor the provider will refuse forever.
+ *
+ * A subclass rather than a new code: `jmap_error` is a wire contract (the SPA
+ * maps it, docs/OPERATIONS.md lists it), and everything that matched on the
+ * code, the status or `instanceof DomainError` keeps matching. `name` stays
+ * "DomainError" for the same reason.
+ */
+export class JmapMethodError extends DomainError {
+  constructor(readonly methodErrorType: string | undefined) {
+    super("jmap_error", 502, "errors.jmap_error");
+  }
+}
+
 function toDomainError(status: number): DomainError {
   if (status === 401) {
     return new DomainError("mail_auth_failed", 502, "errors.mail_auth_failed");
@@ -441,7 +466,9 @@ export function createJmapClient(input: {
         }
       }
 
-      throw new DomainError("jmap_error", 502, "errors.jmap_error");
+      throw new JmapMethodError(
+        typeof failure.type === "string" ? failure.type : undefined,
+      );
     },
 
     async uploadBlob(

@@ -3,6 +3,7 @@ import { DEFAULT_JMAP_TIMEOUT_MS } from "../../core/deadline";
 import {
   createJmapClient,
   jmapAuthHeader,
+  JmapMethodError,
   resolveAccountId,
   resolveSessionUrls,
   type JmapMethodCall,
@@ -233,6 +234,31 @@ describe("jmap client", () => {
     await expect(
       client.request(auth, session, [["Mailbox/get", {}, "0"]]),
     ).rejects.toMatchObject({ code: "jmap_error" });
+  });
+
+  it("carries the failing method's error type on the thrown jmap_error (GH #313)", async () => {
+    // The shared-mailbox copy cycle has to tell `cannotCalculateChanges` (the
+    // cursor is too old: re-baseline) apart from every other method error (a
+    // transient failure: keep the cursor and retry later). The code stays
+    // `jmap_error`, so nothing that matched on it before changes.
+    const client = createJmapClient({
+      baseUrl: "https://mail.test",
+      fetchFn: fetchReturning({
+        methodResponses: [["error", { type: "cannotCalculateChanges" }, "0"]],
+      }),
+    });
+    const session: JmapSession = {
+      apiUrl: "https://mail.test/jmap/",
+      accountId: "acc-1",
+      eventSourceUrl: "https://mail.test/es",
+      uploadUrl: "https://mail.test/upload/{accountId}/",
+      downloadUrl: "https://mail.test/download/{accountId}/{blobId}/{name}",
+    };
+    const failure = await client
+      .request(auth, session, [["Email/changes", { accountId: "acc-1", sinceState: "s0" }, "0"]])
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(JmapMethodError);
+    expect(failure).toMatchObject({ code: "jmap_error", methodErrorType: "cannotCalculateChanges" });
   });
 
   describe("outbound deadline (GH #165)", () => {
