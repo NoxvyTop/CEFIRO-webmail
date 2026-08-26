@@ -224,6 +224,9 @@
       "destroy_failed": "Could not delete the message",
       "account_forbidden": "You don't have access to that mailbox",
       "invalid_account": "That mailbox can't be copied to your inbox",
+      "invalid_domain": "That sender's domain can't be added as a trusted service",
+      "trusted_service_seed": "That service is trusted by default and can't be removed",
+      "trusted_services_limit": "Your trusted services list is full. Remove one before adding another",
       "copy_failed": "Could not copy the message to your inbox",
       "generic": "Mail could not be loaded"
     },
@@ -287,6 +290,14 @@
       "passLabel": "Sender authentication passed (SPF/DKIM/DMARC verified)",
       "failLabel": "Sender authentication failed — this message may be spoofed"
     },
+    "senderTrust": {
+      "knownLabel": "Known sender: you have written to {{address}}",
+      "trustedServiceLabel": "Trusted service: {{domain}}",
+      "trustAction": "Trust {{domain}}",
+      "untrustAction": "Stop trusting {{domain}}",
+      "trusted": "{{domain}} is now a trusted service",
+      "untrusted": "{{domain}} is no longer a trusted service"
+    },
     "bodyTruncated": {
       "title": "This message is incomplete",
       "hint": "It exceeded the size limit, so only the beginning was loaded. Replying or forwarding will quote only the part shown here."
@@ -319,7 +330,7 @@
     "enter": "Enter",
     "copyLabel": "Receive a copy in my inbox",
     "copyToggle": "Receive a copy of {{name}} in my inbox",
-    "copyHelp": "When new mail arrives in this mailbox, a copy will be delivered to your inbox. Automatic delivery ships in an upcoming update; for now you can copy messages manually from the mailbox.",
+    "copyHelp": "When new mail arrives in this mailbox, a copy will be delivered to your inbox.",
     "copyError": "Couldn't change the preference. Please try again.",
     "activeIndicator": "Shared mailbox: {{name}}",
     "backToPersonal": "Back to my mailbox"

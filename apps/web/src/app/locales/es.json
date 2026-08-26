@@ -224,6 +224,9 @@
       "destroy_failed": "No se pudo eliminar el mensaje",
       "account_forbidden": "No tienes acceso a ese buzón",
       "invalid_account": "Ese buzón no admite copiar a tu bandeja",
+      "invalid_domain": "El dominio de ese remitente no se puede añadir como servicio de confianza",
+      "trusted_service_seed": "Ese servicio es de confianza por defecto y no se puede quitar",
+      "trusted_services_limit": "Tu lista de servicios de confianza está llena. Quita uno antes de añadir otro",
       "copy_failed": "No se pudo copiar el mensaje a tu bandeja",
       "generic": "No se pudo cargar el correo"
     },
@@ -287,6 +290,14 @@
       "passLabel": "Autenticación del remitente verificada (SPF/DKIM/DMARC)",
       "failLabel": "Autenticación del remitente fallida — este mensaje podría ser falsificado"
     },
+    "senderTrust": {
+      "knownLabel": "Remitente conocido: ya has escrito a {{address}}",
+      "trustedServiceLabel": "Servicio de confianza: {{domain}}",
+      "trustAction": "Confiar en {{domain}}",
+      "untrustAction": "Dejar de confiar en {{domain}}",
+      "trusted": "{{domain}} ahora es un servicio de confianza",
+      "untrusted": "{{domain}} ya no es un servicio de confianza"
+    },
     "bodyTruncated": {
       "title": "Este mensaje está incompleto",
       "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondés o reenviás, se citará únicamente la parte que se ve acá."
@@ -319,7 +330,7 @@
     "enter": "Entrar",
     "copyLabel": "Recibir copia en mi bandeja",
     "copyToggle": "Recibir copia de {{name}} en mi bandeja",
-    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja. La entrega automática se activa en una próxima actualización; por ahora podés copiar correos manualmente desde el buzón.",
+    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja.",
     "copyError": "No se pudo cambiar la preferencia. Inténtalo de nuevo.",
     "activeIndicator": "Buzón compartido: {{name}}",
     "backToPersonal": "Volver a mi buzón"

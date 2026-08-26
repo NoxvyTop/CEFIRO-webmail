@@ -136,6 +136,54 @@ export type OutboundSample = {
   durationMs: number;
 };
 
+/**
+ * How one automatic shared-mailbox copy ended (GH #313). Closed by
+ * construction, like `OutboundOutcome`: `copied` is a confirmed Email/copy,
+ * `failed` a refused or thrown one, `skipped` a message of a replayed page the
+ * cycle must not copy — the member already holds a confirmed copy, or the row
+ * is `failed` and belongs to the retry pass, which owns the verification and
+ * the attempt cap (expected to be rare, and a rising rate means cycles are
+ * being cut short) — and `unresolved` a copy that
+ * was claimed in the ledger but never confirmed, so the process died or the
+ * database failed between the provider making the copy and the row being
+ * written. Those are deliberately NOT retried — the delivery is at-most-once
+ * and the manual copy button is the recovery — so any `unresolved` at all is
+ * worth an operator's attention.
+ *
+ * `owed` is the fifth: a copy the account owes a member the cycle could not
+ * deliver to at all (their session failed, or the deliverable listing does not
+ * have them — deactivated, no credential). No JMAP call was made for it; the
+ * ledger row is what keeps the message reachable after the cursor moves past
+ * its page, and the retry pass hands it over when the member is back. A
+ * sustained rate means somebody has been undeliverable for a while, not that
+ * anything was lost.
+ *
+ * `dropped` is the sixth, and the only one of the six that IS a loss: a message
+ * left out of that trail because the member's outstanding owed rows have
+ * reached DELIVERY_OWED_CAP (modules/mail/shared-copy/delivery.ts). It means
+ * somebody has been unreachable for so long — a credential revoked at the
+ * provider, an account their session no longer lists — that the account stopped
+ * writing them a trail rather than grow one without end. Anything other than
+ * zero is a membership to fix, and the mail behind it is reachable only through
+ * the shared mailbox itself.
+ */
+export type SharedMailboxCopyResult =
+  | "copied"
+  | "failed"
+  | "skipped"
+  | "unresolved"
+  | "owed"
+  | "dropped";
+
+const SHARED_MAILBOX_COPY_RESULTS: readonly SharedMailboxCopyResult[] = [
+  "copied",
+  "failed",
+  "skipped",
+  "unresolved",
+  "owed",
+  "dropped",
+];
+
 export type Metrics = {
   /** Records one finished request. Called once per response, from createApp. */
   recordRequest(sample: RequestSample): void;
@@ -148,6 +196,14 @@ export type Metrics = {
   recordOutbound(sample: OutboundSample): void;
   /** Publishes the current number of open SSE streams (GH #240). */
   setOpenStreams(count: number): void;
+  /**
+   * Records one attempted automatic shared-mailbox copy (GH #313). Fed from
+   * modules/mail/shared-copy/delivery.ts, which runs with no request in flight
+   * — so nothing inbound can show whether the worker is delivering, refusing
+   * or idle, and this counter is the only signal an operator has short of the
+   * log stream.
+   */
+  recordSharedMailboxCopy(result: SharedMailboxCopyResult): void;
   /**
    * Renders the whole registry. `dependencies` comes from the cached
    * /api/health probe (core/health.ts) rather than from fresh outbound calls —
@@ -232,6 +288,12 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
   const outboundCounters = new Map<string, OutboundCounterEntry>();
   const outboundHistograms = new Map<string, OutboundHistogramEntry>();
   let openStreams = 0;
+  // Every outcome present from the first scrape, at zero: a dashboard reading
+  // `rate(...{result="failed"})` must see a flat zero, not an absent series
+  // it cannot tell from "the worker never ran".
+  const sharedMailboxCopies = new Map<SharedMailboxCopyResult, number>(
+    SHARED_MAILBOX_COPY_RESULTS.map((result) => [result, 0]),
+  );
 
   return {
     recordRequest(sample: RequestSample): void {
@@ -284,6 +346,10 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
 
     setOpenStreams(count: number): void {
       openStreams = Math.max(0, count);
+    },
+
+    recordSharedMailboxCopy(result: SharedMailboxCopyResult): void {
+      sharedMailboxCopies.set(result, (sharedMailboxCopies.get(result) ?? 0) + 1);
     },
 
     render(dependencies: Record<string, boolean>): string {
@@ -374,6 +440,16 @@ export function createMetrics(input: { now?: () => number } = {}): Metrics {
       );
 
       lines.push(
+        "# HELP cefiro_shared_mailbox_copies_total Automatic shared-mailbox copies attempted, by result.",
+        "# TYPE cefiro_shared_mailbox_copies_total counter",
+      );
+      for (const result of SHARED_MAILBOX_COPY_RESULTS) {
+        lines.push(
+          `cefiro_shared_mailbox_copies_total{${labels([["result", result]])}} ${sharedMailboxCopies.get(result) ?? 0}`,
+        );
+      }
+
+      lines.push(
         "# HELP cefiro_dependency_up Dependency reachable on the last health probe (1 up, 0 down).",
         "# TYPE cefiro_dependency_up gauge",
       );
@@ -431,6 +507,11 @@ export function recordOutbound(sample: OutboundSample): void {
 /** Publishes the open SSE stream count. Called from modules/mail/streams.ts. */
 export function setOpenStreams(count: number): void {
   active?.setOpenStreams(count);
+}
+
+/** Records one automatic shared-mailbox copy. Called from modules/mail/shared-copy/ (GH #313). */
+export function recordSharedMailboxCopy(result: SharedMailboxCopyResult): void {
+  active?.recordSharedMailboxCopy(result);
 }
 
 async function sha256(value: string): Promise<Uint8Array> {

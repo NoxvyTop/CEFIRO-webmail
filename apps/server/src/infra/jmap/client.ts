@@ -88,6 +88,30 @@ export type JmapMethodCall = [string, Record<string, unknown>, string];
 export type JmapMethodResponse = [string, Record<string, unknown>, string];
 
 /**
+ * Per-request options of `JmapClient.request`.
+ *
+ * `degradation` says how the call relates to the client's degradable-property
+ * latch (GH #144, `DEGRADABLE_EMAIL_PROPERTIES`):
+ * - `shared` (default): today's behaviour — a call that finds the latch set is
+ *   sent without the degradable properties, and a call that trips it sets it
+ *   for every later call in the process;
+ * - `isolated` (GH #313): the latch is neither consulted nor set. The call is
+ *   sent exactly as written and, on the same `invalidArguments` condition, is
+ *   retried ONCE without the degradable properties for that call only.
+ *
+ * `isolated` exists for the shared-mailbox delivery page read. `messageId` is
+ * degradable, and once any conversation view had tripped the shared latch the
+ * page read silently stopped asking for it: every claim stored
+ * `message_id = null`, and the retry verification that depends on it was
+ * disabled for the rest of the process without a line of log. With the latch
+ * out of the way, an absent `messageId` in the answer means the PROVIDER does
+ * not return it, which the caller can see and report.
+ */
+export type JmapRequestOptions = {
+  degradation?: "shared" | "isolated";
+};
+
+/**
  * Email properties this server asks for but can live without (GH #144).
  *
  * RFC 8621 §4.2 makes an unrecognised property name a method-level
@@ -178,6 +202,31 @@ export function jmapAuthHeader(auth: JmapAuth, mode: JmapAuthMode = "basic"): st
  */
 export function jmapUnavailable(): DomainError {
   return new DomainError("stalwart_unavailable", 502, "errors.stalwart_unavailable");
+}
+
+/**
+ * The 502 for "the provider answered the batch with a method-level error"
+ * (RFC 8620 §3.6.2), carrying WHICH error so a caller that can act on one
+ * specific type gets to see it (GH #313).
+ *
+ * The shared-mailbox copy cycle is that caller: `Email/changes` answers
+ * `cannotCalculateChanges` when its cursor is older than the provider keeps
+ * history for, and the correct move is to re-baseline — while every OTHER
+ * method error is a transient failure whose correct move is to keep the
+ * cursor and try again later. Treating both as the one opaque `jmap_error`
+ * the client used to throw would force the cycle to choose between
+ * re-baselining on a blip (silently skipping the mail that arrived during it)
+ * and retrying a cursor the provider will refuse forever.
+ *
+ * A subclass rather than a new code: `jmap_error` is a wire contract (the SPA
+ * maps it, docs/OPERATIONS.md lists it), and everything that matched on the
+ * code, the status or `instanceof DomainError` keeps matching. `name` stays
+ * "DomainError" for the same reason.
+ */
+export class JmapMethodError extends DomainError {
+  constructor(readonly methodErrorType: string | undefined) {
+    super("jmap_error", 502, "errors.jmap_error");
+  }
 }
 
 function toDomainError(status: number): DomainError {
@@ -410,20 +459,31 @@ export function createJmapClient(input: {
      * a degradable property is retried once without those properties. If the
      * retry succeeds the caller gets a real answer with some metadata missing,
      * which every one of them already handles, instead of a 502.
+     *
+     * `options.degradation: "isolated"` (GH #313) keeps this call out of the
+     * shared latch in both directions — see `JmapRequestOptions`. The default
+     * is byte-identical to what every existing caller got before the option
+     * existed.
      */
     async request(
       auth: JmapAuth,
       session: JmapSession,
       calls: JmapMethodCall[],
       extraUsing: string[] = [],
+      options: JmapRequestOptions = {},
     ): Promise<JmapMethodResponse[]> {
-      const first = degradedProperties ? withoutDegradableProperties(calls).calls : calls;
+      const isolated = options.degradation === "isolated";
+      // An isolated call never reads the latch: it must learn what THIS
+      // provider answers to the properties it asks for, not what some earlier
+      // call in the process was refused.
+      const degraded = !isolated && degradedProperties;
+      const first = degraded ? withoutDegradableProperties(calls).calls : calls;
       const responses = await post(auth, session, first, extraUsing);
       const failure = firstMethodError(responses);
       if (!failure) return responses;
 
       const retryable =
-        !degradedProperties &&
+        !degraded &&
         failure.type === INVALID_ARGUMENTS &&
         !calls.some(([name]) => MUTATING_METHOD.test(name));
       if (retryable) {
@@ -431,6 +491,16 @@ export function createJmapClient(input: {
         if (reduced.stripped) {
           const retried = await post(auth, session, reduced.calls, extraUsing);
           if (!firstMethodError(retried)) {
+            if (isolated) {
+              // Degraded for this call only. The latch stays as it was: an
+              // isolated caller reads the absence out of the answer itself and
+              // decides what it means for it.
+              log("debug", "jmap provider rejected optional email properties for one call", {
+                properties: [...DEGRADABLE_EMAIL_PROPERTIES],
+                methods: calls.map(([name]) => name),
+              });
+              return retried;
+            }
             degradedProperties = true;
             log("warn", "jmap provider rejected optional email properties, degrading", {
               properties: [...DEGRADABLE_EMAIL_PROPERTIES],
@@ -441,7 +511,9 @@ export function createJmapClient(input: {
         }
       }
 
-      throw new DomainError("jmap_error", 502, "errors.jmap_error");
+      throw new JmapMethodError(
+        typeof failure.type === "string" ? failure.type : undefined,
+      );
     },
 
     async uploadBlob(

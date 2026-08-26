@@ -20,6 +20,8 @@ import { createMailCredentialsRepo } from "./infra/repos/mail-credentials";
 import { createSignaturesRepo } from "./infra/repos/signatures";
 import { createSsoConfigRepo } from "./infra/repos/sso-config";
 import { createUserPreferencesRepo } from "./infra/repos/user-preferences";
+import { createSentRecipientsRepo } from "./infra/repos/sent-recipients";
+import { createSharedMailboxCopiesRepo } from "./infra/repos/shared-mailbox-copies";
 import { createUsersRepo } from "./infra/repos/users";
 import { createFilterRulesRepo } from "./infra/repos/filter-rules";
 import { createSieveRawScriptRepo } from "./infra/repos/sieve-raw-script";
@@ -43,8 +45,12 @@ import {
   remoteKeySource,
 } from "./modules/auth/oidc";
 import { createSessionStore } from "./modules/auth/sessions";
-import { createJmapClient } from "./infra/jmap/client";
+import { createJmapClient, withJmapTransportErrors } from "./infra/jmap/client";
+import { withDeadlineFetch } from "./core/deadline";
+import { recordSharedMailboxCopy } from "./core/metrics";
+import { getMailSession } from "./modules/mail/context";
 import { createMailRouter } from "./modules/mail/router";
+import { createSharedCopyWorker } from "./modules/mail/shared-copy/worker";
 import { createSieveRouter } from "./modules/sieve/router";
 import { createAdminRouter } from "./modules/admin/router";
 import { createProfileRouter } from "./modules/profile/router";
@@ -188,6 +194,10 @@ const instanceSettings = createInstanceSettingsRepo(db);
 const mailCredentials = createMailCredentialsRepo(db, keyring);
 const signatures = createSignaturesRepo(db);
 const userPreferences = createUserPreferencesRepo(db);
+// GH #314: the addresses the user has written to (Tier A "known sender").
+const sentRecipients = createSentRecipientsRepo(db);
+// GH #313: cursor + dedup ledger of the automatic shared-mailbox copies.
+const sharedMailboxCopies = createSharedMailboxCopiesRepo(db);
 const filterRules = createFilterRulesRepo(db);
 const sieveSyncState = createSieveSyncStateRepo(db);
 const sieveRawScript = createSieveRawScriptRepo(db);
@@ -245,6 +255,45 @@ if (config.jmapUrl) {
     timeoutMs: config.jmapTimeoutMs,
   });
 }
+
+// GH #313: the background worker that copies new shared-mailbox mail into
+// each opted-in member's own inbox (modules/mail/shared-copy/). Built only
+// when a JMAP provider is configured — there is nothing to watch otherwise —
+// and unless the operator switched it off; with no opt-ins it runs no cycle
+// and opens no subscription, so it is inert by default in every other sense.
+// Its session lookup is the same cached one requireMail uses, so a member's
+// eviction (logout, credential rotation) reaches the worker too.
+//
+// The subscription's fetch is dressed the same way the SSE proxy's is
+// (modules/mail/router.ts): the outbound deadline covers time-to-headers
+// only, so the long-lived stream stays open while a provider that accepts and
+// never answers still fails fast, and a transport failure reads as the
+// dependency being down rather than as an internal error.
+function buildSharedCopyWorker() {
+  if (!jmap || !config.sharedMailboxCopyEnabled) return null;
+  const jmapClient = jmap;
+  return createSharedCopyWorker({
+    delivery: {
+      jmap: jmapClient,
+      copies: sharedMailboxCopies,
+      getMailSession: (member) => getMailSession({ jmap: jmapClient, mailCredentials }, member),
+      onCopyResult: recordSharedMailboxCopy,
+    },
+    listOptIns: () => userPreferences.listSharedMailboxCopyOptIns(),
+    listOptInMembership: () => userPreferences.listSharedMailboxCopyOptInMembership(),
+    pollMs: config.sharedMailboxCopyPollMs,
+    fetchFn: withJmapTransportErrors(withDeadlineFetch(fetch, "stalwart", config.jmapTimeoutMs)),
+    authMode: config.jmapAuthMode,
+  });
+}
+
+const sharedCopyWorker = buildSharedCopyWorker();
+
+log("info", "shared mailbox copies", {
+  enabled: sharedCopyWorker !== null,
+  configured: config.sharedMailboxCopyEnabled,
+  pollMs: config.sharedMailboxCopyPollMs,
+});
 
 // Software-level default-safe gate: AI features are inert unless explicitly
 // enabled AND an API key is configured. See docs/ARCHITECTURE.md ("IA —
@@ -407,6 +456,11 @@ const app = createApp({
     userPreferences,
     jmap,
     contacts,
+    sentRecipients,
+    // GH #313: the manual copy button writes into the same ledger the copy
+    // worker reads, so a message the member pulled themselves is not
+    // delivered to them again by the next cycle.
+    sharedMailboxCopies,
     timeoutMs: config.jmapTimeoutMs,
     // The raw-fetch routes (SSE, blob up/download) must present the mailbox
     // credential the same way the JMAP client does, or `bearer` would work for
@@ -462,18 +516,25 @@ const server = Bun.serve({ port: config.port, fetch: app.fetch });
 // without weakening Bun's global idleTimeout for every other route (GH #204).
 registerServer(server);
 
+// GH #313: only once the listener is up — the worker's first pass talks to
+// Postgres and to the provider, and a boot that fails there must fail with the
+// server already answering /api/health/live, not before it.
+sharedCopyWorker?.start();
+
 // Graceful shutdown (GH #193). Both budgets are env-tunable; the drain budget
 // bounds how long in-flight requests may finish before connections are
 // force-closed, and the DB budget bounds the pool close. Defaults live in
 // core/shutdown.ts and are applied by core/config.ts, which now validates both
 // values instead of the local parser that used to swallow a malformed one and
-// fall back to the default (GH #218).
+// fall back to the default (GH #218). The copy worker (GH #313) is stopped
+// FIRST, before the drain, so no cycle starts a copy against a closing pool.
 const shutdown = createShutdown({
   server,
   sql: db,
   log,
   graceMs: config.shutdownGraceMs,
   dbTimeoutMs: config.shutdownDbTimeoutMs,
+  stopWorkers: sharedCopyWorker ? () => sharedCopyWorker.stop() : undefined,
 });
 installProcessHandlers({ shutdown, log });
 

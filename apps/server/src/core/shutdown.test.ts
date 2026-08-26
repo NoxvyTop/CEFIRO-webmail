@@ -117,6 +117,151 @@ describe("createShutdown", () => {
     expect(lines.some((l) => l.level === "error")).toBe(true);
     expect(exit).toHaveBeenCalledWith(0);
   });
+
+  // GH #313: background workers (the shared-mailbox copy worker) hold upstream
+  // sockets and may be mid-cycle when SIGTERM arrives. They stop FIRST, before
+  // the listener drains, so a cycle cannot start a copy against a pool that
+  // is about to close.
+  describe("stopWorkers hook (GH #313)", () => {
+    it("stops the workers before draining the server and closing the database", async () => {
+      const order: string[] = [];
+      const { sql } = fakeSql();
+      const server = {
+        pendingRequests: 0,
+        stop: vi.fn(() => {
+          order.push("server");
+          return Promise.resolve();
+        }),
+      };
+      const stopWorkers = vi.fn(async () => {
+        order.push("workers");
+      });
+      const { log } = recordingLog();
+      const exit = vi.fn();
+
+      const shutdown = createShutdown({ server, sql, log, graceMs: 50, exit, stopWorkers });
+      await shutdown({ kind: "signal", signal: "SIGTERM" });
+
+      expect(order).toEqual(["workers", "server"]);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it("carries on when stopping the workers rejects", async () => {
+      const { server, calls } = fakeServer();
+      const { sql, end } = fakeSql();
+      const { log, lines } = recordingLog();
+      const exit = vi.fn();
+
+      const shutdown = createShutdown({
+        server,
+        sql,
+        log,
+        graceMs: 50,
+        exit,
+        stopWorkers: () => Promise.reject(new Error("watcher stuck")),
+      });
+      await shutdown({ kind: "signal", signal: "SIGTERM" });
+
+      expect(lines.some((l) => l.level === "error" && l.msg.includes("worker"))).toBe(true);
+      expect(calls).toEqual([false]);
+      expect(end).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it("does not let a worker that never stops block the shutdown past the grace period", async () => {
+      const { server, calls } = fakeServer();
+      const { sql, end } = fakeSql();
+      const { log, lines } = recordingLog();
+      const exit = vi.fn();
+
+      const shutdown = createShutdown({
+        server,
+        sql,
+        log,
+        graceMs: 20,
+        exit,
+        stopWorkers: () => new Promise<void>(() => {}),
+      });
+      await shutdown({ kind: "signal", signal: "SIGTERM" });
+
+      expect(lines.some((l) => l.level === "warn" && l.msg.includes("worker"))).toBe(true);
+      expect(calls).toEqual([false]);
+      expect(end).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    // GH #313, shutdown budget doubled: stopping the workers and draining the
+    // listener each raced against the FULL graceMs, so an operator who set
+    // SHUTDOWN_GRACE_MS=15000 could wait 30s before the forced close — past
+    // the orchestrator's own kill timeout, which turns a graceful stop into a
+    // SIGKILL. One deadline now covers both phases.
+    it("spends one shared deadline on stopping the workers and draining the server", async () => {
+      vi.useFakeTimers();
+      try {
+        const { server, calls } = fakeServer({ drains: false });
+        const { sql } = fakeSql();
+        const { log } = recordingLog();
+        const exit = vi.fn();
+
+        const shutdown = createShutdown({
+          server,
+          sql,
+          log,
+          graceMs: 10_000,
+          exit,
+          // Stops cleanly, but only after 6 of the 10 seconds.
+          stopWorkers: () => new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+        });
+        const finished = shutdown({ kind: "signal", signal: "SIGTERM" });
+
+        await vi.advanceTimersByTimeAsync(6_000);
+        expect(calls).toEqual([false]); // the drain has started
+
+        // Only the 4s left of the shared budget, not another full 10s.
+        await vi.advanceTimersByTimeAsync(3_999);
+        expect(calls).toEqual([false]);
+        await vi.advanceTimersByTimeAsync(1);
+        await finished;
+
+        expect(calls).toEqual([false, true]);
+        expect(exit).toHaveBeenCalledWith(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still leaves the drain a one-second floor when the workers ate the whole budget", async () => {
+      vi.useFakeTimers();
+      try {
+        const { server, calls } = fakeServer({ drains: false });
+        const { sql } = fakeSql();
+        const { log } = recordingLog();
+        const exit = vi.fn();
+
+        const shutdown = createShutdown({
+          server,
+          sql,
+          log,
+          graceMs: 5_000,
+          exit,
+          stopWorkers: () => new Promise<void>(() => {}),
+        });
+        const finished = shutdown({ kind: "signal", signal: "SIGTERM" });
+
+        await vi.advanceTimersByTimeAsync(5_000); // the worker stop times out
+        expect(calls).toEqual([false]);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(calls).toEqual([false]);
+        await vi.advanceTimersByTimeAsync(1);
+        await finished;
+
+        expect(calls).toEqual([false, true]);
+        expect(exit).toHaveBeenCalledWith(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 describe("installProcessHandlers", () => {

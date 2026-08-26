@@ -8,6 +8,7 @@ import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
 import { createContactsRepo, type ContactsRepo } from "../../infra/repos/contacts";
+import { createSentRecipientsRepo, type SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
@@ -21,6 +22,7 @@ const defaultMailboxRoles = [
   { id: "mb-inbox", role: "inbox" },
   { id: "mb-junk", role: "junk" },
   { id: "mb-trash", role: "trash" },
+  { id: "mb-sent", role: "sent" },
 ];
 
 // Answers the two batches a mail-arrival harvest makes: the Email/query +
@@ -87,6 +89,7 @@ function sseFetch(frames: string[]): typeof fetch {
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
 let contacts: ContactsRepo;
+let sentRecipients: SentRecipientsRepo;
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
@@ -96,6 +99,7 @@ beforeAll(async () => {
   mailCredentials = createMailCredentialsRepo(sql, key);
   sessions = createSessionStore(sql);
   contacts = createContactsRepo(sql);
+  sentRecipients = createSentRecipientsRepo(sql);
 });
 afterAll(() => sql.end());
 
@@ -108,7 +112,14 @@ async function createTestUser() {
   return { userId: user.id, email, token };
 }
 
-function makeApp(jmap: JmapClient, fetchFn: typeof fetch, harvestContacts?: ContactsRepo) {
+function makeApp(
+  jmap: JmapClient,
+  fetchFn: typeof fetch,
+  harvestContacts?: ContactsRepo,
+  // GH #314: the known-sender store fed from the same arrival page. Optional
+  // like `contacts`, so every pre-existing test above runs exactly as before.
+  harvestSentRecipients?: SentRecipientsRepo,
+) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -118,6 +129,7 @@ function makeApp(jmap: JmapClient, fetchFn: typeof fetch, harvestContacts?: Cont
       jmap,
       fetchFn,
       contacts: harvestContacts,
+      sentRecipients: harvestSentRecipients,
     }),
   });
 }
@@ -383,5 +395,171 @@ describe("contact harvest on the mail-arrival event stream (GH #180)", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(frames.join(""));
     expect(calls).toHaveLength(0);
+  });
+});
+
+// GH #314: the same arrival page feeds the Tier A ("known sender") store —
+// the to/cc/bcc of messages sitting in Sent. This is what keeps the store in
+// step with mail sent from OTHER clients (a phone, a desktop MUA), which never
+// pass through POST /send.
+describe("sent-recipient harvest on the mail-arrival event stream (GH #314)", () => {
+  const arrival = [stateChangeFrame({ email: "s1" }), stateChangeFrame({ email: "s2" })];
+
+  it("records the to/cc/bcc of messages in Sent, and nothing from received mail", async () => {
+    const user = await createTestUser();
+    const calls: JmapMethodCall[][] = [];
+    const sentTo = `sent-to-${user.userId}@x.com`;
+    const sentCc = `sent-cc-${user.userId}@x.com`;
+    const sentBcc = `sent-bcc-${user.userId}@x.com`;
+    const receivedTo = `received-to-${user.userId}@x.com`;
+    const jmap = makeStubJmap({
+      emails: [
+        {
+          id: "e-sent",
+          mailboxIds: { "mb-sent": true },
+          from: [{ name: "Me", email: user.email }],
+          to: [{ name: "To", email: sentTo.toUpperCase() }],
+          cc: [{ email: sentCc }],
+          bcc: [{ email: sentBcc }],
+        },
+        {
+          id: "e-received",
+          mailboxIds: { "mb-inbox": true },
+          from: [{ name: "Alice", email: `alice-${user.userId}@x.com` }],
+          to: [{ email: receivedTo }],
+        },
+      ],
+      calls,
+    });
+
+    const res = await makeApp(jmap, sseFetch(arrival), contacts, sentRecipients).request(
+      "/api/mail/events",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const known = await sentRecipients.has(user.userId, [sentTo, sentCc, sentBcc, receivedTo]);
+    expect(known).toEqual(new Set([sentTo, sentCc, sentBcc]));
+
+    // The page is fetched ONCE for both harvests, and it must carry the
+    // recipient properties the sent side needs.
+    const pageCalls = calls.filter((c) => c[0]?.[0] === "Email/query");
+    expect(pageCalls).toHaveLength(1);
+    const getCall = pageCalls[0]?.find((c) => c[0] === "Email/get");
+    const getParams = getCall?.[1] as { properties: string[] } | undefined;
+    expect(getParams?.properties).toEqual(
+      expect.arrayContaining(["from", "mailboxIds", "to", "cc", "bcc"]),
+    );
+    // The pre-existing sender harvest still ran off the same page.
+    const list = await contacts.list(user.userId);
+    expect(list.some((c) => c.email === `alice-${user.userId}@x.com`)).toBe(true);
+  });
+
+  // GH #314 (JD-4): both harvests read the same account's mailbox roles from
+  // the same arrival, so asking JMAP twice is a duplicate round trip per
+  // delivery for an answer that cannot have changed between the two calls.
+  it("looks the mailbox roles up ONCE per arrival, not once per harvest", async () => {
+    const user = await createTestUser();
+    const calls: JmapMethodCall[][] = [];
+    const jmap = makeStubJmap({
+      emails: [
+        {
+          id: "e-sent",
+          mailboxIds: { "mb-sent": true },
+          from: [{ email: user.email }],
+          to: [{ email: `both-${user.userId}@x.com` }],
+        },
+        {
+          id: "e-received",
+          mailboxIds: { "mb-inbox": true },
+          from: [{ name: "Alice", email: `alice-both-${user.userId}@x.com` }],
+        },
+      ],
+      calls,
+    });
+
+    const res = await makeApp(jmap, sseFetch(arrival), contacts, sentRecipients).request(
+      "/api/mail/events",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(calls.filter((c) => c[0]?.[0] === "Mailbox/get")).toHaveLength(1);
+    expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
+    // Both harvests still ran off that one lookup.
+    expect(await sentRecipients.has(user.userId, [`both-${user.userId}@x.com`])).toEqual(
+      new Set([`both-${user.userId}@x.com`]),
+    );
+    const list = await contacts.list(user.userId);
+    expect(list.some((c) => c.email === `alice-both-${user.userId}@x.com`)).toBe(true);
+  });
+
+  it("never records the owner's own address from a message they sent to themselves", async () => {
+    const user = await createTestUser();
+    const other = `other-${user.userId}@x.com`;
+    const jmap = makeStubJmap({
+      emails: [
+        {
+          id: "e-self",
+          mailboxIds: { "mb-sent": true },
+          from: [{ email: user.email }],
+          to: [{ email: user.email.toUpperCase() }, { email: other }],
+        },
+      ],
+      calls: [],
+    });
+
+    const res = await makeApp(jmap, sseFetch(arrival), undefined, sentRecipients).request(
+      "/api/mail/events",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    await res.text();
+
+    expect(await sentRecipients.has(user.userId, [user.email, other])).toEqual(new Set([other]));
+  });
+
+  it("runs with only the sent-recipients store wired (no contacts repo)", async () => {
+    const user = await createTestUser();
+    const calls: JmapMethodCall[][] = [];
+    const recipient = `solo-${user.userId}@x.com`;
+    const jmap = makeStubJmap({
+      emails: [{ id: "e1", mailboxIds: { "mb-sent": true }, to: [{ email: recipient }] }],
+      calls,
+    });
+
+    const res = await makeApp(jmap, sseFetch(arrival), undefined, sentRecipients).request(
+      "/api/mail/events",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(await sentRecipients.has(user.userId, [recipient])).toEqual(new Set([recipient]));
+    expect(calls.filter((c) => c[0]?.[0] === "Email/query")).toHaveLength(1);
+  });
+
+  it("streams the bytes through unchanged when recording sent recipients fails", async () => {
+    const user = await createTestUser();
+    const jmap = makeStubJmap({
+      emails: [
+        { id: "e1", mailboxIds: { "mb-sent": true }, to: [{ email: `fail-${user.userId}@x.com` }] },
+      ],
+      calls: [],
+    });
+    const failing: SentRecipientsRepo = {
+      ...sentRecipients,
+      record: async () => {
+        throw new Error("boom: simulated DB failure");
+      },
+    };
+
+    const res = await makeApp(jmap, sseFetch(arrival), contacts, failing).request(
+      "/api/mail/events",
+      { headers: { cookie: `session=${user.token}` } },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(arrival.join(""));
   });
 });

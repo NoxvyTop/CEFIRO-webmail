@@ -28,8 +28,13 @@ import { currentLogContext, log, withLogContext } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
-import { deriveSenderAuthVerdict } from "./sender-auth";
+import { deriveSenderAuthFacts } from "./sender-auth";
+import { resolveSenderTrust } from "./sender-trust";
+import { backfillSentRecipients } from "./sent-recipients-backfill";
+import { copyEmailToPersonalInbox, type CopyFailureReason } from "./shared-copy/copy";
 import { guardStream, mailStreams } from "./streams";
+import { createTrustedServicesRouter } from "./trusted-services";
+import { TRUSTED_SERVICES_SEED } from "./trusted-services-seed";
 import {
   jmapAuthHeader,
   resolveAccountId,
@@ -73,6 +78,16 @@ type JmapEmail = {
 // rather than being raised. GH #140 makes the resulting cut visible instead of
 // silent (see collectBodyValues / EmailDetail.bodyTruncated).
 const MAX_BODY_VALUE_BYTES = 524288;
+
+// GH #313: the HTTP status each G-2 copy failure has always answered with,
+// now that the copy itself lives in ./shared-copy/copy.ts. Kept as a table so
+// the route cannot quietly drift from the reasons the shared function reports.
+const COPY_FAILURE_STATUS: Record<CopyFailureReason, 400 | 404 | 502> = {
+  invalid_account: 400,
+  mailbox_roles_missing: 502,
+  not_found: 404,
+  copy_failed: 502,
+};
 
 type JmapBodyPart = { partId: string; type?: string | null };
 // RFC 8621 §4.1.4: isTruncated is set by the server when `value` had to be cut
@@ -212,14 +227,33 @@ function toAttachments(attachments?: JmapAttachment[]): AttachmentMeta[] {
     }));
 }
 
+// GH #314: the per-request inputs the sender-trust tiers need, resolved ONCE
+// by the thread route (one sent_recipients query for the thread's distinct
+// senders, one preferences read for the user's trusted domains) and handed to
+// the mapper so it stays synchronous and pure. Absent (undefined) means "assert
+// nothing" — every message maps to "none" — which is what the fixtures and any
+// caller that has not resolved the context get.
+type SenderTrustContext = {
+  knownRecipients: ReadonlySet<string>;
+  trustedDomains: ReadonlySet<string>;
+};
+
 // GH #152: `authServId` is this deployment's own configured authserv-id
 // (JMAP_AUTHSERV_ID), threaded through so deriveSenderAuthVerdict can trust only
 // the Authentication-Results header our own MTA stamped. Passed explicitly
 // rather than closed over so this stays a pure mapper like the rest of the
 // to*() helpers; undefined here means the fail-safe "unknown" for every message.
-function toEmailDetail(email: JmapEmailDetail, authServId: string | undefined): EmailDetail {
+function toEmailDetail(
+  email: JmapEmailDetail,
+  authServId: string | undefined,
+  trust?: SenderTrustContext,
+): EmailDetail {
   const html = collectBodyValues(email.htmlBody, email.bodyValues);
   const text = collectBodyValues(email.textBody, email.bodyValues);
+  // GH #314: the verdict AND the domain that verdict is about, read from the
+  // same trusted header in one pass, so the tier below can be bound to the
+  // address the reader is shown rather than to "some domain passed DMARC".
+  const { verdict: senderAuth, dmarcFromDomain } = deriveSenderAuthFacts(email.headers, authServId);
   return {
     ...toEmailSummary(email),
     cc: toEmailAddresses(email.cc),
@@ -238,7 +272,24 @@ function toEmailDetail(email: JmapEmailDetail, authServId: string | undefined): 
     messageId: email.messageId ?? null,
     references: email.references ?? null,
     inReplyTo: email.inReplyTo ?? null,
-    senderAuth: deriveSenderAuthVerdict(email.headers, authServId),
+    senderAuth,
+    // GH #314: the positive-only tier above senderAuth, resolved from the
+    // FIRST From address — the same one the reader renders next to the badge
+    // (ThreadView shows `from[0]`), so the mark is always tied to the address
+    // the user can see. Gated on senderAuth inside resolveSenderTrust, and on
+    // the DMARC binding it needs `fromCount`/`dmarcFromDomain` for: a pass that
+    // evaluated another domain, or a From header carrying more than one
+    // address, asserts nothing about `from[0]`.
+    senderTrust: trust
+      ? resolveSenderTrust({
+          senderAuth,
+          fromEmail: email.from?.[0]?.email,
+          fromCount: email.from?.length ?? 0,
+          dmarcFromDomain,
+          knownRecipients: trust.knownRecipients,
+          trustedDomains: trust.trustedDomains,
+        })
+      : "none",
   };
 }
 
@@ -443,6 +494,11 @@ export function createMailRouter(deps: MailDeps) {
 
   router.use("*", requireSession(deps.sessions));
 
+  // GH #314: the trusted-services list (seed + the user's confirmed domains)
+  // behind the sender-trust badge — app-side preference state, so it sits next
+  // to /preferences rather than behind requireMail. See ./trusted-services.ts.
+  router.route("/trusted-services", createTrustedServicesRouter({ userPreferences: deps.userPreferences }));
+
   router.get("/signatures", async (c) => {
     const user = c.get("user");
     const list = await deps.signatures.list(user.userId);
@@ -535,10 +591,13 @@ export function createMailRouter(deps: MailDeps) {
   });
 
   // GH #13/#50 (G-3): record whether this member wants a copy of new mail from a
-  // shared mailbox delivered to their own inbox. This ONLY persists intent — no
-  // copy is made here and nothing consumes the preference yet (deferred, see
-  // docs/design/shared-mailboxes.md); the member still pulls copies manually via
-  // copy-to-inbox above. The `:id` names the shared account: resolveAccountId
+  // shared mailbox delivered to their own inbox. This route ONLY persists the
+  // intent — no copy is made here. What consumes it (GH #313) is the
+  // background worker in ./shared-copy/, which lists every opted-in member on
+  // each cycle (userPreferences.listSharedMailboxCopyOptIns) and copies each
+  // new message of the shared inbox to them; the copy-to-inbox route below
+  // remains for mail that predates the opt-in. The `:id` names the shared
+  // account: resolveAccountId
   // authorizes it against the member's session (403 account_forbidden if
   // unreachable), and it MUST be a shared, non-personal account — a personal id
   // is refused with 400 invalid_account, mirroring copy-to-inbox, since opting
@@ -693,6 +752,11 @@ export function createMailRouter(deps: MailDeps) {
       "content-type": "text/event-stream",
       "cache-control": "no-store",
       connection: "keep-alive",
+      // The ecosystem router runs nginx with `proxy_buffering on`, which holds
+      // an upstream response until its buffer fills or the connection closes —
+      // for a stream that idles between events that means bursts, or nothing
+      // until disconnect. nginx honours this header per response (GH #316).
+      "x-accel-buffering": "no",
     };
 
     // GH #180: this subscription (types=Email,Mailbox) is where the server
@@ -708,9 +772,15 @@ export function createMailRouter(deps: MailDeps) {
     // tap below is deliberately scoped to the PERSONAL accountId: contact
     // harvesting mines the member's OWN inbox into their OWN contacts, and a
     // shared mailbox's senders are not the member's contacts to harvest.
+    //
+    // GH #314: the same tap also feeds the sent-recipients store (the to/cc/bcc
+    // of messages landing in Sent — mail sent from other clients that never
+    // passes through POST /send below). Either store alone is enough to tap;
+    // with neither wired the stream is proxied untouched, exactly as before.
     const contacts = deps.contacts;
+    const sentRecipients = deps.sentRecipients;
     const jmap = deps.jmap;
-    if (contacts && jmap) {
+    if ((contacts || sentRecipients) && jmap) {
       const user = streamUser;
       const auth = c.get("jmapAuth");
       // The harvest runs whenever mail arrives, which is long after this
@@ -724,6 +794,7 @@ export function createMailRouter(deps: MailDeps) {
           withLogContext(logContext, () =>
             harvestOnMailArrival({
               contacts,
+              sentRecipients,
               jmap,
               auth,
               session,
@@ -991,9 +1062,48 @@ export function createMailRouter(deps: MailDeps) {
       (a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt),
     );
 
+    // GH #314: resolve the sender-trust inputs once for the whole thread —
+    // one sent_recipients query for its distinct From addresses and one
+    // preferences read for the user's trusted domains — rather than per
+    // message, so a long conversation costs the same two reads as a short
+    // one. Both are app-side state, so they run AFTER the JMAP round trip
+    // above: a missing thread is still a 404 without touching the database.
+    //
+    // Tier A needs the sent-recipients store, which is optional in MailDeps
+    // (deployments predating this feature). Without it only Tier B is
+    // resolved. With it, the one-time Sent backfill runs first for a user who
+    // has never had it (see sent-recipients-backfill.ts); it never throws, so
+    // a JMAP or database hiccup there degrades to "not known yet" instead of
+    // a broken reader.
+    const user = c.get("user");
+    const auth = c.get("jmapAuth");
+    const sentRecipients = deps.sentRecipients;
+    // requireMail already refused a null jmap above; narrowing it again here
+    // is only for the type.
+    if (sentRecipients && deps.jmap) {
+      await backfillSentRecipients({
+        jmap: deps.jmap,
+        auth,
+        session,
+        userId: user.userId,
+        ownerEmails: [user.email],
+        sentRecipients,
+        userPreferences: deps.userPreferences,
+      });
+    }
+    const senders = [...new Set(emails.map((email) => email.from?.[0]?.email).filter(Boolean))] as string[];
+    const [knownRecipients, preferences] = await Promise.all([
+      sentRecipients ? sentRecipients.has(user.userId, senders) : Promise.resolve(new Set<string>()),
+      deps.userPreferences.get(user.userId),
+    ]);
+    const trust: SenderTrustContext = {
+      knownRecipients,
+      trustedDomains: new Set([...TRUSTED_SERVICES_SEED, ...preferences.trustedServices]),
+    };
+
     const thread: ThreadDetail = {
       id: threadId,
-      emails: emails.map((email) => toEmailDetail(email, authServId)),
+      emails: emails.map((email) => toEmailDetail(email, authServId, trust)),
     };
     return c.json(thread);
   });
@@ -1104,16 +1214,15 @@ export function createMailRouter(deps: MailDeps) {
   });
 
   // GH #13/#50 (G-2, spike G-0): copies a message from a SHARED mailbox into
-  // the member's OWN personal Inbox with a single JMAP Email/copy authenticated
-  // as the member. Stalwart exposes the shared account in the member's session
-  // (G-1 access), so one cross-account copy — fromAccountId = shared,
-  // accountId = personal — is all it takes; there is no delegated/group
-  // credential (the spike confirmed a group principal cannot even log in).
+  // the member's OWN personal Inbox. The copy itself — the two JMAP batches,
+  // the keyword carry-over, the positive confirmation — lives in
+  // ./shared-copy/copy.ts since GH #313, where the automatic delivery reuses
+  // it verbatim; this route is the adapter that authorizes the account and
+  // maps each failure reason to the status it always answered with.
   //
-  // The original is left in place (onSuccessDestroyOriginal:false); the source
-  // email's own keywords are carried into the create so flags survive (spike
-  // caveat). The copy counts against the member's personal quota — a documented
-  // spike caveat with nothing to do about it, so this makes no attempt to.
+  // Still worth having next to the automatic delivery: it serves mail that
+  // predates a member's opt-in (the worker only follows changes from the
+  // moment it baselines) and any message the member wants without opting in.
   router.post("/messages/:id/copy-to-inbox", requireMail(deps), async (c) => {
     const id = c.req.param("id");
     const session = c.get("jmapSession");
@@ -1121,80 +1230,40 @@ export function createMailRouter(deps: MailDeps) {
 
     // The message lives in the shared account named by ?accountId=.
     // resolveAccountId authorizes it (403 account_forbidden if the session
-    // cannot reach it). It MUST be a shared, non-personal account: Stalwart
-    // rejects a same-account copy with invalidArguments "From accountId is equal
-    // to fromAccountId" (spike G-0), so a personal — or absent — accountId is
-    // refused up front with a clean 400 rather than forwarded into an opaque
-    // JMAP error. Absent resolves to the personal account, so it lands here too.
+    // cannot reach it). A personal — or absent, which resolves to personal —
+    // accountId is refused by the copy with `invalid_account`, surfaced here as
+    // a clean 400 rather than forwarded into an opaque JMAP error.
     const fromAccountId = resolveAccountId(session, c.req.query("accountId"));
-    const personalAccountId = session.accountId;
-    if (fromAccountId === personalAccountId) {
-      return errorResponse(c, "invalid_account", 400);
-    }
-
-    // One request resolves the member's personal Inbox (role=inbox on their OWN
-    // account) and, alongside it, the source email's keywords so the copy
-    // preserves its flags. The Email/get is scoped to the shared account, where
-    // the message lives; the Mailbox/query to the personal one, where it lands.
-    // Both reach through the member's own credential.
-    const lookup = await deps.jmap!.request(auth, session, [
-      ["Mailbox/query", { accountId: personalAccountId, filter: { role: "inbox" } }, "mbx"],
-      ["Email/get", { accountId: fromAccountId, ids: [id], properties: ["keywords"] }, "src"],
-    ]);
-
-    const inboxResult = (lookup[0]?.[1] ?? {}) as { ids?: string[] };
-    const personalInboxId = (inboxResult.ids ?? [])[0];
-    if (!personalInboxId) {
-      return errorResponse(c, "mailbox_roles_missing", 502);
-    }
-
-    // Email/get is scoped to the shared account, so an id that isn't a message
-    // there comes back as an empty list — indistinguishable from "no such
-    // message" and refused the same way, never leaking whether the id exists
-    // elsewhere.
-    const sourceResult = (lookup[1]?.[1] ?? {}) as {
-      list?: Array<{ keywords?: Record<string, boolean> }>;
-    };
-    const source = (sourceResult.list ?? [])[0];
-    if (!source) {
-      return errorResponse(c, "not_found", 404);
-    }
-    const keywords = source.keywords ?? {};
-
-    const responses = await deps.jmap!.request(auth, session, [
-      [
-        "Email/copy",
-        {
-          fromAccountId,
-          accountId: personalAccountId,
-          create: {
-            c: {
-              id,
-              mailboxIds: { [personalInboxId]: true },
-              keywords,
-            },
-          },
-          onSuccessDestroyOriginal: false,
-        },
-        "c",
-      ],
-    ]);
-
-    const copyResult = (responses[0]?.[1] ?? {}) as {
-      created?: Record<string, { id?: string }>;
-      notCreated?: Record<string, unknown>;
-    };
-
-    // Positive confirmation, matching the destroy/send paths: an empty
-    // notCreated is not proof of success. The copy must appear in `created`
-    // before this reports it done.
-    if (copyResult.notCreated && "c" in copyResult.notCreated) {
-      return errorResponse(c, "copy_failed", 502);
-    }
-    if (copyResult.created?.c?.id) {
+    const result = await copyEmailToPersonalInbox({
+      jmap: deps.jmap!,
+      auth,
+      session,
+      fromAccountId,
+      emailId: id,
+    });
+    if (result.ok) {
+      // GH #313: the same ledger the automatic cycle writes, keyed by the
+      // SHARED account this came from. Without it the two paths are blind to
+      // each other and the cycle delivers its own copy of a message the member
+      // already pulled — the duplicate the ledger exists to prevent.
+      //
+      // Best-effort, after a CONFIRMED copy: the message is already in their
+      // inbox, so answering anything but ok would invite them to press the
+      // button again and get a second copy. A ledger that missed a row costs
+      // at most one duplicate from the next cycle; a 502 here guarantees one.
+      if (deps.sharedMailboxCopies) {
+        try {
+          await deps.sharedMailboxCopies.recordCopy(c.get("user").userId, fromAccountId, id);
+        } catch (error) {
+          log("warn", "copy-to-inbox: recording the shared-mailbox copy failed", {
+            emailId: id,
+            error: String(error),
+          });
+        }
+      }
       return c.json({ ok: true });
     }
-    return errorResponse(c, "copy_failed", 502);
+    return errorResponse(c, result.reason, COPY_FAILURE_STATUS[result.reason]);
   });
 
   router.post("/send", requireMail(deps), async (c) => {
@@ -1338,6 +1407,29 @@ export function createMailRouter(deps: MailDeps) {
       } catch {
         log("warn", "send: remediation of the post-submission move to Sent threw", {
           emailId: draftId,
+        });
+      }
+    }
+
+    // GH #314: a confirmed submission is the one moment this server KNOWS the
+    // user wrote to these addresses, so it feeds the known-sender store here,
+    // synchronously — after the confirmation above, never before it, so a
+    // send that did not go out can never make a stranger "known". The user's
+    // own identities are excluded (a note-to-self is not a correspondent):
+    // the From identity of this send and the signed-in address. Best-effort,
+    // like the remediation above: the mail HAS gone out, and a store hiccup
+    // must not turn that into a 502 that invites a duplicate send.
+    if (deps.sentRecipients) {
+      const own = new Set([identity.email.toLowerCase(), c.get("user").email.toLowerCase()]);
+      const recipients = [...input.to, ...input.cc, ...input.bcc]
+        .map((address) => address.email)
+        .filter((email) => !own.has(email.toLowerCase()));
+      try {
+        await deps.sentRecipients.record(c.get("user").userId, recipients);
+      } catch (error) {
+        log("warn", "send: recording sent recipients failed", {
+          emailId: draftId,
+          error: String(error),
         });
       }
     }

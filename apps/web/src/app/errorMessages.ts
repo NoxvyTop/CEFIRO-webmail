@@ -58,6 +58,12 @@ export const SERVER_ERROR_CODES = [
   "generic",
   "internal",
   "invalid_body",
+  // GH #314: the trusted-services routes. `invalid_domain` is the 400 for a
+  // `:domain` that is not a plain hostname; `trusted_service_seed` the 409 for
+  // trying to remove a seed entry per user; `trusted_services_limit` the 409
+  // for adding one past the per-user cap, which used to answer 200 over a list
+  // that never grew (see apps/server/src/modules/mail/trusted-services.ts).
+  "invalid_domain",
   "invalid_identity",
   "invalid_order",
   "invalid_query",
@@ -82,6 +88,8 @@ export const SERVER_ERROR_CODES = [
   // transient failure and not retryable — see modules/sieve/router.ts.
   "sieve_unsupported",
   "stalwart_unavailable",
+  "trusted_service_seed",
+  "trusted_services_limit",
   "unauthorized",
   "update_failed",
   "upstream_timeout",
