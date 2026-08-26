@@ -568,8 +568,33 @@ copia ya está en su bandeja y un error invitaría a pulsar otra vez.
    base evita— y, siendo el lote de reintentos las 100 filas más antiguas de la
    cuenta, ocupaban sitio que necesitan los miembros vivos. Por lo mismo, el
    lote de reintentos se pide **acotado a los miembros entregables** del ciclo.
+
+   **Al miembro que no se puede servir se le deja rastro.** Conservarle la
+   línea base era solo la mitad de "al volver, la entrega sigue donde estaba":
+   el cursor es de la cuenta, no de cada miembro, así que avanza página a
+   página mientras él está fuera y **nada recuerda una página por la que ya
+   pasó**. Por eso el worker le pasa al ciclo, además de los miembros
+   **entregables**, los que le **debe** una copia (la membresía por preferencia
+   menos la lista entregable), y el ciclo escribe para cada uno de ellos —y
+   también para un miembro entregable cuya sesión no se pudo resolver en ese
+   ciclo: credencial revocada, proveedor que rechaza, cuenta que su sesión ya
+   no lista— una fila `failed` **sin gastar intento**
+   (`last_error = "member unavailable"`, `recordOwed`) por cada mensaje de la
+   página al que tiene derecho, **antes** de que el cursor avance. No se hace
+   ninguna llamada JMAP en su nombre —no tener sesión utilizable es justo lo
+   que hace que la copia se le deba—; la fila lleva el `Message-ID` y el
+   `receivedAt` del origen como cualquier reserva, y el **paso de reintentos**
+   la entrega (verificándola antes, punto 5) en cuanto el miembro vuelve a ser
+   entregable. Se escribe con `on conflict do nothing`, y esa es toda su
+   seguridad: nunca toca una fila que ya existe, ni una `copied` (que se
+   reabriría), ni una `pending` (que se daría por contestada), ni una `failed`
+   con intentos ya gastados. Al miembro que se le debe se le fija **línea
+   base** igual que a los entregables, para que su rastro sea igual de hacia
+   adelante que la entrega: volver no le trae el correo anterior a ser
+   miembro. Cada fila así escrita suma en la métrica como `owed`.
 5. **Copiar a cada miembro** ya registrado, con la sesión de cada uno (un
-   miembro cuya sesión ya no lista la cuenta se salta con log). El libro
+   miembro cuya sesión no se puede resolver —o que ya no lista la cuenta— se
+   salta con log, dejándole el rastro `owed` del punto 4). El libro
    `shared_mailbox_copies` se consulta en una sola query por página y **se
    escribe antes de copiar**: la fila se reserva como `pending`, se emite el
    `Email/copy` y solo entonces pasa a `copied` (por `created`, nunca por

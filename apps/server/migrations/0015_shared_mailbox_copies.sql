@@ -131,6 +131,15 @@ create table shared_mailbox_member_state (
 -- cost a member their copy while the cursor moves past it. `last_error` keeps
 -- the last reason for the operator.
 --
+-- A `failed` row with `attempts = 0` and `last_error = 'member unavailable'` is
+-- the same state reached without an attempt: a copy the account OWES a member
+-- the cycle could not deliver to at all — deactivated, without a credential, or
+-- whose session could not be resolved that cycle. The cursor is per ACCOUNT and
+-- advances past the page whatever happens to any one member, so without this
+-- row that advance was the loss: nothing else remembers a page the cursor has
+-- passed. Written with `on conflict do nothing`, so it can never reopen a
+-- `copied` row, answer a `pending` one, or reset the attempts of a `failed` one.
+--
 -- `message_id` is the SOURCE message's RFC 5322 Message-ID, recorded with the
 -- claim, and it exists for exactly one question: a retry has to know whether
 -- the copy it is about to make was already made. An Email/copy whose response

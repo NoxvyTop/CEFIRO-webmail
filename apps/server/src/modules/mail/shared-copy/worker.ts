@@ -107,7 +107,11 @@ export type SharedCopyWorkerInput = {
   /** Injectable for tests; defaults to ../delivery.ts runDeliveryCycle. */
   runCycle?: (
     deps: DeliveryDeps,
-    input: { sharedAccountId: string; members: SharedCopyMember[] },
+    input: {
+      sharedAccountId: string;
+      members: SharedCopyMember[];
+      owedMembers: string[];
+    },
   ) => Promise<DeliveryCycleResult>;
   /** Injectable for tests; defaults to a started ../watcher.ts subscription. */
   openWatcher?: (input: WatcherFactoryInput) => Pick<SharedMailboxWatcher, "stop">;
@@ -182,6 +186,14 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
   let started = false;
   let stopped = false;
   let membership = new Map<string, SharedCopyMember[]>();
+  /**
+   * User ids per account as the PREFERENCE names them, deliverable or not,
+   * refreshed by `reconcileMembers` on every poll. Kept because the cycle
+   * needs the difference — the members it OWES a copy — and a push that
+   * arrives between polls runs a cycle from the last listing, exactly as it
+   * does with `membership`.
+   */
+  let preferenceMembers = new Map<string, string[]>();
   const watchers = new Map<string, Pick<SharedMailboxWatcher, "stop">>();
   const queue = new Set<string>();
   let draining: Promise<void> | null = null;
@@ -194,8 +206,16 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
     // An account nobody opts into any more can still be signalled by a
     // watcher that was closed a moment ago; there is nobody to copy for.
     if (!members || members.length === 0) return;
+    // Members by preference, minus the ones the cycle can deliver to: the
+    // people it owes a copy. Without them the cycle never heard of a member it
+    // could not serve, so the cursor moved past their mail with nothing
+    // written and that page was theirs to lose (see `reconcileMembers`).
+    const deliverable = new Set(members.map((member) => member.userId));
+    const owedMembers = (preferenceMembers.get(sharedAccountId) ?? []).filter(
+      (userId) => !deliverable.has(userId),
+    );
     try {
-      const result = await runCycle(delivery, { sharedAccountId, members });
+      const result = await runCycle(delivery, { sharedAccountId, members, owedMembers });
       log("debug", "shared mailbox copy: cycle result", { sharedAccountId, ...result });
     } catch (error) {
       log("error", "shared mailbox copy: cycle failed", {
@@ -249,14 +269,22 @@ export function createSharedCopyWorker(input: SharedCopyWorkerInput): SharedCopy
    * the cycles run for: that list filters `active` and joins the credential,
    * so a member deactivated for an afternoon, or momentarily without a
    * credential, read as "opted out" and lost their baseline and their owed
-   * `pending`/`failed` rows. Such a member is neither delivered to nor
-   * pruned; when they are back, delivery resumes where it left off.
+   * `pending`/`failed` rows. Such a member is neither delivered to nor pruned.
+   *
+   * That listing is also what the cycle is told it OWES a copy to (see
+   * `cycleFor`): keeping the baseline was only half of "when they are back,
+   * delivery resumes where it left off", because the cursor advances page by
+   * page while they are away and nothing remembers a page it has passed. The
+   * cycle now writes them a `failed` row per message of every page, with no
+   * attempt spent, and its retry pass delivers those rows the moment the
+   * member is deliverable again.
    *
    * Idempotent by construction: an account whose members did not change has
    * nothing to prune, so this is a no-op statement per account per poll.
    */
   async function reconcileMembers(): Promise<void> {
     const members = membershipByAccount(await input.listOptInMembership());
+    preferenceMembers = members;
     for (const accountId of await delivery.copies.listAccountIds()) {
       if (stopped) return;
       try {

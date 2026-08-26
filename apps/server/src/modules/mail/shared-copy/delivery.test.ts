@@ -285,6 +285,25 @@ function fakeCopiesRepo(events: string[]) {
         }
         return rows;
       },
+      recordOwed: async (
+        userId: string,
+        accountId: string,
+        rows: Array<{ emailId: string; messageId: string | null; receivedAt: Date }>,
+      ) => {
+        for (const row of rows) {
+          const id = key(userId, accountId, row.emailId);
+          events.push(`ledger:owed:${userId}:${row.emailId}`);
+          // `on conflict do nothing`: a row that already exists — pending,
+          // copied or failed with attempts behind it — is left alone.
+          if (states.has(id)) continue;
+          states.set(id, "failed");
+          attempts.set(id, 0);
+          errors.set(id, "member unavailable");
+          messageIds.set(id, row.messageId);
+          receivedAts.set(id, row.receivedAt);
+          if (!failedOrder.includes(id)) failedOrder.push(id);
+        }
+      },
       recordCopy: async (userId: string, accountId: string, emailId: string) => {
         states.set(key(userId, accountId, emailId), "copied");
       },
@@ -544,8 +563,8 @@ beforeEach(() => {
   h = harness();
 });
 
-function run(members: SharedCopyMember[] = [ana, bruno]) {
-  return runDeliveryCycle(h.deps, { sharedAccountId: SHARED, members });
+function run(members: SharedCopyMember[] = [ana, bruno], owedMembers: string[] = []) {
+  return runDeliveryCycle(h.deps, { sharedAccountId: SHARED, members, owedMembers });
 }
 
 describe("electWatcher (GH #313)", () => {
@@ -897,6 +916,87 @@ describe("runDeliveryCycle — resuming after a gap and per-member baseline (GH 
   });
 });
 
+// GH #313: the cursor advances past a page whatever happens to any one member,
+// so a member the cycle could not serve — their session threw, their credential
+// is gone, or the deliverable listing does not have them at all — used to lose
+// that page for good: nothing was written, and nothing else remembers a page
+// the cursor has passed. Every member the account owes a copy now gets a row
+// BEFORE the cursor moves, and the retry pass delivers it when they are back.
+describe("runDeliveryCycle — the trail for members it cannot deliver to (GH #313)", () => {
+  const carla = member("carla");
+
+  it("leaves a failed row with no attempt spent for a member whose session throws, and delivers it when they are back", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, bruno.userId]);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+    h.sessionThrowsFor.add(bruno.email);
+
+    await expect(run()).resolves.toMatchObject({ status: "delivered", copied: 1, owed: 1 });
+    expect(copyCalls(h).map((c) => c.by)).toEqual([ana.email]);
+    // The cursor still moves — pinning the page would starve everyone else —
+    // and the row is what keeps bruno's message reachable past it.
+    expect(h.copies.cursors.get(SHARED)).toBe("s-2");
+    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e1`)).toBe("failed");
+    expect(h.copies.attempts.get(`${bruno.userId}|${SHARED}|e1`)).toBe(0);
+    expect(h.copies.errors.get(`${bruno.userId}|${SHARED}|e1`)).toBe("member unavailable");
+
+    // Next cycle, with his session healthy: the retry pass verifies the copy
+    // against his own inbox and makes it.
+    h.sessionThrowsFor.clear();
+    h.pages = [{ created: [], newState: "s-3" }];
+    await expect(run()).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).slice(-1)).toMatchObject([{ by: bruno.email, emailId: "e1" }]);
+    expect(h.copies.states.get(`${bruno.userId}|${SHARED}|e1`)).toBe("copied");
+  });
+
+  it("records the trail for a member the deliverable listing leaves out, without one JMAP call on their behalf", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, carla.userId]);
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await expect(run([ana], [carla.userId])).resolves.toMatchObject({ copied: 1, owed: 1 });
+    // Nothing is asked of a member who is deactivated or has no credential:
+    // there is no session to ask it with, which is why they are owed at all.
+    expect(h.requests.every((request) => request.auth.email !== carla.email)).toBe(true);
+    expect(h.copies.states.get(`${carla.userId}|${SHARED}|e1`)).toBe("failed");
+    expect(h.copies.attempts.get(`${carla.userId}|${SHARED}|e1`)).toBe(0);
+
+    // Reactivated, she is a deliverable member again and the retry pass hands
+    // her the mail the cursor had already moved past.
+    h.pages = [{ created: [], newState: "s-3" }];
+    await expect(run([ana, carla])).resolves.toMatchObject({ copied: 1 });
+    expect(copyCalls(h).slice(-1)).toMatchObject([{ by: carla.email, emailId: "e1" }]);
+  });
+
+  it("baselines an owed member and writes no row for mail that predates their baseline", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId]);
+    h.pages = [{ created: ["e-old", "e-new"], newState: "s-2" }];
+    h.inInbox.add("e-old").add("e-new");
+    h.receivedAtFor.set("e-old", new Date(Date.now() - 3_600_000));
+
+    await expect(run([ana], [carla.userId])).resolves.toMatchObject({ owed: 1 });
+    // Recorded as baselined now, exactly like a deliverable member the account
+    // had not seen before — the opt-in is forward-looking for her too.
+    expect(h.copies.baselined(SHARED)).toContain(carla.userId);
+    expect(h.copies.states.get(`${carla.userId}|${SHARED}|e-old`)).toBeUndefined();
+    expect(h.copies.states.get(`${carla.userId}|${SHARED}|e-new`)).toBe("failed");
+  });
+
+  it("leaves the rows an owed member already has exactly as they are", async () => {
+    h.copies.seedCursor(SHARED, "s-1");
+    h.copies.seedMembers(SHARED, [ana.userId, carla.userId]);
+    await h.copies.repo.recordCopy(carla.userId, SHARED, "e1");
+    h.pages = [{ created: ["e1"], newState: "s-2" }];
+    h.inInbox.add("e1");
+
+    await run([ana], [carla.userId]);
+    expect(h.copies.states.get(`${carla.userId}|${SHARED}|e1`)).toBe("copied");
+  });
+});
+
 describe("runDeliveryCycle — delivery (GH #313)", () => {
   beforeEach(() => {
     h.copies.seedCursor(SHARED, "s-1");
@@ -923,6 +1023,7 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
       skipped: 0,
       failed: 0,
       unresolved: 0,
+      owed: 0,
       pages: 1,
       truncated: false,
     });

@@ -81,7 +81,11 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
   const pruneGates = new Map<string, Promise<void>>();
   const prunes: Array<{ accountId: string; userIds: string[] }> = [];
   const logs: Array<{ level: string; msg: string; fields: Record<string, unknown> }> = [];
-  const cycles: Array<{ sharedAccountId: string; members: SharedCopyMember[] }> = [];
+  const cycles: Array<{
+    sharedAccountId: string;
+    members: SharedCopyMember[];
+    owedMembers?: string[];
+  }> = [];
   const blocked = new Map<string, () => void>();
   const throwFor = new Set<string>();
   const watchers = new Map<
@@ -114,6 +118,7 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
       beginCopy: async () => {},
       markCopied: async () => {},
       markFailed: async () => {},
+      recordOwed: async () => {},
       listRetryable: async () => [],
       acquireLease: async () => true,
       renewLease: async () => true,
@@ -154,7 +159,16 @@ function harness(initial: OptIn[] = [ana, bruno], initialMembership?: Membership
           });
         } else resolve();
       });
-      return { status: "delivered", copied: 0, skipped: 0, failed: 0, unresolved: 0, pages: 1, truncated: false };
+      return {
+        status: "delivered",
+        copied: 0,
+        skipped: 0,
+        failed: 0,
+        unresolved: 0,
+        owed: 0,
+        pages: 1,
+        truncated: false,
+      };
     },
     openWatcher: (input) => {
       opened.push(input.sharedAccountId);
@@ -248,8 +262,13 @@ describe("createSharedCopyWorker — start and poll (GH #313)", () => {
           { userId: ana.userId, email: ana.email },
           { userId: bruno.userId, email: bruno.email },
         ],
+        owedMembers: [],
       },
-      { sharedAccountId: "acc-b", members: [{ userId: ana.userId, email: ana.email }] },
+      {
+        sharedAccountId: "acc-b",
+        members: [{ userId: ana.userId, email: ana.email }],
+        owedMembers: [],
+      },
     ]);
     expect(h.opened).toEqual(["acc-a", "acc-b"]);
     expect(h.worker.watching).toEqual(["acc-a", "acc-b"]);
@@ -278,7 +297,11 @@ describe("createSharedCopyWorker — start and poll (GH #313)", () => {
     await settle();
 
     expect(h.cycles.slice(2)).toEqual([
-      { sharedAccountId: "acc-c", members: [{ userId: bruno.userId, email: bruno.email }] },
+      {
+        sharedAccountId: "acc-c",
+        members: [{ userId: bruno.userId, email: bruno.email }],
+        owedMembers: [],
+      },
     ]);
     expect(h.watchers.get("acc-a")!.stopped).toBe(1);
     expect(h.watchers.get("acc-b")!.stopped).toBe(1);
@@ -435,6 +458,34 @@ describe("createSharedCopyWorker — membership reconcile (GH #313)", () => {
     await h.worker.stop();
   });
 
+  // GH #313: a member the preference names but the deliverable listing leaves
+  // out was invisible to the cycle, so the cursor moved past their mail with
+  // nothing recorded — the very loss the prune above was fixed to avoid. The
+  // cycle is told who it OWES a copy as well as who it can deliver to.
+  it("tells the cycle which members it owes a copy: named by the preference, not deliverable today", async () => {
+    // Bruno is deactivated right now: a member of acc-a, nothing to copy with.
+    const h = harness([ana], [
+      { userId: ana.userId, accountIds: ana.accountIds },
+      { userId: bruno.userId, accountIds: bruno.accountIds },
+    ]);
+    h.worker.start();
+    await settle();
+
+    expect(h.cycles).toEqual([
+      {
+        sharedAccountId: "acc-a",
+        members: [{ userId: ana.userId, email: ana.email }],
+        owedMembers: [bruno.userId],
+      },
+      {
+        sharedAccountId: "acc-b",
+        members: [{ userId: ana.userId, email: ana.email }],
+        owedMembers: [],
+      },
+    ]);
+    await h.worker.stop();
+  });
+
   it("still prunes a member whose preference no longer names the account", async () => {
     const h = harness();
     h.worker.start();
@@ -488,6 +539,7 @@ describe("createSharedCopyWorker — push (GH #313)", () => {
     expect(h.cycles.at(-1)).toEqual({
       sharedAccountId: "acc-b",
       members: [{ userId: ana.userId, email: ana.email }],
+      owedMembers: [],
     });
     expect(h.cycles).toHaveLength(3);
     await h.worker.stop();

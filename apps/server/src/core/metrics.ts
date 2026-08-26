@@ -147,14 +147,23 @@ export type OutboundSample = {
  * written. Those are deliberately NOT retried — the delivery is at-most-once
  * and the manual copy button is the recovery — so any `unresolved` at all is
  * worth an operator's attention.
+ *
+ * `owed` is the fifth: a copy the account owes a member the cycle could not
+ * deliver to at all (their session failed, or the deliverable listing does not
+ * have them — deactivated, no credential). No JMAP call was made for it; the
+ * ledger row is what keeps the message reachable after the cursor moves past
+ * its page, and the retry pass hands it over when the member is back. A
+ * sustained rate means somebody has been undeliverable for a while, not that
+ * anything was lost.
  */
-export type SharedMailboxCopyResult = "copied" | "failed" | "skipped" | "unresolved";
+export type SharedMailboxCopyResult = "copied" | "failed" | "skipped" | "unresolved" | "owed";
 
 const SHARED_MAILBOX_COPY_RESULTS: readonly SharedMailboxCopyResult[] = [
   "copied",
   "failed",
   "skipped",
   "unresolved",
+  "owed",
 ];
 
 export type Metrics = {

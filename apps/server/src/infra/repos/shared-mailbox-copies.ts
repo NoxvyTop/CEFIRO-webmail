@@ -370,6 +370,54 @@ export function createSharedMailboxCopiesRepo(sql: Db) {
     },
 
     /**
+     * Records the copies this account OWES a member the cycle could not
+     * deliver to — their session failed, or the deliverable listing does not
+     * have them at all (deactivated, no credential) — as `failed` rows with no
+     * attempt spent, so the retry pass delivers them the moment the member is
+     * back (GH #313).
+     *
+     * The cursor advances past a page whatever happens to any one member: a
+     * page pinned behind one member's absence would starve everyone else's
+     * mail. Without a row, that advance was the loss — nothing else remembers
+     * a page the cursor has passed, so an afternoon of deactivation, or one
+     * cycle with a revoked credential, cost that member every message of it.
+     *
+     * `attempts = 0` because nothing was attempted: the member had no session
+     * to attempt it with. It is the retry pass that spends attempts, and it
+     * verifies before it copies (see `beginCopy`'s `message_id`), so a row
+     * written here is delivered exactly like a copy that failed on the wire.
+     *
+     * `on conflict do nothing`, and that is the whole safety of it: a `copied`
+     * row must not be reopened, a `pending` one must not be answered, and a
+     * `failed` one must keep the attempts, reason and Message-ID the retry
+     * pass left on it. This writes the rows that do not exist yet and touches
+     * nothing else.
+     */
+    async recordOwed(
+      userId: string,
+      sharedAccountId: string,
+      rows: Array<{ emailId: string; messageId: string | null; receivedAt: Date }>,
+    ): Promise<void> {
+      if (rows.length === 0) return;
+      await sql`
+        insert into shared_mailbox_copies
+          (user_id, shared_account_id, email_id, status, attempts, last_error, message_id, received_at)
+        select
+          ${userId}, ${sharedAccountId}, row.email_id, 'failed', 0, 'member unavailable',
+          row.message_id, row.received_at
+        from unnest(
+          ${rows.map((row) => row.emailId)}::text[],
+          ${rows.map((row) => row.messageId)}::text[],
+          -- ISO strings cast in SQL, not Date objects: the driver types a
+          -- Date[] parameter as a single timestamptz, which Postgres then
+          -- refuses to cast to an array of one.
+          ${rows.map((row) => row.receivedAt.toISOString())}::timestamptz[]
+        ) as row(email_id, message_id, received_at)
+        on conflict (user_id, shared_account_id, email_id) do nothing
+      `;
+    },
+
+    /**
      * Records a confirmed copy in one step, for the manual copy route, which
      * has no cycle around it to claim the row first. Idempotent: a member who
      * presses the button twice, or presses it for mail a cycle already

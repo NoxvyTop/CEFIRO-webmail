@@ -60,10 +60,17 @@
  *   the previous cycles already copied;
  * - any other provider error → propagate WITHOUT advancing the cursor, so the
  *   same page is retried on the next poll or push;
- * - one member's copy fails (refused, thrown, no session) → counted, logged,
- *   the next member is served, and the cursor still advances — the LEDGER is
- *   what protects a member's copy across cycles, not the cursor, and pinning
- *   a page behind one member's failure would starve everyone else's mail;
+ * - one member's copy fails (refused, thrown) → counted, logged, the next
+ *   member is served, and the cursor still advances — the LEDGER is what
+ *   protects a member's copy across cycles, not the cursor, and pinning a page
+ *   behind one member's failure would starve everyone else's mail;
+ * - a member the cycle cannot even attempt a copy for — their session could
+ *   not be resolved, or the deliverable listing does not have them at all
+ *   because they are deactivated or momentarily without a credential → the
+ *   page's messages are recorded as OWED to them (`failed`, no attempt spent)
+ *   before the cursor moves, and the retry pass delivers them when they are
+ *   back. Skipping them without a row was the same advance costing them the
+ *   page for ever;
  * - a copy claimed in the ledger but never confirmed (this process died, or
  *   the database failed, between the provider making the copy and the row
  *   being written) → `unresolved`: counted, logged once per member and page,
@@ -204,6 +211,16 @@ export type SharedCopyStore = {
     lastError: string,
   ): Promise<void>;
   /**
+   * Records the page's copies for a member this cycle cannot deliver to as
+   * `failed` rows with NO attempt spent, leaving any row that already exists
+   * untouched. The trail that survives the cursor advancing past their mail.
+   */
+  recordOwed(
+    userId: string,
+    sharedAccountId: string,
+    rows: Array<{ emailId: string; messageId: string | null; receivedAt: Date }>,
+  ): Promise<void>;
+  /**
    * This account's failed copies still worth another try, oldest first,
    * restricted to the members this cycle can deliver to.
    */
@@ -281,12 +298,15 @@ export type DeliveryCycleResult =
  * What one cycle did, per attempted copy. `unresolved` counts ledger rows an
  * earlier attempt claimed and never confirmed: they are left exactly as they
  * are, because re-copying one risks the duplicate this design refuses.
+ * `owed` counts the rows written for members this cycle could not deliver to
+ * at all, which nothing attempted and the retry pass will pick up.
  */
 export type DeliveryCounts = {
   copied: number;
   skipped: number;
   failed: number;
   unresolved: number;
+  owed: number;
 };
 
 function reaches(session: JmapSession, sharedAccountId: string): boolean {
@@ -373,22 +393,27 @@ async function baseline(
   watcher: ElectedWatcher,
   sharedAccountId: string,
   members: SharedCopyMember[],
+  owedMembers: string[],
   reason: BaselineReason,
 ): Promise<DeliveryCycleResult> {
   const state = await currentEmailState(watcher, deps, sharedAccountId);
   await deps.copies.setCursor(sharedAccountId, state);
   // The members are baselined alongside the account: a cycle that copies
   // nothing must still leave every member "entitled from here", so the mail
-  // arriving from this moment on is theirs on the next cycle.
-  await deps.copies.baselineMembers(
-    sharedAccountId,
-    members.map((member) => member.userId),
-  );
+  // arriving from this moment on is theirs on the next cycle. The owed ones
+  // included — the timestamp rule is what makes their trail forward-looking
+  // too, and without a baseline the first page after they come back would be
+  // measured against a baseline written then.
+  await deps.copies.baselineMembers(sharedAccountId, [
+    ...members.map((member) => member.userId),
+    ...owedMembers,
+  ]);
   (deps.log ?? defaultLog)(reason === "no_cursor" ? "info" : "warn", "shared mailbox copy: baselined", {
     sharedAccountId,
     reason,
     state,
     members: members.length,
+    owedMembers: owedMembers.length,
   });
   return { status: "baselined", reason };
 }
@@ -723,6 +748,74 @@ async function recordFailure(
 }
 
 /**
+ * The page's trail for a member this cycle cannot copy for: a `failed` row per
+ * message they are entitled to, with no attempt spent, written BEFORE the
+ * cursor can advance past the page (GH #313).
+ *
+ * Two members reach this, and they are the same failure seen from two sides:
+ * one the deliverable listing still has, whose session could not be resolved
+ * this cycle (a revoked credential, a provider refusing, an account the
+ * session no longer lists), and one the listing does not have at all —
+ * deactivated, or momentarily without a credential — who is a member by their
+ * preference and nothing else. Both used to be skipped with `continue`, and
+ * the cursor moved past their mail with NOTHING recorded: that page was theirs
+ * to lose for ever, because the cursor is not per member and nothing else
+ * remembers a page it has passed.
+ *
+ * No JMAP call is made here and none could be: not having a usable session is
+ * exactly what makes the copy owed. The row carries the source's Message-ID
+ * and receivedAt like any claim, so the retry pass — which owns the
+ * verification and the attempt cap — delivers it as soon as the member is
+ * deliverable again.
+ */
+async function recordOwed(
+  deps: DeliveryDeps,
+  sharedAccountId: string,
+  userId: string,
+  emails: DeliverableEmail[],
+  counts: DeliveryCounts,
+  reason: string,
+): Promise<void> {
+  if (emails.length === 0) return;
+  try {
+    await deps.copies.recordOwed(
+      userId,
+      sharedAccountId,
+      emails.map((email) => ({
+        emailId: email.id,
+        messageId: email.messageId,
+        receivedAt: email.receivedAt,
+      })),
+    );
+  } catch (error) {
+    // Nothing else can record this page for them, and the cursor moves on
+    // regardless — pinning it would starve every other member. Logged as the
+    // loss it is, against a database that is already failing.
+    (deps.log ?? defaultLog)("error", "shared mailbox copy: could not record the copies owed", {
+      sharedAccountId,
+      userId,
+      emailIds: emails.length,
+      reason,
+      error: String(error),
+    });
+    return;
+  }
+  const report = deps.onCopyResult ?? recordSharedMailboxCopy;
+  for (let recorded = 0; recorded < emails.length; recorded += 1) {
+    counts.owed += 1;
+    report("owed");
+  }
+  // One line per member and page rather than per message, like the unresolved
+  // one below: the operator needs to know it happened and to whom.
+  (deps.log ?? defaultLog)("info", "shared mailbox copy: copies owed to a member this cycle cannot serve", {
+    sharedAccountId,
+    userId,
+    emailIds: emails.length,
+    reason,
+  });
+}
+
+/**
  * Pushes this account's lease out by another TTL, answering whether the cycle
  * still holds it. False means another replica took the account over and this
  * cycle must copy nothing more: it is called after every member's batch, not
@@ -805,7 +898,7 @@ async function retryFailed(
       userId: member.userId,
       emailIds: rows.length,
     });
-    const baselinedAt = baselineOf(baselines, member);
+    const baselinedAt = baselineOf(baselines, member.userId);
     for (const row of rows) {
       if (row.receivedAt && predatesBaseline(row.receivedAt, baselinedAt)) {
         await recordFailure(
@@ -941,20 +1034,37 @@ async function alreadyCopied(
  * was asked; treated as "baselined now", the direction that back-fills
  * nothing.
  */
-function baselineOf(baselines: Map<string, Date>, member: SharedCopyMember): Date {
-  return baselines.get(member.userId) ?? new Date();
+function baselineOf(baselines: Map<string, Date>, userId: string): Date {
+  return baselines.get(userId) ?? new Date();
 }
 
 /**
- * One page's copies for every deliverable member. Answers whether the cycle
- * still holds the account's lease: false means another replica took the
- * account over mid-page and this one stopped where it was, with the cursor
- * deliberately left behind (see the caller).
+ * The member's share of a page: what the shared mailbox received from their
+ * baseline on. The rest is the backlog their opt-in never covered — and it is
+ * filtered before anything is written, so a message they are not entitled to
+ * costs them neither a copy nor an owed row.
+ */
+function entitledTo(
+  emails: DeliverableEmail[],
+  baselines: Map<string, Date>,
+  userId: string,
+): DeliverableEmail[] {
+  const baselinedAt = baselineOf(baselines, userId);
+  return emails.filter((email) => !predatesBaseline(email.receivedAt, baselinedAt));
+}
+
+/**
+ * One page's copies for every deliverable member, and its ledger trail for
+ * every member the cycle owes one. Answers whether the cycle still holds the
+ * account's lease: false means another replica took the account over mid-page
+ * and this one stopped where it was, with the cursor deliberately left behind
+ * (see the caller).
  */
 async function deliverPage(
   deps: DeliveryDeps,
   sharedAccountId: string,
   members: SharedCopyMember[],
+  owedMembers: string[],
   baselines: Map<string, Date>,
   emails: DeliverableEmail[],
   counts: DeliveryCounts,
@@ -963,13 +1073,23 @@ async function deliverPage(
 ): Promise<boolean> {
   const log = deps.log ?? defaultLog;
   const report = deps.onCopyResult ?? recordSharedMailboxCopy;
+  // The members nothing can be copied for goes FIRST, before any copy and long
+  // before the caller can advance the cursor: their trail is the only thing
+  // that survives the page, and it must not depend on the rest of the page
+  // finishing.
+  for (const userId of owedMembers) {
+    await recordOwed(
+      deps,
+      sharedAccountId,
+      userId,
+      entitledTo(emails, baselines, userId),
+      counts,
+      "not deliverable this cycle",
+    );
+  }
   for (const member of members) {
-    // The member's share of the page: what the shared mailbox received from
-    // their baseline on. The rest is the backlog their opt-in never covered,
-    // and it is filtered BEFORE the ledger is asked, so a message they are not
-    // entitled to costs neither a query nor a row.
-    const baselinedAt = baselineOf(baselines, member);
-    const entitled = emails.filter((email) => !predatesBaseline(email.receivedAt, baselinedAt));
+    const baselinedAt = baselineOf(baselines, member.userId);
+    const entitled = entitledTo(emails, baselines, member.userId);
     if (entitled.length < emails.length) {
       log("debug", "shared mailbox copy: messages before the member's baseline withheld", {
         sharedAccountId,
@@ -980,7 +1100,19 @@ async function deliverPage(
     }
     if (entitled.length === 0) continue;
     const resolved = await resolveMember(deps, sharedAccountId, member);
-    if (!resolved) continue;
+    if (!resolved) {
+      // Listed as deliverable, but not this cycle. Skipping alone lost them
+      // the page, because the cursor advances either way.
+      await recordOwed(
+        deps,
+        sharedAccountId,
+        member.userId,
+        entitled,
+        counts,
+        "member session unavailable",
+      );
+      continue;
+    }
     const states = await deps.copies.copyStates(
       member.userId,
       sharedAccountId,
@@ -1044,10 +1176,11 @@ async function deliverPage(
 /** The cycle proper, with this account's lease already held by `owner`. */
 async function deliver(
   deps: DeliveryDeps,
-  input: { sharedAccountId: string; members: SharedCopyMember[] },
+  input: { sharedAccountId: string; members: SharedCopyMember[]; owedMembers?: string[] },
   owner: string,
 ): Promise<DeliveryCycleResult> {
   const { sharedAccountId, members } = input;
+  const owedMembers = input.owedMembers ?? [];
   const log = deps.log ?? defaultLog;
 
   const watcher = await electWatcher(deps, input);
@@ -1061,7 +1194,7 @@ async function deliver(
 
   const state = await deps.copies.getState(sharedAccountId);
   if (state.emailState === null) {
-    return baseline(deps, watcher, sharedAccountId, members, "no_cursor");
+    return baseline(deps, watcher, sharedAccountId, members, owedMembers, "no_cursor");
   }
   // However old the cursor is, it is where delivery resumes. An age-based
   // re-baseline used to drop the whole gap on the guess that it was an
@@ -1077,13 +1210,17 @@ async function deliver(
   // timestamp is what makes it so: not a one-cycle exclusion, which let the
   // backlog reach a joiner from the second cycle and cost them the mail that
   // arrived during the first.
-  const baselines = await deps.copies.baselineMembers(
-    sharedAccountId,
-    members.map((member) => member.userId),
-  );
+  //
+  // The OWED members are baselined with the deliverable ones, because the same
+  // rule decides what goes into their trail: a member deactivated today must
+  // not come back to the backlog from before they were ever a member.
+  const baselines = await deps.copies.baselineMembers(sharedAccountId, [
+    ...members.map((member) => member.userId),
+    ...owedMembers,
+  ]);
   const deliverTo = members;
 
-  const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0 };
+  const counts: DeliveryCounts = { copied: 0, skipped: 0, failed: 0, unresolved: 0, owed: 0 };
   // One personal-inbox lookup per member for the whole cycle, pages included.
   const inboxes = new Map<string, string | null>();
   // What the page read has already reported about the provider this cycle.
@@ -1111,13 +1248,20 @@ async function deliver(
       page = await fetchChanges(deps, watcher, sharedAccountId, cursor);
     } catch (error) {
       if (error instanceof JmapMethodError && error.methodErrorType === "cannotCalculateChanges") {
-        return baseline(deps, watcher, sharedAccountId, members, "cannot_calculate_changes");
+        return baseline(
+          deps,
+          watcher,
+          sharedAccountId,
+          members,
+          owedMembers,
+          "cannot_calculate_changes",
+        );
       }
       throw error;
     }
     pages += 1;
 
-    if (page.created.length > 0 && deliverTo.length > 0) {
+    if (page.created.length > 0 && deliverTo.length + owedMembers.length > 0) {
       const deliverable = await inboxOnly(deps, watcher, sharedAccountId, page.created, warned);
       if (
         deliverable.length > 0 &&
@@ -1125,6 +1269,7 @@ async function deliver(
           deps,
           sharedAccountId,
           deliverTo,
+          owedMembers,
           baselines,
           deliverable,
           counts,
@@ -1174,7 +1319,15 @@ async function deliver(
 
 /**
  * Runs one cycle for `sharedAccountId` on behalf of `members` (every member
- * opted into it, as listed by userPreferences.listSharedMailboxCopyOptIns).
+ * opted into it AND deliverable right now, as listed by
+ * userPreferences.listSharedMailboxCopyOptIns) and `owedMembers` (the user ids
+ * whose preference names the account but whom that listing leaves out —
+ * deactivated, or momentarily without a credential).
+ *
+ * The owed ones are ids and nothing else on purpose: there is no session to
+ * open for them and no copy to make, so an email address would only invite
+ * one. What they get is the ledger trail (`recordOwed`) that keeps the pages
+ * the cursor passes reachable until they are deliverable again.
  *
  * Serialised per account twice over: in-process by the worker's single-flight
  * queue, and across replicas by the account's delivery LEASE (`locked` when
@@ -1192,7 +1345,7 @@ async function deliver(
  */
 export async function runDeliveryCycle(
   deps: DeliveryDeps,
-  input: { sharedAccountId: string; members: SharedCopyMember[] },
+  input: { sharedAccountId: string; members: SharedCopyMember[]; owedMembers?: string[] },
 ): Promise<DeliveryCycleResult> {
   const { sharedAccountId } = input;
   const log = deps.log ?? defaultLog;

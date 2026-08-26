@@ -567,6 +567,75 @@ describe("createSharedMailboxCopiesRepo — failed copies and retries (GH #313)"
     );
   });
 
+  // GH #313: a member the cycle cannot deliver to — deactivated, momentarily
+  // without a credential, or whose session lookup throws — used to be skipped
+  // with nothing written while the cursor advanced past their mail, so that
+  // page was lost for them for good. `recordOwed` is the trail the cycle
+  // leaves instead: a `failed` row with NO attempt spent, which the retry pass
+  // delivers the moment they are deliverable again.
+  it("records an owed copy as failed without spending an attempt", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    const receivedAt = new Date("2026-08-20T10:00:00.000Z");
+
+    await repo.recordOwed(member, accountId, [
+      { emailId: "e1", messageId: "abc@shared.test", receivedAt },
+    ]);
+
+    expect(await repo.copyStates(member, accountId, ["e1"])).toEqual(new Map([["e1", "failed"]]));
+    const rows = await sql<{ attempts: number; last_error: string }[]>`
+      select attempts, last_error from shared_mailbox_copies
+      where user_id = ${member} and shared_account_id = ${accountId} and email_id = 'e1'
+    `;
+    expect(rows[0]).toMatchObject({ attempts: 0, last_error: "member unavailable" });
+    // The retry pass picks it up with everything it needs: the Message-ID to
+    // verify against the member's inbox and the receivedAt for the baseline.
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([
+      { userId: member, emailId: "e1", attempts: 0, messageId: "abc@shared.test", receivedAt },
+    ]);
+  });
+
+  it("never touches a row that already exists, whatever its status", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await repo.recordCopy(member, accountId, "e-copied");
+    await repo.beginCopy(member, accountId, "e-pending", "pending@shared.test");
+    await repo.beginCopy(member, accountId, "e-failed", "failed@shared.test");
+    await repo.markFailed(member, accountId, "e-failed", "copy_failed");
+
+    await repo.recordOwed(member, accountId, [
+      { emailId: "e-copied", messageId: "x@shared.test", receivedAt: new Date() },
+      { emailId: "e-pending", messageId: "x@shared.test", receivedAt: new Date() },
+      { emailId: "e-failed", messageId: "x@shared.test", receivedAt: new Date() },
+    ]);
+
+    expect(await repo.copyStates(member, accountId, ["e-copied", "e-pending", "e-failed"])).toEqual(
+      new Map([
+        ["e-copied", "copied"],
+        ["e-pending", "pending"],
+        ["e-failed", "failed"],
+      ]),
+    );
+    // The attempt already spent on the failed row is neither reset nor added
+    // to, and its own Message-ID and reason stay as the retry pass left them.
+    const rows = await sql<{ attempts: number; last_error: string; message_id: string }[]>`
+      select attempts, last_error, message_id from shared_mailbox_copies
+      where user_id = ${member} and shared_account_id = ${accountId} and email_id = 'e-failed'
+    `;
+    expect(rows[0]).toMatchObject({
+      attempts: 1,
+      last_error: "copy_failed",
+      message_id: "failed@shared.test",
+    });
+  });
+
+  it("tolerates an owed member with nothing to record", async () => {
+    const member = await freshUserId();
+    const accountId = freshAccountId();
+    await expect(repo.recordOwed(member, accountId, [])).resolves.toBeUndefined();
+    expect(await repo.listRetryable(accountId, { userIds: [member], maxAttempts: 5, limit: 100 })).toEqual([]);
+  });
+
   it("stops listing a failed copy once it finally succeeds", async () => {
     const member = await freshUserId();
     const accountId = freshAccountId();
