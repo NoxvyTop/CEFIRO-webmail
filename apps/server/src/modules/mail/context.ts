@@ -3,6 +3,7 @@ import { errorResponse } from "../../core/error-response";
 import type { ContactsRepo } from "../../infra/repos/contacts";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SentRecipientsRepo } from "../../infra/repos/sent-recipients";
+import type { SharedMailboxCopiesRepo } from "../../infra/repos/shared-mailbox-copies";
 import type { SignaturesRepo } from "../../infra/repos/signatures";
 import type { UserPreferencesRepo } from "../../infra/repos/user-preferences";
 import type {
@@ -56,6 +57,14 @@ export type MailDeps = {
   // reason `contacts` is: every existing test/deploy that omits it keeps
   // behaving exactly as before, with Tier A simply never asserted.
   sentRecipients?: SentRecipientsRepo;
+  // Optional (GH #313): the ledger of shared-mailbox copies. The manual
+  // copy-to-inbox button writes a `copied` row into it so the automatic
+  // delivery cycle (modules/mail/shared-copy/) skips a message the member has
+  // already pulled themselves — without it, the two paths copy the same
+  // message into the same inbox twice. Optional for the same reason
+  // `sentRecipients` is: a deployment that omits it keeps behaving exactly as
+  // before, with the button simply recording nothing.
+  sharedMailboxCopies?: SharedMailboxCopiesRepo;
 };
 
 // Narrow slice of MailDeps that requireMail actually needs. Extracted so other

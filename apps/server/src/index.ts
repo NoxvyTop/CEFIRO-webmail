@@ -456,6 +456,10 @@ const app = createApp({
     jmap,
     contacts,
     sentRecipients,
+    // GH #313: the manual copy button writes into the same ledger the copy
+    // worker reads, so a message the member pulled themselves is not
+    // delivered to them again by the next cycle.
+    sharedMailboxCopies,
     timeoutMs: config.jmapTimeoutMs,
     // The raw-fetch routes (SSE, blob up/download) must present the mailbox
     // credential the same way the JMAP client does, or `bearer` would work for

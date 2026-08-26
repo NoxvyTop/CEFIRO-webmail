@@ -1242,6 +1242,25 @@ export function createMailRouter(deps: MailDeps) {
       emailId: id,
     });
     if (result.ok) {
+      // GH #313: the same ledger the automatic cycle writes, keyed by the
+      // SHARED account this came from. Without it the two paths are blind to
+      // each other and the cycle delivers its own copy of a message the member
+      // already pulled — the duplicate the ledger exists to prevent.
+      //
+      // Best-effort, after a CONFIRMED copy: the message is already in their
+      // inbox, so answering anything but ok would invite them to press the
+      // button again and get a second copy. A ledger that missed a row costs
+      // at most one duplicate from the next cycle; a 502 here guarantees one.
+      if (deps.sharedMailboxCopies) {
+        try {
+          await deps.sharedMailboxCopies.recordCopy(c.get("user").userId, fromAccountId, id);
+        } catch (error) {
+          log("warn", "copy-to-inbox: recording the shared-mailbox copy failed", {
+            emailId: id,
+            error: String(error),
+          });
+        }
+      }
       return c.json({ ok: true });
     }
     return errorResponse(c, result.reason, COPY_FAILURE_STATUS[result.reason]);

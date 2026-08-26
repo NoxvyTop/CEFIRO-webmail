@@ -449,6 +449,12 @@ la credencial del miembro destinatario), ejecutado sin que nadie pulse nada.
 El diseño y las alternativas descartadas están en
 `docs/design/shared-mailboxes.md` (G-2); aquí va cómo funciona.
 
+El botón manual escribe en **el mismo libro** (`shared_mailbox_copies`, fila
+`copied` para la cuenta compartida de origen) en cuanto la copia queda
+confirmada, de modo que el ciclo automático no vuelve a entregar un mensaje que
+el miembro ya se copió; si esa escritura falla, la ruta responde `ok` igual —la
+copia ya está en su bandeja y un error invitaría a pulsar otra vez.
+
 **Ciclo de entrega** (`delivery.ts`, uno por cuenta compartida):
 
 1. **Elegir un watcher.** No existe credencial del grupo (un principal de grupo
