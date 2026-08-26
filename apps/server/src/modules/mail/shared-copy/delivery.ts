@@ -802,14 +802,26 @@ async function retryFailed(
         );
         continue;
       }
-      const verdict = await alreadyCopied(deps, member, resolved, row.messageId, inboxes);
-      if (verdict === "unknown") {
-        // The provider could not answer, so nothing is known about whether the
-        // copy exists. Copying blind is the one move that cannot be taken back;
-        // the row keeps its attempt count and the next cycle asks again.
+      const verification = await alreadyCopied(deps, member, resolved, row.messageId, inboxes);
+      if (verification.verdict === "unknown") {
+        // Nothing is known about whether the copy exists, and copying blind is
+        // the one move that cannot be taken back — so no copy. But the attempt
+        // IS spent: left untouched, a row whose question never gets answered
+        // was immortal, sat at the head of the oldest-first batch on every
+        // cycle, and with enough of them the batch never reached anybody
+        // else's copy. Counted, it ages out after DELIVERY_RETRY_MAX_ATTEMPTS
+        // like any other failure, and the next cycle asks again meanwhile.
+        await recordFailure(
+          deps,
+          sharedAccountId,
+          member,
+          row.emailId,
+          `verification unavailable: ${verification.reason}`,
+          counts,
+        );
         continue;
       }
-      if (verdict === "present") {
+      if (verification.verdict === "present") {
         counts.skipped += 1;
         report("skipped");
         try {
@@ -845,10 +857,12 @@ async function retryFailed(
  *
  * Three answers, and each drives a different move:
  * - `present` → confirm the row, copy nothing;
- * - `absent` → copy, which is what the retry is for;
- * - `unknown` → the question could not be asked (no Message-ID on the source,
- *   no personal inbox, or the query failed), so behave as before this check
- *   existed for the first case and hold off for the others.
+ * - `absent` → copy, which is what the retry is for. A source with no
+ *   Message-ID answers this too: it cannot be looked for, so it is retried
+ *   exactly as it was before this check existed (at-least-once for that one
+ *   message, the trade the header's absence forces);
+ * - `unknown` → the question could not be asked (the query failed), so hold
+ *   off: no copy, and the attempt is spent by the caller with the reason.
  *
  * It is NOT a second dedup store. A member who deleted their copy is asked to
  * receive it again — the same answer the manual button gives — and the ledger
@@ -860,13 +874,10 @@ async function alreadyCopied(
   resolved: { auth: JmapAuth; session: JmapSession },
   messageId: string | null,
   inboxes: Map<string, string | null>,
-): Promise<"present" | "absent" | "unknown"> {
-  // A source with no Message-ID cannot be looked for, so it is retried exactly
-  // as it was before this check existed: at-least-once for that one message,
-  // which is the trade the header's absence forces.
-  if (!messageId) return "absent";
+): Promise<{ verdict: "present" | "absent" } | { verdict: "unknown"; reason: string }> {
+  if (!messageId) return { verdict: "absent" };
   const personalInboxId = await personalInboxOf(deps, member, resolved, inboxes);
-  if (personalInboxId === null) return "absent";
+  if (personalInboxId === null) return { verdict: "absent" };
   try {
     const responses = await deps.jmap.request(resolved.auth, resolved.session, [
       [
@@ -880,14 +891,14 @@ async function alreadyCopied(
       ],
     ]);
     const ids = ((responses[0]?.[1] ?? {}) as { ids?: string[] }).ids ?? [];
-    return ids.length > 0 ? "present" : "absent";
+    return { verdict: ids.length > 0 ? "present" : "absent" };
   } catch (error) {
     (deps.log ?? defaultLog)("warn", "shared mailbox copy: retry verification failed", {
       userId: member.userId,
       messageId,
       error: String(error),
     });
-    return "unknown";
+    return { verdict: "unknown", reason: String(error) };
   }
 }
 

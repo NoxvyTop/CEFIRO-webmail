@@ -249,7 +249,11 @@ function fakeCopiesRepo(events: string[]) {
         states.set(id, "failed");
         attempts.set(id, (attempts.get(id) ?? 0) + 1);
         errors.set(id, lastError);
-        if (!failedOrder.includes(id)) failedOrder.push(id);
+        // `updated_at = now()`: a row that just failed again goes to the tail
+        // of the oldest-first batch, exactly as the real `order by` puts it.
+        const at = failedOrder.indexOf(id);
+        if (at >= 0) failedOrder.splice(at, 1);
+        failedOrder.push(id);
       },
       listRetryable: async (
         accountId: string,
@@ -342,6 +346,8 @@ type Harness = {
   personalCopies: Set<string>;
   /** Members whose personal Email/query throws. */
   queryThrowsFor: Set<string>;
+  /** Message-IDs (as sent in the header filter) whose Email/query throws, for anybody. */
+  queryThrowsForMessageId: Set<string>;
   /** Every Email/query the verification made, in order. */
   verifications: Array<{ by: string; messageId: string; inMailbox: string }>;
   /** Ledger writes and Email/copy calls, in the order they happened. */
@@ -374,6 +380,7 @@ function harness(): Harness {
     omitReceivedAt: false,
     personalCopies: new Set(),
     queryThrowsFor: new Set(),
+    queryThrowsForMessageId: new Set(),
     verifications: [],
     currentState: "s-now",
   };
@@ -448,7 +455,7 @@ function harness(): Harness {
           const filter = params.filter as { inMailbox: string; header: [string, string] };
           const messageId = filter.header[1];
           h.verifications.push({ by: auth.email, messageId, inMailbox: filter.inMailbox });
-          if (h.queryThrowsFor.has(auth.email)) {
+          if (h.queryThrowsFor.has(auth.email) || h.queryThrowsForMessageId.has(messageId)) {
             throw new DomainError("stalwart_unavailable", 502, "x");
           }
           return [
@@ -1175,18 +1182,47 @@ describe("runDeliveryCycle — delivery (GH #313)", () => {
     expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e1"]);
   });
 
-  it("leaves the row for the next cycle when the verification itself fails", async () => {
+  // GH #313: an unanswerable verification used to leave the `failed` row
+  // exactly as it was — no attempt spent, `updated_at` untouched — so a copy
+  // whose verification never answers was immortal: it sat at the head of the
+  // oldest-first retry batch on every cycle, and with enough of them the
+  // batch never reached anybody else's copy.
+  it("spends an attempt, without copying, when the verification cannot be answered", async () => {
     h.copies.seedFailed(ana.userId, SHARED, "e1", 1, "<unknown@shared.test>");
     h.queryThrowsFor.add(ana.email);
     h.pages = [{ created: [], newState: "s-2" }];
 
-    // Copying blind is the one thing that cannot be undone, so an unanswerable
-    // question spends no attempt and makes no copy.
-    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 0, skipped: 0 });
+    // Copying blind is the one thing that cannot be undone, so no copy is
+    // made — but the attempt IS counted, so the row ages out like any other.
+    await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1, skipped: 0 });
     expect(copyCalls(h)).toEqual([]);
     expect(h.copies.states.get(`${ana.userId}|${SHARED}|e1`)).toBe("failed");
-    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(1);
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e1`)).toBe(2);
+    expect(h.copies.errors.get(`${ana.userId}|${SHARED}|e1`)).toMatch(/^verification unavailable: /);
     expect(h.logs.some((l) => l.level === "warn" && l.msg.includes("verif"))).toBe(true);
+  });
+
+  it("ages out a copy whose verification never answers, so it stops holding the head of the batch", async () => {
+    h.copies.seedFailed(ana.userId, SHARED, "e-stuck", 0, "<stuck@shared.test>");
+    h.queryThrowsForMessageId.add("<stuck@shared.test>");
+
+    for (let cycle = 0; cycle < DELIVERY_RETRY_MAX_ATTEMPTS; cycle += 1) {
+      h.pages = [{ created: [], newState: `s-${cycle + 2}` }];
+      await expect(run([ana])).resolves.toMatchObject({ copied: 0, failed: 1 });
+    }
+    expect(h.verifications.filter((v) => v.messageId === "<stuck@shared.test>")).toHaveLength(
+      DELIVERY_RETRY_MAX_ATTEMPTS,
+    );
+    expect(h.copies.attempts.get(`${ana.userId}|${SHARED}|e-stuck`)).toBe(DELIVERY_RETRY_MAX_ATTEMPTS);
+
+    // Out of attempts: the row is no longer retryable, and a copy that failed
+    // after it is reached and delivered instead of waiting behind it.
+    h.copies.seedFailed(ana.userId, SHARED, "e-live", 1, "<live@shared.test>");
+    h.verifications.length = 0;
+    h.pages = [{ created: [], newState: "s-99" }];
+    await expect(run([ana])).resolves.toMatchObject({ copied: 1, failed: 0 });
+    expect(h.verifications.map((v) => v.messageId)).toEqual(["<live@shared.test>"]);
+    expect(copyCalls(h).map((c) => c.emailId)).toEqual(["e-live"]);
   });
 
   it("stops retrying a copy that has used its attempts, and leaves the row as the record", async () => {
