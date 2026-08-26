@@ -31,6 +31,7 @@ import { tapEmailStateChanges } from "./contacts-harvest-stream";
 import { deriveSenderAuthFacts } from "./sender-auth";
 import { resolveSenderTrust } from "./sender-trust";
 import { backfillSentRecipients } from "./sent-recipients-backfill";
+import { copyEmailToPersonalInbox, type CopyFailureReason } from "./shared-copy/copy";
 import { guardStream, mailStreams } from "./streams";
 import { createTrustedServicesRouter } from "./trusted-services";
 import { TRUSTED_SERVICES_SEED } from "./trusted-services-seed";
@@ -77,6 +78,16 @@ type JmapEmail = {
 // rather than being raised. GH #140 makes the resulting cut visible instead of
 // silent (see collectBodyValues / EmailDetail.bodyTruncated).
 const MAX_BODY_VALUE_BYTES = 524288;
+
+// GH #313: the HTTP status each G-2 copy failure has always answered with,
+// now that the copy itself lives in ./shared-copy/copy.ts. Kept as a table so
+// the route cannot quietly drift from the reasons the shared function reports.
+const COPY_FAILURE_STATUS: Record<CopyFailureReason, 400 | 404 | 502> = {
+  invalid_account: 400,
+  mailbox_roles_missing: 502,
+  not_found: 404,
+  copy_failed: 502,
+};
 
 type JmapBodyPart = { partId: string; type?: string | null };
 // RFC 8621 §4.1.4: isTruncated is set by the server when `value` had to be cut
@@ -1200,16 +1211,15 @@ export function createMailRouter(deps: MailDeps) {
   });
 
   // GH #13/#50 (G-2, spike G-0): copies a message from a SHARED mailbox into
-  // the member's OWN personal Inbox with a single JMAP Email/copy authenticated
-  // as the member. Stalwart exposes the shared account in the member's session
-  // (G-1 access), so one cross-account copy — fromAccountId = shared,
-  // accountId = personal — is all it takes; there is no delegated/group
-  // credential (the spike confirmed a group principal cannot even log in).
+  // the member's OWN personal Inbox. The copy itself — the two JMAP batches,
+  // the keyword carry-over, the positive confirmation — lives in
+  // ./shared-copy/copy.ts since GH #313, where the automatic delivery reuses
+  // it verbatim; this route is the adapter that authorizes the account and
+  // maps each failure reason to the status it always answered with.
   //
-  // The original is left in place (onSuccessDestroyOriginal:false); the source
-  // email's own keywords are carried into the create so flags survive (spike
-  // caveat). The copy counts against the member's personal quota — a documented
-  // spike caveat with nothing to do about it, so this makes no attempt to.
+  // Still worth having next to the automatic delivery: it serves mail that
+  // predates a member's opt-in (the worker only follows changes from the
+  // moment it baselines) and any message the member wants without opting in.
   router.post("/messages/:id/copy-to-inbox", requireMail(deps), async (c) => {
     const id = c.req.param("id");
     const session = c.get("jmapSession");
@@ -1217,80 +1227,21 @@ export function createMailRouter(deps: MailDeps) {
 
     // The message lives in the shared account named by ?accountId=.
     // resolveAccountId authorizes it (403 account_forbidden if the session
-    // cannot reach it). It MUST be a shared, non-personal account: Stalwart
-    // rejects a same-account copy with invalidArguments "From accountId is equal
-    // to fromAccountId" (spike G-0), so a personal — or absent — accountId is
-    // refused up front with a clean 400 rather than forwarded into an opaque
-    // JMAP error. Absent resolves to the personal account, so it lands here too.
+    // cannot reach it). A personal — or absent, which resolves to personal —
+    // accountId is refused by the copy with `invalid_account`, surfaced here as
+    // a clean 400 rather than forwarded into an opaque JMAP error.
     const fromAccountId = resolveAccountId(session, c.req.query("accountId"));
-    const personalAccountId = session.accountId;
-    if (fromAccountId === personalAccountId) {
-      return errorResponse(c, "invalid_account", 400);
-    }
-
-    // One request resolves the member's personal Inbox (role=inbox on their OWN
-    // account) and, alongside it, the source email's keywords so the copy
-    // preserves its flags. The Email/get is scoped to the shared account, where
-    // the message lives; the Mailbox/query to the personal one, where it lands.
-    // Both reach through the member's own credential.
-    const lookup = await deps.jmap!.request(auth, session, [
-      ["Mailbox/query", { accountId: personalAccountId, filter: { role: "inbox" } }, "mbx"],
-      ["Email/get", { accountId: fromAccountId, ids: [id], properties: ["keywords"] }, "src"],
-    ]);
-
-    const inboxResult = (lookup[0]?.[1] ?? {}) as { ids?: string[] };
-    const personalInboxId = (inboxResult.ids ?? [])[0];
-    if (!personalInboxId) {
-      return errorResponse(c, "mailbox_roles_missing", 502);
-    }
-
-    // Email/get is scoped to the shared account, so an id that isn't a message
-    // there comes back as an empty list — indistinguishable from "no such
-    // message" and refused the same way, never leaking whether the id exists
-    // elsewhere.
-    const sourceResult = (lookup[1]?.[1] ?? {}) as {
-      list?: Array<{ keywords?: Record<string, boolean> }>;
-    };
-    const source = (sourceResult.list ?? [])[0];
-    if (!source) {
-      return errorResponse(c, "not_found", 404);
-    }
-    const keywords = source.keywords ?? {};
-
-    const responses = await deps.jmap!.request(auth, session, [
-      [
-        "Email/copy",
-        {
-          fromAccountId,
-          accountId: personalAccountId,
-          create: {
-            c: {
-              id,
-              mailboxIds: { [personalInboxId]: true },
-              keywords,
-            },
-          },
-          onSuccessDestroyOriginal: false,
-        },
-        "c",
-      ],
-    ]);
-
-    const copyResult = (responses[0]?.[1] ?? {}) as {
-      created?: Record<string, { id?: string }>;
-      notCreated?: Record<string, unknown>;
-    };
-
-    // Positive confirmation, matching the destroy/send paths: an empty
-    // notCreated is not proof of success. The copy must appear in `created`
-    // before this reports it done.
-    if (copyResult.notCreated && "c" in copyResult.notCreated) {
-      return errorResponse(c, "copy_failed", 502);
-    }
-    if (copyResult.created?.c?.id) {
+    const result = await copyEmailToPersonalInbox({
+      jmap: deps.jmap!,
+      auth,
+      session,
+      fromAccountId,
+      emailId: id,
+    });
+    if (result.ok) {
       return c.json({ ok: true });
     }
-    return errorResponse(c, "copy_failed", 502);
+    return errorResponse(c, result.reason, COPY_FAILURE_STATUS[result.reason]);
   });
 
   router.post("/send", requireMail(deps), async (c) => {
