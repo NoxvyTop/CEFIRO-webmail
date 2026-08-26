@@ -160,6 +160,55 @@ export function createUserPreferencesRepo(sql: Db) {
     async markSentRecipientsBackfillAttempted(userId: string, at: string): Promise<void> {
       await this.merge(userId, { sentRecipientsBackfillAttemptedAt: at });
     },
+
+    // GH #313: every member who can take part in automatic shared-mailbox
+    // copies, across ALL users — the one cross-user read this repo has. The
+    // copy worker starts each cycle from it, so the filter does the worker's
+    // pre-screening in the database: only ACTIVE users (a deactivated member
+    // must stop receiving copies the moment the admin flips them, without
+    // waiting for a preference cleanup), only users WITH a mailbox credential
+    // (there is nothing to copy with otherwise, and the worker would log a
+    // skip for them on every cycle), and only rows whose opt-in is a non-empty
+    // jsonb array. The array check is a CASE rather than an `and` chain on
+    // purpose: SQL `and` does not short-circuit, so the planner is free to
+    // evaluate `jsonb_array_length` on a row before `jsonb_typeof` has ruled
+    // it out, and ONE hand-corrupted scalar in any row then fails the whole
+    // listing with "cannot get array length of a scalar" — taking every
+    // member's copies down with it. CASE is the one construct Postgres does
+    // guarantee to evaluate lazily.
+    //
+    // The ids still pass through parseSharedMailboxCopyOptIn so the worker
+    // sees exactly the list get() would show the member; a row whose list
+    // parses to nothing is dropped here rather than handed over as a member
+    // with no accounts. Ordered by email so the worker's per-account member
+    // order — and with it which member is elected to watch — is stable
+    // between cycles.
+    async listSharedMailboxCopyOptIns(): Promise<
+      Array<{ userId: string; email: string; accountIds: string[] }>
+    > {
+      const rows = await sql<{ user_id: string; email: string; account_ids: unknown }[]>`
+        select u.id as user_id, u.email, p.preferences -> 'sharedMailboxCopyOptIn' as account_ids
+        from user_preferences p
+        join users u on u.id = p.user_id
+        join mail_credentials mc on mc.user_id = u.id
+        where u.active = true
+          and (
+            case
+              when jsonb_typeof(p.preferences -> 'sharedMailboxCopyOptIn') = 'array'
+                then jsonb_array_length(p.preferences -> 'sharedMailboxCopyOptIn')
+              else 0
+            end
+          ) > 0
+        order by u.email asc
+      `;
+      const listed: Array<{ userId: string; email: string; accountIds: string[] }> = [];
+      for (const row of rows) {
+        const accountIds = parseSharedMailboxCopyOptIn(row.account_ids);
+        if (accountIds.length === 0) continue;
+        listed.push({ userId: row.user_id, email: row.email, accountIds });
+      }
+      return listed;
+    },
   };
 }
 

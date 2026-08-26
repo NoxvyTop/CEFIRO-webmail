@@ -4,16 +4,23 @@ import { createDb } from "../db/client";
 import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
 import { createUsersRepo } from "./users";
+import { createMailCredentialsRepo } from "./mail-credentials";
 import { createUserPreferencesRepo } from "./user-preferences";
+import { importMasterKey } from "../../modules/credentials/crypto";
 
 const sql = createDb(testDatabaseUrl());
 let repo: ReturnType<typeof createUserPreferencesRepo>;
 let users: ReturnType<typeof createUsersRepo>;
+let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
   repo = createUserPreferencesRepo(sql);
   users = createUsersRepo(sql);
+  const key = await importMasterKey(
+    btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
+  );
+  mailCredentials = createMailCredentialsRepo(sql, key);
 });
 afterAll(() => sql.end());
 
@@ -172,5 +179,60 @@ describe("createUserPreferencesRepo — sentRecipientsBackfilledAt (GH #314)", (
       values (${userId}, ${sql.json({ sentRecipientsBackfilledAt: 42 })})
     `;
     expect(await repo.getSentRecipientsBackfilledAt(userId)).toBeNull();
+  });
+});
+
+// GH #313: the cross-user listing the shared-mailbox copy worker starts every
+// cycle from. Only members who can actually take part are returned: active,
+// with a mailbox credential to copy with, and with at least one opt-in.
+describe("createUserPreferencesRepo — listSharedMailboxCopyOptIns (GH #313)", () => {
+  async function optedInUser(accountIds: unknown, options: { credential?: boolean; active?: boolean } = {}) {
+    const user = await users.create({
+      email: `o-${crypto.randomUUID()}@noxvytop.com`,
+      displayName: "Opt-in User",
+    });
+    if (options.credential !== false) await mailCredentials.set(user.id, "mailbox-pw");
+    if (options.active === false) await users.setActive(user.id, false);
+    await sql`
+      insert into user_preferences (user_id, preferences)
+      values (${user.id}, ${sql.json({ sharedMailboxCopyOptIn: accountIds as never })})
+    `;
+    return user;
+  }
+
+  it("lists each opted-in member with their email and account ids", async () => {
+    const member = await optedInUser(["acc-a", "acc-b"]);
+    const listed = await repo.listSharedMailboxCopyOptIns();
+    expect(listed).toContainEqual({
+      userId: member.id,
+      email: member.email,
+      accountIds: ["acc-a", "acc-b"],
+    });
+  });
+
+  it("leaves out members with no opt-in, an empty opt-in or a non-array value", async () => {
+    const none = await freshUserId();
+    const empty = await optedInUser([]);
+    const malformed = await optedInUser("acc-a");
+    const ids = (await repo.listSharedMailboxCopyOptIns()).map((entry) => entry.userId);
+    expect(ids).not.toContain(none);
+    expect(ids).not.toContain(empty.id);
+    expect(ids).not.toContain(malformed.id);
+  });
+
+  it("leaves out members without a mailbox credential or deactivated", async () => {
+    const noCredential = await optedInUser(["acc-a"], { credential: false });
+    const inactive = await optedInUser(["acc-a"], { active: false });
+    const ids = (await repo.listSharedMailboxCopyOptIns()).map((entry) => entry.userId);
+    expect(ids).not.toContain(noCredential.id);
+    expect(ids).not.toContain(inactive.id);
+  });
+
+  it("applies the same defensive parse as get(), dropping a member whose list parses to nothing", async () => {
+    const dirty = await optedInUser(["acc-a", "acc-a", "", 5, null]);
+    const junk = await optedInUser(["", 5, null]);
+    const listed = await repo.listSharedMailboxCopyOptIns();
+    expect(listed.find((entry) => entry.userId === dirty.id)?.accountIds).toEqual(["acc-a"]);
+    expect(listed.map((entry) => entry.userId)).not.toContain(junk.id);
   });
 });

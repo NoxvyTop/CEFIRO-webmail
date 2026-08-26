@@ -71,6 +71,10 @@ describe("migrate", () => {
       // GH #314: Tier A ("known sender") store — addresses the user has
       // written to, kept apart from `contacts` on purpose.
       "sent_recipients",
+      // GH #313: automatic shared-mailbox copies — the per-account Email state
+      // cursor and the per-member dedup ledger.
+      "shared_mailbox_copy_state",
+      "shared_mailbox_copies",
     ]) {
       expect(names).toContain(expected);
     }
