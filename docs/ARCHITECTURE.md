@@ -744,7 +744,9 @@ drenaje, con un suelo de 1 s (`MIN_DRAIN_MS`) para que la petición en vuelo
 pueda terminar aunque el worker se coma el plazo entero. La espera hasta el
 cierre forzado es por tanto **≤ `SHUTDOWN_GRACE_MS` + 1 s** —ese suelo—, no el
 doble del plazo configurado. Cada copia intentada suma en
-`cefiro_shared_mailbox_copies_total{result}`.
+`cefiro_shared_mailbox_copies_total{result}`, con seis desenlaces: `copied`,
+`failed`, `skipped`, `unresolved`, `owed` y `dropped` (docs/OPERATIONS.md los
+detalla).
 
 **Fuera de alcance, a propósito:** retención o purga de las copias, borrado en
 cascada, backfill del correo anterior al opt-in y la UI más allá del texto de
