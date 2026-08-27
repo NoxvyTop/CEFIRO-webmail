@@ -216,19 +216,37 @@ describe("health budget (GH #212)", () => {
     // The bug: checks ran one after another, so two ~10s upstream ceilings
     // added up to ~20s while the container's HEALTHCHECK waits 5s. Two stalled
     // checks must now cost one budget, not two.
-    const app = createApp({
-      checks: { postgres: stalled, stalwart: stalled },
-      healthBudgetMs: 100,
-    });
+    //
+    // Measured with fake timers, not the wall clock. The first version timed
+    // a real request and asserted `elapsed < 2 × budget`; on a shared CI
+    // runner one scheduling hiccup turned 100ms into 317ms and failed the
+    // main pipeline over a suite that was correct. The invariant is about
+    // WHEN the timers fire, so that is what gets asserted: after exactly one
+    // budget the response must already be settled. With sequential checks the
+    // second timer would only be armed once the first expired, and the
+    // request would still be pending here.
+    vi.useFakeTimers();
+    try {
+      const app = createApp({
+        checks: { postgres: stalled, stalwart: stalled },
+        healthBudgetMs: 100,
+      });
 
-    const startedAt = Date.now();
-    const res = await app.request("/api/health");
-    const elapsed = Date.now() - startedAt;
+      let settled = false;
+      const pending = app.request("/api/health").then((res) => {
+        settled = true;
+        return res;
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(true);
 
-    expect(res.status).toBe(503);
-    expect(elapsed).toBeLessThan(200);
-    const body = healthResponseSchema.parse(await res.json());
-    expect(body.checks).toEqual({ postgres: false, stalwart: false });
+      const res = await pending;
+      expect(res.status).toBe(503);
+      const body = healthResponseSchema.parse(await res.json());
+      expect(body.checks).toEqual({ postgres: false, stalwart: false });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ships a default budget comfortably under the container HEALTHCHECK timeout", () => {
