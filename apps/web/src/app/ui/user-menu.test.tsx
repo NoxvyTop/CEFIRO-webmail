@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import "../i18n";
 import { UserMenu } from "./UserMenu";
 
@@ -14,6 +14,7 @@ function renderMenu(overrides: Partial<Parameters<typeof UserMenu>[0]> = {}) {
   const onToggleTheme = vi.fn();
   const onLogout = vi.fn();
   const onEnableNotifications = vi.fn();
+  const onShowShortcuts = vi.fn();
   const props = {
     user: baseUser,
     theme: "night" as const,
@@ -21,6 +22,7 @@ function renderMenu(overrides: Partial<Parameters<typeof UserMenu>[0]> = {}) {
     onLogout,
     showNotifications: false,
     onEnableNotifications,
+    onShowShortcuts,
     ...overrides,
   };
   const utils = render(
@@ -28,7 +30,7 @@ function renderMenu(overrides: Partial<Parameters<typeof UserMenu>[0]> = {}) {
       <UserMenu {...props} />
     </MemoryRouter>,
   );
-  return { ...utils, onToggleTheme, onLogout, onEnableNotifications };
+  return { ...utils, onToggleTheme, onLogout, onEnableNotifications, onShowShortcuts };
 }
 
 describe("UserMenu", () => {
@@ -69,5 +71,19 @@ describe("UserMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Cerrar sesión/ }));
     expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  // GH #13/#50 (G-4): the "Atajos" launcher moved from a standalone header
+  // button into this menu; it must still open the shortcuts dialog.
+  it("shows an Atajos item that fires onShowShortcuts and closes the menu", () => {
+    const { onShowShortcuts } = renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
+
+    const atajos = screen.getByRole("menuitem", { name: /Atajos/ });
+    expect(atajos).toBeInTheDocument();
+    fireEvent.click(atajos);
+
+    expect(onShowShortcuts).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });

@@ -1,20 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
+import { createSentRecipientsRepo, type SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createMailRouter } from "./router";
-import type { JmapClient, JmapMethodCall } from "../../infra/stalwart/jmap";
+import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 const defaultIdentityList = [{ id: "id-1", name: "Carlos", email: "carlos@noxvytop.com" }];
 const defaultMailboxList = [
@@ -31,6 +31,19 @@ let emailSetResponse: { created?: Record<string, unknown>; notCreated?: Record<s
 };
 let submissionResponse: { created?: Record<string, unknown>; notCreated?: Record<string, unknown> } = {
   created: { sub: { id: "sub-1" } },
+};
+// RFC 8621 §7.5: onSuccessUpdateEmail is applied by a SEPARATE implicit
+// Email/set that runs after the submission and is appended to the response
+// array with the same method-call id ("s") as EmailSubmission/set. RFC 8620
+// §5.3 makes that Email/set non-transactional, so the submission can succeed
+// while this update fails — which is exactly the partial failure under test.
+let implicitUpdateResponse: { updated?: Record<string, unknown>; notUpdated?: Record<string, unknown> } = {
+  updated: { "e-new": null },
+};
+// Response to the server's best-effort post-send remediation (a lone
+// Email/set update re-applying the move-to-Sent / $draft-clear patch).
+let remediationResponse: { updated?: Record<string, unknown>; notUpdated?: Record<string, unknown> } = {
+  updated: { "e-new": null },
 };
 
 const stubJmap: JmapClient = {
@@ -50,9 +63,16 @@ const stubJmap: JmapClient = {
         ["Mailbox/get", { list: mailboxes }, "m"],
       ];
     }
+    // The best-effort post-send remediation is a single Email/set update.
+    if (methodCalls.length === 1 && name === "Email/set") {
+      return [["Email/set", remediationResponse, "u"]];
+    }
+    // The /send request: draft create + submission + the implicit
+    // onSuccessUpdateEmail response (same "s" id, appended by the server).
     return [
       ["Email/set", emailSetResponse, "e"],
       ["EmailSubmission/set", submissionResponse, "s"],
+      ["Email/set", implicitUpdateResponse, "s"],
     ];
   },
   uploadBlob: async () => "blob-id",
@@ -60,7 +80,10 @@ const stubJmap: JmapClient = {
 
 let sessions: ReturnType<typeof createSessionStore>;
 let mailCredentials: ReturnType<typeof createMailCredentialsRepo>;
+let sentRecipients: SentRecipientsRepo;
 let token: string;
+let userId: string;
+let userEmail: string;
 
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
@@ -70,12 +93,12 @@ beforeAll(async () => {
   );
   mailCredentials = createMailCredentialsRepo(sql, key);
   sessions = createSessionStore(sql);
+  sentRecipients = createSentRecipientsRepo(sql);
 
-  const withCred = await users.create({
-    email: `m-${crypto.randomUUID()}@noxvytop.com`,
-    displayName: "Mail User",
-  });
+  userEmail = `m-${crypto.randomUUID()}@noxvytop.com`;
+  const withCred = await users.create({ email: userEmail, displayName: "Mail User" });
   await mailCredentials.set(withCred.id, "mailbox-pw");
+  userId = withCred.id;
   token = (await sessions.create(withCred.id, 1)).token;
 });
 afterAll(() => sql.end());
@@ -86,9 +109,14 @@ beforeEach(() => {
   mailboxes = defaultMailboxList;
   emailSetResponse = { created: { draft: { id: "e-new" } } };
   submissionResponse = { created: { sub: { id: "sub-1" } } };
+  implicitUpdateResponse = { updated: { "e-new": null } };
+  remediationResponse = { updated: { "e-new": null } };
 });
 
-function makeApp() {
+// GH #314: `sentRecipients` is optional here exactly as it is in MailDeps, so
+// every pre-existing test keeps running the route without the known-sender
+// store wired — the same shape the contacts harvest uses.
+function makeApp(sentRecipients?: SentRecipientsRepo) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -96,6 +124,7 @@ function makeApp() {
       signatures: createSignaturesRepo(sql),
       userPreferences: createUserPreferencesRepo(sql),
       jmap: stubJmap,
+      sentRecipients,
     }),
   });
 }
@@ -109,8 +138,10 @@ const basePayload = {
   textBody: "Plain text",
   htmlBody: "<p>Rich text</p>",
   attachments: [{ blobId: "blob-1", name: "file.pdf", type: "application/pdf" }],
-  inReplyTo: ["<msg-1@noxvytop.com>"],
-  references: ["<msg-0@noxvytop.com>", "<msg-1@noxvytop.com>"],
+  // RFC 8621: JMAP exposes and accepts message ids in parsed form — no
+  // surrounding angle brackets and no CFWS.
+  inReplyTo: ["msg-1@noxvytop.com"],
+  references: ["msg-0@noxvytop.com", "msg-1@noxvytop.com"],
 };
 
 describe("POST /api/mail/send", () => {
@@ -145,8 +176,8 @@ describe("POST /api/mail/send", () => {
       textBody: [{ partId: "t", type: "text/plain" }],
       htmlBody: [{ partId: "h", type: "text/html" }],
       attachments: [{ blobId: "blob-1", type: "application/pdf", name: "file.pdf", disposition: "attachment" }],
-      inReplyTo: ["<msg-1@noxvytop.com>"],
-      references: ["<msg-0@noxvytop.com>", "<msg-1@noxvytop.com>"],
+      inReplyTo: ["msg-1@noxvytop.com"],
+      references: ["msg-0@noxvytop.com", "msg-1@noxvytop.com"],
     });
 
     const submissionCall = sendCall[1];
@@ -165,6 +196,38 @@ describe("POST /api/mail/send", () => {
         "keywords/$draft": null,
       },
     });
+  });
+
+  // GH #120: [] is truthy in JavaScript, so a plain truthiness guard would
+  // forward an empty inReplyTo/references array to Email/set instead of
+  // omitting the property. A non-reply payload must produce neither key.
+  it("omits inReplyTo and references from the Email/set create object for a non-reply payload", async () => {
+    const { inReplyTo: _inReplyTo, references: _references, ...nonReply } = basePayload;
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(nonReply),
+    });
+    expect(res.status).toBe(200);
+
+    const create = (requests[1]?.[0]?.[1] as { create: Record<string, Record<string, unknown>> })
+      .create.draft as Record<string, unknown>;
+    expect(create).not.toHaveProperty("inReplyTo");
+    expect(create).not.toHaveProperty("references");
+  });
+
+  it("omits inReplyTo and references when the payload carries empty arrays", async () => {
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...basePayload, inReplyTo: [], references: [] }),
+    });
+    expect(res.status).toBe(200);
+
+    const create = (requests[1]?.[0]?.[1] as { create: Record<string, Record<string, unknown>> })
+      .create.draft as Record<string, unknown>;
+    expect(create).not.toHaveProperty("inReplyTo");
+    expect(create).not.toHaveProperty("references");
   });
 
   it("returns 400 invalid_identity for an unknown identity and skips the send request", async () => {
@@ -204,6 +267,82 @@ describe("POST /api/mail/send", () => {
     expect(((await res.json()) as { code: string }).code).toBe("send_failed");
   });
 
+  // GH #192: positive confirmation of the send, mirroring the draft-save (#149)
+  // and destroy (#133) paths. Three outcomes to pin down:
+  //   1. submission confirmed in `created` + post-send update confirmed -> ok,
+  //      no remediation.
+  //   2. submission absent from `created` -> the mail did NOT go out, so we
+  //      must fail, never falsely report success off an empty notCreated.
+  //   3. submission confirmed but the post-send move-to-Sent failed -> the mail
+  //      IS out, so still report sent (no resend prompt), but re-clear the
+  //      $draft state so the sent message is not re-presented as a fresh draft.
+  it("confirms the submission and the post-send email update, issuing no remediation", async () => {
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(basePayload),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    // Lookup + send only: the implicit onSuccessUpdateEmail confirmed, so there
+    // is nothing left to remediate.
+    expect(requests).toHaveLength(2);
+  });
+
+  it("returns 502 send_failed and does not falsely report success when the submission is absent from created", async () => {
+    // Neither `created` nor `notCreated` names the submission: the server never
+    // confirmed it, so the mail did NOT go out. A truthiness-only guard on
+    // notCreated would fall through to { ok: true } — a phantom success that
+    // hides a non-delivery.
+    submissionResponse = {};
+
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(basePayload),
+    });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("send_failed");
+    // Nothing was sent, so no post-send remediation must be attempted.
+    expect(requests).toHaveLength(2);
+  });
+
+  it("still reports the message as sent but re-clears $draft when the post-send email update fails", async () => {
+    // Submission created (mail is out) but the implicit onSuccessUpdateEmail
+    // could not move the message to Sent / clear $draft.
+    implicitUpdateResponse = { notUpdated: { "e-new": { type: "stateMismatch" } } };
+
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(basePayload),
+    });
+
+    // The mail went out — erroring here would invite a duplicate resend.
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    // A best-effort remediation Email/set re-applies the move-to-Sent /
+    // $draft-clear patch so the already-sent message does not linger as a
+    // fresh, re-sendable draft.
+    expect(requests).toHaveLength(3);
+    const remediation = requests[2] ?? [];
+    expect(remediation).toHaveLength(1);
+    const remediationCall = remediation[0];
+    expect(remediationCall?.[0]).toBe("Email/set");
+    const remediationParams = remediationCall?.[1] as {
+      accountId: string;
+      update: Record<string, Record<string, unknown>>;
+    };
+    expect(remediationParams.accountId).toBe("acc-1");
+    expect(remediationParams.update["e-new"]).toEqual({
+      "mailboxIds/mb-drafts": null,
+      "mailboxIds/mb-sent": true,
+      "keywords/$draft": null,
+    });
+  });
+
   it("returns 400 invalid_body for zero recipients", async () => {
     const res = await makeApp().request("/api/mail/send", {
       method: "POST",
@@ -223,5 +362,79 @@ describe("POST /api/mail/send", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { code: string }).code).toBe("invalid_body");
+  });
+});
+
+// GH #314: a confirmed send is the strongest "I know this address" signal the
+// server ever sees, so it feeds the Tier A ("known sender") store
+// synchronously — after the submission is confirmed, never before.
+describe("POST /api/mail/send — sent recipients (GH #314)", () => {
+  function send(payload: unknown, repo: SentRecipientsRepo = sentRecipients) {
+    return makeApp(repo).request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it("records every to/cc/bcc address, lowercased, once the submission is confirmed", async () => {
+    const res = await send({
+      ...basePayload,
+      to: [{ name: "Bob", email: "Bob@Partner.Test" }],
+      cc: [{ name: null, email: "carla@partner.test" }],
+      bcc: [{ name: null, email: "dave@partner.test" }],
+    });
+    expect(res.status).toBe(200);
+    const known = await sentRecipients.has(userId, [
+      "bob@partner.test",
+      "carla@partner.test",
+      "dave@partner.test",
+    ]);
+    expect(known).toEqual(new Set(["bob@partner.test", "carla@partner.test", "dave@partner.test"]));
+  });
+
+  it("never records the user's own identities (the From identity or the signed-in address)", async () => {
+    const res = await send({
+      ...basePayload,
+      to: [{ name: "Me", email: "Carlos@noxvytop.com" }],
+      cc: [{ name: null, email: userEmail.toUpperCase() }],
+      bcc: [{ name: null, email: "erin@partner.test" }],
+    });
+    expect(res.status).toBe(200);
+    const known = await sentRecipients.has(userId, [
+      "carlos@noxvytop.com",
+      userEmail.toLowerCase(),
+      "erin@partner.test",
+    ]);
+    expect(known).toEqual(new Set(["erin@partner.test"]));
+  });
+
+  it("records nothing when the submission is not confirmed — a failed send is not a correspondent", async () => {
+    submissionResponse = { notCreated: { sub: { type: "invalidProperties" } } };
+    const res = await send({ ...basePayload, to: [{ name: null, email: "failed@partner.test" }] });
+    expect(res.status).toBe(502);
+    expect(await sentRecipients.has(userId, ["failed@partner.test"])).toEqual(new Set());
+  });
+
+  it("still reports the send as successful when recording the recipients throws (best-effort)", async () => {
+    const failing: SentRecipientsRepo = {
+      ...sentRecipients,
+      record: async () => {
+        throw new Error("boom: simulated DB failure");
+      },
+    };
+    const res = await send({ ...basePayload, to: [{ name: null, email: "frank@partner.test" }] }, failing);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("does nothing when no sent-recipients store is wired (deployments predating GH #314)", async () => {
+    const res = await makeApp().request("/api/mail/send", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...basePayload, to: [{ name: null, email: "grace@partner.test" }] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await sentRecipients.has(userId, ["grace@partner.test"])).toEqual(new Set());
   });
 });

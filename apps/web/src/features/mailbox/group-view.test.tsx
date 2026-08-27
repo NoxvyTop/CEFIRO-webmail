@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
@@ -73,7 +74,7 @@ describe("group view filtering", () => {
   it("requests messages with to=<group address> and the inbox mailbox id in group view", async () => {
     const { fetchMock } = renderAt("/?group=soporte@x.com", { groupMailInMainInbox: false });
 
-    await screen.findByText("Inbox");
+    await screen.findByText(i18n.t("mail.folders.inbox"));
     const calls = await vi.waitFor(() => {
       const found = messagesCalls(fetchMock);
       expect(found.some((url) => url.includes("to=soporte%40x.com"))).toBe(true);
@@ -87,7 +88,7 @@ describe("group view filtering", () => {
   it("excludes group addresses from the main inbox when the toggle is off", async () => {
     const { fetchMock } = renderAt("/", { groupMailInMainInbox: false });
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     await vi.waitFor(() => {
       const found = messagesCalls(fetchMock);
       expect(found.some((url) => url.includes("excludeTo=soporte%40x.com"))).toBe(true);
@@ -118,5 +119,14 @@ describe("group view filtering", () => {
       expect(last).toBeDefined();
       expect(last).not.toContain("excludeTo");
     });
+  });
+
+  it("styles the group toggle row like a Sidebar row (fixed height, hover feedback) instead of a bare native checkbox row", async () => {
+    await renderAt("/", { groupMailInMainInbox: false });
+
+    const toggle = await screen.findByRole("checkbox", { name: i18n.t("groups.showInInbox") });
+    const row = toggle.closest("label") as HTMLElement;
+    expect(row.className).toContain("h-[38px]");
+    expect(row.className).toContain("hover:bg-hover");
   });
 });

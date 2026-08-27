@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { LoginPage } from "../auth/LoginPage";
 import { useAuth } from "../auth/useAuth";
 
@@ -16,7 +16,7 @@ export function RequireAdmin({ children }: { children: ReactNode }) {
         <p role="alert" className="text-sm text-danger">
           {t("admin.forbidden")}
         </p>
-        <Link to="/" className="text-sm text-accent underline">
+        <Link to="/" className="text-sm text-accent-text underline">
           {t("admin.back")}
         </Link>
       </div>

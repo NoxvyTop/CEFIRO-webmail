@@ -7,11 +7,14 @@ import { seedInbox } from "../smtp-seed";
 //   docker compose -f docker-compose.e2e.yml up -d --build
 //   cd e2e && E2E_STALWART_URL=http://localhost:8096 bunx playwright test tests/mail-actions.spec.ts
 
-const STALWART_SMTP_HOST = "localhost";
+// Env-overridable with the same defaults and reasoning as
+// global-setup.ts's identically-named constants — see there for why a
+// containerized CI job overrides these to reach the fixture by service name.
+const STALWART_SMTP_HOST = process.env.STALWART_SMTP_HOST ?? "localhost";
 // The TLS ("SMTPS") listener — see e2e/smtp-seed.ts's file header for why
 // authenticated, TLS-only submission is required to land seeded mail in the
 // Inbox instead of Junk Mail.
-const STALWART_SMTP_PORT = 8465;
+const STALWART_SMTP_PORT = Number(process.env.STALWART_SMTP_PORT ?? 8465);
 
 // A dedicated, uniquely-subjected message seeded straight into the Inbox for
 // this spec only — NOT one of fixtures/mail.ts's SEED_EMAILS, so archiving it
@@ -37,7 +40,12 @@ test("star a message into Destacados, then archive it out of the inbox into Arch
   await page.goto("/");
   await expect(page.getByRole("alert")).toHaveCount(0);
 
-  const row = page.getByRole("option", { name: new RegExp(SUBJECT) });
+  // Scoped to the row WRAPPER, not to the role="option" element (GH #225): an
+  // ARIA option must not contain interactive descendants, so the star button
+  // was moved out of the option and sits beside it inside the wrapper. Nesting
+  // into the option to reach the star therefore resolves to nothing now; the
+  // wrapper's data-testid is the stable handle for "this row's controls".
+  const row = page.getByTestId("conversation-row").filter({ hasText: SUBJECT });
   await expect(row).toBeVisible();
 
   await row.getByRole("button", { name: "Destacar" }).click();
@@ -47,16 +55,16 @@ test("star a message into Destacados, then archive it out of the inbox into Arch
 
   // Open it from Destacados and archive it from the reader.
   await page.getByRole("option", { name: new RegExp(SUBJECT) }).click();
-  await page.getByRole("button", { name: "Archivar" }).click();
+  await page.getByTestId("thread-actions-bar").getByRole("button", { name: "Archivar" }).click();
 
   await expect(page.getByRole("status")).toHaveText(/Correo archivado/);
 
   // Left the inbox...
-  await page.getByRole("button", { name: "Inbox" }).click();
+  await page.getByRole("button", { name: "Recibidos" }).click();
   await expect(page.getByRole("option", { name: new RegExp(SUBJECT) })).toHaveCount(0);
 
   // ...and shows up in Archive.
-  await page.getByRole("button", { name: "Archive" }).click();
+  await page.getByRole("button", { name: "Archivados" }).click();
   await expect(page.getByRole("option", { name: new RegExp(SUBJECT) })).toBeVisible();
 });
 

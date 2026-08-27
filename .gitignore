@@ -14,6 +14,8 @@ GEMINI.md
 openspec/
 docs/superpowers/
 *.local.md
+.codegraph/
+scratchpad/
 
 # Environment and secrets
 .env
@@ -52,3 +54,4 @@ e2e/.auth/
 e2e/test-results/
 e2e/playwright-report/
 e2e/node_modules/
+docker-compose.dev.override.yml

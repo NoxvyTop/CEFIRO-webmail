@@ -3,104 +3,645 @@ name: ci
 on:
   push:
     branches: ["init-**", preproduc, main]
-    tags: ["v*"]
+    # Release tags (vX.Y.Z) publish an immutable, semver-pinned image so a
+    # deploy can pin to and roll back to an exact version (GH #190).
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
+  # Lets a branch be validated on demand without either opening a placeholder
+  # pull request or widening the automatic push triggers — broadening those
+  # would commit every future branch matching the pattern to consuming a
+  # runner forever, to solve a problem that only exists while iterating.
+  #   gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
 
+# Successive pushes to the same PR supersede each other: only the newest
+# commit's result is ever looked at, so letting the older runs finish burns
+# Actions minutes to produce an answer nobody reads. Pushes to preproduc and
+# main are deliberately NOT cancelled — those runs gate the publish job, and
+# cancelling one halfway could leave the registry without the image its
+# commit was supposed to produce.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Where each job runs is deliberate, not incidental.
+#
+# The self-hosted runner is OUR machine: our kernel, our packages, our Docker.
+# It is excellent for the inner loop — fast, and it costs no Actions minutes —
+# but validating a release against an environment we tuned ourselves is the
+# organisational version of "works on my machine". This pipeline already lost
+# three waves of work to exactly that failure mode: a dependency GitHub's
+# image supplied implicitly went unnoticed until the jobs moved off it.
+#
+# So anything gating `main` runs on GitHub's stock image instead — neutral
+# infrastructure, independent of anything we installed. `main` is reached
+# rarely, so the quota comfortably covers it: minutes get spent precisely
+# where they buy a guarantee.
+#
+# Containerising the jobs is what makes this safe to alternate: the toolchain
+# is declared in this file, so the same job behaves identically on either.
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: webmail
-          POSTGRES_PASSWORD: webmail
-          POSTGRES_DB: webmail
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U webmail"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run test
-        env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
-
-  e2e:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: webmail
-          POSTGRES_PASSWORD: webmail
-          POSTGRES_DB: webmail
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U webmail"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - run: bun install --frozen-lockfile
-      - run: cd e2e && bunx playwright install --with-deps chromium
-      # Brings up the pre-provisioned Stalwart fixture (docker-compose.e2e.yml)
-      # so tests/mail-connect.spec.ts has a real JMAP/SMTP backend to talk to.
-      # Postgres stays the `services:` container above, not part of this
-      # compose file (see docker-compose.e2e.yml's own comment on that).
-      - run: docker compose -f docker-compose.e2e.yml up -d --build
-      - name: Wait for Stalwart to be healthy
-        run: |
-          for i in $(seq 1 20); do
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose -f docker-compose.e2e.yml ps -q stalwart)" 2>/dev/null || true)
-            if [ "$status" = "healthy" ]; then exit 0; fi
-            sleep 3
-          done
-          echo "Stalwart did not become healthy in time" >&2
-          docker compose -f docker-compose.e2e.yml logs
-          exit 1
-      - run: cd e2e && bunx playwright test
-        env:
-          DATABASE_URL: postgres://webmail:webmail@localhost:5432/webmail
-          E2E_STALWART_URL: http://localhost:8096
-          CI: "true"
-      - if: always()
-        run: docker compose -f docker-compose.e2e.yml down -v
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: e2e/playwright-report
-
-  publish:
-    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref_name == 'preproduc' || github.ref_name == 'main')
-    needs: [test, e2e]
-    runs-on: ubuntu-latest
+  # Resolves the Stalwart fixture image the e2e job will run against, and
+  # publishes it if that exact image does not exist yet.
+  #
+  # The tag is derived from the CONTENT of e2e/stalwart, not written by hand.
+  # A hand-written tag was the previous design, and it did not freeze anything:
+  # the publishing workflow pushed a fixed `v1` on every fixture change, so an
+  # old commit silently started being tested against a fixture that did not
+  # exist when it was written. The file even said "bump it whenever either
+  # input changes" — an intention that depends on nobody forgetting is not a
+  # guarantee, and there was nothing checking it.
+  #
+  # Content-addressing makes the guarantee structural instead. Change a seed
+  # file and the tag changes with it, so the new fixture cannot occupy the old
+  # one's name. Change nothing and the tag is already in the registry, the
+  # build is skipped, and every commit keeps resolving to the bytes it was
+  # written against.
+  fixture:
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+    env:
+      IMAGE_NAME: ghcr.io/noxvytop/cefiro-e2e-stalwart
     steps:
       - uses: actions/checkout@v4
+      - id: resolve
+        # hashFiles returns an empty string when the glob matches nothing, which
+        # would silently produce the tag `sha-` and hand every future fixture the
+        # same name again — the exact failure this job exists to remove. Fail
+        # instead: an empty hash means the fixture directory moved, and that is
+        # worth stopping for.
+        run: |
+          hash='${{ hashFiles('e2e/stalwart/**') }}'
+          if [ -z "$hash" ]; then
+            echo "::error::e2e/stalwart/** matched no files — the fixture directory moved or is empty."
+            exit 1
+          fi
+          echo "image=${IMAGE_NAME}:sha-${hash}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: probe
+        # The common case by far: the fixture has not changed, the image is
+        # already published, and the whole job costs one registry round-trip.
+        run: |
+          if docker manifest inspect '${{ steps.resolve.outputs.image }}' >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.probe.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.probe.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./e2e/stalwart
+          push: true
+          tags: ${{ steps.resolve.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Biome lint gate (GH #198). Runs before `test` — which declares `needs:
+  # [lint]` — so a lint failure fails the pipeline fast, before the more
+  # expensive test/e2e jobs spend a runner. Biome is a self-contained binary
+  # (no Postgres, no browser), so this job only needs Bun to resolve it from
+  # the workspace. Same runner-selection and root-ownership handling as `test`,
+  # for the reasons documented on that job.
+  lint:
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
+  test:
+    needs: [lint]
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    # The job runs inside a declared image rather than on whatever the runner
+    # host happens to have. That host is shared with other projects, so any
+    # system-level dependency installed for one of them could change this
+    # pipeline's behaviour without a single commit here. Pinning the image
+    # makes the toolchain part of the repository.
+    #
+    # Node comes from the image because vitest's mock-hoisting transform needs
+    # it (see the setup-node step's history); Bun is installed on top by its
+    # own action, so both versions stay declared and independent.
+    container: node:22-bookworm
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        # No host port is published: a containerised job shares a network with
+        # its services and reaches them by service name, so nothing binds on
+        # the host and parallel jobs cannot collide over a port at all.
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      # Bun's global package cache. Keyed on the lockfile, so it is reused
+      # until a dependency actually changes rather than re-downloading the
+      # whole tree on every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # Fans out to every workspace, which since GH #216 includes the e2e
+      # package: its bun:test suite over the SMTP seeder's protocol helpers (the
+      # GH #184 regression cover) had no `test` script, so nothing ran it. Those
+      # tests need neither Postgres nor a browser, so they belong here rather
+      # than in the heavy `e2e` job.
+      - run: bun run test
+        env:
+          # Reached by service name, not localhost: the job and its services
+          # share a network, and no port is published on the host.
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
+      # A containerised job runs as root, so everything it writes into the
+      # shared workspace ends up root-owned. On a self-hosted runner that
+      # workspace persists between runs, and the next job that is NOT
+      # containerised cannot even clean its own checkout — git fails with
+      # EACCES on .git/objects, which reads like repository corruption and is
+      # not. Hand ownership back to whoever the runner created the directory
+      # as, rather than hardcoding a uid that only holds on this machine.
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
+  # Coverage gate (GH #199). Runs vitest with the v8 provider and the per-package
+  # thresholds declared in each vitest config, so a genuine drop in line/function/
+  # branch coverage fails the build. It mirrors `test`'s container + Postgres
+  # service — the server suite is integration-tested against a real database and
+  # self-migrates, exactly like `test`; the web suite needs no database but shares
+  # the step. Runs as its own job (rather than folded into `test`) so `test` keeps
+  # covering every workspace unchanged; gated behind `lint` to fail fast.
+  #
+  # `bun run coverage` now fans out to all three testable packages: web, server
+  # AND packages/shared, which had no vitest config and therefore sat outside
+  # this gate entirely until GH #229 — including the Sieve schemas that are the
+  # input contract of an injection-sensitive generator.
+  #
+  # The thresholds are also checked per file rather than only in aggregate
+  # (GH #228), so a single module can no longer rot to zero behind a healthy
+  # package average.
+  coverage:
+    needs: [lint]
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    container: node:22-bookworm
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run coverage
+        env:
+          # Reached by service name, not localhost (mirrors the `test` job).
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
+  # dbSOS restore DRILL (GH #258). db-backup.sh only verifies the archive index;
+  # nothing ever proved the RESTORE reconstructs data. This job runs the real
+  # backup and restore scripts against a throwaway database and fails loudly if
+  # the restored data does not match the source — so a rotted restore path is
+  # caught here, not during an outage. Gated behind lint to fail fast; a failure
+  # blocks publish (see that job's `needs`).
+  restore-drill:
+    needs: [lint]
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    # The Postgres client MUST match the server's major version — pg_dump refuses
+    # to dump a server newer than itself — so this job runs in the postgres:17
+    # image, which carries pg_dump/pg_restore/psql 17. The node image used by
+    # `test` ships an older client that would abort against the 17 service.
+    # openssl is the one tool that image lacks; it is installed below.
+    container: postgres:17
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends openssl
+      - name: run the dbSOS restore drill
+        # A maintenance database the drill creates/drops its throwaway DBs off.
+        # It never touches the application `webmail` database.
+        env:
+          ADMIN_DATABASE_URL: postgres://webmail:webmail@postgres:5432/postgres
+        run: bash scripts/db-restore-drill.sh
+      # A containerised job runs as root; hand workspace ownership back so a later
+      # non-containerised job on the self-hosted runner can clean its checkout.
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
+  e2e:
+    # The fixture job resolves — and publishes if missing — the exact image
+    # this job pulls, so the tag can never name bytes other than the ones this
+    # commit declares.
+    needs: [fixture]
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    # The official Playwright image, pinned to the exact @playwright/test
+    # version the lockfile resolves. These two must match: Playwright refuses
+    # to launch a browser from a mismatched image, and it was a caret range
+    # here that produced the mismatch — the declared floor read 1.49.0 while
+    # the lockfile had long since resolved 1.61.1. The dependency is now
+    # pinned exactly so the pair cannot drift apart again silently.
+    #
+    # It ships Chromium and every system library the browser links against,
+    # plus a matching Node.js, so the runner host needs nothing installed for
+    # this job at all — see the `test` job's container comment for why jobs
+    # are containerised in the first place: the host is shared with other
+    # projects. Node itself is still required (not just Bun): Playwright's
+    # test runner always executes global-setup.ts and the test workers under
+    # a real `node` binary, even when the CLI itself is invoked via `bunx`
+    # (see global-setup.ts's own comment on this) — the image's bundled Node
+    # 22 covers that, so no separate actions/setup-node step is needed here.
+    #
+    # --ipc=host avoids Chromium crashing under Docker's default 64MB
+    # /dev/shm, which is too small for a real browser to run reliably
+    # (Playwright's own documented Docker/CI guidance).
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+      options: --ipc=host
+    permissions:
+      contents: read
+      packages: read
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webmail
+          POSTGRES_PASSWORD: webmail
+          POSTGRES_DB: webmail
+        # No host port is published: a containerised job shares a network
+        # with its services and reaches them by service name, exactly like
+        # the `test` job.
+        options: >-
+          --health-cmd "pg_isready -U webmail"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      stalwart:
+        # Pre-provisioned Stalwart fixture, built from ./e2e/stalwart (see that
+        # directory's README for what's baked in). `services:` needs a
+        # pre-built image rather than a build context, which is why this is not
+        # `docker compose build` — the `fixture` job above covers the build.
+        #
+        # The tag is content-addressed rather than hand-written, so it names
+        # this commit's fixture and cannot be repointed at a later one. See the
+        # `fixture` job for why that distinction matters.
+        image: ${{ needs.fixture.outputs.image }}
+        # The package is private, like the repository it belongs to — a test
+        # fixture with seeded mailboxes has no reason to be world-readable.
+        # A service container pulls before any step runs, so it needs the
+        # credential inline; the workflow's own token already has read access
+        # to a package its repository published.
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          # Stalwart's baked config advertises "https://mail.cefiro.test/…"
+          # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set
+          # during the original setup wizard run — see
+          # e2e/stalwart/README.md). That host doesn't resolve here, so a
+          # client following the advertised apiUrl verbatim cannot reach it
+          # (which is what apps/server does under JMAP_URL_MODE=trust).
+          # STALWART_PUBLIC_URL overrides the advertised base URL
+          # (crates/store/src/registry/local.rs); it must point at this
+          # service's own name and container-native port — the only address
+          # reachable from inside the job container's network — unlike
+          # docker-compose.e2e.yml, which points it at the host-published
+          # localhost:8096 because that setup has no shared service network.
+          STALWART_PUBLIC_URL: "http://stalwart:8080"
+        # The probe talks to the three ports the tests actually use, instead of
+        # asking the binary its version. `stalwart --version` answers at t=0s,
+        # before a single listener is serving, so the container was reported
+        # healthy while it could still accept a TCP connection and drop it
+        # without sending the SMTP greeting — which is precisely how seeding
+        # failed: "SMTP connection closed before a final response arrived
+        # (buffer: "")". Measured on the runner: version says ok at t=0s, the
+        # ports answer at t≈2s. The suite passed most of the time because job
+        # setup happened to outlast the gap, which is luck, not readiness.
+        #
+        # The `/cefiro.test` path is curl's EHLO domain, not a URL path. Without
+        # it curl greets with the container hostname and Stalwart answers "550
+        # Invalid EHLO domain" — a healthy server refusing a malformed hello,
+        # which would make this probe fail forever against a working container.
+        #
+        # --insecure on 465 because the fixture's certificate is self-signed;
+        # the seeder connects the same way (see e2e/smtp-seed.ts's
+        # trust-on-first-use comment). This is a loopback probe inside the
+        # container, so there is no transport to intercept.
+        options: >-
+          --health-cmd "curl -sS --max-time 3 -o /dev/null smtp://127.0.0.1:25/cefiro.test && curl -sS --max-time 3 -o /dev/null --insecure smtps://127.0.0.1:465/cefiro.test && curl -sS --max-time 3 -o /dev/null http://127.0.0.1:8080/"
+          --health-interval 3s
+          --health-timeout 10s
+          --health-start-period 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      # setup-bun extracts a zip, and the Playwright image is slim enough not
+      # to ship unzip. This only surfaced on the second runner: the first had
+      # Bun already in its tool cache and never had to extract anything, so
+      # the job passed there for a reason that had nothing to do with being
+      # correct. Install it explicitly rather than depending on which machine
+      # happens to be warm.
+      - run: apt-get update && apt-get install -y --no-install-recommends unzip
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      # Chromium and its system deps come from the container image now, not
+      # from a lockfile-cached download + `playwright install`.
+      - run: cd e2e && bunx playwright test
+        env:
+          # Reached by service name, not localhost — no port is published on
+          # the host (mirrors the `test` job).
+          DATABASE_URL: postgres://webmail:webmail@postgres:5432/webmail
+          E2E_STALWART_URL: http://stalwart:8080
+          STALWART_SMTP_HOST: stalwart
+          STALWART_SMTP_PORT: "465"
+          STALWART_SMTP_PLAIN_PORT: "25"
+          CI: "true"
+      # Artifacts are evidence, not the verdict: the job's result is the
+      # Playwright exit code above. Uploads share one storage quota across the
+      # whole organisation, and when it is full GitHub refuses every new
+      # artifact for 6-12 hours — that must read as "no report attached", never
+      # as a red job over a suite that passed. Reports of failed runs rarely
+      # matter after a week, so they expire before they can fill the quota.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        continue-on-error: true
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+      # The retry record (GH #246), published on EVERY run — including the green
+      # ones, which are the whole point. `retries: 1` means a spec that fails
+      # half the time still exits this job 0, so the only place the instability
+      # exists is this file; uploading it only on failure would drop exactly the
+      # runs it was written for. A run with nothing to report still uploads an
+      # empty list, so a missing artifact means a broken step rather than a
+      # clean suite. See e2e/README.md for what is expected to happen when the
+      # same spec keeps showing up in it.
+      - name: publish the e2e retry record
+        if: always()
+        # Same rule as the report above: a quota refusal loses one retry record,
+        # it does not fail a green suite.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-retries
+          path: e2e/test-results/retries.json
+          if-no-files-found: warn
+          retention-days: 30
+      # A containerised job runs as root, so everything it writes into the
+      # shared workspace ends up root-owned. On a self-hosted runner that
+      # workspace persists between runs, and the next job that is NOT
+      # containerised cannot even clean its own checkout — git fails with
+      # EACCES on .git/objects, which reads like repository corruption and is
+      # not. Hand ownership back to whoever the runner created the directory
+      # as, rather than hardcoding a uid that only holds on this machine.
+      - if: always()
+        run: chown -R --reference="$RUNNER_WORKSPACE" "$GITHUB_WORKSPACE"
+
+
+  publish:
+    if: github.event_name == 'push' && (github.ref_name == 'preproduc' || github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [test, e2e, coverage, restore-drill]
+    # A release tag is cut from main, so it validates and publishes on neutral
+    # GitHub-hosted infra just like main does.
+    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Every publish pushes a moving pointer AND an immutable per-commit tag,
+      # so a deploy can pin to and roll back to an exact image (GH #190) instead
+      # of chasing whatever :latest/:staging happens to point at now. A release
+      # tag additionally publishes the semver tag it was cut as.
+      #
+      #   preproduc push -> :staging          + :sha-<commit>
+      #   main push      -> :latest           + :sha-<commit>
+      #   vX.Y.Z tag     -> :vX.Y.Z + :latest + :sha-<commit>
+      - id: tags
+        run: |
+          img=ghcr.io/noxvytop/cefiro-webmail
+          {
+            echo "list<<EOF"
+            echo "$img:sha-${GITHUB_SHA}"
+            if [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/v}" ]; then
+              echo "$img:${GITHUB_REF_NAME}"
+              echo "$img:latest"
+            elif [ "${GITHUB_REF_NAME}" = "main" ]; then
+              echo "$img:latest"
+            else
+              echo "$img:staging"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      # BUILD, TEST, THEN PUSH (GH #244) — the build below does not push.
+      #
+      # Nothing in this pipeline had ever STARTED the image it publishes. The
+      # e2e job runs the app from source (e2e/serve.ts), so every property that
+      # only exists in the artifact — the production-only dependency install,
+      # the node_modules copied between stages, STATIC_DIR, the HEALTHCHECK
+      # itself, and since GH #256 the dbSOS scripts — was published untested. A
+      # green pipeline said the source works, never that the thing you deploy
+      # boots.
+      #
+      # The image build is also the most expensive single step in the pipeline
+      # and a runner starts with an empty Docker layer cache, so without this it
+      # rebuilds every layer — dependency install included — on every release.
+      # mode=max caches intermediate stages too, which is what makes the
+      # multi-stage build actually reuse its install layer. It is also what
+      # makes splitting build from push affordable: the push step below is a
+      # cache-only re-export of these exact layers, not a second build.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: cefiro-webmail:ci-smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Supply-chain gate (GH #260). Blocks on HIGH/CRITICAL, and only on what
+      # is actually fixable: an unfixed upstream CVE would otherwise wedge every
+      # release behind a patch nobody has published yet, and a gate that has to
+      # be bypassed to ship stops being a gate. Unfixed findings still print.
+      #
+      # Today's known findings are triaged, one by one and with an expiry date,
+      # in .trivyignore.yaml — read that file before adding anything to it. The
+      # ignore file is passed through TRIVY_IGNOREFILE rather than the action's
+      # `trivyignores` input, which concatenates the files it is given and would
+      # not survive the YAML format the expiry dates need.
+      - name: scan the image for known vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
+        with:
+          image-ref: cefiro-webmail:ci-smoke
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: "1"
+      # Runs the freshly built image against a real Postgres and refuses to
+      # publish unless the container reports ITSELF healthy through its own
+      # HEALTHCHECK and answers on the two surfaces it exists to serve.
+      #
+      # Nothing is published on a host port: the probes run inside the same
+      # user-defined network, from the Postgres container's busybox wget. That
+      # keeps two publish jobs on the shared self-hosted runner from colliding
+      # over a port, and it exercises the real path a reverse proxy takes rather
+      # than a loopback shortcut. Names carry the run id for the same reason.
+      - name: smoke-test the built image
+        env:
+          NET: cefiro-smoke-${{ github.run_id }}
+          DB: cefiro-smoke-db-${{ github.run_id }}
+          APP: cefiro-smoke-app-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          docker network create "$NET"
+          docker run -d --name "$DB" --network "$NET" \
+            -e POSTGRES_USER=webmail -e POSTGRES_PASSWORD=webmail -e POSTGRES_DB=webmail \
+            --health-cmd "pg_isready -U webmail" --health-interval 3s --health-retries 20 \
+            postgres:17-alpine
+          for _ in $(seq 1 40); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' "$DB")" = healthy ] && break
+            sleep 2
+          done
+          [ "$(docker inspect -f '{{.State.Health.Status}}' "$DB")" = healthy ]
+
+          # A GENERATED master key, not a fixture one: with NODE_ENV=production
+          # the config refuses a weak key (GH #223), so booting at all is itself
+          # part of what this proves. NODE_ENV=production also switches on the
+          # static-file serving that STATIC_DIR points at. Built from
+          # /dev/urandom with coreutils rather than `openssl rand`, so the step
+          # does not assume the runner host has openssl — this job also runs on
+          # the self-hosted runner, uncontainerised.
+          docker run -d --name "$APP" --network "$NET" \
+            -e DATABASE_URL="postgres://webmail:webmail@$DB:5432/webmail" \
+            -e MASTER_KEY="$(head -c 32 /dev/urandom | base64 -w0)" \
+            -e APP_URL=http://localhost:8080 \
+            -e NODE_ENV=production \
+            cefiro-webmail:ci-smoke
+
+          # The container's own HEALTHCHECK is the gate, so a broken probe
+          # command in the Dockerfile fails here instead of in production, where
+          # it would either hide a dead container or drain a healthy one.
+          for _ in $(seq 1 60); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' "$APP")"
+            [ "$status" = healthy ] && break
+            [ "$status" = unhealthy ] && break
+            sleep 2
+          done
+          if [ "$(docker inspect -f '{{.State.Health.Status}}' "$APP")" != healthy ]; then
+            echo "::error::the built image never reported healthy"
+            docker logs "$APP" || true
+            exit 1
+          fi
+
+          # Probed from another container on the same network, not from the host.
+          # The response is captured into a variable rather than piped into grep:
+          # `grep -q` exits at the first match and would close the pipe under the
+          # writer, which with `pipefail` turns a passing assertion into a failed
+          # step at random.
+          probe() { docker run --rm --network "$NET" postgres:17-alpine wget -qO- "$1"; }
+          # The API: 200 + status ok, i.e. the app reached Postgres and migrated.
+          health="$(probe "http://$APP:8080/api/health")"
+          echo "$health"
+          case "$health" in *'"status":"ok"'*) ;; *) echo "::error::/api/health did not report ok"; exit 1 ;; esac
+          # The SPA: proves STATIC_DIR names the assets the build stage produced.
+          index="$(probe "http://$APP:8080/")"
+          case "$index" in *'<div id="root">'*) ;; *) echo "::error::the SPA was not served"; exit 1 ;; esac
+          # The dbSOS scripts an operator is told to run on day one (GH #256).
+          docker exec "$APP" test -x /app/scripts/db-backup.sh
+          docker exec "$APP" test -x /app/scripts/db-restore.sh
+          echo "image smoke test passed"
+      - name: tear down the smoke test
+        if: always()
+        env:
+          NET: cefiro-smoke-${{ github.run_id }}
+          DB: cefiro-smoke-db-${{ github.run_id }}
+          APP: cefiro-smoke-app-${{ github.run_id }}
+        run: |
+          docker rm -f "$APP" "$DB" >/dev/null 2>&1 || true
+          docker network rm "$NET" >/dev/null 2>&1 || true
+      # Only now, with the artifact proven to boot: the same layers, re-exported
+      # from cache and pushed. SBOM and provenance attestations ride along
+      # (GH #260) — buildx produces both from the build it already did, so they
+      # cost a flag each and answer "what is inside this image, and which commit
+      # and workflow produced it" without a separate tool. Image signing is NOT
+      # here; see docs/OPERATIONS.md for why and what it would take.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/noxvytop/cefiro-webmail:${{ github.ref_type == 'tag' && github.ref_name || (github.ref_name == 'main' && 'latest' || 'staging') }}
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: type=gha
+          sbom: true
+          provenance: mode=max

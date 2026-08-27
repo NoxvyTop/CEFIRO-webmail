@@ -5,10 +5,16 @@ import type {
   VacationSettings as VacationSettingsData,
   VacationSettingsInput,
 } from "@webmail/shared";
-import { fetchVacationSettings, updateVacationSettings } from "./api";
+import { fetchSieveCapability, fetchVacationSettings, updateVacationSettings } from "./api";
 import { settingsErrorKey } from "./errors";
+import { SettingsLoadError, SettingsLoading, SettingsUnavailable } from "./PanelStates";
+import { AdvancedModeNotice } from "./SieveAdvanced";
 
 const VACATION_QUERY_KEY = ["mail", "vacation"] as const;
+// Shared verbatim with FilterSettings (GH #36): both features are the same
+// generated Sieve script, so they are the same question and must not each pay
+// for their own answer.
+const SIEVE_CAPABILITY_QUERY_KEY = ["mail", "sieve-capability"] as const;
 
 function toInput(settings: VacationSettingsData): VacationSettingsInput {
   return {
@@ -25,6 +31,10 @@ export function VacationSettings() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const vacationQuery = useQuery({ queryKey: VACATION_QUERY_KEY, queryFn: fetchVacationSettings });
+  const capabilityQuery = useQuery({
+    queryKey: SIEVE_CAPABILITY_QUERY_KEY,
+    queryFn: fetchSieveCapability,
+  });
 
   const [form, setForm] = useState<VacationSettingsInput | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -47,8 +57,25 @@ export function VacationSettings() {
     onError: (error) => setErrorKey(settingsErrorKey(error)),
   });
 
+  // GH #36: an automatic reply is a Sieve `vacation` action, so a mail server
+  // without the extension can never send one. Checked ahead of the form —
+  // there is no point waiting on settings that could not be applied — and only
+  // on a positive `false`, so an undecided or failed read changes nothing.
+  if (capabilityQuery.data?.supported === false) {
+    return <SettingsUnavailable messageKey="vacation.unavailable" />;
+  }
+
+  // GH #272: propagate #250's loading/error language here. A failed load used to
+  // `return null` — a blank panel that says neither "loading" nor "we could not
+  // read this", and offers no way to try again.
+  if (vacationQuery.isError) {
+    return (
+      <SettingsLoadError error={vacationQuery.error} onRetry={() => void vacationQuery.refetch()} />
+    );
+  }
+
   if (!form) {
-    return null;
+    return <SettingsLoading />;
   }
 
   function update(patch: Partial<VacationSettingsInput>) {
@@ -73,6 +100,13 @@ export function VacationSettings() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      {/* GH #23: an automatic reply is part of the same Sieve script the
+          advanced editor takes over, so while a hand-written script owns the
+          account this form saves and does not apply. Without this, the panel
+          would answer a save with "Saved" for a reply that never goes out —
+          the quietest failure this feature could produce. */}
+      <AdvancedModeNotice messageKey="vacation.advancedNotice" />
+
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -89,7 +123,7 @@ export function VacationSettings() {
           value={form.subject}
           maxLength={200}
           onChange={(event) => update({ subject: event.target.value })}
-          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+          className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
         />
       </label>
 
@@ -101,7 +135,7 @@ export function VacationSettings() {
           maxLength={5000}
           rows={4}
           onChange={(event) => update({ message: event.target.value })}
-          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+          className="rounded-input border border-line bg-soft px-3 py-2 text-ink field-focus"
         />
       </label>
 
@@ -113,7 +147,7 @@ export function VacationSettings() {
             type="date"
             value={form.startsAt ?? ""}
             onChange={(event) => update({ startsAt: event.target.value || null })}
-            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+            className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
           />
         </label>
 
@@ -124,7 +158,7 @@ export function VacationSettings() {
             type="date"
             value={form.endsAt ?? ""}
             onChange={(event) => update({ endsAt: event.target.value || null })}
-            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+            className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
           />
         </label>
 
@@ -140,7 +174,7 @@ export function VacationSettings() {
               const parsed = Number.parseInt(event.target.value, 10);
               update({ intervalDays: Number.isNaN(parsed) ? 7 : Math.min(60, Math.max(1, parsed)) });
             }}
-            className="w-24 rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+            className="h-11 w-24 rounded-input border border-line bg-soft px-3 text-ink field-focus"
           />
         </label>
       </div>
@@ -152,10 +186,10 @@ export function VacationSettings() {
       )}
 
       <div className="flex items-center gap-3">
-        <button type="submit" className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98]">
+        <button type="submit" className="self-start rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98]">
           {t("vacation.save")}
         </button>
-        {saved && <span className="text-sm text-accent">{t("vacation.saved")}</span>}
+        {saved && <span className="text-sm text-accent-text">{t("vacation.saved")}</span>}
       </div>
     </form>
   );

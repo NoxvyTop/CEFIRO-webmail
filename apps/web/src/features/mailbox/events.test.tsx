@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
+import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
 
 const user = {
@@ -91,22 +93,29 @@ describe("mail SSE live refresh and notifications", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens an EventSource to /api/mail/events and invalidates mail queries on message", async () => {
+  it("opens an EventSource to /api/mail/events and refetches only what the event says changed", async () => {
     stubFetch();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
     renderAt("/", client);
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
 
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]?.url).toBe("/api/mail/events");
 
-    FakeEventSource.instances[0]?.emitMessage();
-
-    expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: ["mail"] }),
+    FakeEventSource.instances[0]?.emitMessage(
+      JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
     );
+
+    const keys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    expect(keys).toEqual([
+      ["mail", "messages"],
+      ["mail", "thread"],
+    ]);
+    // GH #167: the whole-namespace sweep also refetched mailboxes, identities,
+    // preferences and every loaded page of the infinite listing, on every event.
+    expect(keys).not.toContainEqual(["mail"]);
   });
 
   it("fires a Notification when the tab is hidden and permission is granted", async () => {
@@ -124,7 +133,7 @@ describe("mail SSE live refresh and notifications", () => {
     Object.defineProperty(document, "hidden", { value: true, configurable: true });
 
     renderAt("/", client);
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
 
     FakeEventSource.instances[0]?.emitMessage();
 

@@ -7,17 +7,21 @@
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "coverage": "vitest run --coverage",
     "migrate": "bun run scripts/migrate.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
     "@webmail/shared": "workspace:*",
     "hono": "^4.6.0",
     "jose": "^5.9.0",
     "postgres": "^3.4.0",
+    "web-push": "^3.6.7",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
+    "@types/web-push": "^3.6.4",
     "nodemon": "^3.1.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

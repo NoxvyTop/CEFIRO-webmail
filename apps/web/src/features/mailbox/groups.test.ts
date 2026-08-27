@@ -26,7 +26,15 @@ describe("preferences client", () => {
       new Response(JSON.stringify({ groupMailInMainInbox: true })),
     ) as unknown as (input: string, init?: RequestInit) => Promise<Response>;
     vi.stubGlobal("fetch", fetchMock);
-    await expect(fetchPreferences()).resolves.toEqual({ groupMailInMainInbox: true });
+    // customLabels, sharedMailboxCopyOptIn and trustedServices (GH #314)
+    // default to [] when the server response omits them (backward compatible
+    // with servers/fixtures that predate these fields).
+    await expect(fetchPreferences()).resolves.toEqual({
+      groupMailInMainInbox: true,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+      trustedServices: [],
+    });
     expect((fetchMock as any).mock.calls[0]?.[0]).toBe("/api/mail/preferences");
   });
 
@@ -42,6 +50,9 @@ describe("preferences client", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(updatePreferences({ groupMailInMainInbox: false })).resolves.toEqual({
       groupMailInMainInbox: false,
+      customLabels: [],
+      sharedMailboxCopyOptIn: [],
+      trustedServices: [],
     });
     const call = (fetchMock as any).mock.calls[0];
     const [url, init] = call as [string, RequestInit];
@@ -53,5 +64,22 @@ describe("preferences client", () => {
   it("throws MailApiError when updating preferences fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 500 })));
     await expect(updatePreferences({ groupMailInMainInbox: true })).rejects.toMatchObject({ status: 500 });
+  });
+
+  it("PUTs a customLabels patch and round-trips it through the response", async () => {
+    const label = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [label] })),
+    ) as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updatePreferences({ customLabels: [label] })).resolves.toEqual({
+      groupMailInMainInbox: true,
+      customLabels: [label],
+      sharedMailboxCopyOptIn: [],
+      trustedServices: [],
+    });
+    const [, init] = (fetchMock as any).mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init?.body))).toEqual({ customLabels: [label] });
   });
 });

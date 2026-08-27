@@ -35,10 +35,13 @@ test("clicking the backdrop closes the Atajos dialog", async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
-test("the header ? Atajos button also opens the dialog", async ({ page }) => {
+test("the profile menu Atajos item also opens the dialog", async ({ page }) => {
   await page.goto("/");
 
-  await page.getByRole("button", { name: "? Atajos" }).click();
+  // GH #13/#50 (G-4): the "Atajos" control moved out of the header into the
+  // profile dropdown menu, so it is now reached by opening that menu first.
+  await page.getByRole("button", { name: /Sesión iniciada como/ }).click();
+  await page.getByRole("menuitem", { name: "Atajos" }).click();
 
   await expect(page.getByRole("dialog", { name: "Atajos" })).toBeVisible();
 });

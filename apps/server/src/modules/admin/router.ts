@@ -1,14 +1,22 @@
 import { Hono } from "hono";
 import {
+  adminUsersQuerySchema,
   createUserInputSchema,
   setActiveInputSchema,
   setMailCredentialInputSchema,
   setRoleInputSchema,
   setupSsoSchema,
+  updateInstanceSettingsSchema,
   type AdminSsoView,
   type AdminUser,
+  type AdminUsersPage,
+  type InstanceSettingsView,
 } from "@webmail/shared";
+import { avatarImageResponse } from "../../core/avatar";
+import { errorResponse } from "../../core/error-response";
+import { isUniqueViolation } from "../../infra/db/client";
 import type { AuditRepo } from "../../infra/repos/audit";
+import type { InstanceSettingsRepo } from "../../infra/repos/instance-settings";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import type { UserRecord, UsersRepo } from "../../infra/repos/users";
@@ -23,11 +31,23 @@ export type AdminDeps = {
   mailCredentials: MailCredentialsRepo;
   audit: AuditRepo;
   ssoConfig: SsoConfigRepo;
+  instanceSettings: InstanceSettingsRepo;
 };
 
 type Env = { Variables: AuthVariables };
 
-async function toAdminUser(deps: AdminDeps, user: UserRecord): Promise<AdminUser> {
+// The admin console loads each avatar from this cacheable endpoint (GH #205)
+// rather than receiving it inline. The admin router is mounted under
+// /api/admin (see app.ts), so the full path is /api/admin/users/:id/avatar.
+function adminAvatarUrl(id: string): string {
+  return `/api/admin/users/${id}/avatar`;
+}
+
+async function toAdminUser(
+  deps: AdminDeps,
+  user: UserRecord,
+  hasAvatar: boolean,
+): Promise<AdminUser> {
   return {
     id: user.id,
     email: user.email,
@@ -36,6 +56,7 @@ async function toAdminUser(deps: AdminDeps, user: UserRecord): Promise<AdminUser
     locale: user.locale,
     active: user.active,
     mailboxLinked: await deps.mailCredentials.exists(user.id),
+    avatarUrl: hasAvatar ? adminAvatarUrl(user.id) : null,
   };
 }
 
@@ -61,27 +82,88 @@ export function createAdminRouter(deps: AdminDeps) {
   router.use("*", ...requireAdmin(deps.sessions));
 
   router.get("/users", async (c) => {
-    const users = await deps.users.list();
-    const body: AdminUser[] = await Promise.all(users.map((u) => toAdminUser(deps, u)));
+    // GH #153: paginate server-side. Params are coerced/clamped by the schema
+    // (junk numbers fall back to defaults, pageSize is capped); the only way
+    // safeParse fails is an over-long search term, which is a client bug → 400.
+    const parsed = adminUsersQuerySchema.safeParse({
+      page: c.req.query("page"),
+      pageSize: c.req.query("pageSize"),
+      search: c.req.query("search"),
+    });
+    if (!parsed.success) {
+      return errorResponse(c, "invalid_query", 400);
+    }
+    const { page, pageSize, search } = parsed.data;
+    const offset = (page - 1) * pageSize;
+
+    // One bounded page of users plus the aggregate counts the Resumen
+    // dashboard needs — all O(1) queries regardless of page size, issued
+    // concurrently.
+    const [pageRows, total, statsTotal, statsActive, statsMailbox] = await Promise.all([
+      deps.users.listPage({ limit: pageSize, offset, search }),
+      deps.users.countMatching(search),
+      deps.users.count(),
+      deps.users.countActive(),
+      deps.mailCredentials.count(),
+    ]);
+
+    // Fix the N+1: resolve mailbox-linked state for the whole page in ONE
+    // query instead of calling exists() per row.
+    const linkedIds = await deps.mailCredentials.existsForUsers(pageRows.map((u) => u.id));
+    const users: AdminUser[] = pageRows.map((u) => ({
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName,
+      role: u.role,
+      locale: u.locale,
+      active: u.active,
+      mailboxLinked: linkedIds.has(u.id),
+      // GH #205: a URL to the cacheable avatar endpoint, or null → initials.
+      avatarUrl: u.hasAvatar ? adminAvatarUrl(u.id) : null,
+    }));
+
+    const body: AdminUsersPage = {
+      users,
+      total,
+      stats: { total: statsTotal, active: statsActive, mailboxLinked: statsMailbox },
+    };
     return c.json(body);
+  });
+
+  // GH #205: the cacheable avatar resource the users list points at. This
+  // router is already admin-only (requireAdmin above), so an admin may fetch
+  // any user's photo. Returns 404 when the user has no avatar (or no such id).
+  router.get("/users/:id/avatar", async (c) => {
+    const dataUrl = await deps.users.getAvatar(c.req.param("id"));
+    const res = await avatarImageResponse(dataUrl, c.req.header("if-none-match"));
+    return res ?? errorResponse(c, "not_found", 404);
   });
 
   router.post("/users", async (c) => {
     const parsed = await parseBody(c, createUserInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const { email, displayName, role, locale, mailPassword } = parsed.data;
     if (await deps.users.findByEmail(email)) {
-      return c.json(
-        { code: "user_exists", message: "errors.user_exists", traceId: c.get("traceId") },
-        409,
-      );
+      return errorResponse(c, "user_exists", 409);
     }
-    const user = await deps.users.create({ email, displayName, role, locale });
+    // The findByEmail pre-check is a courtesy, not the guarantee: two requests
+    // creating the same email concurrently both read "not found" and both reach
+    // the insert, where the unique index on users.email (0001_initial.sql) lets
+    // exactly one win. The loser used to escape as a raw 23505 → 500 `internal`
+    // (this server blaming itself for a client's duplicate); catching it here
+    // gives the loser the same 409 `user_exists` the pre-check returns — the
+    // TOCTOU #45 closed for the last-admin guard, closed here too (GH #277).
+    let user: UserRecord;
+    try {
+      user = await deps.users.create({ email, displayName, role, locale });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        return errorResponse(c, "user_exists", 409);
+      }
+      throw error;
+    }
     if (mailPassword) {
       await deps.mailCredentials.set(user.id, mailPassword);
     }
@@ -91,71 +173,56 @@ export function createAdminRouter(deps: AdminDeps) {
       target: user.email,
       detail: { role: user.role },
     });
-    return c.json(await toAdminUser(deps, user));
+    // A just-created user has never uploaded a photo yet.
+    return c.json(await toAdminUser(deps, user, false));
   });
 
   router.put("/users/:id/role", async (c) => {
     const parsed = await parseBody(c, setRoleInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const id = c.req.param("id");
     const target = await deps.users.findById(id);
     if (!target) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     const isDemotion = target.role === "admin" && parsed.data.role !== "admin";
-    if (isDemotion) {
-      if (c.get("user").userId === id) {
-        return c.json(
-          { code: "self_demotion", message: "errors.self_demotion", traceId: c.get("traceId") },
-          409,
-        );
-      }
-      if (target.active && (await deps.users.countActiveAdmins()) <= 1) {
-        return c.json(
-          { code: "last_admin", message: "errors.last_admin", traceId: c.get("traceId") },
-          409,
-        );
-      }
+    // Self-demotion is about who is asking, not about how many admins exist, so
+    // it stays out here: no concurrent request can change the answer.
+    if (isDemotion && c.get("user").userId === id) {
+      return errorResponse(c, "self_demotion", 409);
     }
-    const updated = await deps.users.setRole(id, parsed.data.role);
-    if (!updated) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+    // The last-admin half, in contrast, is a count — and a count read outside
+    // the write's transaction is worth nothing under concurrency (GH #45). The
+    // repo re-reads the target under the same lock, so the `target` above is
+    // only used for the two checks that are safe to make from a stale read.
+    const result = await deps.users.setRoleGuarded(id, parsed.data.role);
+    if (result.outcome === "last_admin") {
+      return errorResponse(c, "last_admin", 409);
     }
+    if (result.outcome === "not_found") {
+      return errorResponse(c, "not_found", 404);
+    }
+    const updated = result.user;
     await deps.audit.record({
       actor: c.get("user").email,
       action: "user.role_change",
       target: updated.email,
       detail: { role: updated.role },
     });
-    return c.json(await toAdminUser(deps, updated));
+    return c.json(await toAdminUser(deps, updated, await deps.users.hasAvatar(updated.id)));
   });
 
   router.put("/users/:id/credential", async (c) => {
     const parsed = await parseBody(c, setMailCredentialInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const id = c.req.param("id");
     const target = await deps.users.findById(id);
     if (!target) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+      return errorResponse(c, "not_found", 404);
     }
     await deps.mailCredentials.set(id, parsed.data.mailPassword);
     // Drop any cached JMAP session bound to the previous credentials.
@@ -171,40 +238,28 @@ export function createAdminRouter(deps: AdminDeps) {
   router.put("/users/:id/active", async (c) => {
     const parsed = await parseBody(c, setActiveInputSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     const id = c.req.param("id");
     if (!parsed.data.active) {
       const target = await deps.users.findById(id);
       if (!target) {
-        return c.json(
-          { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-          404,
-        );
+        return errorResponse(c, "not_found", 404);
       }
+      // Who is asking — safe to answer from a read outside the write, unlike
+      // the last-admin count, which the repo now takes under lock (GH #45).
       if (c.get("user").userId === id) {
-        return c.json(
-          { code: "self_archive", message: "errors.self_archive", traceId: c.get("traceId") },
-          409,
-        );
-      }
-      if (target.role === "admin" && target.active && (await deps.users.countActiveAdmins()) <= 1) {
-        return c.json(
-          { code: "last_admin", message: "errors.last_admin", traceId: c.get("traceId") },
-          409,
-        );
+        return errorResponse(c, "self_archive", 409);
       }
     }
-    const updated = await deps.users.setActive(id, parsed.data.active);
-    if (!updated) {
-      return c.json(
-        { code: "not_found", message: "errors.not_found", traceId: c.get("traceId") },
-        404,
-      );
+    const result = await deps.users.setActiveGuarded(id, parsed.data.active);
+    if (result.outcome === "last_admin") {
+      return errorResponse(c, "last_admin", 409);
     }
+    if (result.outcome === "not_found") {
+      return errorResponse(c, "not_found", 404);
+    }
+    const updated = result.user;
     if (parsed.data.active) {
       await deps.audit.record({
         actor: c.get("user").email,
@@ -222,24 +277,21 @@ export function createAdminRouter(deps: AdminDeps) {
         detail: { revokedSessions },
       });
     }
-    return c.json(await toAdminUser(deps, updated));
+    return c.json(await toAdminUser(deps, updated, await deps.users.hasAvatar(updated.id)));
   });
 
   router.get("/sso", async (c) => {
     const pub = await deps.ssoConfig.getPublic();
     const body: AdminSsoView = pub
       ? { configured: true, ...pub }
-      : { configured: false, issuer: null, clientId: null, scopes: null };
+      : { configured: false, issuer: null, clientId: null, scopes: null, providerName: null };
     return c.json(body);
   });
 
   router.put("/sso", async (c) => {
     const parsed = await parseBody(c, setupSsoSchema);
     if (!parsed.success) {
-      return c.json(
-        { code: "invalid_body", message: "errors.invalid_body", traceId: c.get("traceId") },
-        400,
-      );
+      return errorResponse(c, "invalid_body", 400);
     }
     await deps.ssoConfig.set(parsed.data);
     await deps.audit.record({
@@ -249,6 +301,27 @@ export function createAdminRouter(deps: AdminDeps) {
       detail: { issuer: parsed.data.issuer, clientId: parsed.data.clientId },
     });
     return c.json({ ok: true });
+  });
+
+  router.get("/instance", async (c) => {
+    const settings = await deps.instanceSettings.get();
+    const body: InstanceSettingsView = { sentWithFooter: settings.sentWithFooterEnabled };
+    return c.json(body);
+  });
+
+  router.put("/instance", async (c) => {
+    const parsed = await parseBody(c, updateInstanceSettingsSchema);
+    if (!parsed.success) {
+      return errorResponse(c, "invalid_body", 400);
+    }
+    await deps.instanceSettings.set({ sentWithFooterEnabled: parsed.data.sentWithFooter });
+    await deps.audit.record({
+      actor: c.get("user").email,
+      action: "instance_settings.update",
+      detail: { sentWithFooter: parsed.data.sentWithFooter },
+    });
+    const body: InstanceSettingsView = { sentWithFooter: parsed.data.sentWithFooter };
+    return c.json(body);
   });
 
   return router;

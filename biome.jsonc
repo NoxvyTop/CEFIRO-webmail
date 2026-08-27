@@ -1,0 +1,106 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/coverage",
+      "!**/.claude",
+      "!e2e/stalwart/seed"
+    ]
+  },
+  "formatter": {
+    // Settings match the repo's conventions, but the formatter is DISABLED as a
+    // gate: this codebase predates Biome and was never formatter-normalized, so
+    // running `biome format` would rewrite ~194 files (a whole-repo cosmetic
+    // reformat). This gate lints only; formatting stays out of scope here.
+    "enabled": false,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  // Import-organizing is off so the gate never rewrites import order across the
+  // (never-sorted) codebase; it only lints.
+  "assist": { "enabled": false },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      // Accessibility findings are downgraded to warn, not disabled: the gate
+      // stays green and still surfaces them for review.
+      //
+      // Recounted honestly in GH #253 — the "61 findings" this comment used to
+      // claim overstated the debt about fourfold. The 55 warnings outside tests
+      // today break down as:
+      //
+      //   27  noSvgWithoutTitle in app/ui/icons.tsx, where aria-hidden IS set —
+      //       via the `commonProps` spread (icons.tsx:3-10), which Biome cannot
+      //       follow statically. False positives, every one.
+      //   15  backdrop divs (5 noStaticElementInteractions + 10
+      //       useKeyWithClickEvents): a click-to-dismiss overlay that already
+      //       has the real Escape handler beside it, on an element that is not
+      //       the only way to perform the action.
+      //   13  ARIA patterns the rules read as suspicious but that are correct:
+      //       the resize handle's role="separator" with aria-valuenow, TipTap's
+      //       contenteditable textbox (focusable only at runtime), and
+      //       RecipientField's combobox popup, whose options are addressed by
+      //       aria-activedescendant rather than by being focusable.
+      //
+      // #253 fixed the genuinely actionable ones: the two aria-labels on
+      // generic <span>s that no assistive tech ever announced, the redundant
+      // role="main", and role="region" on a div that should have been a
+      // <section>. Automated a11y coverage now lives in the test suite (GH
+      // #252, apps/web/src/test/axe.ts) rather than in this lint budget.
+      //
+      // Treat a NEW warning here as real rather than assuming it joins the
+      // noise — the categories above are closed, not open-ended.
+      "a11y": {
+        "noSvgWithoutTitle": "warn",
+        "useKeyWithClickEvents": "warn",
+        "noStaticElementInteractions": "warn",
+        "useSemanticElements": "warn",
+        "noAriaHiddenOnFocusable": "warn",
+        "noNoninteractiveElementToInteractiveRole": "warn",
+        "useFocusableInteractive": "warn",
+        "useAriaPropsSupportedByRole": "warn",
+        "noRedundantRoles": "warn"
+      },
+      "correctness": {
+        // React hooks exhaustive-deps (20 findings): conventionally advisory, and
+        // several are intentional (documented empty-dependency memoization).
+        "useExhaustiveDependencies": "warn"
+      },
+      "suspicious": {
+        // All 13 matches are deliberate control-character sanitization (anti-XSS
+        // scheme-obfuscation strip in the composer; sieve-injection strip in the
+        // sieve generator) — the rule is a false positive against that security code.
+        "noControlCharactersInRegex": "warn",
+        // key={index} in a few static, non-reordered lists; pre-existing, low risk.
+        "noArrayIndexKey": "warn"
+      }
+    }
+  },
+  "overrides": [
+    {
+      // noUnsafeOptionalChaining currently fires only inside server mail test
+      // assertions (23 findings, all in *.test.ts against known fixtures). Keep it
+      // an ERROR for production code; relax to warn in tests only.
+      "includes": ["**/*.test.ts", "**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUnsafeOptionalChaining": "warn" }
+        }
+      }
+    }
+  ]
+}

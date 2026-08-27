@@ -1,17 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
 import type { AdminSsoView } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AdminPage } from "./AdminPage";
 
 const {
-  fetchAdminUsers, fetchAdminSso, updateAdminSso,
+  fetchAdminUsers, fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 } = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   fetchAdminSso: vi.fn(),
   updateAdminSso: vi.fn(),
+  fetchAdminInstance: vi.fn().mockResolvedValue({ sentWithFooter: false }),
+  updateAdminInstance: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -22,6 +25,8 @@ vi.mock("./api", () => ({
   setUserCredential: vi.fn(),
   fetchAdminSso,
   updateAdminSso,
+  fetchAdminInstance,
+  updateAdminInstance,
 }));
 
 const configuredSso: AdminSsoView = {
@@ -35,9 +40,12 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <AdminPage />
+      <MemoryRouter>
+        <AdminPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.nav.sso") }));
   return client;
 }
 
@@ -65,7 +73,7 @@ describe("AdminPage SSO config panel", () => {
     expect(await screen.findByText(i18n.t("admin.sso.notConfigured"))).toBeInTheDocument();
   });
 
-  it("submits the form and PUTs the entered values including clientSecret, showing saved on success", async () => {
+  it("submits the form and PUTs the entered values including clientSecret and providerName, showing saved on success", async () => {
     fetchAdminUsers.mockResolvedValue([]);
     fetchAdminSso.mockResolvedValue(configuredSso);
     updateAdminSso.mockResolvedValue(undefined);
@@ -77,6 +85,11 @@ describe("AdminPage SSO config panel", () => {
     fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "new-client" } });
     fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "s3cr3t" } });
     fireEvent.change(screen.getByLabelText("Scopes"), { target: { value: "openid profile" } });
+    // #290 / audit FIX 1: the provider name rides on the same save, so an edit
+    // no longer drops it (the PUT used to omit the field and null it server-side).
+    fireEvent.change(screen.getByLabelText(i18n.t("admin.sso.fields.providerName")), {
+      target: { value: "Authentik" },
+    });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.sso.save") }));
 
     await waitFor(() => expect(updateAdminSso).toHaveBeenCalledWith({
@@ -84,20 +97,50 @@ describe("AdminPage SSO config panel", () => {
       clientId: "new-client",
       clientSecret: "s3cr3t",
       scopes: "openid profile",
+      providerName: "Authentik",
     }));
 
     expect(await screen.findByText(i18n.t("admin.sso.saved"))).toBeInTheDocument();
   });
 
-  it("shows an error message when saving fails", async () => {
+  // GH #282: an invalid/empty issuer used to reach the server and come back as a
+  // single fixed "could not save" with no clue which field was wrong. The issuer
+  // is now validated at the field (mirroring the server's `z.string().url()`),
+  // so the doomed request is never sent and the hint names the field.
+  it("shows a per-field hint for an invalid issuer without sending the request", async () => {
     fetchAdminUsers.mockResolvedValue([]);
     fetchAdminSso.mockResolvedValue(configuredSso);
-    updateAdminSso.mockRejectedValue(new Error("boom"));
+    // This file has no beforeEach reset, so clear the shared spy's prior calls.
+    updateAdminSso.mockClear();
     renderPage();
 
     await screen.findByText(i18n.t("admin.sso.configured"));
+    fireEvent.change(screen.getByLabelText("Issuer"), { target: { value: "not-a-url" } });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.sso.save") }));
 
-    expect(await screen.findByText(i18n.t("admin.sso.error"))).toBeInTheDocument();
+    expect(await screen.findByText(i18n.t("admin.sso.errors.issuerInvalid"))).toBeInTheDocument();
+    expect(updateAdminSso).not.toHaveBeenCalled();
+  });
+
+  // GH #282: a server rejection now resolves through the per-code map, and the
+  // form — the client secret above all — survives the failure, so fixing one
+  // field does not mean re-typing the secret.
+  it("shows the server error by code and keeps the client secret on failure", async () => {
+    const { MailApiError } = await import("../mailbox/api");
+    fetchAdminUsers.mockResolvedValue([]);
+    fetchAdminSso.mockResolvedValue(configuredSso);
+    updateAdminSso.mockRejectedValue(new MailApiError(400, "invalid_body"));
+    renderPage();
+
+    await screen.findByText(i18n.t("admin.sso.configured"));
+    fireEvent.change(screen.getByLabelText("Issuer"), { target: { value: "https://auth.test" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "webmail" } });
+    fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "s3cr3t" } });
+    fireEvent.change(screen.getByLabelText("Scopes"), { target: { value: "openid email" } });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.sso.save") }));
+
+    expect(await screen.findByText(i18n.t("admin.errors.invalid_body"))).toBeInTheDocument();
+    const secret = screen.getByLabelText("Client Secret") as HTMLInputElement;
+    expect(secret.value).toBe("s3cr3t");
   });
 });

@@ -87,7 +87,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
           value={name}
           maxLength={100}
           onChange={(event) => setName(event.target.value)}
-          className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+          className="h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
         />
       </label>
 
@@ -97,7 +97,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
           id="filter-match"
           value={matchType}
           onChange={(event) => setMatchType(event.target.value as FilterRuleInput["matchType"])}
-          className="self-start rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+          className="self-start h-11 rounded-input border border-line bg-soft px-3 text-ink field-focus"
         >
           <option value="all">{t("filters.matchAll")}</option>
           <option value="any">{t("filters.matchAny")}</option>
@@ -114,7 +114,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               onChange={(event) =>
                 updateCondition(index, { field: event.target.value as FilterCondition["field"] })
               }
-              className="rounded-md border border-line bg-soft p-1 text-sm text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             >
               {FIELD_OPTIONS.map((field) => (
                 <option key={field} value={field}>
@@ -128,7 +128,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               onChange={(event) =>
                 updateCondition(index, { op: event.target.value as FilterCondition["op"] })
               }
-              className="rounded-md border border-line bg-soft p-1 text-sm text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             >
               {OP_OPTIONS.map((op) => (
                 <option key={op} value={op}>
@@ -141,13 +141,13 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               value={condition.value}
               maxLength={500}
               onChange={(event) => updateCondition(index, { value: event.target.value })}
-              className="min-w-40 flex-1 rounded-md border border-line bg-soft p-1 text-sm text-ink outline-none focus:border-accent"
+              className="min-w-40 flex-1 h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             />
             <button
               type="button"
               disabled={conditions.length === 1}
               onClick={() => setConditions(conditions.filter((_, i) => i !== index))}
-              className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
+              className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover disabled:opacity-50"
             >
               {t("filters.remove")}
             </button>
@@ -159,7 +159,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
             onClick={() =>
               setConditions([...conditions, { field: "from", op: "contains", value: "" }])
             }
-            className="self-start rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
+            className="self-start rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
           >
             {t("filters.addCondition")}
           </button>
@@ -182,7 +182,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
                   ),
                 )
               }
-              className="rounded-md border border-line bg-soft p-1 text-sm text-ink outline-none focus:border-accent"
+              className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
             >
               {ACTION_OPTIONS.map((type) => (
                 <option key={type} value={type}>
@@ -201,7 +201,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
                     ),
                   )
                 }
-                className="rounded-md border border-line bg-soft p-1 text-sm text-ink outline-none focus:border-accent"
+                className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
               >
                 {folders.map((folder) => (
                   <option key={folder} value={folder}>
@@ -227,14 +227,14 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
                     ),
                   )
                 }
-                className="rounded-md border border-line bg-soft p-1 text-sm text-ink outline-none focus:border-accent"
+                className="h-11 rounded-input border border-line bg-soft px-3 text-sm text-ink field-focus"
               />
             )}
             <button
               type="button"
               disabled={actions.length === 1}
               onClick={() => setActions(actions.filter((_, i) => i !== index))}
-              className="rounded-md border border-line px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
+              className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover disabled:opacity-50"
             >
               {t("filters.remove")}
             </button>
@@ -244,7 +244,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
           <button
             type="button"
             onClick={() => setActions([...actions, { type: "seen" }])}
-            className="self-start rounded-md border border-line px-2 py-1 text-xs hover:bg-hover"
+            className="self-start rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
           >
             {t("filters.addAction")}
           </button>
@@ -261,13 +261,13 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
       </label>
 
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
+        <button type="button" onClick={onCancel} className="rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover">
           {t("composer.cancel")}
         </button>
         <button
           type="submit"
           disabled={!valid}
-          className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+          className="rounded-[11px] bg-accent px-3 py-1 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
         >
           {t("settings.save")}
         </button>

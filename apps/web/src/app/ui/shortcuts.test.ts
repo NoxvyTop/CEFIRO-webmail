@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isModalOpen, isPlainShortcut, isTypingTarget } from "./shortcuts";
+import { isModalOpen, isPlainShortcut, isTypingTarget, MODAL_SELECTOR } from "./shortcuts";
 
 function keydownEvent(key: string, target: EventTarget, overrides: Partial<KeyboardEventInit> = {}): KeyboardEvent {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...overrides });
@@ -81,7 +81,9 @@ describe("isPlainShortcut", () => {
 
 describe("isModalOpen", () => {
   afterEach(() => {
-    Array.from(document.querySelectorAll('[role="dialog"]')).forEach((el) => el.remove());
+    Array.from(document.querySelectorAll(MODAL_SELECTOR)).forEach((el) => {
+      el.remove();
+    });
   });
 
   it("returns false when no dialog is present", () => {
@@ -93,5 +95,27 @@ describe("isModalOpen", () => {
     dialog.setAttribute("role", "dialog");
     document.body.appendChild(dialog);
     expect(isModalOpen()).toBe(true);
+  });
+
+  // GH #161: the permanent-delete confirmation uses role="alertdialog", not
+  // "dialog" — isModalOpen() must recognize it too, or single-key shortcuts
+  // (r, c, ...) keep firing underneath an irreversible-action confirmation.
+  it("returns true when only an alertdialog element is present", () => {
+    const alertdialog = document.createElement("div");
+    alertdialog.setAttribute("role", "alertdialog");
+    document.body.appendChild(alertdialog);
+    expect(isModalOpen()).toBe(true);
+  });
+});
+
+describe("MODAL_SELECTOR", () => {
+  // GH #161: shortcuts.ts's isModalOpen() and Composer.tsx's own nested-
+  // overlay Escape check both answer "is there a modal-owning overlay here"
+  // — MODAL_SELECTOR is the single definition both consume, so the two never
+  // drift again the way isModalOpen (dialog only) and Composer's own check
+  // (dialog + alertdialog) had.
+  it("matches both dialog and alertdialog roles", () => {
+    expect(MODAL_SELECTOR).toContain('[role="dialog"]');
+    expect(MODAL_SELECTOR).toContain('[role="alertdialog"]');
   });
 });

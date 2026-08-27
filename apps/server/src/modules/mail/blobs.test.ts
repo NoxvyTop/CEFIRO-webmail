@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
@@ -10,11 +11,9 @@ import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
 import { createApp } from "../../app";
 import { createMailRouter } from "./router";
-import type { JmapClient } from "../../infra/stalwart/jmap";
+import type { JmapClient } from "../../infra/jmap/client";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 
 const stubJmap: JmapClient = {
   getSession: async () => ({
@@ -59,6 +58,10 @@ function stubFetch(): typeof fetch {
   }) as typeof fetch;
 }
 
+/** Stalwart is down: the connection is refused, so fetch rejects (GH #211). */
+const refusingFetch = (() =>
+  Promise.reject(new TypeError("fetch failed"))) as unknown as typeof fetch;
+
 beforeAll(async () => {
   await migrate(sql, fileURLToPath(new URL("../../../migrations", import.meta.url)));
   const users = createUsersRepo(sql);
@@ -84,7 +87,7 @@ beforeAll(async () => {
 });
 afterAll(() => sql.end());
 
-function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch) {
+function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch, timeoutMs?: number) {
   return createApp({
     mailRouter: createMailRouter({
       sessions,
@@ -93,6 +96,7 @@ function makeApp(jmap: JmapClient | null, fetchFn?: typeof fetch) {
       userPreferences: createUserPreferencesRepo(sql),
       jmap,
       fetchFn,
+      timeoutMs,
     }),
   });
 }
@@ -155,6 +159,20 @@ describe("POST /api/mail/blobs", () => {
     upstreamResponse = new Response(null, { status: 500 });
 
     const res = await makeApp(stubJmap, stubFetch()).request("/api/mail/blobs", {
+      method: "POST",
+      headers: { cookie: `session=${token}`, "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
+  });
+
+  it("returns 502 stalwart_unavailable when the connection to Stalwart is refused", async () => {
+    // GH #211: the upload deliberately uses the undeadlined fetch, so nothing
+    // else was mapping its transport failures — a Stalwart that is DOWN made
+    // the attachment upload answer 500 "internal".
+    const res = await makeApp(stubJmap, refusingFetch).request("/api/mail/blobs", {
       method: "POST",
       headers: { cookie: `session=${token}`, "content-type": "image/png" },
       body: new Uint8Array([1, 2, 3]),
@@ -277,6 +295,18 @@ describe("GET /api/mail/blobs/:blobId", () => {
     expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
   });
 
+  it("returns 502 stalwart_unavailable when the connection to Stalwart is refused", async () => {
+    // GH #211: a rejecting fetch, not an !ok response — the download used to
+    // surface a down Stalwart as a 500 "internal".
+    const res = await makeApp(stubJmap, refusingFetch).request(
+      "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf",
+      { headers: { cookie: `session=${token}` } },
+    );
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { code: string }).code).toBe("stalwart_unavailable");
+  });
+
   it("returns 502 stalwart_unavailable when downloadUrl template is empty", async () => {
     const beforeCount = fetchCallCount;
     const res = await makeApp(stubJmapEmpty, stubFetch()).request("/api/mail/blobs/b1", {
@@ -354,5 +384,48 @@ describe("GET /api/mail/blobs/:blobId", () => {
     expect(res.headers.get("content-type")).toBe("application/octet-stream");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
+
+  describe("outbound deadline (GH #165)", () => {
+    /** Stalwart accepts the download and then never answers. */
+    const silentFetch = (() =>
+      new Promise<Response>(() => {})) as unknown as typeof fetch;
+
+    it("returns 504 upstream_timeout instead of hanging forever", async () => {
+      const res = await makeApp(stubJmap, silentFetch, 50).request(
+        "/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf",
+        { headers: { cookie: `session=${token}` } },
+      );
+
+      expect(res.status).toBe(504);
+      expect(((await res.json()) as { code: string }).code).toBe("upstream_timeout");
+    });
+
+    it("keeps aborting the upstream when the client cancels the download mid-stream", async () => {
+      upstreamResponse = new Response(
+        new ReadableStream({
+          start() {
+            // Never closes: a large attachment still being relayed.
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/pdf" } },
+      );
+      const client = new AbortController();
+
+      const res = await makeApp(stubJmap, stubFetch(), 50).request(
+        new Request("http://localhost/api/mail/blobs/b1?name=report.pdf&type=application%2Fpdf", {
+          headers: { cookie: `session=${token}` },
+          signal: client.signal,
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const upstreamSignal = (capturedInit as RequestInit).signal;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(upstreamSignal?.aborted).toBe(false);
+
+      client.abort();
+      expect(upstreamSignal?.aborted).toBe(true);
+    });
   });
 });

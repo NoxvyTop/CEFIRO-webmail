@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
@@ -42,27 +43,30 @@ const thread = {
       replyTo: [],
       bodyHtml: "<p>Hi</p>",
       bodyText: null,
-      attachments: [{ blobId: "b1", name: "doc.pdf", type: "application/pdf", size: 2048 }],
+      attachments: [{ blobId: "b1", name: "doc.pdf", type: "application/pdf", size: 2048, cid: null }],
+      messageId: ["e1@x.com"],
+      references: null,
+      inReplyTo: null,
     },
   ],
 };
 
 function stubFetch() {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/auth/me")) return new Response(JSON.stringify(user));
-      if (url.includes("/api/mail/mailboxes")) return new Response(JSON.stringify(mailboxes));
-      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
-      if (url.includes("/api/mail/signatures")) return new Response(JSON.stringify([]));
-      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(thread));
-      if (url.includes("/api/mail/messages")) {
-        return new Response(JSON.stringify({ total: 0, position: 0, emails: [] }));
-      }
-      return new Response(JSON.stringify({ status: "ok", checks: {} }));
-    }),
-  );
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/api/auth/me")) return new Response(JSON.stringify(user));
+    if (url.includes("/api/mail/mailboxes")) return new Response(JSON.stringify(mailboxes));
+    if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(identities));
+    if (url.includes("/api/mail/signatures")) return new Response(JSON.stringify([]));
+    if (url.includes("/api/mail/drafts")) return new Response(JSON.stringify({ id: "draft-1" }));
+    if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(thread));
+    if (url.includes("/api/mail/messages")) {
+      return new Response(JSON.stringify({ total: 0, position: 0, emails: [] }));
+    }
+    return new Response(JSON.stringify({ status: "ok", checks: {} }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 function renderAt(path: string) {
@@ -80,19 +84,20 @@ describe("composer wiring", () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=new");
 
-    expect(await screen.findByRole("dialog", { name: i18n.t("composer.title") })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") })).toBeInTheDocument();
 
     const cancelButton = screen.getByRole("button", { name: i18n.t("composer.cancel") });
     fireEvent.click(cancelButton);
 
-    expect(screen.queryByRole("dialog", { name: i18n.t("composer.title") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") })).not.toBeInTheDocument();
   });
 
   it("opens the composer at compose=reply:e1 with the from address chip in To", async () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=reply:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.title") });
+    // GH #269: a reply composer now announces itself as a reply, not "New message".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.reply") });
     expect(within(dialog).getByText("a@x.com")).toBeInTheDocument();
   });
 
@@ -100,10 +105,43 @@ describe("composer wiring", () => {
     stubFetch();
     renderAt("/?mailbox=mb1&thread=t1&compose=forward:e1");
 
-    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.title") });
+    // GH #269: a forward composer now announces itself as a forward, not "New message".
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.forward") });
     const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
     expect((subject as HTMLInputElement).value).toMatch(/^Fwd: /);
     expect(within(dialog).getByText(/doc\.pdf/)).toBeInTheDocument();
     expect(within(dialog).queryByText("a@x.com")).not.toBeInTheDocument();
+  });
+
+  // GH #176: clicking the header's CÉFIRO home link clears the compose param
+  // and unmounts the composer — an exit route that never runs through the
+  // discard confirmation. With autosave in place (#178), leaving this way must
+  // flush the in-progress draft rather than silently discarding it.
+  it("flushes an unsaved draft to the save-draft endpoint when leaving via the home link (#176)", async () => {
+    const fetchMock = stubFetch();
+    renderAt("/?mailbox=mb1&thread=t1&compose=new");
+
+    const dialog = await screen.findByRole("dialog", { name: i18n.t("composer.newMessage") });
+    const subject = within(dialog).getByLabelText(i18n.t("composer.subject"));
+    fireEvent.change(subject, { target: { value: "Unsaved but important" } });
+
+    fireEvent.click(screen.getByRole("link", { name: i18n.t("app.home") }));
+
+    // The composer is torn down by the navigation…
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: i18n.t("composer.newMessage") }),
+      ).not.toBeInTheDocument(),
+    );
+
+    // …and the draft was persisted on the way out, not lost.
+    await waitFor(() => {
+      const draftSave = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).includes("/api/mail/drafts") && init?.method === "POST",
+      );
+      expect(draftSave).toBeTruthy();
+      expect(String(draftSave?.[1]?.body)).toContain("Unsaved but important");
+    });
   });
 });

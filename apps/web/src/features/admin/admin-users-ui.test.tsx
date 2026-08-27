@@ -1,14 +1,28 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AdminUser } from "@webmail/shared";
+import { MemoryRouter } from "react-router";
+import type { AdminUser, AdminUsersPage } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AdminPage } from "./AdminPage";
 
+// GH #153: fetchAdminUsers resolves a page envelope now, not a bare array.
+function usersPage(users: AdminUser[]): AdminUsersPage {
+  return {
+    users,
+    total: users.length,
+    stats: {
+      total: users.length,
+      active: users.filter((u) => u.active).length,
+      mailboxLinked: users.filter((u) => u.mailboxLinked).length,
+    },
+  };
+}
+
 const {
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
-  fetchAdminSso, updateAdminSso,
+  fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 } = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   createAdminUser: vi.fn(),
@@ -17,11 +31,13 @@ const {
   setUserCredential: vi.fn(),
   fetchAdminSso: vi.fn(),
   updateAdminSso: vi.fn(),
+  fetchAdminInstance: vi.fn().mockResolvedValue({ sentWithFooter: false }),
+  updateAdminInstance: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
   fetchAdminUsers, createAdminUser, setUserRole, setUserActive, setUserCredential,
-  fetchAdminSso, updateAdminSso,
+  fetchAdminSso, updateAdminSso, fetchAdminInstance, updateAdminInstance,
 }));
 
 const adminActive: AdminUser = {
@@ -48,15 +64,18 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <AdminPage />
+      <MemoryRouter>
+        <AdminPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.nav.users") }));
   return client;
 }
 
 describe("AdminPage users table", () => {
   it("lists users with mailbox/status text and a role select per row", async () => {
-    fetchAdminUsers.mockResolvedValue([adminActive, employeeUnlinked]);
+    fetchAdminUsers.mockResolvedValue(usersPage([adminActive, employeeUnlinked]));
     renderPage();
 
     expect(await screen.findByText("admin@example.com")).toBeInTheDocument();
@@ -67,8 +86,34 @@ describe("AdminPage users table", () => {
     expect(within(table).getAllByRole("combobox", { name: i18n.t("admin.actions.role") })).toHaveLength(2);
   });
 
+  it("renders each row with an avatar showing the user's initials next to their name", async () => {
+    fetchAdminUsers.mockResolvedValue(usersPage([adminActive, employeeUnlinked]));
+    renderPage();
+
+    const row = (await screen.findByText("admin@example.com")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("AO")).toBeInTheDocument();
+    expect(within(row).getByText("Admin One")).toBeInTheDocument();
+  });
+
+  // GH #205: the admin contract now carries a cacheable avatar URL
+  // (adminUserSchema.avatarUrl) instead of an inline data URL — the row must
+  // render a lazy <img> pointing at it, reusing Avatar's photo-or-initials
+  // decision.
+  it("renders a user's photo via the avatar URL instead of initials when avatarUrl is present", async () => {
+    const withPhoto: AdminUser = { ...adminActive, avatarUrl: "/api/admin/users/u1/avatar" };
+    fetchAdminUsers.mockResolvedValue(usersPage([withPhoto]));
+    renderPage();
+
+    const row = (await screen.findByText("admin@example.com")).closest("tr") as HTMLElement;
+    const img = row.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("src")).toBe("/api/admin/users/u1/avatar");
+    expect(img?.getAttribute("loading")).toBe("lazy");
+    expect(within(row).queryByText("AO")).not.toBeInTheDocument();
+  });
+
   it("shows the empty state when there are no users", async () => {
-    fetchAdminUsers.mockResolvedValue([]);
+    fetchAdminUsers.mockResolvedValue(usersPage([]));
     renderPage();
     expect(await screen.findByText(i18n.t("admin.empty"))).toBeInTheDocument();
   });
@@ -80,7 +125,7 @@ describe("AdminPage users table", () => {
   });
 
   it("reveals a password input on 'link mailbox' and calls setUserCredential on save", async () => {
-    fetchAdminUsers.mockResolvedValue([employeeUnlinked]);
+    fetchAdminUsers.mockResolvedValue(usersPage([employeeUnlinked]));
     setUserCredential.mockResolvedValue(undefined);
     renderPage();
 
@@ -95,7 +140,7 @@ describe("AdminPage users table", () => {
   });
 
   it("changes the role via the select and calls setUserRole", async () => {
-    fetchAdminUsers.mockResolvedValue([employeeUnlinked]);
+    fetchAdminUsers.mockResolvedValue(usersPage([employeeUnlinked]));
     setUserRole.mockResolvedValue({ ...employeeUnlinked, role: "admin" });
     renderPage();
 
@@ -108,7 +153,7 @@ describe("AdminPage users table", () => {
   });
 
   it("archives via a two-click inline confirm", async () => {
-    fetchAdminUsers.mockResolvedValue([adminActive]);
+    fetchAdminUsers.mockResolvedValue(usersPage([adminActive]));
     setUserActive.mockResolvedValue({ ...adminActive, active: false });
     renderPage();
 
@@ -125,7 +170,7 @@ describe("AdminPage users table", () => {
 
   it("reactivates with a single click (no confirm step)", async () => {
     const archived = { ...employeeUnlinked, active: false };
-    fetchAdminUsers.mockResolvedValue([archived]);
+    fetchAdminUsers.mockResolvedValue(usersPage([archived]));
     setUserActive.mockResolvedValue({ ...archived, active: true });
     renderPage();
 
@@ -135,7 +180,7 @@ describe("AdminPage users table", () => {
   });
 
   it("shows an inline action error when a mutation fails", async () => {
-    fetchAdminUsers.mockResolvedValue([employeeUnlinked]);
+    fetchAdminUsers.mockResolvedValue(usersPage([employeeUnlinked]));
     setUserRole.mockRejectedValue(new Error("boom"));
     renderPage();
 
@@ -144,11 +189,11 @@ describe("AdminPage users table", () => {
       target: { value: "admin" },
     });
 
-    expect(await within(row).findByText(i18n.t("admin.errors.action"))).toBeInTheDocument();
+    expect(await within(row).findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });
 
   it("submits the new-user form and calls createAdminUser", async () => {
-    fetchAdminUsers.mockResolvedValue([]);
+    fetchAdminUsers.mockResolvedValue(usersPage([]));
     createAdminUser.mockResolvedValue(adminActive);
     renderPage();
 

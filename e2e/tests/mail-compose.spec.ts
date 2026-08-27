@@ -12,7 +12,7 @@ test("compose and send a self-addressed email, then find it in Sent", async ({ p
 
   await page.getByRole("button", { name: "Redactar" }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Redactar" });
+  const dialog = page.getByRole("dialog", { name: "Nuevo mensaje" });
   await expect(dialog).toBeVisible();
 
   // The From identity is real: the seeded admin@cefiro.test account's own
@@ -21,7 +21,10 @@ test("compose and send a self-addressed email, then find it in Sent", async ({ p
   const fromSelect = dialog.getByRole("combobox", { name: "De" });
   await expect(fromSelect.locator("option:checked")).toHaveText(/admin@cefiro\.test/);
 
-  const to = dialog.getByRole("textbox", { name: "Para" });
+  // The recipient field is a WAI-ARIA combobox, not a plain textbox: it owns
+  // a contact-suggestion listbox (GH #124). An input with an associated popup
+  // no longer exposes the textbox role, so querying for one finds nothing.
+  const to = dialog.getByRole("combobox", { name: "Para" });
   await to.fill("admin@cefiro.test");
   await to.press("Enter");
 
@@ -42,6 +45,6 @@ test("compose and send a self-addressed email, then find it in Sent", async ({ p
   // the sender's own copy always lands in Sent regardless of how Stalwart
   // chooses to handle the inbound leg, which is the deterministic mailbox to
   // assert on here.
-  await page.getByRole("button", { name: "Sent Items" }).click();
+  await page.getByRole("button", { name: "Enviados" }).click();
   await expect(page.getByRole("option", { name: new RegExp(subject) }).first()).toBeVisible();
 });

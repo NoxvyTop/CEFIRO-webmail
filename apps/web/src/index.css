@@ -13,6 +13,85 @@ body {
   outline-offset: 2px;
 }
 
+/* Unified, subtle focus for BOXED form fields (border + rounded inputs across
+   settings, admin, auth, setup, the banner search, the link popover): an accent
+   border + soft ring, replacing the hard global outline. Buttons and links keep
+   the outline above for keyboard accessibility. */
+.field-focus {
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.field-focus:focus,
+.field-focus:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* Wrapper variant of .field-focus, for boxed fields whose border+radius live on
+   a container around the actual <input> (e.g. the banner search bar, which wraps
+   an icon + a transparent input + a shortcut hint). The accent border and ring
+   react to focus landing anywhere inside; the inner input itself carries
+   .field-focus-line so its own hard outline is suppressed. */
+.field-focus-within {
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.field-focus-within:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* Focus for UNDERLINE / borderless fields (the composer's Gmail-style rows:
+   From/To/CC/BCC, Subject, Signature, and the body editor). A box ring would
+   fight that language, so here we only suppress the hard global outline — the
+   visible affordance is the field's own accent underline (focus/focus-within
+   border-accent) or, for the borderless body, the text caret. */
+.field-focus-line {
+  outline: none;
+  transition: border-color 150ms ease;
+}
+.field-focus-line:focus,
+.field-focus-line:focus-visible {
+  outline: none;
+}
+
 ::selection {
   background: var(--sel);
+}
+
+/* Composer: draws a visual boundary between the message body and the
+   auto-applied signature (issue #121) — a top border on the signature
+   marker wrapper, keyed off the existing data-cefiro-signature attribute
+   (composer/signature.ts). Editor-only chrome: that attribute (and this
+   rule's hook) is stripped from the body HTML before it's sent — see
+   stripSignatureMarkers, used by useComposer's send() — so recipients only
+   ever see the signature content itself, never this rule.
+
+   #173a: was var(--line), which measures ~1.2:1 against the composer's
+   bg-panel in BOTH themes — below WCAG's ~3:1 guidance for a meaningful
+   divider, and in practice invisible. var(--line-strong) is the same token
+   already used for outline/ghost-button borders that need to read as a real
+   boundary rather than a hairline; see its definitions in theme.css. */
+[data-cefiro-signature] {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line-strong);
+}
+
+/* Composer: visible affordance for an image selected via the size/align
+   toolbar (issue #127) — ProseMirror-selectednode is the class ProseMirror
+   itself adds directly to a NodeSelection's DOM node (here, always an
+   <img>; see RichTextEditor's handleImageFileSelected and image toolbar).
+   Same accent-border + soft-ring language as .field-focus above, using
+   outline instead of border so toggling selection never shifts the image's
+   box size in the surrounding text flow. Editor-only chrome, same guarantee
+   as [data-cefiro-signature] above: ProseMirror-selectednode is a runtime
+   class the live EditorView applies to its DOM, never a document/schema
+   attribute, so it cannot appear in getHTML() output and is never sent to
+   a recipient. */
+.ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ring);
+  border-radius: 2px;
 }

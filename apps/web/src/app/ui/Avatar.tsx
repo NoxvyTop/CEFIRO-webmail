@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const AVATAR_COLORS = [
   "#3E8E7E",
   "#4E6E9E",
@@ -29,19 +31,60 @@ export function initials(name: string | null, email: string): string {
   return (first + second).toUpperCase();
 }
 
-type AvatarProps = { name: string | null; email: string; size?: number };
+type AvatarProps = {
+  name: string | null;
+  email: string;
+  size?: number;
+  tone?: "palette" | "accent";
+  // Uploaded profile photo (data: URL from GET /api/profile). When present
+  // (and non-null), it replaces the initials block entirely; when absent or
+  // null, the existing initials fallback renders unchanged.
+  imageUrl?: string | null;
+};
 
-export function Avatar({ name, email, size = 38 }: AvatarProps) {
+// "accent" is a distinct visual role from the rotating sender palette: the
+// header's own user avatar (spec: 36px circular, fixed accent background),
+// not another entry in the deterministic per-sender color rotation.
+export function Avatar({ name, email, size = 38, tone = "palette", imageUrl }: AvatarProps) {
+  const isAccent = tone === "accent";
+  // GH #282: an avatar URL can 404 the moment it is fetched — the admin list
+  // builds rows from `avatarUrl`, and a photo removed between building the list
+  // and painting it (GH #205) would otherwise leave a broken-image icon. On the
+  // image's `error` we remember the URL that failed and fall back to the initials
+  // block below. Keying the fallback on the URL (rather than a plain boolean)
+  // means a later, different photo gets a fresh attempt on its own — e.g. the
+  // header avatar refetched after a profile save.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+
+  if (imageUrl && failedUrl !== imageUrl) {
+    return (
+      <img
+        src={imageUrl}
+        alt=""
+        aria-hidden="true"
+        // GH #205: when imageUrl is a URL (e.g. the admin list's avatar
+        // endpoint) let the browser lazy-load and cache it; harmless for the
+        // data: URLs still passed by the header/profile.
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailedUrl(imageUrl)}
+        className="shrink-0 rounded-full object-cover"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+
   return (
     <span
       aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-full font-semibold"
+      className={`flex shrink-0 items-center justify-center rounded-full ${
+        isAccent ? "bg-accent font-bold text-accent-ink" : "font-semibold"
+      }`}
       style={{
         width: size,
         height: size,
-        background: avatarColor(email),
-        color: "#F4FBF8",
         fontSize: Math.round(size * 0.37),
+        ...(isAccent ? {} : { background: avatarColor(email), color: "#F4FBF8" }),
       }}
     >
       {initials(name, email)}

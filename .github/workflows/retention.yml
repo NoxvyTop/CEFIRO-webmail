@@ -1,0 +1,54 @@
+name: retention
+
+# Keeps the organisation's shared storage quota from filling up again.
+#
+# GitHub bills Actions artifacts and GHCR packages against ONE quota for the
+# whole organisation (500 MB on the free plan). ci.yml publishes an image on
+# every push to preproduc and main, and each publish leaves the previous
+# version behind as an untagged orphan that still counts: by August 2026 the
+# three container packages of this repository held 66 versions of 66-112 MB
+# each, the quota was full, and a green e2e job went red because it could not
+# upload a 2 KB retry record. Artifacts were 156 MB across the whole org — the
+# images were the problem.
+#
+# What this job deletes, and what it never touches:
+#   - UNTAGGED versions only. A tag (staging, latest, vX.Y.Z, sha-...) is a
+#     name somebody may still pull; an untagged version is a layer set nothing
+#     references any more. `min-versions-to-keep` leaves the newest untagged
+#     ones behind as a rollback window.
+#   - Both packages ci.yml publishes: the app image and the content-addressed
+#     e2e fixture. The fixture's tags are derived from content, so a tag that
+#     is still in use is by definition still tagged and survives.
+#
+# Runs after every successful publish (the moment an orphan appears) and once
+# a week regardless, so a quiet period cannot let orphans accumulate either.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [preproduc, main]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  prune-images:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # Housekeeping, not a gate: it needs no toolchain and no isolation, so it
+    # runs on the runner that costs no minutes.
+    runs-on: [self-hosted, linux, x64, docker]
+    strategy:
+      matrix:
+        package: [cefiro-webmail, cefiro-e2e-stalwart]
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          delete-only-untagged-versions: "true"
+          min-versions-to-keep: 3

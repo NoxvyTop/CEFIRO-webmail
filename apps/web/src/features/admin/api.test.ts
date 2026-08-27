@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { MailApiError } from "../mailbox/api";
 import {
-  createAdminUser, fetchAdminSso, fetchAdminUsers,
-  setUserActive, setUserCredential, setUserRole, updateAdminSso,
+  createAdminUser, fetchAdminInstance, fetchAdminSso, fetchAdminUsers,
+  setUserActive, setUserCredential, setUserRole, updateAdminInstance, updateAdminSso,
 } from "./api";
 
 const adminUser = {
@@ -26,10 +26,35 @@ function stubFetchByUrl(handlers: Record<string, () => Response>) {
 }
 
 describe("admin api client", () => {
-  it("fetches and validates admin users", async () => {
-    stubFetchByUrl({ "/api/admin/users": () => new Response(JSON.stringify([adminUser])) });
-    const users = await fetchAdminUsers();
-    expect(users[0]?.email).toBe("a@example.com");
+  it("fetches and validates a page of admin users", async () => {
+    stubFetchByUrl({
+      "/api/admin/users": () =>
+        new Response(
+          JSON.stringify({
+            users: [adminUser],
+            total: 1,
+            stats: { total: 1, active: 1, mailboxLinked: 1 },
+          }),
+        ),
+    });
+    const page = await fetchAdminUsers({ page: 1, pageSize: 25 });
+    expect(page.users[0]?.email).toBe("a@example.com");
+    expect(page.total).toBe(1);
+    expect(page.stats).toEqual({ total: 1, active: 1, mailboxLinked: 1 });
+  });
+
+  it("sends page, pageSize and search as query params", async () => {
+    const fetchMock = stubFetchByUrl({
+      "/api/admin/users": () =>
+        new Response(
+          JSON.stringify({ users: [], total: 0, stats: { total: 0, active: 0, mailboxLinked: 0 } }),
+        ),
+    });
+    await fetchAdminUsers({ page: 2, pageSize: 25, search: "alice" });
+    const url = String((fetchMock.mock.calls[0] as unknown as [string])[0]);
+    expect(url).toContain("page=2");
+    expect(url).toContain("pageSize=25");
+    expect(url).toContain("search=alice");
   });
 
   it("POSTs the create-user input body", async () => {
@@ -98,11 +123,31 @@ describe("admin api client", () => {
     expect(JSON.parse(String(init?.body))).toEqual(input);
   });
 
+  it("fetches and validates the instance settings view", async () => {
+    stubFetchByUrl({ "/api/admin/instance": () => new Response(JSON.stringify({ sentWithFooter: true })) });
+    const view = await fetchAdminInstance();
+    expect(view.sentWithFooter).toBe(true);
+  });
+
+  it("PUTs the instance settings and resolves void", async () => {
+    const fetchMock = stubFetchByUrl({
+      "/api/admin/instance": () => new Response(JSON.stringify({ sentWithFooter: true })),
+    });
+    await expect(updateAdminInstance({ sentWithFooter: true })).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toBe("/api/admin/instance");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ sentWithFooter: true });
+  });
+
   it("throws MailApiError with code 'forbidden' on 403", async () => {
     stubFetchByUrl({
       "/api/admin/users": () => new Response(JSON.stringify({ code: "forbidden", message: "no", traceId: "t" }), { status: 403 }),
     });
-    await expect(fetchAdminUsers()).rejects.toMatchObject({ status: 403, code: "forbidden" });
-    await expect(fetchAdminUsers()).rejects.toBeInstanceOf(MailApiError);
+    await expect(fetchAdminUsers({ page: 1, pageSize: 25 })).rejects.toMatchObject({
+      status: 403,
+      code: "forbidden",
+    });
+    await expect(fetchAdminUsers({ page: 1, pageSize: 25 })).rejects.toBeInstanceOf(MailApiError);
   });
 });

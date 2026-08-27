@@ -46,6 +46,15 @@
    contiene lógica propia donde aporta valor: provisioning, preferencias e
    integración con Odoo.
 
+   El adaptador (`infra/jmap/`) habla **JMAP (RFC 8620/8621) a secas**, no
+   Stalwart (#33): el proveedor se configura por rol con `JMAP_URL`, las URLs
+   que anuncia en su sesión se resuelven según `JMAP_URL_MODE`
+   (`rewrite` por defecto, `trust` para host partido — #34) y la credencial se
+   presenta según `JMAP_AUTH_MODE` (`basic` o `bearer` para proveedores con
+   token — #35). Como el navegador nunca consume esas URLs anunciadas, el BFF
+   puede reescribirlas al camino directo sin que nada más se entere. Ver la
+   matriz de topologías en [OPERATIONS.md](OPERATIONS.md).
+
 3. **PostgreSQL guarda solo datos propios de la aplicación**:
    firmas, preferencias de usuario, configuración del administrador y mapeos
    con Odoo. Los correos, carpetas y etiquetas viven en Stalwart — nunca se
@@ -116,6 +125,70 @@ Reglas no negociables:
 - El descifrado es por sesión y solo en memoria.
 - TLS en todo el trayecto BFF ↔ Stalwart.
 
+### Rotación de la clave maestra
+
+Cada fila cifrada guarda en `key_version` la versión de la clave con la que se
+selló. El servidor no maneja una clave sino un llavero: la clave actual, que es
+la única que cifra, más las claves retiradas que todavía hacen falta para leer
+filas que aún no se han vuelto a cifrar.
+
+| Variable | Contenido |
+| --- | --- |
+| `MASTER_KEY` | clave actual, base64 de 32 bytes (44 caracteres) |
+| `MASTER_KEY_VERSION` | versión que se estampa al cifrar; por defecto `1` |
+| `MASTER_KEY_PREVIOUS` | claves retiradas como `version:base64key`, separadas por comas |
+
+Un despliegue que solo define `MASTER_KEY` sigue funcionando sin cambios: es la
+versión 1 sin historial, que es justo lo que el esquema pone por defecto en
+todas las columnas `key_version`.
+
+#### La clave se genera, nunca se copia (#223)
+
+```sh
+bun apps/server/scripts/generate-master-key.ts
+```
+
+Esa es la **única** forma admitida de obtener un `MASTER_KEY`. La clave que
+trae `docker-compose.dev.yml` es literalmente `dev-master-key-dev-master-key-01`
+en base64: existe para que el entorno de desarrollo arranque sin ceremonia y es
+pública, porque está en el repositorio. Copiada a producción descifra todas las
+credenciales de buzón y el client secret de SSO.
+
+Antes solo se validaba la **longitud** de la clave, así que esa copia pasaba sin
+una queja. Ahora el arranque rechaza claves publicadas en el repositorio y
+claves de baja entropía (todos los bytes iguales, muy pocos valores distintos, o
+enteramente ASCII imprimible — es decir, una frase escrita a mano en vez de 32
+bytes generados).
+
+La comprobación **no se aplica cuando `NODE_ENV` es `development` o `test`**, y
+sí en cualquier otro valor (`production`, `staging`, `preproduc`, o el nombre
+que se invente el despliegue). Es una lista de permitidos, no de prohibidos:
+para saltarse la validación hay que declarar explícitamente que el entorno no es
+real. El compose de desarrollo y la suite de tests siguen funcionando sin tocar
+nada.
+
+Las claves retiradas de `MASTER_KEY_PREVIOUS` **no** se validan: sirven para
+leer filas selladas antes de una rotación, así que rechazarlas dejaría sin
+arrancar justo al despliegue que está rotando *para salir* de una clave débil.
+Ese es el camino de salida si alguna instancia arrancó con la clave de
+desarrollo: rotar (la nueva clave generada pasa a `MASTER_KEY`, la débil queda
+listada en `MASTER_KEY_PREVIOUS`) y esperar a que el re-cifrado progresivo mueva
+todas las filas antes de retirarla.
+
+Dos garantías sostienen el diseño: en el arranque el servidor comprueba que el
+llavero cubre todas las `key_version` presentes en `mail_credentials`,
+`sso_config` e `integrations` y **no arranca** si falta alguna; y las filas se
+vuelven a cifrar solas al leerlas con una clave retirada, de forma best-effort,
+porque el correo del usuario no puede depender de esa reescritura.
+
+Mientras queden filas en la versión antigua, su clave debe seguir listada: es
+lo que evita que una rotación deje credenciales indescifrables.
+
+El **procedimiento de rotación** —paso a paso, con las consultas para saber
+cuándo se puede retirar una clave y su interacción con los backups— es
+operación, no diseño, y vive en el runbook:
+[OPERATIONS.md → Rotación de `MASTER_KEY`](OPERATIONS.md#rotación-de-master_key).
+
 ### Configuración OIDC administrable
 
 La configuración del proveedor SSO (issuer, client_id, client_secret,
@@ -129,13 +202,29 @@ cifrado y conexión a Postgres.
 
 Al estilo Stalwart, `BOOTSTRAP_MODE=true` en el entorno cumple dos roles:
 
-- **Primer arranque**: la aplicación inicia en modo configuración e imprime
-  en consola un usuario administrador temporal con contraseña generada. Con
-  esa cuenta se configura el administrador real, el proveedor OIDC y las
-  credenciales de buzón iniciales desde una pantalla mínima de setup.
+- **Primer arranque**: la aplicación inicia en modo configuración con un
+  usuario administrador temporal cuya contraseña **fija quien despliega** en
+  `BOOTSTRAP_PASSWORD` (#235). Con esa cuenta se configura el administrador
+  real, el proveedor OIDC y las credenciales de buzón iniciales desde una
+  pantalla mínima de setup.
 - **Recuperación**: si una configuración OIDC defectuosa deja a todos sin
-  acceso, se activa el modo, se entra con la credencial temporal de consola,
-  se corrige la configuración y se vuelve a producción.
+  acceso, se activa el modo, se entra por el login de emergencia, se corrige la
+  configuración desde el portal de administración y se vuelve a producción.
+
+La credencial no la genera ni la registra el proceso. Antes se inventaba al
+arrancar y se escribía en claro en el log, que es el sitio de un contenedor con
+más lectores y más retención; pedírsela al operador borra el problema de
+entrega en vez de moverlo, y la deja en el mismo gestor de secretos que
+`MASTER_KEY` — que es la frontera de confianza que le corresponde, porque
+concede acceso de administración.
+
+La bandera de entorno no es la única compuerta del setup: `/api/setup` se cierra
+por sí mismo en cuanto el setup está terminado —existe un administrador activo y
+SSO configurado— aunque `BOOTSTRAP_MODE` siga puesto (#234). El estado se lee de
+la base de datos, no de una columna que alguien marque, así que sobrevive a un
+reinicio, a un redespliegue y a un rollback sin nada que migrar. Es la
+recuperación la que cambia de puerta: a partir de ahí se entra por el login de
+emergencia y se corrige en el portal de administración, no en el asistente.
 
 Al volver el entorno a producción y reiniciar, el modo desaparece. La
 pantalla de setup es la semilla del portal de administración de la Fase 2.
@@ -213,7 +302,7 @@ apps/server/src/
 │   ├── settings/       # firmas, preferencias
 │   └── setup/          # modo bootstrap
 ├── core/               # tipos de dominio, errores, puertos
-└── infra/              # adaptadores: Postgres, cliente Stalwart, cliente Authentik
+└── infra/              # adaptadores: Postgres, cliente JMAP (infra/jmap/), cliente Authentik
 ```
 
 ### Modelo de datos propio
@@ -232,6 +321,10 @@ configuración de administración en F2, mapeos con Odoo en F4).
 | `audit_log` | actor, acción, objetivo, fecha, IP, detalle (JSON) |
 | `sso_config` | proveedor OIDC: issuer, client_id, client_secret (cifrado), scopes |
 | `integrations` | integraciones externas: tipo (ej. odoo-calendar), config (JSON), secretos cifrados, activada sí/no |
+| `sent_recipients` | direcciones a las que el usuario ha escrito (nivel "remitente conocido" del indicador de confianza, #314); separada de `contacts` a propósito |
+| `shared_mailbox_copy_state` | cursor de las copias automáticas de buzones compartidos (#313): último estado `Email` JMAP procesado (nulo = nunca fijado) y el arrendamiento de entrega por cuenta (`lease_owner`, `lease_until`), una fila por cuenta compartida |
+| `shared_mailbox_member_state` | línea base por miembro (#313): desde qué momento (`baselined_at`) recibe copias cada miembro de cada cuenta compartida, comparado con el `receivedAt` de cada mensaje; se borra al desactivar la opción |
+| `shared_mailbox_copies` | libro de copias entregadas (#313): (miembro, cuenta compartida, mensaje origen), lo que impide duplicados al repetir una página |
 
 Las sesiones persisten en Postgres (sobreviven reinicios); la credencial
 descifrada no se persiste nunca — se re-descifra bajo demanda y se cachea
@@ -286,6 +379,379 @@ memoria del navegador para renderizarse.
 - La restricción de egress limita el alcance de cualquier compromiso del
   servidor.
 
+### Indicador de confianza del remitente (#314)
+
+Sobre la insignia de autenticidad (#136/#152: veredicto DMARC `pass`/`fail`/
+`unknown` leído de `Authentication-Results`, ver `docs/OPERATIONS.md`), el
+lector muestra un segundo nivel **solo positivo** (`senderTrust`), calculado en
+`GET /api/mail/threads/:id` por `modules/mail/sender-trust.ts`:
+
+| Nivel | Condición |
+|-------|-----------|
+| `known` (remitente conocido) | DMARC `pass` **y** la dirección `From` exacta es una a la que el usuario ha escrito antes (`sent_recipients`). |
+| `trusted-service` (servicio de confianza) | DMARC `pass` **y** el dominio del `From` está en la lista de servicios de confianza, o es subdominio de una entrada (`noreply.github.com` cae bajo `github.com`). |
+| `none` | Cualquier otro caso. No es un aviso: es la ausencia de afirmación. |
+
+Si aplican los dos, gana `trusted-service`. Reglas que no se negocian:
+
+- **DMARC `pass` es la puerta.** Sin él no hay nivel, aunque la dirección sea
+  conocida o el dominio esté en la lista: un `fail` sigue siendo la única señal
+  negativa y nunca se contradice con una marca positiva. Un `pass` solo, sin
+  coincidencia, tampoco da confianza. No se parsea DKIM `d=`: DMARC ya exige
+  alineación con el dominio del `From` (RFC 7489 §6.6.2).
+- **El `pass` debe estar ligado a la dirección que se muestra.** Un `dmarc=pass`
+  es evidencia sobre el dominio que DMARC evaluó, no sobre cualquier dirección
+  del mensaje: `deriveSenderAuthFacts` lee el propspec `header.from=` del
+  `dmarc=` de esa misma cabecera de confianza y el nivel solo se asigna si ese
+  dominio coincide exactamente con el de `from[0]`. Además el mensaje debe
+  llevar **una sola** dirección en `From` (RFC 5322 permite varias y DMARC
+  evalúa una); con varias, cuál ve el lector es un accidente de representación
+  y no se afirma ningún nivel. Sin `header.from=` legible, o con dos entradas
+  `dmarc=` que nombran dominios distintos, el resultado es `none`.
+- **La interfaz muestra siempre la dirección o el dominio real** junto a la
+  insignia (`SenderTrustBadge`, con el `from[0]` que devuelve el servidor en
+  su nombre accesible), para que el lector compruebe a quién se avala.
+- **"Está en contactos" no es señal.** `contacts` se alimenta de cada remitente
+  que llega (#124/#180), así que un phisher ganaría una fila con solo enviar.
+  `sent_recipients` registra únicamente la dirección **saliente**: envíos
+  confirmados por `POST /send`, los mensajes que aparecen en *Enviados* en la
+  cosecha de llegada, y un backfill único y acotado (200 mensajes más
+  recientes de *Enviados*) la primera vez que un usuario abre un hilo.
+- **Coincidencia de dominio por etiquetas**, en minúsculas: `githiib.com` o
+  `notgithub.com` nunca coinciden con `github.com`; `com` tampoco.
+
+La lista de servicios de confianza es la unión de una **semilla curada**
+(`apps/server/src/modules/mail/trusted-services-seed.ts`: grandes proveedores
+cuyo correo transaccional es objetivo habitual de phishing y que publican DMARC
+en modo estricto; inmutable y no editable por usuario) y los dominios que el
+usuario confirma desde el lector ("Confiar en {dominio}", solo ofrecido con
+DMARC `pass`), guardados en `user_preferences.preferences.trustedServices` y
+gestionados por `GET/PUT/DELETE /api/mail/trusted-services[/:dominio]`.
+Quitar una entrada de la semilla responde `409 trusted_service_seed`; añadir
+una entrada nueva cuando la lista del usuario ya tiene 200 responde
+`409 trusted_services_limit` (volver a confiar una ya presente sigue siendo
+`200`).
+
+No es BIMI: no se consulta DNS del remitente ni se descarga ningún logotipo;
+la marca es un icono fijo junto al dominio real. No requiere variables de
+entorno nuevas; sin `JMAP_AUTHSERV_ID` todo queda en `none`, igual que la
+insignia de autenticidad queda en `unknown`.
+
+### Copias automáticas de buzones compartidos (#313)
+
+Un miembro de un buzón compartido puede pedir, desde Ajustes → Buzones
+compartidos, que el correo nuevo de ese buzón le llegue también a su propia
+bandeja (`user_preferences.preferences.sharedMailboxCopyOptIn`). Desde #313 el
+servidor actúa sobre esa preferencia con **el único trabajo de fondo que tiene
+este proceso**: `apps/server/src/modules/mail/shared-copy/`. Es el mismo
+`Email/copy` del botón manual "copiar a mi bandeja" (`shared-copy/copy.ts`, con
+la credencial del miembro destinatario), ejecutado sin que nadie pulse nada.
+El diseño y las alternativas descartadas están en
+`docs/design/shared-mailboxes.md` (G-2); aquí va cómo funciona.
+
+El botón manual escribe en **el mismo libro** (`shared_mailbox_copies`, fila
+`copied` para la cuenta compartida de origen) en cuanto la copia queda
+confirmada, de modo que el ciclo automático no vuelve a entregar un mensaje que
+el miembro ya se copió; si esa escritura falla, la ruta responde `ok` igual —la
+copia ya está en su bandeja y un error invitaría a pulsar otra vez.
+
+**Ciclo de entrega** (`delivery.ts`, uno por cuenta compartida):
+
+1. **Elegir un watcher.** No existe credencial del grupo (un principal de grupo
+   no puede iniciar sesión), así que la cuenta compartida se lee a través de la
+   sesión de un miembro: el primero de los miembros con opt-in (orden por
+   email) cuya sesión JMAP alcanza la cuenta. Se re-elige en cada ciclo; un
+   miembro dado de baja o con credencial revocada solo cuesta una línea de
+   log. Sin candidato, el ciclo no toca nada.
+2. **Cursor.** El servidor guarda el último estado `Email` de la cuenta
+   compartida que procesó (`shared_mailbox_copy_state.email_state`). Sin fila,
+   el primer ciclo **solo fija el estado actual, sin copiar**: el opt-in es
+   hacia adelante, y el correo anterior sigue disponible con el botón manual.
+   Con fila, el ciclo **siempre reanuda desde el cursor, tenga la edad que
+   tenga**: pide `Email/changes { sinceState, maxChanges: 100 }` y recorre como
+   mucho cinco páginas por ciclo; lo que quede lo termina el siguiente. Parar
+   el worker, un despliegue o una caída del proveedor **aplazan** la entrega,
+   no la cancelan: al volver, el atraso se drena a razón de cinco páginas por
+   ciclo. Lo que impide que un miembro reciba correo anterior a su propio
+   opt-in no es el tiempo, es la línea base por miembro (punto 4). Un descarte
+   por antigüedad —el ciclo re-fijaba el estado si el cursor llevaba dos
+   intervalos de sondeo quieto— se retiró justamente por eso: el reloj no
+   distingue una pausa intencionada de una caída, así que tiraba todo el correo
+   del hueco. `last_cycle_at` sobrevive **solo como dato informativo**: se
+   sella en cuanto el ciclo toma el arrendamiento, de modo que dice "último
+   intento" (incluye los ciclos sin watcher y los que fallaron), y nadie decide
+   nada con él. Si el proveedor responde `cannotCalculateChanges` (el cursor es
+   más viejo que su historial), se vuelve a fijar el estado y se avisa en el
+   log: el correo de ese hueco es incognoscible, y un barrido "los N más
+   recientes" repartiría duplicados. Cualquier otro error del proveedor se
+   propaga **sin mover el cursor**, para reintentar la misma página en el
+   siguiente sondeo o push.
+3. **Solo bandeja de entrada.** Un lote de lectura (`Mailbox/query role=inbox`
+   + `Email/get mailboxIds, keywords, messageId, receivedAt`) sobre la cuenta
+   compartida filtra los ids creados y, de paso, trae las `keywords` de cada
+   mensaje (se pasan a la copia para conservar las marcas sin una lectura por
+   copia), su `Message-ID` (punto 5) y su `receivedAt` (punto 4). Esa lectura
+   se hace **fuera del cerrojo compartido de degradación** del cliente JMAP
+   (`request(…, { degradation: "isolated" })`): `messageId` es una propiedad
+   degradable, y el cerrojo es por proceso, así que en cuanto cualquier vista
+   de conversación lo activaba la lectura de página perdía `messageId` sin
+   avisar, cada reserva guardaba `null` y la verificación del reintento quedaba
+   desactivada para el resto del proceso. Aislada, la lectura pide lo que
+   necesita y un `messageId` **ausente** (no `null`, que es "sin cabecera")
+   significa que el proveedor no lo devuelve: se avisa una vez por ciclo. La bandeja
+   personal de cada miembro se resuelve **una vez por ciclo**, no una vez por
+   mensaje: antes, cada par (miembro, mensaje) costaba dos viajes de ida y
+   vuelta a JMAP para dos respuestas que el ciclo ya tenía. Lo filtrado:
+   lo enviado por el grupo, los borradores y lo archivado por una regla Sieve
+   no es "correo nuevo del buzón".
+
+   **Qué se entrega, exactamente.** Solo los ids que `Email/changes` devuelve
+   como **`created`**; los de `updated` y `destroyed` se ignoran a propósito.
+   De ahí salen dos casos que **no** se copian, ambos deliberados:
+
+   - un mensaje que llega a otra carpeta del buzón compartido y **se mueve
+     después** a la bandeja de entrada: para el proveedor eso es un `updated`,
+     no un `created`, así que ningún ciclo lo verá como correo nuevo;
+   - un mensaje creado en la bandeja compartida que se **mueve o se borra antes
+     de que corra el ciclo**: la pertenencia a la bandeja se evalúa al correr el
+     ciclo, no al llegar el mensaje, así que para entonces ya no está ahí y el
+     filtro del punto 3 lo descarta.
+
+   Tratar `updated` como entregable sería peor: cada marca de leído, cada
+   etiqueta y cada movimiento dentro del buzón compartido son `updated`, y
+   repartirlos convertiría una reorganización de carpetas en una avalancha de
+   copias; distinguir "movido a la bandeja" de "marcado como leído" exigiría
+   leer y recordar el estado anterior de cada mensaje, un segundo libro con su
+   propia deriva. Para los dos casos, la recuperación es la misma y explícita:
+   el botón manual **"copiar a mi bandeja"**, que copia cualquier mensaje que
+   el miembro vea en el buzón compartido, sin importar cuándo llegó ni por
+   dónde pasó.
+4. **Línea base por miembro.** El primer ciclo que ve a un miembro en una
+   cuenta lo **registra con la hora** (`shared_mailbox_member_state.baselined_at`)
+   y desde ese mismo ciclo le copia **solo** los mensajes que el buzón
+   compartido recibió (`receivedAt`, RFC 8621) **a partir de esa hora**, con un
+   margen de 60 s de desfase de reloj (`DELIVERY_BASELINE_SKEW_MS`: el
+   proveedor sella el mensaje con su reloj y la base de datos sella la línea
+   base con el suyo; sin margen, un proveedor unos segundos atrasado retendría
+   justo el mensaje que llegó nada más activar la opción, y un minuto de
+   correo ajeno no se parece a los meses de un backfill). Todo lo anterior a
+   esa hora **nunca** se le copia, por muchas páginas de atraso que el cursor
+   tenga aún por drenar: activar la opción no reparte el correo que ya estaba
+   en el buzón, que es justo lo que cubre el botón manual. Antes la línea base
+   era un estado `Email` opaco que se guardaba y **no se comparaba con nada**,
+   así que solo excluía al recién llegado durante un ciclo, y un atraso mayor
+   que el tope de páginas de ese ciclo le llegaba entero desde el siguiente;
+   además, con la regla por hora esa exclusión de un ciclo sería dañina, porque
+   le costaría el correo que llega durante el ciclo en que se une. La misma
+   regla se aplica en el **paso de reintentos** (la reserva guarda el
+   `receivedAt` del origen): una fila `failed` anterior a la línea base del
+   miembro gasta un intento en vez de entregarse. Si el proveedor no devuelve
+   `receivedAt`, el ciclo falla sin mover el cursor —como con una bandeja
+   irresoluble—, porque sin él ningún mensaje se puede situar frente a ninguna
+   línea base. Si el miembro desactiva la opción, su fila se borra, de modo que
+   volver a activarla lo registra de nuevo —con hora nueva— en lugar de
+   rellenarle el hueco. La limpieza la hace **solo el worker, en cada
+   sondeo**, sobre todas las cuentas con estado guardado, no el ciclo: un
+   buzón que se queda sin ningún miembro no vuelve a tener ciclo, y su última
+   baja se quedaba registrada para siempre. Y la hace contra **lo que dice la
+   preferencia** (`listSharedMailboxCopyOptInMembership`: todo usuario cuya
+   preferencia nombra la cuenta, esté activo o no, tenga credencial o no), no
+   contra la lista entregable (`listSharedMailboxCopyOptIns`, que filtra
+   `active` y exige credencial) con la que corren los ciclos: podar contra esa
+   lista hacía que un miembro desactivado una tarde, o sin credencial un
+   momento, pasara por "dado de baja" y perdiera su línea base y sus copias
+   pendientes. Ese miembro **ni recibe ni se poda**; al volver, la entrega
+   sigue donde estaba. Con la fila se van también sus copias
+   **pendientes y fallidas** de ese buzón (las `copied` se conservan como
+   historial anti-duplicado): eran correo que ya no se le puede entregar, el
+   reintento se las habría repartido al volver —justo el hueco que la línea
+   base evita— y, siendo el lote de reintentos las 100 filas más antiguas de la
+   cuenta, ocupaban sitio que necesitan los miembros vivos. Por lo mismo, el
+   lote de reintentos se pide **acotado a los miembros entregables** del ciclo.
+
+   **Al miembro que no se puede servir se le deja rastro.** Conservarle la
+   línea base era solo la mitad de "al volver, la entrega sigue donde estaba":
+   el cursor es de la cuenta, no de cada miembro, así que avanza página a
+   página mientras él está fuera y **nada recuerda una página por la que ya
+   pasó**. Por eso el worker le pasa al ciclo, además de los miembros
+   **entregables**, los que le **debe** una copia (la membresía por preferencia
+   menos la lista entregable), y el ciclo escribe para cada uno de ellos —y
+   también para un miembro entregable cuya sesión no se pudo resolver en ese
+   ciclo: credencial revocada, proveedor que rechaza, cuenta que su sesión ya
+   no lista— una fila `failed` **sin gastar intento**
+   (`last_error = "member unavailable"`, `recordOwed`) por cada mensaje de la
+   página al que tiene derecho, **antes** de que el cursor avance. No se hace
+   ninguna llamada JMAP en su nombre —no tener sesión utilizable es justo lo
+   que hace que la copia se le deba—; la fila lleva el `Message-ID` y el
+   `receivedAt` del origen como cualquier reserva, y el **paso de reintentos**
+   la entrega (verificándola antes, punto 5) en cuanto el miembro vuelve a ser
+   entregable. Se escribe con `on conflict do nothing`, y esa es toda su
+   seguridad: nunca toca una fila que ya existe, ni una `copied` (que se
+   reabriría), ni una `pending` (que se daría por contestada), ni una `failed`
+   con intentos ya gastados. Al miembro que se le debe se le fija **línea
+   base** igual que a los entregables, para que su rastro sea igual de hacia
+   adelante que la entrega: volver no le trae el correo anterior a ser
+   miembro. Cada fila así escrita suma en la métrica como `owed`.
+
+   **Y ese rastro está acotado.** "No se puede servir este ciclo" no siempre es
+   pasajero: una credencial revocada en el proveedor, o una sesión que deja de
+   listar la cuenta compartida, es un estado permanente que este servidor no
+   puede terminar. Sin cota, ese miembro costaba el correo de los demás por dos
+   caminos. Uno es el **lote de reintentos**: sus filas llegan al paso de
+   reintentos, no hay sesión con la que intentar nada y el paso sigue adelante
+   sin gastar intento ni tocar `updated_at`, así que —siendo el lote
+   `order by updated_at asc limit 100`— unas filas que nadie mueve se quedaban
+   con la cabeza de la cola de toda la cuenta para siempre y **ningún otro
+   miembro volvía a reintentarse**. Por eso, cuando la sesión de un miembro no
+   se resuelve, sus filas del lote **rotan al final de la cola** (`touchRows`,
+   solo `updated_at = now()`): **sin gastar intento**, porque no se intentó nada
+   y nada se le puede cobrar, y con una línea por miembro y ciclo. El otro es el
+   **conjunto de filas**: el rastro crecía una fila por mensaje y por página, sin
+   fin, en una tabla sin retención y para correo que nadie va a entregar. Por eso
+   solo se escribe mientras ese miembro tenga menos de `DELIVERY_OWED_CAP`
+   (1000) filas debidas pendientes en esa cuenta (`countOwed`: `failed`,
+   `attempts = 0`, `last_error = "member unavailable"`); pasada la cota la
+   página no se le escribe, sus mensajes se cuentan como `dropped` y se avisa
+   una vez por miembro y ciclo. La cota es la misma para el miembro al que la
+   lista entregable no incluye. `dropped` es el único desenlace de ese contador
+   que **sí** es una pérdida: el correo sigue en el buzón compartido, con su
+   botón manual de copiar a la bandeja, y lo que hay que arreglar es la
+   membresía.
+5. **Copiar a cada miembro** ya registrado, con la sesión de cada uno (un
+   miembro cuya sesión no se puede resolver —o que ya no lista la cuenta— se
+   salta con log, dejándole el rastro `owed` del punto 4). El libro
+   `shared_mailbox_copies` se consulta en una sola query por página y **se
+   escribe antes de copiar**: la fila se reserva como `pending`, se emite el
+   `Email/copy` y solo entonces pasa a `copied` (por `created`, nunca por
+   ausencia de `notCreated`). Si el proceso muere —o falla la base de datos—
+   entre la copia ya hecha y su confirmación, la fila se queda en `pending`:
+   los ciclos siguientes la **saltan** y la cuentan como `unresolved` en vez de
+   volver a copiarla. La entrega es *como mucho una vez* a propósito, porque un
+   mensaje duplicado es el fallo que el miembro nota, y para el que falta hay
+   una recuperación evidente: el botón manual de copiar a la bandeja. Un fallo
+   en la copia de un miembro se cuenta, se registra y **no bloquea a los
+   demás**: la fila queda en `failed` con su motivo y su número de intentos,
+   y **cada ciclo empieza reintentando** un lote acotado de esas filas (100
+   como mucho, hasta 5 intentos por copia) antes de mirar páginas nuevas. Sin
+   eso, un fallo pasajero del proveedor costaba el mensaje para siempre,
+   porque el cursor ya había avanzado por encima de la página que lo traía.
+   Agotados los intentos, la fila se queda como registro de una copia que no
+   se entregó. Esa fila `failed` es **solo** del paso de reintentos: si una
+   página repetida —el cursor no avanzó por un arrendamiento perdido a mitad o
+   por una caída antes de guardarlo— vuelve a traer ese id, la página lo
+   **salta** (cuenta como `skipped`) en vez de copiarlo. Copiarlo ahí lo
+   trataba como un id que nadie había intentado: sin la comprobación por
+   `Message-ID` y fuera del tope de intentos, que es exactamente el duplicado
+   que esa comprobación existe para evitar.
+
+   **Antes de reintentar, se comprueba.** Un `Email/copy` cuya respuesta se
+   pierde *después* de que el proveedor la haya hecho queda igual que uno que
+   nunca ocurrió —fila `failed`—, y reintentarlo entregaba el mensaje dos
+   veces. Por eso la reserva guarda el `Message-ID` del mensaje de origen (lo
+   trae la misma lectura de la página) y el reintento pregunta primero por él
+   en la bandeja del miembro (`Email/query { inMailbox, header: ["Message-ID",
+   "<id>"], limit: 1 }`, con su propia sesión): si aparece, la fila pasa a
+   `copied` **sin copiar**; si no, se copia. Ojo con las dos formas del id: la
+   propiedad `messageId` de JMAP (`asMessageIds`, RFC 8621) viene **sin**
+   ángulos y así se guarda (`message_id`, normalizado por si acaso), mientras
+   que el filtro `header` compara contra el valor **crudo** de la cabecera, que
+   los lleva; la consulta envuelve el id guardado en `<…>` exactamente una vez.
+   Si el origen no trae `Message-ID` —raro, pero legal— se reintenta como
+   antes, asumiendo el duplicado para ese caso. Si la consulta falla, o la
+   bandeja personal del miembro no se puede resolver, no se copia nada
+   —copiar a ciegas es lo único que no tiene vuelta atrás—, pero la fila
+   **gasta un intento** (`last_error = "verification unavailable: …"`): dejarla
+   intacta la hacía inmortal, y ocupaba para siempre la cabeza del lote de
+   reintentos (las 100 más antiguas por `updated_at`) hasta dejar sin sitio a
+   las demás. No es un segundo libro de dedupe: solo se usa en el
+   camino de reintento, sobre una copia que este servidor reservó, y si el
+   miembro borró la copia se le vuelve a entregar, igual que con el botón
+   manual.
+6. **Avanzar el cursor** al `newState` de la página **después** de sus copias.
+   Una caída entre la última copia y el avance repite la página en el ciclo
+   siguiente, y el libro convierte la repetición en saltos, no en duplicados.
+   El cursor avanza aunque la copia de un miembro haya fallado: lo que protege
+   la copia de ese miembro entre ciclos es el libro, y clavar una página por el
+   fallo de uno dejaría sin correo a todos.
+
+**Disparador híbrido** (`worker.ts` + `watcher.ts`, decisión del owner): por
+cada cuenta con opt-ins el servidor mantiene **una suscripción EventSource**
+propia (`{types}=Email`, `{closeafter}=no`, `{ping}=30`) abierta con la
+credencial del watcher, y un cambio del estado `Email` de la cuenta lanza un
+ciclo al momento. Como red de seguridad, un **sondeo pasivo** cada
+`SHARED_MAILBOX_COPY_POLL_MS` (5 min) vuelve a listar los opt-ins, corre el
+ciclo de cada cuenta y reconcilia las suscripciones (abre las de cuentas
+nuevas, cierra las que ya nadie pide). Los pushes de una misma cuenta se
+pliegan en un solo ciclo en vuelo más, como mucho, uno de seguimiento. La
+suscripción tiene watchdog de silencio de 90 s y reconexión con backoff
+exponencial (5 s → 60 s), y **no** se registra en `mailStreams`: ese registro
+es por usuario, tiene tope de 8 y se cierra con el logout del usuario, y el
+logout de un miembro no debe apagar el buzón para los demás. Una credencial
+rotada o revocada aparece como 401 en la siguiente conexión o elección, y se
+elige a otro miembro. `PushSubscription` de JMAP (webhook real) queda como
+opción futura: quitaría el socket sostenido a cambio de un endpoint HTTPS
+entrante y su handshake.
+
+**Varias réplicas.** Cada réplica mantiene sus propias suscripciones y su
+propio sondeo, a propósito: la duplicación de suscripciones es barata y evita
+coordinar quién escucha. Lo que **no** se duplica es la entrega: cada ciclo
+toma un **arrendamiento (lease) por cuenta** en la propia fila de estado
+(`lease_owner`, `lease_until`), y quien no lo consigue cede sin esperar — el
+poseedor está haciendo el mismo trabajo. El titular es un `crypto.randomUUID()`
+por proceso, así que cada réplica es un titular distinto. Se toma con un único
+`insert … on conflict do update … where` atómico (el `where` corre bajo el
+bloqueo de fila del insert, así que dos réplicas compitiendo se serializan y
+solo una recibe fila), se renueva **tras el lote de cada miembro** (y también
+entre páginas) y se libera en el `finally`; si el titular muere a medio ciclo,
+la cuenta se recupera sola al vencer `lease_until` (TTL de 10 min). Renovarlo
+solo entre páginas dejaba que una página más larga que el TTL —cien mensajes
+por una docena de miembros— fuese adquirida por otra réplica **a mitad de
+página**, y las dos copiaban los mismos mensajes: el libro se lee una vez por
+miembro y por página, así que ninguna de las dos veía a tiempo las reservas de
+la otra. Si una renovación falla, el ciclo **deja de copiar en el acto** y no
+avanza el cursor de esa página: quien tenga ahora la cuenta la vuelve a leer, y
+el libro convierte en saltos lo que este ciclo ya había copiado. Por la misma
+razón, marcar una copia como `failed` **nunca degrada una fila ya `copied`**
+(una copia manual simultánea, o la confirmación de otro titular): degradarla la
+devolvería al lote de reintentos y la entregaría dos veces. **Ninguna transacción abarca el ciclo**: el
+advisory lock anterior mantenía una conexión del pool dentro de una transacción
+durante todo el ciclo mientras cada query de ese mismo ciclo pedía otra
+conexión al mismo pool — bloqueo mutuo garantizado con `DB_POOL_MAX=1` y una
+conexión *idle in transaction* de minutos en cualquier otro caso, además de
+posibles colisiones de `hashtext` entre cuentas distintas.
+
+**Arranque y apagado.** El worker se construye solo con `JMAP_URL` configurado
+y `SHARED_MAILBOX_COPY_ENABLED` no desactivado, arranca **después** de que el
+listener esté escuchando, y sin opt-ins no corre ciclos ni abre suscripciones.
+En el apagado ordenado (#193) se detiene **antes** de drenar el listener
+(`createShutdown.stopWorkers`) para que ningún ciclo empiece una copia contra
+un pool que se está cerrando. `stop()` espera también al **sondeo en vuelo**, y
+el sondeo vuelve a comprobar `stopped` **tras cada `await`** (listar opt-ins,
+reconciliar miembros, drenar): antes solo lo miraba al empezar, y un `stop()`
+que caía durante el listado o la reconciliación iba seguido igualmente de la
+reconciliación de suscripciones, que volvía a abrir watchers en el mapa que
+`stop()` acababa de vaciar. La reconciliación de miembros captura el fallo
+**por cuenta**, para que una poda que falla no deje sin podar a las cuentas
+siguientes. Si lo que falla es el **listado de membresía por preferencia**, ese
+sondeo **no corre ciclos** (las suscripciones se quedan abiertas) y un push
+anterior al primer listado correcto también se salta: ese listado es lo que dice
+a quién se le **debe** una copia, y un ciclo corrido sin él avanzaría el cursor
+por encima del correo de los miembros que falten en el mapa sin dejarles rastro.
+Se reintenta en el sondeo siguiente: un ciclo aplazado cuesta un intervalo,
+correrlo con una respuesta que no se tiene cuesta correo. Las dos fases comparten **un solo plazo**,
+`SHUTDOWN_GRACE_MS`: lo que tarde en pararse el worker se descuenta del
+drenaje, con un suelo de 1 s (`MIN_DRAIN_MS`) para que la petición en vuelo
+pueda terminar aunque el worker se coma el plazo entero. La espera hasta el
+cierre forzado es por tanto **≤ `SHUTDOWN_GRACE_MS` + 1 s** —ese suelo—, no el
+doble del plazo configurado. Cada copia intentada suma en
+`cefiro_shared_mailbox_copies_total{result}`, con seis desenlaces: `copied`,
+`failed`, `skipped`, `unresolved`, `owed` y `dropped` (docs/OPERATIONS.md los
+detalla).
+
+**Fuera de alcance, a propósito:** retención o purga de las copias, borrado en
+cascada, backfill del correo anterior al opt-in y la UI más allá del texto de
+ayuda.
+
 ### Papelera con retención
 
 La regla de borrado tras X días la ejecuta Stalwart. En F1 se configura
@@ -324,12 +790,30 @@ adaptadores de Odoo llegan en F4.
 - **traceId de punta a punta**: cada petición lleva un identificador que la
   sigue por SPA → BFF → Stalwart y aparece en todos los logs relacionados.
 - **Logs estructurados** (JSON), filtrables por usuario, ruta y traceId.
-  Ninguna credencial aparece jamás en logs.
+  Ninguna credencial aparece jamás en logs. El traceId viaja en un contexto
+  asíncrono (`core/logger.ts`), así que las líneas de diagnóstico profundas
+  —deadline saliente, sincronización Sieve, cosecha de contactos, adaptador de
+  IA— se correlacionan sin arrastrar un logger por cada firma. `LOG_LEVEL`
+  (`debug`|`info`|`warn`|`error`, por defecto `info`) filtra la salida.
 - **Frontend resiliente**: reintentos con backoff para fallos transitorios;
   si Stalwart no responde, banner de desconexión manteniendo visible el
   contenido cacheado.
-- **Health checks**: endpoint que reporta el estado de Postgres, Stalwart y
-  Authentik.
+- **Health checks**: `/api/health` reporta el estado de Postgres y Stalwart
+  (sonda JMAP acotada por el deadline saliente) y devuelve **503** cuando algún
+  chequeo falla, para que un balanceador/orquestador saque de rotación una
+  instancia degradada. Authentik (OIDC) no se sondea en cada poll a propósito:
+  su `discover()` es una llamada saliente al IdP y golpearla en cada health
+  reintroduciría el vector de amplificación que cierra #194. Los chequeos
+  corren **en paralelo** y con presupuesto propio (`core/health.ts`), muy por
+  debajo del `--timeout=5s` del `HEALTHCHECK` del contenedor, y su resultado se
+  **cachea unos segundos**: N sondeos no son N llamadas salientes a Stalwart.
+  El endpoint es anónimo, así que además lleva límite de tasa por origen.
+- **Métricas**: `/metrics` expone en formato Prometheus los contadores de
+  petición por ruta/método/estado, la latencia como histograma y el estado de
+  cada dependencia, reutilizando la sonda de salud ya cacheada en vez de añadir
+  llamadas salientes. Es superficie de operador, no del SPA: se abre con un
+  token portador (`METRICS_TOKEN`) y sin él el endpoint no existe. Procedimiento
+  y reglas de alerta en [OPERATIONS.md](OPERATIONS.md#métricas-y-alertas).
 
 ## Testing
 
@@ -356,6 +840,52 @@ compilación y en runtime.
   variables de entorno del servidor — nunca en el repositorio ni en la
   imagen.
 
+### Migraciones de esquema (#207)
+
+Las migraciones corren **en el arranque** del propio servidor
+(`apps/server/src/index.ts` → `infra/db/migrate.ts`), no como paso separado
+del despliegue: un contenedor que arranca deja la base al día por sí solo.
+
+Todo el runner va dentro de una transacción que sostiene un **advisory lock**
+(`pg_advisory_xact_lock`). Sin él, dos réplicas que arrancan a la vez pasaban
+ambas la comprobación `select 1 from schema_migrations`, ejecutaban el mismo
+DDL y la perdedora moría — un crash loop, porque cada reinicio repite la
+carrera. Con el lock una réplica migra y las demás esperan; cuando entran,
+todas las migraciones ya constan aplicadas. Es la variante *xact* del lock
+porque se libera tanto al confirmar como al abortar: una réplica que muere a
+mitad no puede dejar el lock tomado y bloquear a las demás.
+
+Consecuencia de diseño: como el runner corre dentro de una transacción, una
+migración **no puede usar sentencias no transaccionales** (`CREATE INDEX
+CONCURRENTLY`, `VACUUM`). Ya era así antes de #207 — cada archivo se aplicaba
+dentro de su propia transacción — pero conviene tenerlo escrito.
+
+#### Reversibilidad: solo cambios compatibles hacia atrás
+
+**No hay down-migrations, y es una decisión deliberada.** El rollback de #190
+vuelve a una imagen exacta, es decir revierte el *código*; el esquema no
+vuelve solo, y una down-migration que borre una columna o una tabla destruye
+datos justo en el momento en que el sistema ya está en incidente. La red de
+seguridad real del esquema es el backup (`scripts/db-restore.sh`), no un
+script inverso.
+
+Por eso la regla es que **toda migración debe ser compatible con la imagen
+anterior**: la versión N-1 del código tiene que seguir funcionando contra el
+esquema de la versión N. En la práctica:
+
+- Añadir columnas siempre como nullable o con `default`; nunca `not null` sin
+  default en una tabla con filas.
+- Añadir tablas, índices y columnas es libre. **Borrar y renombrar no**: se
+  hace en dos despliegues (expandir → migrar datos y dejar de usar el campo →
+  contraer en un despliegue posterior, cuando ya no queda código que lo lea).
+- Cambiar el tipo de una columna se trata como borrar + añadir.
+- Nada de DML destructivo dentro de una migración.
+
+Deshacer un cambio de esquema es, entonces, **otra migración hacia delante**
+(o una restauración de backup si ya hubo pérdida de datos), nunca un rollback
+de esquema. Un cambio que no se pueda expresar de forma compatible hacia atrás
+necesita ventana de mantenimiento explícita y backup previo verificado.
+
 ### Restricción de egress (regla de diseño)
 
 Preproducción y producción operan con egress restringido: la conexión
@@ -369,6 +899,32 @@ permitida es hacia GitHub/GHCR (repos e imágenes propios).
 - Las imágenes remotas dentro de correos HTML las carga el navegador del
   empleado (no el servidor) y se bloquean por defecto con botón
   "cargar imágenes" (anti-tracking).
+
+### IA — funciones opt-in (resumen y redacción asistida)
+
+Las funciones de IA (resumen de correos, "Redactar con IA") están **apagadas
+por defecto e inertes sin configuración explícita**. Esto es lo único que el
+software de CEFIRO-webmail asume o promete al respecto:
+
+- `AI_ENABLED` (booleano, por defecto `false`) y `AI_API_KEY` (secreto) deben
+  estar ambos presentes para que el proveedor se active; si falta cualquiera
+  de los dos, cualquier llamada a resumir/redactar falla rápido con un error
+  de dominio (`ai_disabled`) **sin intentar ninguna petición de red**, ni al
+  proveedor de IA ni a Stalwart.
+- `AI_PROVIDER` (por defecto `anthropic`) y `AI_MODEL` (por defecto
+  `claude-opus-4-8`) son configurables por variable de entorno — no hay
+  modelo ni proveedor hardcodeado.
+- El contenido del correo nunca se registra en logs. Solo se envía al
+  proveedor el mínimo contenido necesario para la llamada (cuerpo del mensaje
+  para resumir; asunto y contexto opcional para redactar) — nunca el buzón
+  completo ni datos no relacionados.
+
+Cualquier restricción adicional a nivel de red (por ejemplo, limitar el
+egress del contenedor hacia el proveedor de IA) es una decisión de
+**despliegue**, específica de cada instalación — no algo que esta aplicación
+imponga o de lo que dependa. Ese tipo de defensa en profundidad vive en el
+repositorio de despliegue de quien autoaloja el software, fuera del contrato
+de esta base de código.
 
 ## Fases de entrega
 

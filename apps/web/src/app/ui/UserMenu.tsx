@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Avatar } from "./Avatar";
-import { BellIcon, LogoutIcon, MoonIcon, SettingsIcon, SunIcon, UsersIcon } from "./icons";
+import { BellIcon, KeyboardIcon, LogoutIcon, MoonIcon, SettingsIcon, SunIcon, UsersIcon } from "./icons";
 
 interface UserMenuUser {
   email: string;
@@ -12,11 +12,17 @@ interface UserMenuUser {
 
 interface UserMenuProps {
   user: UserMenuUser;
+  // Profile photo (data: URL), fetched separately from /api/profile — see
+  // useProfile in features/settings. Absent/null keeps the initials fallback.
+  avatarUrl?: string | null;
   theme: "night" | "light";
   onToggleTheme: () => void;
   onLogout: () => void;
   showNotifications: boolean;
   onEnableNotifications: () => void;
+  // GH #13/#50 (G-4): opens the keyboard-shortcuts dialog. The standalone
+  // "Atajos" header button moved in here; the `?` keyboard trigger is unchanged.
+  onShowShortcuts: () => void;
 }
 
 const menuItemClass =
@@ -24,11 +30,13 @@ const menuItemClass =
 
 export function UserMenu({
   user,
+  avatarUrl,
   theme,
   onToggleTheme,
   onLogout,
   showNotifications,
   onEnableNotifications,
+  onShowShortcuts,
 }: UserMenuProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -62,7 +70,13 @@ export function UserMenu({
         aria-expanded={open}
         title={user.email}
       >
-        <Avatar name={user.displayName ?? null} email={user.email} size={36} />
+        <Avatar
+          name={user.displayName ?? null}
+          email={user.email}
+          size={36}
+          tone="accent"
+          imageUrl={avatarUrl}
+        />
       </button>
       {open && (
         <div
@@ -84,6 +98,20 @@ export function UserMenu({
               {t("admin.title")}
             </Link>
           )}
+          {/* GH #13/#50 (G-4): the "Atajos" launcher moved here from a standalone
+              header button; it opens the same shortcuts dialog. */}
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClass}
+            onClick={() => {
+              onShowShortcuts();
+              setOpen(false);
+            }}
+          >
+            <KeyboardIcon />
+            {t("shortcuts.title")}
+          </button>
           <button
             type="button"
             role="menuitem"

@@ -6,7 +6,211 @@ export type SanitizedEmail = { html: string; hasRemoteImages: boolean };
 // which browsers resolve using the current page's protocol and are just as capable
 // of leaking a tracking pixel as a fully-qualified https:// URL.
 const REMOTE_URL_PATTERN = /^(https?:)?\/\//i;
-const CSS_REMOTE_URL_PATTERN = /url\(\s*['"]?\s*(https?:)?\/\//i;
+
+// The three shapes a remote reference takes inside CSS, assembled from shared
+// fragments so the inline-[style] check and the <style>-element check can
+// never drift apart on which of them they recognise.
+//
+//  - url(…)          the obvious one, valid anywhere a <url> is.
+//  - image-set(…)    GH #224: takes BARE quoted URLs as candidates, with no
+//                    url() wrapper — image-set("https://tracker/p.png" 1x) —
+//                    so the url() fragment alone never saw it. The legacy
+//                    -webkit- prefixed form is still what most mail-authoring
+//                    tools emit, and Chromium still honours it.
+//  - @import         pulls a whole remote stylesheet and likewise has a
+//                    bare-string form (@import "https://…";).
+//
+// All three fetch the moment the rule applies, so all three leak.
+const CSS_URL_REFERENCE = String.raw`url\(\s*['"]?\s*(https?:)?\/\/`;
+const CSS_IMAGE_SET_REFERENCE = String.raw`(?:-webkit-)?image-set\(\s*['"]?\s*(https?:)?\/\/`;
+const CSS_IMPORT_REFERENCE = String.raw`@import\s+(url\(\s*)?['"]?\s*(https?:)?\/\/`;
+
+const CSS_REMOTE_URL_PATTERN = new RegExp(
+  `${CSS_URL_REFERENCE}|${CSS_IMAGE_SET_REFERENCE}`,
+  "i",
+);
+// Everything the inline-[style] pattern covers, plus @import — which is only
+// legal inside a stylesheet, never in a style attribute.
+const CSS_REMOTE_REFERENCE_PATTERN = new RegExp(
+  `${CSS_URL_REFERENCE}|${CSS_IMAGE_SET_REFERENCE}|${CSS_IMPORT_REFERENCE}`,
+  "i",
+);
+
+// GH #239: the three patterns above are matched against NORMALISED CSS, never
+// against raw text, because both spellings below are ordinary valid CSS that
+// the browser resolves long before it looks at the value:
+//
+//   url(\68 ttps://tracker/p.png)    \68 is the CSS escape for "h"
+//   url(/*x*/https://tracker/p.png)  a comment interleaved in the value
+//
+// Neither contains the literal substring the patterns look for, so both walked
+// straight through the inline-[style] check AND the <style>-element check and
+// fetched the pixel with the remote-content block fully on — defeating #182 and
+// #224. Deciding on the resolved text closes the whole class of these instead
+// of the two spellings the issue happened to name.
+const CSS_HEX_DIGIT = /[0-9a-fA-F]/;
+// CSS whitespace (Syntax §4.2) — deliberately NOT \s, which also matches
+// U+00A0 and friends that the tokenizer does not treat as whitespace.
+const CSS_WHITESPACE = /[ \t\n\r\f]/;
+const CSS_MAX_ESCAPE_HEX_DIGITS = 6;
+const CSS_MAX_CODE_POINT = 0x10ffff;
+const UNICODE_REPLACEMENT = "�";
+
+/**
+ * Resolves the one escape sequence that starts at `value[start]` (a backslash),
+ * returning the text it denotes and the index just past it — CSS Syntax §4.3.7.
+ *
+ * The invariant that keeps this from becoming a bypass in its own right: an
+ * escape never resolves to nothing except for a line continuation, so it can
+ * never swallow the character that follows it out of the value.
+ */
+function readCssEscape(value: string, start: number): { text: string; next: number } {
+  const first = value[start + 1];
+  // A trailing backslash escapes nothing; keep it verbatim.
+  if (first === undefined) return { text: "\\", next: start + 1 };
+
+  // Backslash-newline: a line continuation inside a string, and not a valid
+  // escape anywhere else (there it is a parse error that voids the whole
+  // declaration). Dropping it in both cases only ever rejoins text that was
+  // split apart, which is the fail-closed direction.
+  //
+  // The CR arm is unreachable from the two callers as they stand — HTML
+  // input-stream preprocessing has already collapsed every CR and CRLF to a
+  // bare LF by the time the parser yields a <style>'s text or a style
+  // attribute — but a CRLF is one line break rather than two, and getting that
+  // wrong would leave a stray LF sitting in the middle of a scheme. Cheaper to
+  // be right here than to depend on where the string came from.
+  if (first === "\n" || first === "\f") return { text: "", next: start + 2 };
+  if (first === "\r") {
+    return { text: "", next: start + (value[start + 2] === "\n" ? 3 : 2) };
+  }
+
+  // Not a hex digit: the character stands for itself (\h -> h, \: -> :).
+  if (!CSS_HEX_DIGIT.test(first)) return { text: first, next: start + 2 };
+
+  // Up to six hex digits, then at most ONE whitespace character that acts as
+  // the sequence terminator and is consumed with it. That terminator is the
+  // whole trick in `\68 ttps`: the space ends the escape rather than appearing
+  // in the value, so it spells "https" and not "h ttps".
+  let hex = "";
+  let index = start + 1;
+  let digit = value[index];
+  while (
+    digit !== undefined &&
+    hex.length < CSS_MAX_ESCAPE_HEX_DIGITS &&
+    CSS_HEX_DIGIT.test(digit)
+  ) {
+    hex += digit;
+    index += 1;
+    digit = value[index];
+  }
+  const terminator = value[index];
+  if (terminator === "\r" && value[index + 1] === "\n") index += 2;
+  else if (terminator !== undefined && CSS_WHITESPACE.test(terminator)) index += 1;
+
+  const code = Number.parseInt(hex, 16);
+  // Null, lone surrogates and out-of-range values all become U+FFFD per the
+  // spec — a character, never an empty string.
+  const isInvalid = code === 0 || (code >= 0xd800 && code <= 0xdfff) || code > CSS_MAX_CODE_POINT;
+  return { text: isInvalid ? UNICODE_REPLACEMENT : String.fromCodePoint(code), next: index };
+}
+
+/**
+ * Rewrites CSS text into the form the browser actually acts on: escape
+ * sequences resolved to the characters they denote, comments removed. The
+ * remote-reference patterns are then matched against THAT rather than against
+ * whatever the message author typed.
+ *
+ * Why this cannot be turned into a new bypass: the walk only ever *removes
+ * comments* and *resolves escapes*, and never deletes anything else, so no URL
+ * text can go missing from the string the patterns see. The two places an
+ * attacker could try to steer it are both closed:
+ *
+ *  - Escapes are resolved FIRST, in every state. That is what stops an escaped
+ *    quote (\") from opening or closing a string and an escaped slash (\/*)
+ *    from opening a comment — exactly the reading the CSS tokenizer gives them.
+ *  - Comments are recognised only OUTSIDE strings, so a "/*" sitting inside a
+ *    quoted URL — url("https:/*x*\/y") — is left alone instead of taking the
+ *    rest of the value away with it.
+ *
+ * Text removed as a comment is text the browser also discards, so a reference
+ * that only exists inside a comment is one that never fetches. In the other
+ * direction the normalisation is deliberately generous: it resolves escapes and
+ * strips comments in positions where a browser would instead treat the value as
+ * a parse error and fetch nothing (inside an unquoted url() token, say), which
+ * can only over-detect. Over-detecting costs a dropped style declaration and a
+ * "remote content blocked" banner; under-detecting costs the tracking pixel.
+ */
+function normalizeCss(value: string): string {
+  // Neither an escape nor a comment can be present, so the raw text already IS
+  // the normalised text — the overwhelmingly common case pays nothing.
+  if (!value.includes("\\") && !value.includes("/*")) return value;
+
+  let out = "";
+  let quote: '"' | "'" | null = null;
+  let index = 0;
+  while (index < value.length) {
+    const char = value[index];
+    if (char === undefined) break;
+
+    if (char === "\\") {
+      const resolved = readCssEscape(value, index);
+      out += resolved.text;
+      index = resolved.next;
+      continue;
+    }
+
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      out += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      out += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === "/" && value[index + 1] === "*") {
+      // An unterminated comment runs to the end of the text, as it does in the
+      // tokenizer.
+      const end = value.indexOf("*/", index + 2);
+      index = end === -1 ? value.length : end + 2;
+      continue;
+    }
+
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+/**
+ * The single entry point both remote-reference checks go through, so neither
+ * can be left matching raw text while the other matches normalised text.
+ */
+function referencesRemoteCss(css: string, pattern: RegExp): boolean {
+  return pattern.test(normalizeCss(css));
+}
+
+// GH #224: attributes the browser fetches as soon as the element renders.
+// This used to be just src/srcset on a hard-coded "img, source" query, which
+// left <video poster="https://tracker/p.png"> downloading on render — a
+// tracking pixel by another name, and enough on its own to defeat the
+// remote-image block (GH #182), since the CSP allows img-src https:.
+//
+// Matching on attribute PRESENCE rather than on a tag list is deliberate and
+// fails closed: any element DOMPurify lets through carrying one of these
+// attributes is checked, including tags nobody enumerated here.
+const REMOTE_FETCH_ATTRIBUTES = ["src", "srcset", "poster"] as const;
+const REMOTE_FETCH_SELECTOR = REMOTE_FETCH_ATTRIBUTES.map((name) => `[${name}]`).join(", ");
+
+// The "cid:" URI scheme (RFC 2392) referencing a Content-ID body part —
+// case-insensitive per the URI spec.
+const CID_SCHEME_PATTERN = /^cid:/i;
 
 function extractSrcsetCandidates(srcset: string): string[] {
   return srcset
@@ -15,48 +219,152 @@ function extractSrcsetCandidates(srcset: string): string[] {
     .filter((url): url is string => Boolean(url));
 }
 
+// Some mail authoring tools wrap the Content-ID in angle brackets even inside
+// the src attribute (mirroring the raw Content-ID header syntax), e.g.
+// cid:<logo123>. Strip them so the id matches the server's cid (which never
+// includes brackets).
+function stripAngleBrackets(value: string): string {
+  return value.replace(/^</, "").replace(/>$/, "");
+}
+
+function cidFromSrc(src: string): string | null {
+  if (!CID_SCHEME_PATTERN.test(src)) return null;
+  return stripAngleBrackets(src.slice(4));
+}
+
+/**
+ * Finds every cid:-referenced image in the (untrusted, unsanitized) raw HTML
+ * and returns the set of referenced content ids. Used by ThreadView to
+ * de-duplicate inline images out of the attachment chip list — parsing via
+ * DOMParser only reads attributes into a detached document, it never
+ * executes scripts, so this is safe to run on raw email HTML.
+ */
+export function extractReferencedCids(html: string | null | undefined): Set<string> {
+  const cids = new Set<string>();
+  if (!html) return cids;
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const img of Array.from(doc.querySelectorAll("img"))) {
+    const src = img.getAttribute("src");
+    const cid = src ? cidFromSrc(src) : null;
+    if (cid) cids.add(cid);
+  }
+  return cids;
+}
+
+// Neutralises remote references carried inside <style> elements, working on
+// the raw parse *before* DOMPurify runs.
+//
+// This has to happen here, and not in the post-DOMPurify pass below, for two
+// reasons. First, the reference lives in the element's text content, so the
+// per-attribute [style]/[background] checks never see it. Second — and this is
+// why it can't just be another loop after DOMPurify — DOMPurify's handling of
+// the <style> tag is environment-dependent: a real browser keeps the element
+// (confirmed live: a `background:url(https://…)` fired a request the moment the
+// message was opened, defeating the remote-image opt-in, since the CSP allows
+// https: images), while jsdom drops it. DOMParser keeps <style> in both, so
+// doing it here makes the behaviour identical everywhere and actually testable.
+//
+// Whole elements are removed rather than their CSS edited, exactly as the
+// [style] attribute is dropped whole below: patching arbitrary CSS to excise
+// only the remote bits is far more error-prone than removing a block the reader
+// chose not to load.
+function stripRemoteStyleElements(
+  raw: string,
+  allowRemoteImages: boolean,
+): { html: string; hasRemoteStyle: boolean } {
+  const doc = new DOMParser().parseFromString(raw, "text/html");
+  let hasRemoteStyle = false;
+  for (const styleEl of Array.from(doc.querySelectorAll("style"))) {
+    if (!referencesRemoteCss(styleEl.textContent ?? "", CSS_REMOTE_REFERENCE_PATTERN)) continue;
+    hasRemoteStyle = true;
+    if (!allowRemoteImages) styleEl.remove();
+  }
+  // Re-serialise only when something was found, so the common (no-<style>) case
+  // pays nothing and passes the original string through untouched. The full
+  // documentElement is serialised so a <style> in <head> is covered too.
+  if (!hasRemoteStyle) return { html: raw, hasRemoteStyle: false };
+  return { html: doc.documentElement.outerHTML, hasRemoteStyle: true };
+}
+
 export function sanitizeEmailHtml(
   raw: string,
-  options: { allowRemoteImages: boolean },
+  // cidMap is cid -> already-resolved src string (a data: URL in production).
+  // Resolution — fetching the attachment's blob and building the data: URL —
+  // happens in EmailBody, which is the (authenticated) parent document; the
+  // email body itself renders inside an opaque-origin sandboxed iframe that
+  // can't authenticate a same-origin blob fetch on its own. sanitize just
+  // assigns whatever resolved src it's handed; it never constructs URLs.
+  options: { allowRemoteImages: boolean; cidMap?: Record<string, string> },
 ): SanitizedEmail {
-  const clean = DOMPurify.sanitize(raw, {
+  const { html: preprocessed, hasRemoteStyle } = stripRemoteStyleElements(
+    raw,
+    options.allowRemoteImages,
+  );
+
+  const clean = DOMPurify.sanitize(preprocessed, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["form", "input", "button"],
   });
 
   const doc = new DOMParser().parseFromString(clean, "text/html");
 
-  let hasRemoteImages = false;
+  let hasRemoteImages = hasRemoteStyle;
 
-  for (const el of Array.from(doc.querySelectorAll("img, source"))) {
-    const src = el.getAttribute("src");
-    const srcset = el.getAttribute("srcset");
-    const srcsetCandidates = srcset ? extractSrcsetCandidates(srcset) : [];
-
-    const srcIsRemote = Boolean(src && REMOTE_URL_PATTERN.test(src));
-    const remoteSrcsetCandidate = srcsetCandidates.find((url) => REMOTE_URL_PATTERN.test(url));
-
-    if (srcIsRemote || remoteSrcsetCandidate) {
-      hasRemoteImages = true;
-      if (!options.allowRemoteImages) {
-        const original = srcIsRemote ? (src as string) : remoteSrcsetCandidate;
-        if (srcIsRemote) el.removeAttribute("src");
-        if (remoteSrcsetCandidate) el.removeAttribute("srcset");
-        // Percent-encode the original URL rather than storing it verbatim:
-        // it stays recoverable (decodeURIComponent) for a future "load
-        // images" opt-in, but the raw tracking URL never appears as a
-        // plain substring in the sanitized output (e.g. in logs, copy-paste,
-        // or naive URL scanners).
-        if (original) {
-          el.setAttribute("data-blocked-src", encodeURIComponent(original));
-        }
+  // Rewrite cid: image sources to their resolved src first. This is
+  // independent of the remote-image block below: embedded inline images are
+  // not a tracking vector (they're already part of the message payload the
+  // user received, not a fetch to a third party), so they always resolve —
+  // no "load images" opt-in gate. Only <img src> is handled (not <source>/
+  // srcset): a Content-ID always names one specific resource, not a set of
+  // responsive candidates.
+  if (options.cidMap) {
+    for (const img of Array.from(doc.querySelectorAll("img"))) {
+      const src = img.getAttribute("src");
+      const cid = src ? cidFromSrc(src) : null;
+      if (!cid) continue;
+      const resolvedSrc = options.cidMap[cid];
+      if (resolvedSrc) {
+        img.setAttribute("src", resolvedSrc);
       }
+      // No resolved entry: leave the cid: src verbatim. Either this is an
+      // authoring error in the source email (it references a Content-ID
+      // that isn't among this email's attachments), or the parent's blob
+      // fetch for this cid hasn't resolved yet (or isn't a safe image type)
+      // — either way the browser shows a broken image icon rather than us
+      // guessing at a fallback or silently hiding the img.
+    }
+  }
+
+  for (const el of Array.from(doc.querySelectorAll(REMOTE_FETCH_SELECTOR))) {
+    for (const attribute of REMOTE_FETCH_ATTRIBUTES) {
+      const value = el.getAttribute(attribute);
+      if (!value) continue;
+
+      // srcset is the one attribute holding a LIST of candidates; every other
+      // one is a single URL, so wrapping it keeps a single code path.
+      const candidates = attribute === "srcset" ? extractSrcsetCandidates(value) : [value];
+      const remoteCandidate = candidates.find((url) => REMOTE_URL_PATTERN.test(url));
+      if (!remoteCandidate) continue;
+
+      hasRemoteImages = true;
+      if (options.allowRemoteImages) continue;
+
+      el.removeAttribute(attribute);
+      // Percent-encode the original URL rather than storing it verbatim: it
+      // stays recoverable (decodeURIComponent) for a future "load images"
+      // opt-in, but the raw tracking URL never appears as a plain substring
+      // in the sanitized output (e.g. in logs, copy-paste, or naive URL
+      // scanners). One data-blocked-* per source attribute, so an element
+      // carrying several (an <img src+srcset>, a <video src+poster>) doesn't
+      // silently drop all but one of them.
+      el.setAttribute(`data-blocked-${attribute}`, encodeURIComponent(remoteCandidate));
     }
   }
 
   for (const el of Array.from(doc.querySelectorAll("[style]"))) {
     const style = el.getAttribute("style");
-    if (style && CSS_REMOTE_URL_PATTERN.test(style)) {
+    if (style && referencesRemoteCss(style, CSS_REMOTE_URL_PATTERN)) {
       hasRemoteImages = true;
       if (!options.allowRemoteImages) {
         // Conservative: drop the whole style attribute rather than trying to
@@ -75,6 +383,10 @@ export function sanitizeEmailHtml(
       }
     }
   }
+
+  // Remote references inside <style> elements are handled up front by
+  // stripRemoteStyleElements, before DOMPurify — see its comment for why it
+  // cannot be another pass here.
 
   for (const link of Array.from(doc.querySelectorAll("a"))) {
     link.removeAttribute("target");

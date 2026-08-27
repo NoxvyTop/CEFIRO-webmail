@@ -1,6 +1,7 @@
 {
   "app": {
-    "tagline": "correo del ecosistema",
+    "home": "Go to home",
+    "skipToContent": "Skip to content",
     "themeLight": "Switch to light theme",
     "themeNight": "Switch to night theme",
     "sentWith": "Sent with",
@@ -11,6 +12,32 @@
     "forbidden": "You do not have admin permissions",
     "back": "Back",
     "empty": "No users",
+    "retry": "Try again",
+    "nav": {
+      "label": "Administration sections",
+      "resumen": "Overview",
+      "users": "Users",
+      "sso": "Identity (SSO)",
+      "settings": "Settings"
+    },
+    "metrics": {
+      "users": "Users",
+      "active": "Active",
+      "mailboxes": "Mailboxes",
+      "sso": "SSO",
+      "archivedSuffix": "/ {{count}} arch.",
+      "mailboxGaugeTitle": "Linked mailboxes",
+      "mailboxGaugeLabel": "{{linked}} of {{total}} mailboxes linked, {{percentage}}%",
+      "mailboxGaugeRatio": "{{linked}} / {{total}} linked",
+      "unlinkedCount": "{{count}} not linked"
+    },
+    "settings": {
+      "title": "Instance settings",
+      "footer": {
+        "label": "\"Sent with CÉFIRO\" footer",
+        "description": "Shows the CÉFIRO branding line below the Reply and Forward buttons on every email in the reader. Off by default."
+      }
+    },
     "mailbox": {
       "linked": "Mailbox linked",
       "unlinked": "Not linked"
@@ -48,8 +75,23 @@
       "create": "Create"
     },
     "errors": {
+      "forbidden": "You need administrator permissions to do this",
+      "generic": "The action could not be completed",
+      "invalid_body": "The data is not valid",
+      "last_admin": "Not allowed: this is the only active administrator. Appoint another one before changing this account.",
       "load": "Could not load users",
-      "action": "The action could not be completed"
+      "self_archive": "You cannot archive your own account",
+      "self_demotion": "You cannot remove your own administrator role",
+      "user_exists": "A user with that email already exists"
+    },
+    "search": {
+      "placeholder": "Search by name or email…",
+      "noResults": "No users match your search"
+    },
+    "pagination": {
+      "prev": "Previous",
+      "next": "Next",
+      "range": "{{from}}–{{to}} of {{total}}"
     },
     "sso": {
       "title": "SSO provider (OIDC)",
@@ -57,12 +99,15 @@
       "notConfigured": "Not configured",
       "save": "Save",
       "saved": "Saved",
-      "error": "Could not save",
       "fields": {
         "issuer": "Issuer",
         "clientId": "Client ID",
         "clientSecret": "Client Secret",
-        "scopes": "Scopes"
+        "scopes": "Scopes",
+        "providerName": "Provider name"
+      },
+      "errors": {
+        "issuerInvalid": "Enter a valid issuer: a full URL, e.g. https://id.your-company.com."
       }
     }
   },
@@ -70,42 +115,67 @@
     "degraded": "Service degraded"
   },
   "auth": {
-    "signIn": "Sign in with SSO",
+    "signIn": "Sign in with {{provider}}",
+    "connecting": "Connecting…",
+    "redirecting": "Redirecting to your identity provider…",
     "signOut": "Sign out",
     "signedInAs": "Signed in as {{email}}",
     "subtitle": "Sign in to your team's mail",
+    "credentialsDisabled": "Credential-based sign-in is disabled. Available only in recovery mode.",
     "errors": {
-      "state": "The sign-in attempt expired, try again",
-      "unknown_user": "Your account is not registered in the mail system",
-      "oidc": "Sign-in could not be completed"
+      "account_archived": "Your account is archived. Ask an administrator to reactivate it.",
+      "generic": "Sign-in could not be completed",
+      "oidc_email_unverified": "Your identity provider has not verified your email address. Verify it and try again.",
+      "state": "The sign-in attempt expired, try again"
     },
     "bootstrap": {
       "title": "Emergency access",
       "email": "User",
       "password": "Password",
       "submit": "Sign in",
+      "submitting": "Signing in…",
       "error": "Invalid credential",
-      "hint": "Only available in setup or recovery mode"
+      "hint": "Only available in setup or recovery mode",
+      "setupCta": "Initial setup",
+      "errors": {
+        "emptyUser": "Enter your username.",
+        "emptyPassword": "Enter your password.",
+        "network_error": "Could not reach the server. Check your connection and try again.",
+        "too_many_requests": "Too many attempts. Wait a moment and try again."
+      }
     }
   },
   "setup": {
     "title": "Initial setup",
     "tokenLabel": "Temporary console password",
     "connect": "Connect",
+    "connecting": "Connecting…",
     "disabled": "Setup mode is disabled",
     "status": "SSO configured: {{sso}} — Users: {{count}}",
     "ssoTitle": "SSO provider (OIDC)",
     "userTitle": "New user",
     "save": "Save",
+    "saving": "Saving…",
     "create": "Create",
+    "creating": "Creating…",
     "saved": "Saved",
     "created": "User created",
     "error": "Error: check the fields",
+    "errors": {
+      "generic": "The operation could not be completed. Check the fields and try again.",
+      "invalid_body": "Check the fields: some are missing or have an invalid format.",
+      "network_error": "Could not reach the server. Check your connection and try again.",
+      "not_found": "Initial setup is already complete. Sign in with SSO.",
+      "too_many_requests": "Too many attempts. Wait a moment and try again.",
+      "unauthorized": "The temporary console password is incorrect.",
+      "user_exists": "A user with that email already exists."
+    },
     "fields": {
       "issuer": "Issuer",
       "clientId": "Client ID",
       "clientSecret": "Client Secret",
       "scopes": "Scopes",
+      "providerName": "Provider name",
       "email": "Email",
       "displayName": "Name",
       "role": "Role",
@@ -116,97 +186,302 @@
   "mail": {
     "listRegion": "Message list",
     "readerRegion": "Reading pane",
+    "navRegion": "Mailbox navigation",
+    "navMenu": "Navigation menu",
+    "closeNav": "Close menu",
     "starredView": "Starred",
     "unread": "{{count}} unread",
-    "messageCount": "{{count}} messages",
-    "searchPlaceholder": "Search mail",
+    "messageListLabel": "Message list",
+    "messageCount_one": "{{count}} message",
+    "messageCount_other": "{{count}} messages",
+    "conversationCount_one": "{{count}} message",
+    "conversationCount_other": "{{count}} messages",
+    "searchPlaceholder": "Search mail…",
+    "searchResults": "Search results",
+    "searchResultCount_one": "{{count}} result",
+    "searchResultCount_other": "{{count}} results",
+    "clearSearch": "Clear search",
     "empty": "No mail here.",
     "noSubject": "(no subject)",
     "selectMessage": "Select an email",
+    "loading": "Loading…",
     "loadImages": "Load images",
     "emailContent": "Email content",
     "emptyBody": "(no content)",
     "newMailNotification": "New mail",
+    "liveUpdatesLimited": "Live updates are limited in this tab because too many are open. Close another tab and reload to resume here.",
     "enableNotifications": "Enable notifications",
     "resizeList": "Resize message list",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
+      "ai_disabled": "AI features are not enabled on this server",
+      "ai_provider_error": "Could not generate the AI summary",
+      "ai_rate_limited": "You've used AI too many times in a short while. Wait a moment and try again",
+      "upstream_timeout": "The server took too long to respond. Try again",
+      "database_unavailable": "The service is temporarily unavailable. Try again",
+      "not_in_trash": "The message is no longer in Trash",
+      "destroy_failed": "Could not delete the message",
+      "account_forbidden": "You don't have access to that mailbox",
+      "invalid_account": "That mailbox can't be copied to your inbox",
+      "invalid_domain": "That sender's domain can't be added as a trusted service",
+      "trusted_service_seed": "That service is trusted by default and can't be removed",
+      "trusted_services_limit": "Your trusted services list is full. Remove one before adding another",
+      "copy_failed": "Could not copy the message to your inbox",
       "generic": "Mail could not be loaded"
     },
+    "unlinked": {
+      "title": "Link your mailbox",
+      "descriptionAdmin": "Connect your mailbox to start receiving messages.",
+      "descriptionEmployee": "Your mailbox isn't linked to a mail account yet.",
+      "cta": "Link mailbox",
+      "hint": "Ask an administrator to link it."
+    },
+    "summarizeWithAi": "✦ Summarize with AI",
+    "summarizeConversation": "✦ Summarize conversation",
+    "aiSummaryTitle": "AI Summary",
+    "aiSummaryLoading": "Analyzing the message…",
     "backToList": "Back to messages",
     "archive": "Archive",
     "star": "Star",
     "unstar": "Unstar",
     "archived": "Email archived",
     "archivedHint": "press e to archive faster",
+    "unarchive": "Move to Inbox",
+    "unarchived": "Moved to Inbox",
+    "delete": "Delete",
+    "deleted": "Moved to Trash",
+    "deletePermanently": "Delete permanently",
+    "deletedPermanently": "Message permanently deleted",
+    "copyToInbox": "Copy to my inbox",
+    "copiedToInbox": "Copied to your inbox",
+    "deletePermanentlyConfirm": {
+      "title": "Delete this message permanently?",
+      "description": "\"{{subject}}\" will be permanently deleted. This can't be undone.",
+      "confirm": "Delete permanently",
+      "deleting": "Deleting…",
+      "cancel": "Cancel"
+    },
     "labels": "Labels",
-    "clearLabel": "Clear label filter"
-  },
-  "modules": {
-    "title": "Modules",
-    "mail": "Mail"
+    "clearLabel": "Clear label filter",
+    "newLabel": "New label",
+    "labelNamePlaceholder": "Label name",
+    "chooseLabelColor": "Choose color {{hex}}",
+    "createLabel": "Create label",
+    "cancelNewLabel": "Cancel",
+    "deleteLabel": "Delete label {{name}}",
+    "confirmDeleteLabel": "Delete \"{{name}}\"?",
+    "confirmDelete": "Confirm",
+    "labelNameRequired": "Enter a name for the label",
+    "labelNameDuplicate": "A label with that name already exists",
+    "noLabelsToApply": "No labels yet. Create one from the sidebar",
+    "audience": {
+      "toMe": "to me",
+      "toMeAndName": "to me and {{name}}",
+      "toMeAndCount": "to me and {{count}} more",
+      "toName": "to {{name}}",
+      "toNameAndCount": "to {{name}} and {{count}} more"
+    },
+    "sentTo": "To:",
+    "yesterday": "Yesterday",
+    "expandMessage": "Expand message from {{sender}}",
+    "collapseMessage": "Collapse message from {{sender}}",
+    "senderAuth": {
+      "passLabel": "Sender authentication passed (SPF/DKIM/DMARC verified)",
+      "failLabel": "Sender authentication failed — this message may be spoofed"
+    },
+    "senderTrust": {
+      "knownLabel": "Known sender: you have written to {{address}}",
+      "trustedServiceLabel": "Trusted service: {{domain}}",
+      "trustAction": "Trust {{domain}}",
+      "untrustAction": "Stop trusting {{domain}}",
+      "trusted": "{{domain}} is now a trusted service",
+      "untrusted": "{{domain}} is no longer a trusted service"
+    },
+    "bodyTruncated": {
+      "title": "This message is incomplete",
+      "hint": "It exceeded the size limit, so only the beginning was loaded. Replying or forwarding will quote only the part shown here."
+    },
+    "showQuotedContent": "Show quoted content",
+    "hideQuotedContent": "Hide quoted content",
+    "showFullMessage": "View entire message",
+    "folders": {
+      "inbox": "Inbox",
+      "sent": "Sent",
+      "archive": "Archive",
+      "trash": "Trash",
+      "junk": "Spam",
+      "drafts": "Drafts"
+    }
   },
   "groups": {
     "title": "Groups",
     "showInInbox": "Show in main inbox"
   },
+  "accounts": {
+    "selectorLabel": "Active mailbox",
+    "personal": "My mailbox",
+    "sharedHeading": "Shared mailboxes"
+  },
+  "sharedMailboxes": {
+    "title": "Shared mailboxes",
+    "description": "The shared mailboxes you can access. Enter any of them, or ask for their mail to also land in your inbox.",
+    "empty": "You don't have any shared mailboxes yet. When an administrator adds you to one, it will show up here.",
+    "enter": "Enter",
+    "copyLabel": "Receive a copy in my inbox",
+    "copyToggle": "Receive a copy of {{name}} in my inbox",
+    "copyHelp": "When new mail arrives in this mailbox, a copy will be delivered to your inbox.",
+    "copyError": "Couldn't change the preference. Please try again.",
+    "activeIndicator": "Shared mailbox: {{name}}",
+    "backToPersonal": "Back to my mailbox"
+  },
   "composer": {
+    "showQuoted": "Show quoted message",
+    "hideQuoted": "Hide quoted message",
+    "quotedReadOnly": "Shown as plain text. The original formatting is preserved in the message you send.",
     "title": "Compose",
+    "newMessage": "New message",
+    "editDraft": "Edit draft",
     "from": "From",
     "to": "To",
     "cc": "Cc",
     "bcc": "Bcc",
-    "addCcBcc": "Cc/Bcc",
+    "addCc": "Add Cc",
+    "addBcc": "Add Bcc",
     "subject": "Subject",
     "body": "Message",
+    "bodyPlaceholder": "Write the gist and the AI drafts it…",
+    "bodyPlaceholderNoAi": "Write your message…",
     "signature": "Signature",
+    "noSignature": "None",
     "reply": "Reply",
     "replyAll": "Reply all",
     "forward": "Forward",
     "attach": "Attach",
+    "attachFiles": "Attach files",
+    "close": "Close",
     "send": "Send",
     "sent": "Email sent",
-    "cancel": "Cancel",
+    "cancel": "Discard",
     "sending": "Sending…",
     "invalidEmail": "Invalid email",
     "invalidLink": "Invalid or unsafe URL",
     "bold": "Bold",
     "italic": "Italic",
     "bulletList": "Bulleted list",
+    "textAlignLeft": "Align text left",
+    "textAlignCenter": "Center text",
+    "textAlignRight": "Align text right",
     "link": "Link",
     "linkUrl": "Link URL",
+    "image": "Image",
+    "insertImage": "Insert image",
+    "imageTooLarge": "Image is too large (max 1 MB)",
+    "imageInvalidType": "Unsupported image type (use PNG, JPEG, GIF, or WebP)",
+    "imageSizeSmall": "Small image",
+    "imageSizeMedium": "Medium image",
+    "imageSizeLarge": "Large image",
+    "imageAlignLeft": "Align image left",
+    "imageAlignCenter": "Center image",
+    "imageAlignRight": "Align image right",
     "removeRecipient": "Remove {{email}}",
-    "removeAttachment": "Remove {{name}}",
+    "dropHint": "Drop to attach",
+    "duplicateAttachment": "{{name}} was already attached",
     "errors": {
       "noRecipients": "Add at least one recipient",
       "invalid_identity": "Invalid identity",
       "send_failed": "Could not send",
+      "save_draft_failed": "Could not save the draft",
+      "ai_disabled": "AI features are not enabled on this server",
+      "ai_provider_error": "Could not generate the AI draft",
+      "ai_rate_limited": "You've used AI too many times in a short while. Wait a moment and try again",
+      "upstream_timeout": "The server took too long to respond. Try again",
+      "invalid_body": "The data is not valid",
+      "mail_not_configured": "The mail server is not configured",
+      "mail_credentials_missing": "Your mailbox is not linked yet",
+      "database_unavailable": "The service is temporarily unavailable. Try again",
       "generic": "Something went wrong"
+    },
+    "draftWithAi": "✦ Draft with AI",
+    "draftingWithAi": "Drafting…",
+    "aiDraftNotice": "✦ Draft generated by AI — review it before sending",
+    "aiDraftNeedsIntent": "Write in the body what you want to convey, then try again.",
+    "noIdentitiesHint": "Link your mailbox to start composing emails",
+    "autosave": {
+      "saving": "Saving…",
+      "saved": "Draft saved",
+      "error": "Couldn't save draft"
+    },
+    "discardConfirm": {
+      "title": "Discard this message?",
+      "description": "Your message has unsaved content.",
+      "discard": "Discard anyway",
+      "saveToDrafts": "Save to drafts",
+      "savingToDrafts": "Saving…",
+      "keepEditing": "Keep editing"
     }
   },
   "attachments": {
     "download": "Download",
-    "view": "View"
+    "view": "View",
+    "viewNamed": "View {{name}}",
+    "remove": "Remove {{name}}",
+    "print": "Print",
+    "close": "Close",
+    "previewLoading": "Loading preview…",
+    "previewError": "Couldn't load the preview. Try downloading it instead.",
+    "count_one": "{{count}} attachment",
+    "count_other": "{{count}} attachments"
   },
   "settings": {
     "title": "Settings",
+    "profile": "Profile",
     "signatures": "Signatures",
     "back": "Back",
+    "nav": {
+      "label": "Settings sections",
+      "profile": "Profile",
+      "signatures": "Signatures",
+      "filters": "Filters",
+      "vacation": "Vacation",
+      "contacts": "Contacts",
+      "sessions": "Sessions",
+      "notifications": "Notifications"
+    },
+    "sessions": {
+      "title": "Active sessions / devices",
+      "description": "These are the devices where your session is still open. If you don't recognize one, close it.",
+      "current": "This device",
+      "unknownDevice": "Unknown device",
+      "lastActivity": "Last activity: {{time}}",
+      "location": "Approx. IP: {{ip}}",
+      "close": "Close",
+      "closeOthers": "Close the others"
+    },
     "newSignature": "New signature",
     "name": "Name",
+    "displayName": "Display name",
+    "photo": "Profile photo",
+    "changePhoto": "Change photo",
+    "removePhoto": "Remove photo",
     "default": "Default",
     "save": "Save",
+    "saved": "Saved",
     "delete": "Delete",
     "edit": "Edit",
+    "retry": "Try again",
     "errors": {
       "invalid_body": "The data is not valid",
       "invalid_order": "The rule order is out of date — reload and try again",
       "not_found": "Not found",
       "sieve_invalid": "The generated filter script was rejected — contact your administrator",
       "sieve_sync_failed": "Saved, but not applied to the mail server yet",
+      "sieve_unsupported": "Your mail server does not support filters or automatic replies",
       "vacationMessageRequired": "Write a message for the automatic reply",
       "vacationDateOrder": "The end date must not be before the start date",
+      "imageInvalidType": "Unsupported image type (use PNG, JPEG, or WebP)",
+      "imageTooLarge": "Image is too large (max 1 MB)",
+      "contact_exists": "That contact already exists",
       "generic": "Something went wrong"
     }
   },
@@ -245,7 +520,32 @@
     "moveDown": "Move down",
     "reapply": "Reapply filters",
     "reapplied": "Filters applied",
-    "empty": "No rules yet"
+    "empty": "No rules yet",
+    "unavailable": "Your mail server does not support filters, so no rule could be applied here.",
+    "sync": {
+      "pending": "Your rules are saved, but they are not being applied yet: the mail server has not accepted them.",
+      "failed": "The last attempt to apply your rules to the mail server failed. They are saved, but they are not filtering anything yet.",
+      "invalid": "Your rules are saved, but the mail server rejected the generated script — this will not fix itself. Contact your administrator."
+    },
+    "advanced": {
+      "title": "Advanced: edit the Sieve script",
+      "intro": "This is the Sieve script your rules produce. You can take it over and write it by hand for anything the rule builder does not cover.",
+      "active": "This hand-written script is what your mail server is running.",
+      "label": "Sieve script",
+      "takeoverWarning": "If you save this, it becomes what your mail server runs: your rules and automatic replies stay saved, but stop being applied until you go back to them.",
+      "save": "Save and use this script",
+      "saveReactivate": "Save and re-activate this script",
+      "saved": "Script saved and applied",
+      "useRules": "Go back to my rules",
+      "keptOnReturn": "Going back keeps your script: it stops being applied, and you will find it here unchanged.",
+      "rejected": "Your mail server refused this script, so nothing was saved. Fix it and try again.",
+      "storedInactive": "You have a hand-written Sieve script saved, but it is not being applied today: what runs right now is the script your rules generate. It is here below just as you left it — you can re-activate it, or view the one your rules generate.",
+      "viewLabel": "Which script to show",
+      "viewStored": "My saved script",
+      "viewGenerated": "What my rules generate",
+      "generatedLabel": "Script your rules generate (read-only)",
+      "notice": "You are using a hand-written Sieve script, and that is what runs. These rules are saved, but they are not being applied until you go back to them from the advanced editor."
+    }
   },
   "vacation": {
     "title": "Automatic replies",
@@ -256,10 +556,41 @@
     "endsAt": "End date (optional)",
     "intervalDays": "Days between replies to the same sender",
     "save": "Save",
-    "saved": "Saved"
+    "saved": "Saved",
+    "unavailable": "Your mail server does not support automatic replies.",
+    "advancedNotice": "You are using a hand-written Sieve script, and that is what runs. Automatic replies set here are saved, but they are not being sent until you go back to your rules from the advanced editor in Filters."
+  },
+  "contacts": {
+    "title": "Contacts",
+    "empty": "You don't have any saved contacts yet",
+    "name": "Name",
+    "email": "Email",
+    "add": "Add contact",
+    "harvestedBadge": "Auto-added",
+    "harvestedHint": "Added automatically when you received a message from them",
+    "promote": "Confirm",
+    "promoteLabel": "Confirm \"{{name}}\" as your own contact",
+    "confirmDeleteQuestion": "Delete \"{{name}}\"? This can't be undone.",
+    "confirmDeleteAction": "Delete permanently",
+    "cancelDelete": "Cancel"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "description": "Get an alert on this device when new mail arrives, even with Céfiro closed.",
+    "enable": "Enable background notifications",
+    "disable": "Disable notifications",
+    "enabledOnThisDevice": "Notifications enabled on this device",
+    "working": "One moment…",
+    "unsupported": "Your browser does not support push notifications.",
+    "errors": {
+      "permissionDenied": "Notification permission was not granted. Enable it in your browser settings.",
+      "unavailable": "Notifications are not available right now. Try again.",
+      "generic": "Could not change your notification settings."
+    }
   },
   "shortcuts": {
     "title": "Shortcuts",
+    "overlayTitle": "Keyboard shortcuts",
     "move": "Move through the list",
     "archive": "Archive email",
     "star": "Star email",
@@ -268,6 +599,8 @@
     "search": "Search",
     "close": "Close / dismiss",
     "hint": "j / k to move · e archives · c composes",
-    "listHint": "j / k to move"
+    "listHintPrefix": "Use",
+    "listHintMid": "and",
+    "listHintSuffix": "to move through the list"
   }
 }

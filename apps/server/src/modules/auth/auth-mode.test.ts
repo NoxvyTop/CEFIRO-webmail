@@ -1,20 +1,27 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createDb } from "../../infra/db/client";
+import { testDatabaseUrl } from "../../infra/db/test-db";
+import type { SsoConfigRepo } from "../../infra/repos/sso-config";
 import { createSessionStore } from "./sessions";
 import { createAuthRouter } from "./router";
 import { createBootstrap } from "../setup/bootstrap";
 import { createApp } from "../../app";
 
-const url =
-  process.env.DATABASE_URL ?? "postgres://webmail:webmail@localhost:5434/webmail";
-const sql = createDb(url);
+const sql = createDb(testDatabaseUrl());
 const sessions = createSessionStore(sql);
+
+// Operator-set break-glass credential (GH #235): the process no longer mints
+// one, so a bootstrap that is meant to be enabled has to be handed a secret.
+const BOOTSTRAP_PASSWORD = "test-bootstrap-secret-0123456789";
 
 afterAll(() => sql.end());
 
 function appWith(enabled: boolean) {
   return createApp({
-    authRouter: createAuthRouter({ sessions, bootstrap: createBootstrap(enabled) }),
+    authRouter: createAuthRouter({
+      sessions,
+      bootstrap: createBootstrap(enabled, BOOTSTRAP_PASSWORD),
+    }),
   });
 }
 
@@ -34,5 +41,82 @@ describe("GET /api/auth/mode", () => {
       ((await (await noDep.request("/api/auth/mode")).json()) as { bootstrapMode: boolean })
         .bootstrapMode,
     ).toBe(false);
+  });
+
+  // #290: the login-button provider name rides on this same public probe.
+  function modeAppWith(provider: SsoConfigRepo["getProviderName"] | null) {
+    return createApp({
+      authRouter: createAuthRouter({
+        sessions,
+        bootstrap: createBootstrap(false, BOOTSTRAP_PASSWORD),
+        ...(provider
+          ? { ssoConfig: { getProviderName: provider } as unknown as SsoConfigRepo }
+          : {}),
+      }),
+    });
+  }
+
+  async function providerNameOf(app: ReturnType<typeof createApp>): Promise<string> {
+    return ((await (await app.request("/api/auth/mode")).json()) as { providerName: string })
+      .providerName;
+  }
+
+  it("defaults providerName to SSO when no sso config is wired in", async () => {
+    expect(await providerNameOf(modeAppWith(null))).toBe("SSO");
+  });
+
+  it("returns the configured providerName from the sso config", async () => {
+    expect(await providerNameOf(modeAppWith(async () => "Authentik"))).toBe("Authentik");
+  });
+
+  it("falls back to SSO when the stored providerName is blank", async () => {
+    expect(await providerNameOf(modeAppWith(async () => "   "))).toBe("SSO");
+    expect(await providerNameOf(modeAppWith(async () => null))).toBe("SSO");
+  });
+
+  it("falls back to SSO when reading the sso config throws", async () => {
+    expect(
+      await providerNameOf(
+        modeAppWith(async () => {
+          throw new Error("db down");
+        }),
+      ),
+    ).toBe("SSO");
+  });
+
+  // #305: the first-run setup latch now rides on this public probe, so the
+  // login screen no longer has to poll the audited /api/setup/status.
+  function completionAppWith(isComplete: (() => Promise<boolean>) | null) {
+    return createApp({
+      authRouter: createAuthRouter({
+        sessions,
+        bootstrap: createBootstrap(true, BOOTSTRAP_PASSWORD),
+        ...(isComplete ? { completion: { isComplete } } : {}),
+      }),
+    });
+  }
+
+  async function setupCompleteOf(app: ReturnType<typeof createApp>): Promise<boolean> {
+    return ((await (await app.request("/api/auth/mode")).json()) as { setupComplete: boolean })
+      .setupComplete;
+  }
+
+  it("reports setupComplete from the completion latch", async () => {
+    expect(await setupCompleteOf(completionAppWith(async () => false))).toBe(false);
+    expect(await setupCompleteOf(completionAppWith(async () => true))).toBe(true);
+  });
+
+  it("defaults setupComplete to true when no completion latch is wired", async () => {
+    expect(await setupCompleteOf(completionAppWith(null))).toBe(true);
+  });
+
+  it("falls back to setupComplete=true when the latch read throws", async () => {
+    expect(
+      await setupCompleteOf(
+        completionAppWith(async () => {
+          throw new Error("db down");
+        }),
+      ),
+    ).toBe(true);
   });
 });

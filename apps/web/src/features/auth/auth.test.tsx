@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import { routes } from "../../app/routes";
 
@@ -38,9 +39,14 @@ describe("auth flow", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response("{}", { status: 401 })),
     );
-    renderAt("/?auth_error=unknown_user");
+    // A code the server can actually redirect with (GH #232). This used to
+    // assert on `unknown_user`, which no route has emitted since JIT
+    // provisioning landed — so the one test covering this banner was pinned to
+    // a code that could never appear, while `account_archived`, which does,
+    // rendered nothing at all.
+    renderAt("/?auth_error=account_archived");
     expect(
-      await screen.findByText("Tu cuenta no está registrada en el correo"),
+      await screen.findByText("Tu cuenta está archivada. Pide a un administrador que la reactive."),
     ).toBeInTheDocument();
   });
 

@@ -1,7 +1,7 @@
 # Handoff: Webmail Céfiro
 
 ## Overview
-**Céfiro** es el cliente de webmail del ecosistema (tercer producto junto a Noxvy y Argos). Interfaz de 3 columnas (carpetas / lista / lectura) para equipos de trabajo, en español, con atajos de teclado, funciones de IA (resumen y redacción asistida), etiquetas con filtro, y dos temas: **Noche** (por defecto, a juego con la estética del ecosistema) y **Claro**.
+**Céfiro** es el cliente de webmail del ecosistema (tercer producto junto a Noxvy y Argos). Interfaz de 3 columnas (carpetas / lista / lectura) para equipos de trabajo, en español, con atajos de teclado, funciones de IA (resumen y redacción asistida), etiquetas con filtro, y dos temas: **Claro** (por defecto desde 2026-07-21, con autodescubrimiento de la preferencia del sistema: elección guardada > sistema > Claro) y **Noche** (la estética distintiva del ecosistema).
 
 ## Sobre los archivos de diseño
 Los archivos de este paquete son **referencias de diseño creadas en HTML** — prototipos que muestran el aspecto y comportamiento previstos, NO código de producción para copiar tal cual. La tarea es **recrear este diseño en el entorno del codebase destino** (React, Vue, etc.) usando sus patrones y librerías existentes; si aún no hay entorno, elegir el framework más apropiado e implementarlo ahí.
@@ -11,7 +11,7 @@ Los archivos de este paquete son **referencias de diseño creadas en HTML** — 
 
 ## Design Tokens
 
-### Tema Noche (por defecto)
+### Tema Noche
 - `--bg: #0A0B10` fondo general
 - `--panel: #12141C` paneles (header, lista, modales)
 - `--ink: #ECEEF4` texto principal
@@ -31,7 +31,13 @@ Los archivos de este paquete son **referencias de diseño creadas en HTML** — 
 - Producto: `#5B8DEF` / `rgba(91,141,239,0.14)`
 - Diseño: `#E5A13D` / `rgba(229,161,61,0.15)`
 - Finanzas: `#34C79A` / `rgba(52,199,154,0.14)`
-- Estrella activa: `#E8C24A`
+
+### Estrella activa (NO es igual en ambos temas)
+- Oscuro: `#E8C24A` — el valor del prototipo.
+- Claro: `#a78415` — divergencia deliberada por contraste. `#E8C24A` mide
+  1,71:1 sobre blanco, por debajo incluso del mínimo de 3:1 para elementos no
+  textuales; el valor de claro mide 3,53:1. Ver `theme.css` (CLARO-11), donde
+  está anotado con la medición.
 
 ### Avatares
 Paleta rotativa por id: `#3E8E7E #4E6E9E #6E5E9E #8E6E4E #4E8E5E #5E7E9E #9E5E6E #5E9E8E`, texto `#F4FBF8`.

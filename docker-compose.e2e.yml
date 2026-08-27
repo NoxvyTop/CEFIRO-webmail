@@ -12,17 +12,33 @@ services:
       # for the JMAP apiUrl/downloadUrl/uploadUrl/eventSourceUrl (set during the
       # original setup wizard run — see e2e/stalwart/README.md). "mail.cefiro.test"
       # doesn't resolve from the host/CI runner, so a client following that
-      # advertised apiUrl verbatim (as apps/server/src/infra/stalwart/jmap.ts
-      # does) cannot reach it. Stalwart reads STALWART_PUBLIC_URL at boot to
-      # override the advertised base URL (crates/store/src/registry/local.rs),
-      # so pointing it at the same published host:port fixes JMAP session URLs
-      # without touching the committed seed data or any app/server source.
+      # advertised apiUrl verbatim cannot reach it. Stalwart reads
+      # STALWART_PUBLIC_URL at boot to override the advertised base URL
+      # (crates/store/src/registry/local.rs), so pointing it at the same
+      # published host:port fixes JMAP session URLs without touching the
+      # committed seed data or any app/server source.
+      #
+      # Kept even though `JMAP_URL_MODE=rewrite` (the default since GH #34/#188)
+      # would now paper over the same mismatch on the client side: it makes the
+      # fixture advertise the truth rather than relying on the app to correct
+      # it, which is what keeps the `trust`-mode e2e path meaningful.
       STALWART_PUBLIC_URL: "http://localhost:8096"
+    # Probes the three ports the tests use rather than asking the binary its
+    # version — `stalwart --version` answers before any listener is serving, so
+    # it reported healthy while the container could still accept a connection
+    # and drop it without an SMTP greeting. Kept identical in intent to the
+    # `stalwart` service in .github/workflows/ci.yml, where the same probe is
+    # documented at length.
     healthcheck:
-      test: ["CMD", "/usr/local/bin/stalwart", "--version"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sS --max-time 3 -o /dev/null smtp://127.0.0.1:25/cefiro.test && curl -sS --max-time 3 -o /dev/null --insecure smtps://127.0.0.1:465/cefiro.test && curl -sS --max-time 3 -o /dev/null http://127.0.0.1:8080/",
+        ]
+      interval: 3s
+      timeout: 10s
+      start_period: 5s
+      retries: 30
 
 # Postgres is intentionally NOT part of this stack. E2E runs reuse the
 # existing dev/CI Postgres (docker-compose.dev.yml, port 5434) instead of
@@ -33,3 +49,11 @@ services:
 # The Playwright E2E config should point DATABASE_URL at the same dev
 # Postgres (postgres://webmail:webmail@localhost:5434/webmail) rather than
 # expecting a second instance here.
+#
+# What DATABASE_URL means to the E2E suite changed with GH #230: it is the
+# *admin* connection, not the database under test. The suite creates a uniquely
+# named sibling database from it for each run and drops it afterwards (see
+# e2e/test-db.ts), so it no longer migrates or writes into the dev database —
+# only CREATE/DROP DATABASE are issued against it. There is no longer a default
+# either: with DATABASE_URL unset the suite fails loudly instead of silently
+# falling back to the dev database.

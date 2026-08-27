@@ -1,6 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// Routes and the Composer are now code-split (React.lazy + Suspense), so the
+// components under test resolve through a dynamic import. Under the parallel
+// test pool (maxWorkers 50%) that import — plus the heavy TipTap mount, made
+// heavier by the composer's autosave (#178) — can take longer than a short
+// findBy*/waitFor budget before they give up, which shows up as flaky "dialog
+// never appeared" timeouts only under load. 5s still raced the lazy composer
+// under contention; 10s gives those Suspense boundaries room while staying
+// under the 15s per-test timeout that guards a genuinely stuck render.
+configure({ asyncUtilTimeout: 10000 });
 
 // jsdom's AbortController/AbortSignal are not recognized by Node's built-in
 // fetch (undici), which validates `signal` against its own internal
@@ -12,12 +22,19 @@ import { cleanup } from "@testing-library/react";
 // AbortController's own signal, so the signal can never be threaded through
 // the native Request constructor here.
 //
+// Re-checked on the react-router 8 upgrade (GH #263) by deleting this block
+// and running the suite: still needed. `createClientSideRequest` in
+// react-router 8.3.0 (dist/.../lib/router/router.js) constructs the Request
+// exactly as 7.x did, and every navigation spec fails with the same
+// "Expected signal to be an instance of AbortSignal".
+//
 // Bridge it instead of silently dropping it: construct the Request without
 // `signal` (that path is unaffected), then override the resulting instance's
 // `.signal` so any code that reads it still gets a real, working
 // AbortSignal that forwards abort state from the original signal.
 const NativeRequest = globalThis.Request;
 class PatchedRequest extends NativeRequest {
+  // biome-ignore lint/correctness/noUnreachableSuper: the two super() calls are on mutually exclusive try/catch paths — exactly one runs per construction (the AbortSignal fallback bridge described above).
   constructor(input: RequestInfo | URL, init?: RequestInit) {
     try {
       super(input, init);
@@ -38,6 +55,15 @@ class PatchedRequest extends NativeRequest {
   }
 }
 globalThis.Request = PatchedRequest as unknown as typeof Request;
+
+// jsdom implements no layout, so it ships no Element.prototype.scrollIntoView
+// at all — the property is simply absent, and calling it throws rather than
+// no-opping. MessageList keeps the selected conversation in view with it
+// (GH #251) on the non-virtualized path, so give jsdom the no-op it would have
+// had if it did layout. Tests that care about the call spy on it themselves.
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
 
 afterEach(() => {
   cleanup();

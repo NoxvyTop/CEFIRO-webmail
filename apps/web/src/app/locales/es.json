@@ -1,6 +1,7 @@
 {
   "app": {
-    "tagline": "correo del ecosistema",
+    "home": "Ir al inicio",
+    "skipToContent": "Saltar al contenido",
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",
@@ -8,9 +9,35 @@
   },
   "admin": {
     "title": "Administración",
-    "forbidden": "No tenés permisos de administrador",
+    "forbidden": "No tienes permisos de administrador",
     "back": "Volver",
     "empty": "No hay usuarios",
+    "retry": "Reintentar",
+    "nav": {
+      "label": "Secciones de administración",
+      "resumen": "Resumen",
+      "users": "Usuarios",
+      "sso": "Identidad (SSO)",
+      "settings": "Ajustes"
+    },
+    "metrics": {
+      "users": "Usuarios",
+      "active": "Activos",
+      "mailboxes": "Buzones",
+      "sso": "SSO",
+      "archivedSuffix": "/ {{count}} arch.",
+      "mailboxGaugeTitle": "Buzones vinculados",
+      "mailboxGaugeLabel": "{{linked}} de {{total}} buzones vinculados, {{percentage}}%",
+      "mailboxGaugeRatio": "{{linked}} / {{total}} vinculados",
+      "unlinkedCount": "{{count}} sin vincular"
+    },
+    "settings": {
+      "title": "Ajustes de la instancia",
+      "footer": {
+        "label": "Pie \"Enviado con CÉFIRO\"",
+        "description": "Muestra la frase de marca CÉFIRO debajo de los botones Responder y Reenviar en cada correo del lector. Desactivado por defecto."
+      }
+    },
     "mailbox": {
       "linked": "Buzón vinculado",
       "unlinked": "Sin vincular"
@@ -48,8 +75,23 @@
       "create": "Crear"
     },
     "errors": {
+      "forbidden": "Necesitas permisos de administrador para hacer esto",
+      "generic": "No se pudo completar la acción",
+      "invalid_body": "Los datos no son válidos",
+      "last_admin": "No se puede: es el único administrador activo. Nombra a otro antes de cambiar este.",
       "load": "No se pudieron cargar los usuarios",
-      "action": "No se pudo completar la acción"
+      "self_archive": "No puedes archivar tu propia cuenta",
+      "self_demotion": "No puedes quitarte a ti mismo el rol de administrador",
+      "user_exists": "Ya existe un usuario con ese correo"
+    },
+    "search": {
+      "placeholder": "Buscar por nombre o correo…",
+      "noResults": "Ningún usuario coincide con tu búsqueda"
+    },
+    "pagination": {
+      "prev": "Anterior",
+      "next": "Siguiente",
+      "range": "{{from}}–{{to}} de {{total}}"
     },
     "sso": {
       "title": "Proveedor SSO (OIDC)",
@@ -57,12 +99,15 @@
       "notConfigured": "Sin configurar",
       "save": "Guardar",
       "saved": "Guardado",
-      "error": "No se pudo guardar",
       "fields": {
         "issuer": "Issuer",
         "clientId": "Client ID",
         "clientSecret": "Client Secret",
-        "scopes": "Scopes"
+        "scopes": "Scopes",
+        "providerName": "Nombre del proveedor"
+      },
+      "errors": {
+        "issuerInvalid": "Introduce un issuer válido: una URL completa, p. ej. https://id.tu-empresa.com."
       }
     }
   },
@@ -70,42 +115,67 @@
     "degraded": "Servicio degradado"
   },
   "auth": {
-    "signIn": "Iniciar sesión con SSO",
+    "signIn": "Iniciar sesión con {{provider}}",
+    "connecting": "Conectando…",
+    "redirecting": "Redirigiendo a tu proveedor de identidad…",
     "signOut": "Cerrar sesión",
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
+    "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
     "errors": {
-      "state": "La sesión de inicio expiró, inténtalo de nuevo",
-      "unknown_user": "Tu cuenta no está registrada en el correo",
-      "oidc": "No se pudo completar el inicio de sesión"
+      "account_archived": "Tu cuenta está archivada. Pide a un administrador que la reactive.",
+      "generic": "No se pudo completar el inicio de sesión",
+      "oidc_email_unverified": "Tu proveedor de identidad no ha verificado tu dirección de correo. Verifícala y vuelve a intentarlo.",
+      "state": "La sesión de inicio expiró, inténtalo de nuevo"
     },
     "bootstrap": {
       "title": "Acceso de emergencia",
       "email": "Usuario",
       "password": "Contraseña",
       "submit": "Entrar",
+      "submitting": "Entrando…",
       "error": "Credencial inválida",
-      "hint": "Solo disponible en modo de configuración o recuperación"
+      "hint": "Solo disponible en modo de configuración o recuperación",
+      "setupCta": "Configuración inicial",
+      "errors": {
+        "emptyUser": "Introduce tu usuario.",
+        "emptyPassword": "Introduce tu contraseña.",
+        "network_error": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+        "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo."
+      }
     }
   },
   "setup": {
     "title": "Configuración inicial",
     "tokenLabel": "Contraseña temporal de consola",
     "connect": "Conectar",
+    "connecting": "Conectando…",
     "disabled": "El modo de configuración está desactivado",
     "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
     "ssoTitle": "Proveedor SSO (OIDC)",
     "userTitle": "Nuevo usuario",
     "save": "Guardar",
+    "saving": "Guardando…",
     "create": "Crear",
+    "creating": "Creando…",
     "saved": "Guardado",
     "created": "Usuario creado",
     "error": "Error: revisa los datos",
+    "errors": {
+      "generic": "No se pudo completar la operación. Revisa los datos e inténtalo de nuevo.",
+      "invalid_body": "Revisa los datos: hay campos incompletos o con un formato inválido.",
+      "network_error": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "not_found": "La configuración inicial ya se completó. Inicia sesión por SSO.",
+      "too_many_requests": "Demasiados intentos. Espera un momento e inténtalo de nuevo.",
+      "unauthorized": "La contraseña temporal de consola es incorrecta.",
+      "user_exists": "Ya existe un usuario con ese correo."
+    },
     "fields": {
       "issuer": "Issuer",
       "clientId": "Client ID",
       "clientSecret": "Client Secret",
       "scopes": "Scopes",
+      "providerName": "Nombre del proveedor",
       "email": "Correo",
       "displayName": "Nombre",
       "role": "Rol",
@@ -116,97 +186,302 @@
   "mail": {
     "listRegion": "Lista de mensajes",
     "readerRegion": "Lectura",
+    "navRegion": "Navegación del buzón",
+    "navMenu": "Menú de navegación",
+    "closeNav": "Cerrar menú",
     "starredView": "Destacados",
     "unread": "{{count}} sin leer",
-    "messageCount": "{{count}} correos",
-    "searchPlaceholder": "Buscar en el correo",
+    "messageListLabel": "Lista de mensajes",
+    "messageCount_one": "{{count}} correo",
+    "messageCount_other": "{{count}} correos",
+    "conversationCount_one": "{{count}} mensaje",
+    "conversationCount_other": "{{count}} mensajes",
+    "searchPlaceholder": "Buscar en el correo…",
+    "searchResults": "Resultados de búsqueda",
+    "searchResultCount_one": "{{count}} resultado",
+    "searchResultCount_other": "{{count}} resultados",
+    "clearSearch": "Quitar búsqueda",
     "empty": "No hay correos aquí.",
     "noSubject": "(sin asunto)",
     "selectMessage": "Selecciona un correo",
+    "loading": "Cargando…",
     "loadImages": "Cargar imágenes",
     "emailContent": "Contenido del correo",
     "emptyBody": "(sin contenido)",
     "newMailNotification": "Correo nuevo",
+    "liveUpdatesLimited": "Las actualizaciones en vivo están limitadas en esta pestaña porque hay demasiadas abiertas. Cierra otra y recarga para reanudarlas aquí.",
     "enableNotifications": "Activar notificaciones",
     "resizeList": "Ajustar ancho de la lista",
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
+      "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
+      "ai_provider_error": "No se pudo generar el resumen con IA",
+      "ai_rate_limited": "Has usado la IA demasiadas veces en poco tiempo. Espera un momento e inténtalo de nuevo",
+      "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
+      "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
+      "not_in_trash": "El mensaje ya no está en la papelera",
+      "destroy_failed": "No se pudo eliminar el mensaje",
+      "account_forbidden": "No tienes acceso a ese buzón",
+      "invalid_account": "Ese buzón no admite copiar a tu bandeja",
+      "invalid_domain": "El dominio de ese remitente no se puede añadir como servicio de confianza",
+      "trusted_service_seed": "Ese servicio es de confianza por defecto y no se puede quitar",
+      "trusted_services_limit": "Tu lista de servicios de confianza está llena. Quita uno antes de añadir otro",
+      "copy_failed": "No se pudo copiar el mensaje a tu bandeja",
       "generic": "No se pudo cargar el correo"
     },
+    "unlinked": {
+      "title": "Vincula tu buzón",
+      "descriptionAdmin": "Conecta tu casilla de correo para empezar a recibir mensajes.",
+      "descriptionEmployee": "Tu buzón todavía no está vinculado a una casilla de correo.",
+      "cta": "Vincular buzón",
+      "hint": "Pide a un administrador que lo vincule."
+    },
+    "summarizeWithAi": "✦ Resumir con IA",
+    "summarizeConversation": "✦ Resumir conversación",
+    "aiSummaryTitle": "Resumen IA",
+    "aiSummaryLoading": "Analizando el mensaje…",
     "backToList": "Volver a la lista",
     "archive": "Archivar",
     "star": "Destacar",
     "unstar": "Quitar destacado",
     "archived": "Correo archivado",
     "archivedHint": "pulsa e para archivar más rápido",
+    "unarchive": "Mover a Recibidos",
+    "unarchived": "Movido a Recibidos",
+    "delete": "Eliminar",
+    "deleted": "Movido a la papelera",
+    "deletePermanently": "Eliminar definitivamente",
+    "deletedPermanently": "Mensaje eliminado definitivamente",
+    "copyToInbox": "Copiar a mi bandeja",
+    "copiedToInbox": "Copiado a tu bandeja",
+    "deletePermanentlyConfirm": {
+      "title": "¿Eliminar este mensaje definitivamente?",
+      "description": "«{{subject}}» se eliminará definitivamente. Esta acción no se puede deshacer.",
+      "confirm": "Eliminar definitivamente",
+      "deleting": "Eliminando…",
+      "cancel": "Cancelar"
+    },
     "labels": "Etiquetas",
-    "clearLabel": "Quitar filtro de etiqueta"
-  },
-  "modules": {
-    "title": "Módulos",
-    "mail": "Correo"
+    "clearLabel": "Quitar filtro de etiqueta",
+    "newLabel": "Nueva etiqueta",
+    "labelNamePlaceholder": "Nombre de la etiqueta",
+    "chooseLabelColor": "Elegir color {{hex}}",
+    "createLabel": "Crear etiqueta",
+    "cancelNewLabel": "Cancelar",
+    "deleteLabel": "Eliminar etiqueta {{name}}",
+    "confirmDeleteLabel": "¿Eliminar «{{name}}»?",
+    "confirmDelete": "Confirmar",
+    "labelNameRequired": "Escribe un nombre para la etiqueta",
+    "labelNameDuplicate": "Ya existe una etiqueta con ese nombre",
+    "noLabelsToApply": "Todavía no tienes etiquetas. Crea una desde la barra lateral",
+    "audience": {
+      "toMe": "para mí",
+      "toMeAndName": "para mí y {{name}}",
+      "toMeAndCount": "para mí y {{count}} más",
+      "toName": "para {{name}}",
+      "toNameAndCount": "para {{name}} y {{count}} más"
+    },
+    "sentTo": "Para:",
+    "yesterday": "Ayer",
+    "expandMessage": "Mostrar mensaje completo de {{sender}}",
+    "collapseMessage": "Ocultar mensaje completo de {{sender}}",
+    "senderAuth": {
+      "passLabel": "Autenticación del remitente verificada (SPF/DKIM/DMARC)",
+      "failLabel": "Autenticación del remitente fallida — este mensaje podría ser falsificado"
+    },
+    "senderTrust": {
+      "knownLabel": "Remitente conocido: ya has escrito a {{address}}",
+      "trustedServiceLabel": "Servicio de confianza: {{domain}}",
+      "trustAction": "Confiar en {{domain}}",
+      "untrustAction": "Dejar de confiar en {{domain}}",
+      "trusted": "{{domain}} ahora es un servicio de confianza",
+      "untrusted": "{{domain}} ya no es un servicio de confianza"
+    },
+    "bodyTruncated": {
+      "title": "Este mensaje está incompleto",
+      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondés o reenviás, se citará únicamente la parte que se ve acá."
+    },
+    "showQuotedContent": "Mostrar contenido citado",
+    "hideQuotedContent": "Ocultar contenido citado",
+    "showFullMessage": "Ver todo el mensaje",
+    "folders": {
+      "inbox": "Recibidos",
+      "sent": "Enviados",
+      "archive": "Archivados",
+      "trash": "Papelera",
+      "junk": "Spam",
+      "drafts": "Borradores"
+    }
   },
   "groups": {
     "title": "Grupos",
     "showInInbox": "Mostrar en bandeja principal"
   },
+  "accounts": {
+    "selectorLabel": "Buzón activo",
+    "personal": "Mi buzón",
+    "sharedHeading": "Buzones compartidos"
+  },
+  "sharedMailboxes": {
+    "title": "Buzones compartidos",
+    "description": "Los buzones compartidos a los que tenés acceso. Entrá a cualquiera o pedí que sus correos también lleguen a tu bandeja.",
+    "empty": "Todavía no tenés buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
+    "enter": "Entrar",
+    "copyLabel": "Recibir copia en mi bandeja",
+    "copyToggle": "Recibir copia de {{name}} en mi bandeja",
+    "copyHelp": "Cuando llegue correo nuevo a este buzón te llegará una copia a tu bandeja.",
+    "copyError": "No se pudo cambiar la preferencia. Inténtalo de nuevo.",
+    "activeIndicator": "Buzón compartido: {{name}}",
+    "backToPersonal": "Volver a mi buzón"
+  },
   "composer": {
+    "showQuoted": "Mostrar mensaje citado",
+    "hideQuoted": "Ocultar mensaje citado",
+    "quotedReadOnly": "Se muestra como texto plano. El formato original se conserva en el mensaje que se envía.",
     "title": "Redactar",
+    "newMessage": "Nuevo mensaje",
+    "editDraft": "Editar borrador",
     "from": "De",
     "to": "Para",
     "cc": "Cc",
     "bcc": "Cco",
-    "addCcBcc": "Cc/Cco",
+    "addCc": "Añadir Cc",
+    "addBcc": "Añadir Cco",
     "subject": "Asunto",
     "body": "Mensaje",
+    "bodyPlaceholder": "Escribe la idea y la IA la redacta…",
+    "bodyPlaceholderNoAi": "Escribe tu mensaje…",
     "signature": "Firma",
+    "noSignature": "Ninguna",
     "reply": "Responder",
     "replyAll": "Responder a todos",
     "forward": "Reenviar",
     "attach": "Adjuntar",
+    "attachFiles": "Adjuntar archivos",
+    "close": "Cerrar",
     "send": "Enviar",
     "sent": "Correo enviado",
-    "cancel": "Cancelar",
+    "cancel": "Descartar",
     "sending": "Enviando…",
     "invalidEmail": "Correo inválido",
     "invalidLink": "URL inválida o no segura",
     "bold": "Negrita",
     "italic": "Cursiva",
     "bulletList": "Lista con viñetas",
+    "textAlignLeft": "Alinear texto a la izquierda",
+    "textAlignCenter": "Centrar texto",
+    "textAlignRight": "Alinear texto a la derecha",
     "link": "Enlace",
     "linkUrl": "URL del enlace",
+    "image": "Imagen",
+    "insertImage": "Insertar imagen",
+    "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
+    "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG, GIF o WebP)",
+    "imageSizeSmall": "Imagen pequeña",
+    "imageSizeMedium": "Imagen mediana",
+    "imageSizeLarge": "Imagen grande",
+    "imageAlignLeft": "Alinear imagen a la izquierda",
+    "imageAlignCenter": "Centrar imagen",
+    "imageAlignRight": "Alinear imagen a la derecha",
     "removeRecipient": "Quitar {{email}}",
-    "removeAttachment": "Quitar {{name}}",
+    "dropHint": "Suelta para adjuntar",
+    "duplicateAttachment": "{{name}} ya fue adjuntado",
     "errors": {
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
       "send_failed": "No se pudo enviar",
+      "save_draft_failed": "No se pudo guardar el borrador",
+      "ai_disabled": "Las funciones de IA no están habilitadas en este servidor",
+      "ai_provider_error": "No se pudo generar el borrador con IA",
+      "ai_rate_limited": "Has usado la IA demasiadas veces en poco tiempo. Espera un momento e inténtalo de nuevo",
+      "upstream_timeout": "El servidor tardó demasiado en responder. Inténtalo de nuevo",
+      "invalid_body": "Los datos no son válidos",
+      "mail_not_configured": "El servidor de correo no está configurado",
+      "mail_credentials_missing": "Tu buzón no está vinculado todavía",
+      "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
       "generic": "Ocurrió un error"
+    },
+    "draftWithAi": "✦ Redactar con IA",
+    "draftingWithAi": "Redactando…",
+    "aiDraftNotice": "✦ Borrador generado por IA — revísalo antes de enviar",
+    "aiDraftNeedsIntent": "Escribe en el cuerpo qué quieres transmitir y vuelve a intentarlo.",
+    "noIdentitiesHint": "Vincula tu buzón para poder redactar correos",
+    "autosave": {
+      "saving": "Guardando…",
+      "saved": "Borrador guardado",
+      "error": "No se pudo guardar el borrador"
+    },
+    "discardConfirm": {
+      "title": "¿Descartar este mensaje?",
+      "description": "Tu mensaje tiene contenido sin guardar.",
+      "discard": "Descartar de todos modos",
+      "saveToDrafts": "Guardar en borradores",
+      "savingToDrafts": "Guardando…",
+      "keepEditing": "Seguir editando"
     }
   },
   "attachments": {
     "download": "Descargar",
-    "view": "Ver"
+    "view": "Ver",
+    "viewNamed": "Ver {{name}}",
+    "remove": "Quitar {{name}}",
+    "print": "Imprimir",
+    "close": "Cerrar",
+    "previewLoading": "Cargando vista previa…",
+    "previewError": "No se pudo cargar la vista previa. Probá descargarlo.",
+    "count_one": "{{count}} adjunto",
+    "count_other": "{{count}} adjuntos"
   },
   "settings": {
     "title": "Ajustes",
+    "profile": "Perfil",
     "signatures": "Firmas",
     "back": "Volver",
+    "nav": {
+      "label": "Secciones de ajustes",
+      "profile": "Perfil",
+      "signatures": "Firmas",
+      "filters": "Filtros",
+      "vacation": "Ausencia",
+      "contacts": "Contactos",
+      "sessions": "Sesiones",
+      "notifications": "Notificaciones"
+    },
+    "sessions": {
+      "title": "Sesiones / dispositivos activos",
+      "description": "Estos son los dispositivos donde tu sesión sigue abierta. Si no reconoces alguno, ciérralo.",
+      "current": "Este dispositivo",
+      "unknownDevice": "Dispositivo desconocido",
+      "lastActivity": "Última actividad: {{time}}",
+      "location": "IP aproximada: {{ip}}",
+      "close": "Cerrar",
+      "closeOthers": "Cerrar las demás"
+    },
     "newSignature": "Nueva firma",
     "name": "Nombre",
+    "displayName": "Nombre para mostrar",
+    "photo": "Foto de perfil",
+    "changePhoto": "Cambiar foto",
+    "removePhoto": "Quitar foto",
     "default": "Predeterminada",
     "save": "Guardar",
+    "saved": "Guardado",
     "delete": "Eliminar",
     "edit": "Editar",
+    "retry": "Reintentar",
     "errors": {
       "invalid_body": "Los datos no son válidos",
       "invalid_order": "El orden de las reglas está desactualizado; recarga e inténtalo de nuevo",
       "not_found": "No encontrado",
       "sieve_invalid": "El script de filtros generado fue rechazado; contacta con tu administrador",
       "sieve_sync_failed": "Guardado, pero aún no aplicado en el servidor de correo",
+      "sieve_unsupported": "Tu servidor de correo no admite filtros ni respuestas automáticas",
       "vacationMessageRequired": "Escribe un mensaje para la respuesta automática",
       "vacationDateOrder": "La fecha de fin no puede ser anterior a la de inicio",
+      "imageInvalidType": "Tipo de imagen no compatible (usa PNG, JPEG o WebP)",
+      "imageTooLarge": "La imagen es demasiado grande (máx. 1 MB)",
+      "contact_exists": "Ese contacto ya existe",
       "generic": "Algo salió mal"
     }
   },
@@ -245,7 +520,32 @@
     "moveDown": "Bajar",
     "reapply": "Reaplicar filtros",
     "reapplied": "Filtros aplicados",
-    "empty": "Aún no hay reglas"
+    "empty": "Aún no hay reglas",
+    "unavailable": "Tu servidor de correo no admite filtros, así que aquí no podría aplicarse ninguna regla.",
+    "sync": {
+      "pending": "Tus reglas están guardadas, pero todavía no se aplican: el servidor de correo aún no las ha aceptado.",
+      "failed": "El último intento de aplicar tus reglas en el servidor de correo falló. Están guardadas, pero aún no filtran nada.",
+      "invalid": "Tus reglas están guardadas, pero el servidor de correo rechazó el script generado; esto no se va a arreglar solo. Contacta con tu administrador."
+    },
+    "advanced": {
+      "title": "Avanzado: editar el script Sieve",
+      "intro": "Este es el script Sieve que generan tus reglas. Puedes tomar el control y escribirlo a mano para lo que el constructor de reglas no cubre.",
+      "active": "Este script escrito a mano es el que está ejecutando tu servidor de correo.",
+      "label": "Script Sieve",
+      "takeoverWarning": "Si lo guardas, pasa a ser lo que ejecuta tu servidor de correo: tus reglas y tus respuestas automáticas siguen guardadas, pero dejan de aplicarse hasta que vuelvas a ellas.",
+      "save": "Guardar y usar este script",
+      "saveReactivate": "Guardar y volver a activar este script",
+      "saved": "Script guardado y aplicado",
+      "useRules": "Volver a mis reglas",
+      "keptOnReturn": "Al volver se conserva tu script: deja de aplicarse y lo encontrarás aquí sin cambios.",
+      "rejected": "Tu servidor de correo rechazó este script, así que no se guardó nada. Corrígelo y vuelve a intentarlo.",
+      "storedInactive": "Tienes un script Sieve escrito a mano y guardado, pero hoy no se aplica: ahora mismo se ejecuta el que generan tus reglas. Lo tienes aquí abajo tal como lo dejaste; puedes volver a activarlo o ver el que generan tus reglas.",
+      "viewLabel": "Qué script mostrar",
+      "viewStored": "Mi script guardado",
+      "viewGenerated": "El que generan mis reglas",
+      "generatedLabel": "Script que generan tus reglas (solo lectura)",
+      "notice": "Estás usando un script Sieve escrito a mano y es el que se ejecuta. Estas reglas están guardadas, pero no se aplican hasta que vuelvas a ellas desde el editor avanzado."
+    }
   },
   "vacation": {
     "title": "Respuestas automáticas",
@@ -256,10 +556,41 @@
     "endsAt": "Fecha de fin (opcional)",
     "intervalDays": "Días entre respuestas al mismo remitente",
     "save": "Guardar",
-    "saved": "Guardado"
+    "saved": "Guardado",
+    "unavailable": "Tu servidor de correo no admite respuestas automáticas.",
+    "advancedNotice": "Estás usando un script Sieve escrito a mano y es el que se ejecuta. Las respuestas automáticas que configures aquí se guardan, pero no se envían hasta que vuelvas a tus reglas desde el editor avanzado de Filtros."
+  },
+  "contacts": {
+    "title": "Contactos",
+    "empty": "Aún no tienes contactos guardados",
+    "name": "Nombre",
+    "email": "Correo",
+    "add": "Añadir contacto",
+    "harvestedBadge": "Automático",
+    "harvestedHint": "Añadido automáticamente al recibir un correo suyo",
+    "promote": "Confirmar",
+    "promoteLabel": "Confirmar «{{name}}» como contacto propio",
+    "confirmDeleteQuestion": "¿Eliminar a «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar"
+  },
+  "notifications": {
+    "title": "Notificaciones",
+    "description": "Recibe un aviso en este dispositivo cuando llegue correo nuevo, aunque tengas Céfiro cerrado.",
+    "enable": "Activar notificaciones en segundo plano",
+    "disable": "Desactivar notificaciones",
+    "enabledOnThisDevice": "Notificaciones activadas en este dispositivo",
+    "working": "Un momento…",
+    "unsupported": "Tu navegador no admite notificaciones push.",
+    "errors": {
+      "permissionDenied": "No se concedió el permiso de notificaciones. Actívalo en los ajustes del navegador.",
+      "unavailable": "Las notificaciones no están disponibles ahora mismo. Inténtalo de nuevo.",
+      "generic": "No se pudo cambiar la configuración de notificaciones."
+    }
   },
   "shortcuts": {
     "title": "Atajos",
+    "overlayTitle": "Atajos de teclado",
     "move": "Moverse por la lista",
     "archive": "Archivar correo",
     "star": "Destacar correo",
@@ -268,6 +599,8 @@
     "search": "Buscar",
     "close": "Cerrar / salir",
     "hint": "j / k para moverte · e archiva · c redacta",
-    "listHint": "j / k para moverte"
+    "listHintPrefix": "Usa",
+    "listHintMid": "y",
+    "listHintSuffix": "para moverte por la lista"
   }
 }

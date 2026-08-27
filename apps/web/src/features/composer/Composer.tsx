@@ -1,44 +1,324 @@
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Identity, Signature } from "@webmail/shared";
 import { fetchIdentities, fetchSignatures } from "./api";
-import { useComposer } from "./useComposer";
+import { fetchAiStatus } from "./aiApi";
+import { useComposer, type PendingUpload } from "./useComposer";
+import { isComposerDraftEmpty } from "./emptiness";
 import { RecipientField } from "./RecipientField";
 import { RichTextEditor } from "./RichTextEditor";
-import type { ComposerDraft } from "./reply";
+import { htmlToPlainText } from "./plainText";
+import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
+import type { ComposeMode, ComposerDraft } from "./reply";
+import { applySignature } from "./signature";
+import { Button } from "../../app/ui/Button";
 import { CloseIcon } from "../../app/ui/icons";
+import { MODAL_SELECTOR } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
+import { useFocusTrap } from "../../app/ui/useFocusTrap";
+import { AttachmentCard } from "../reader/AttachmentCard";
+
+// A <select> exists to let the user choose between options. With at most one
+// signature there is nothing to choose — it's apply-or-not, a toggle wearing
+// a dropdown's clothes — so the selector only earns its place once there are
+// at least this many signatures. One line to revisit if that threshold ever
+// needs to change.
+export const SIGNATURE_SELECTOR_MIN_COUNT = 2;
+
+// GH #269: the composer's accessible name (aria-label) and its visible title
+// used to be a hardcoded "New message" for every flow, so a screen reader
+// announced a reply as "New message" — the opposite of what was happening. The
+// name now follows the compose mode (see reply.ts's ComposeMode), keyed off the
+// same distinction #145 remounts on. All but "draft" reuse existing action
+// labels; a bare literal with no mode (test fixtures, defensive default) reads
+// as a new message.
+const COMPOSER_NAME_KEYS: Record<ComposeMode, string> = {
+  new: "composer.newMessage",
+  reply: "composer.reply",
+  "reply-all": "composer.replyAll",
+  forward: "composer.forward",
+  draft: "composer.editDraft",
+};
 
 interface ComposerProps {
   initial: ComposerDraft;
   onClose(): void;
+  // Passed through to useComposer so a successful send of an edited draft
+  // (initial.originalDraftId set) can trash the stale original — see
+  // reply.ts's buildEditDraft and useComposer.ts's send().
+  trashMailboxId?: string | null;
 }
 
-function formatSizeKb(size: number): string {
-  return `${(size / 1024).toFixed(1)} KB`;
+// True only for a drag carrying actual OS files (dataTransfer.types includes
+// "Files") — guards against hijacking normal text drag/selection inside form
+// fields (e.g. dragging selected recipient/subject text around).
+function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  return Array.from(dataTransfer.types ?? []).includes("Files");
 }
 
-export function Composer({ initial, onClose }: ComposerProps) {
+// Pending uploads have no blobId yet, so they can't use AttachmentCard's
+// server-blob preview — this is a compact placeholder shown in the same
+// grid until the upload resolves (or errors) into a real attachment.
+function PendingUploadCard({ upload }: { upload: PendingUpload }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="composer-pending-upload"
+      className="flex w-[172px] shrink-0 flex-col justify-center gap-1 rounded-xl border border-line-strong bg-soft px-2.5 py-2 text-xs"
+    >
+      <span className="truncate">{upload.name}</span>
+      {upload.error ? (
+        <span role="alert" className="text-warn">
+          {t("composer.errors.generic")}
+        </span>
+      ) : (
+        <progress value={upload.progress} max={1} className="w-full" />
+      )}
+    </div>
+  );
+}
+
+interface DiscardConfirmDialogProps {
+  saving: boolean;
+  saveError: string | null;
+  onDiscard(): void;
+  onSaveToDrafts(): void;
+  onKeepEditing(): void;
+}
+
+// GH #125: shown when Escape is pressed on a composer that has content.
+// Mirrors NewLabelModal.tsx/ShortcutsOverlay.tsx's existing dialog precedent
+// in this codebase — a full-screen bg-overlay backdrop, backdrop-click
+// dismissal, focus moved in on open and restored on close, and its own
+// Escape-to-dismiss effect scoped to this dialog only (never the composer
+// itself — see the outer Escape handler in Composer below, which defers to
+// this dialog whenever it's mounted).
+function DiscardConfirmDialog({
+  saving, saveError, onDiscard, onSaveToDrafts, onKeepEditing,
+}: DiscardConfirmDialogProps) {
+  const { t } = useTranslation();
+  // GH #158: focus-in/Tab-cycling/restore-on-close now come from the shared
+  // useFocusTrap primitive — this dialog used to move focus in and restore
+  // it on close by hand, but never cycled Tab, so focus could walk out of
+  // this still-visible confirmation into the composer/page behind it.
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onKeepEditing();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onKeepEditing]);
+
+  return (
+    <div
+      role="alertdialog"
+      // GH #253: the trap is real (useFocusTrap above cycles Tab inside this
+      // dialog), but without aria-modal a screen reader's own virtual cursor
+      // still walks the page behind it — the announced content and the
+      // reachable content disagreed.
+      aria-modal="true"
+      aria-label={t("composer.discardConfirm.title")}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay p-6"
+      onClick={onKeepEditing}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        className="flex w-full max-w-[360px] flex-col gap-4 rounded-[14px] border border-line bg-panel p-5 shadow-pop outline-none"
+        style={{ animation: "popIn 0.18s ease" }}
+      >
+        <div>
+          <h2 className="text-[14px] font-[650]">{t("composer.discardConfirm.title")}</h2>
+          <p className="mt-1 text-[13px] text-muted">{t("composer.discardConfirm.description")}</p>
+        </div>
+        {saveError && (
+          <p role="alert" className="text-[12.5px] text-warn">
+            {t(saveError)}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={onKeepEditing} disabled={saving}>
+            {t("composer.discardConfirm.keepEditing")}
+          </Button>
+          <Button variant="secondary" onClick={onDiscard} disabled={saving}>
+            {t("composer.discardConfirm.discard")}
+          </Button>
+          <Button variant="primary" onClick={onSaveToDrafts} disabled={saving}>
+            {saving ? t("composer.discardConfirm.savingToDrafts") : t("composer.discardConfirm.saveToDrafts")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send } = useComposer(initial);
-  const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
+  const { state, setField, addFiles, removeAttachment, send, saveDraft, discardDraft, draftWithAi } =
+    useComposer(initial, trashMailboxId);
+  // GH #269: derived once from the mode the draft was built with — drives both
+  // the dialog's aria-label and its visible <h2> so the two never disagree.
+  const composerName = t(COMPOSER_NAME_KEYS[initial.mode ?? "new"]);
+  // Split into two independent reveal states (#123) — a draft arriving with
+  // CC recipients (e.g. reply-all, see reply.ts's replyDraft) must show CC
+  // without also showing an unrelated, still-empty BCC field, and vice versa.
+  const [showCc, setShowCc] = useState(initial.cc.length > 0);
+  const [showBcc, setShowBcc] = useState(initial.bcc.length > 0);
   const [appliedSignatureId, setAppliedSignatureId] = useState<string>("");
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Guards the default-signature auto-apply so it only runs once per composer
+  // session (on open), not on every render once signatures finish loading.
+  const appliedDefaultRef = useRef(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // GH #142: the quoted original is collapsed by default, like Gmail's "•••".
+  const [quoteRevealed, setQuoteRevealed] = useState(false);
+  // GH #158: focus-in/Tab-cycling/restore-on-close for the composer's own
+  // dialog — previously unmanaged entirely (no initial focus, no restore,
+  // no Tab trap). Stays active for the composer's whole mounted lifetime
+  // (never toggled off while the nested DiscardConfirmDialog is open):
+  // useFocusTrap's own nested-dialog exclusion already keeps this trap from
+  // fighting the nested one's Tab handling, so there is no need to suspend
+  // it — doing so would instead race the nested dialog's own focus-in
+  // effect for who gets to claim focus first.
+  //
+  // Also this dialog's own root element for the outer Escape handler below,
+  // which uses it to tell its own dialog apart from a nested one (the
+  // discard confirmation) layered on top of it — same identity GH #125
+  // originally used a plain useRef for.
+  const composerRootRef = useFocusTrap<HTMLDivElement>(true);
+
+  // GH #159: the single decision point every exit route must go through —
+  // "is the user abandoning this draft, or is the composer's work done?"
+  // Closes immediately when the draft is empty, or opens the discard
+  // confirmation otherwise (isComposerDraftEmpty, see composer/emptiness.ts).
+  // Escape (below), the header close (X) button, and the bottom Cancel
+  // button all call this instead of onClose() directly — GH #125 wired the
+  // confirmation to the Escape *gesture* specifically, which left every
+  // other way to close the composer (the X button, first and worst) calling
+  // onClose() straight through with no check at all. Routing every "abandon"
+  // exit through this one function means a future exit route inherits the
+  // protection automatically instead of being born unguarded the same way.
+  //
+  // Exit routes that do NOT call this: handleDiscard (the confirmation's own
+  // resolution, already past the check), handleSaveToDrafts and handleSend
+  // on success (the composer's work is done, not abandoned — nothing to
+  // confirm).
+  function requestClose() {
+    if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
+      onClose();
+      return;
+    }
+    setDiscardConfirmOpen(true);
+  }
+
+  // Escape mirrors shortcuts.ts's isModalOpen reasoning — MODAL_SELECTOR
+  // (GH #161) marks a keyboard-owning overlay — but isModalOpen itself can't
+  // be reused unmodified here: it would always report "a dialog is open"
+  // because this composer's own root already matches MODAL_SELECTOR. This
+  // handler excludes that one element so a genuinely nested overlay (the
+  // discard confirmation below, or any other dialog layered on top) still
+  // gets to own Escape instead of this outer handler racing it.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+
+      const overlays = document.querySelectorAll<HTMLElement>(MODAL_SELECTOR);
+      const hasNestedOverlay = Array.from(overlays).some((overlay) => overlay !== composerRootRef.current);
+      if (hasNestedOverlay) return;
+
+      requestClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestClose closes over the same state.draft/attachments/uploads/onClose already listed below
+  }, [state.draft, state.attachments.length, state.uploads.length, onClose]);
+
+  // GH #159: closing the browser tab (or the window) outright bypasses the
+  // composer entirely — same silent-discard hole as the X button, just
+  // through the browser's own exit door. A plain, standards-compliant
+  // beforeunload guard, armed only while the draft actually has content
+  // (mirrors requestClose above) so an untouched compose window never nags.
+  // Setting returnValue (legacy) alongside preventDefault() covers browsers
+  // that still require it to show their native confirmation prompt.
+  useEffect(() => {
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [state.draft, state.attachments.length, state.uploads.length]);
+
+  function handleKeepEditing() {
+    setDiscardConfirmOpen(false);
+  }
+
+  function handleDiscard() {
+    // GH #176/#178: mark the session finalized so the composer's unmount flush
+    // doesn't re-save the draft the user just chose to discard.
+    discardDraft();
+    setDiscardConfirmOpen(false);
+    onClose();
+  }
+
+  async function handleSaveToDrafts() {
+    if (state.savingDraft) return;
+    const ok = await saveDraft();
+    if (ok) {
+      setDiscardConfirmOpen(false);
+      onClose();
+    }
+    // On failure, state.saveDraftError is already set by useComposer and
+    // rendered inside DiscardConfirmDialog — stay open, draft intact.
+  }
 
   const identitiesQuery = useQuery({ queryKey: ["mail", "identities"], queryFn: fetchIdentities });
   const signaturesQuery = useQuery({ queryKey: ["mail", "signatures"], queryFn: fetchSignatures });
+  // GH #292: AI is off by default, so hide the "draft with AI" CTA and the AI
+  // hint in the body placeholder unless the server reports it enabled. Defaults
+  // to hidden (false) while the status query is pending or has errored.
+  const { data: aiEnabled = false } = useQuery({ queryKey: ["ai", "status"], queryFn: fetchAiStatus });
 
   const identities: Identity[] = identitiesQuery.data ?? [];
   const signatures: Signature[] = signaturesQuery.data ?? [];
 
+  // Auto-apply the default signature once, when signatures finish loading —
+  // mirrors Gmail, which appends your default signature to every new email
+  // (and reply/forward) without the user having to pick it manually.
+  useEffect(() => {
+    if (appliedDefaultRef.current) return;
+    if (!signaturesQuery.data) return;
+    appliedDefaultRef.current = true;
+    const defaultSignature = signaturesQuery.data.find((candidate) => candidate.isDefault);
+    if (!defaultSignature) return;
+    setAppliedSignatureId(defaultSignature.id);
+    setField("bodyHtml", applySignature(state.draft.bodyHtml, defaultSignature));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on load, guarded by appliedDefaultRef
+  }, [signaturesQuery.data]);
+
   function handleSignatureChange(signatureId: string) {
     setAppliedSignatureId(signatureId);
-    if (!signatureId) return;
-    const signature = signatures.find((candidate) => candidate.id === signatureId);
-    if (!signature) return;
-    setField("bodyHtml", `${state.draft.bodyHtml}<br>—<br>${signature.contentHtml}`);
+    const signature = signatures.find((candidate) => candidate.id === signatureId) ?? null;
+    setField("bodyHtml", applySignature(state.draft.bodyHtml, signature));
   }
+
+  // GH #142. Memoized because it runs DOMParser, and because the identity of
+  // `editable` is what RichTextEditor compares against its own serialization
+  // to decide whether to re-parse the document.
+  //
+  // Note both signature paths above still operate on the FULL state.draft
+  // .bodyHtml, quote included: applySignature places the signature relative to
+  // the quote marker, so hiding the marker from it would move the signature
+  // below the quoted original.
+  const bodySplit = useMemo(() => splitQuotedTail(state.draft.bodyHtml), [state.draft.bodyHtml]);
 
   async function handleSend() {
     const ok = await send();
@@ -48,168 +328,337 @@ export function Composer({ initial, onClose }: ComposerProps) {
     }
   }
 
+  // Shared by both the hidden file input and drag&drop — addFiles already
+  // dedups (name+size) and enforces the existing upload limits; this just
+  // surfaces the dedup outcome as a toast, reusing the composer's existing
+  // toast mechanism (also used for the "sent" confirmation above).
+  function attachFiles(files: File[]) {
+    const { skipped } = addFiles(files);
+    if (skipped.length > 0) {
+      showToast(t("composer.duplicateAttachment", { name: skipped[0] }));
+    }
+  }
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const files = event.target.files ? Array.from(event.target.files) : [];
-    if (files.length > 0) addFiles(files);
+    if (files.length > 0) attachFiles(files);
     event.target.value = "";
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    // Prevents the browser's default "open file" navigation anywhere over
+    // the dialog, and signals to the browser that a drop is allowed here.
+    event.preventDefault();
+    setIsDraggingFiles(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    // Ignore leaves into a child element (still inside the dialog) so the
+    // overlay doesn't flicker while the pointer moves across nested nodes.
+    const related = event.relatedTarget as Node | null;
+    if (related && event.currentTarget.contains(related)) return;
+    setIsDraggingFiles(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    setIsDraggingFiles(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length > 0) attachFiles(files);
   }
 
   return (
     <div
+      ref={composerRootRef}
       role="dialog"
-      aria-label={t("composer.title")}
-      className="fixed inset-0 z-50 flex items-end justify-end bg-[rgba(3,5,9,0.55)] p-6"
+      // GH #253: see DiscardConfirmDialog above — the focus trap was here from
+      // #158, the matching promise to assistive tech was not.
+      aria-modal="true"
+      aria-label={composerName}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-end justify-end bg-overlay p-6 outline-none"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
-      <div className="flex max-h-full w-full max-w-[640px] flex-col gap-3 overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-pop">
-        <h2 className="-mx-4 -mt-4 flex h-12 items-center rounded-t-[14px] bg-soft px-4 text-sm font-semibold">{t("composer.title")}</h2>
-
-        <label className="flex flex-col gap-1 text-sm">
-          {t("composer.from")}
-          <select
-            aria-label={t("composer.from")}
-            value={state.draft.identityId}
-            onChange={(event) => setField("identityId", event.target.value)}
-            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+      <div
+        className="relative flex max-h-full w-full max-w-[640px] flex-col overflow-y-auto rounded-[14px] border border-line bg-panel shadow-pop"
+        style={{ animation: "popIn 0.18s ease" }}
+      >
+        {isDraggingFiles && (
+          <div
+            data-testid="composer-drop-overlay"
+            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[14px] border-2 border-dashed border-accent bg-accent/10 text-[15px] font-semibold text-accent-text"
           >
-            {identities.map((identity) => (
-              <option key={identity.id} value={identity.id}>
-                {`${identity.name} <${identity.email}>`}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <RecipientField
-          label={t("composer.to")}
-          value={state.draft.to}
-          onChange={(value) => setField("to", value)}
-        />
-
-        {!showCcBcc && (
+            {t("composer.dropHint")}
+          </div>
+        )}
+        <div className="flex h-12 shrink-0 items-center gap-2.5 rounded-t-[14px] border-b border-line bg-soft px-[18px]">
+          <h2 className="flex-1 text-[14px] font-[650]">{composerName}</h2>
           <button
             type="button"
-            onClick={() => setShowCcBcc(true)}
-            className="self-start text-xs text-accent underline"
+            onClick={requestClose}
+            aria-label={t("composer.close")}
+            className="rounded-md px-2 py-1 text-muted transition hover:bg-hover hover:text-ink"
           >
-            {t("composer.addCcBcc")}
+            <CloseIcon size={14} />
           </button>
-        )}
-        {showCcBcc && (
-          <>
+        </div>
+
+        <div className="flex flex-col gap-3 px-5 pb-4 pt-3">
+          <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
+            {t("composer.from")}
+            <select
+              aria-label={t("composer.from")}
+              value={state.draft.identityId}
+              onChange={(event) => setField("identityId", event.target.value)}
+              className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
+            >
+              {identities.map((identity) => (
+                <option key={identity.id} value={identity.id}>
+                  {`${identity.name} <${identity.email}>`}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <RecipientField
+            label={t("composer.to")}
+            value={state.draft.to}
+            onChange={(value) => setField("to", value)}
+          />
+
+          {(!showCc || !showBcc) && (
+            <div className="flex items-center gap-3">
+              {!showCc && (
+                <button
+                  type="button"
+                  onClick={() => setShowCc(true)}
+                  className="self-start text-xs text-accent-text underline"
+                >
+                  {t("composer.addCc")}
+                </button>
+              )}
+              {!showBcc && (
+                <button
+                  type="button"
+                  onClick={() => setShowBcc(true)}
+                  className="self-start text-xs text-accent-text underline"
+                >
+                  {t("composer.addBcc")}
+                </button>
+              )}
+            </div>
+          )}
+          {showCc && (
             <RecipientField
               label={t("composer.cc")}
               value={state.draft.cc}
               onChange={(value) => setField("cc", value)}
             />
+          )}
+          {showBcc && (
             <RecipientField
               label={t("composer.bcc")}
               value={state.draft.bcc}
               onChange={(value) => setField("bcc", value)}
             />
-          </>
-        )}
+          )}
 
-        <label className="flex flex-col gap-1 text-sm">
-          {t("composer.subject")}
           <input
             aria-label={t("composer.subject")}
+            placeholder={t("composer.subject")}
             value={state.draft.subject}
             onChange={(event) => setField("subject", event.target.value)}
-            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
+            className="border-0 border-b border-line bg-transparent px-0.5 py-3 text-[14px] font-semibold text-ink field-focus-line focus:border-accent placeholder:font-normal placeholder:text-muted"
           />
-        </label>
 
-        <label className="flex flex-col gap-1 text-sm">
-          {t("composer.signature")}
-          <select
-            aria-label={t("composer.signature")}
-            value={appliedSignatureId}
-            onChange={(event) => handleSignatureChange(event.target.value)}
-            className="rounded-md border border-line bg-soft p-1 text-ink outline-none focus:border-accent"
-          >
-            <option value="" />
-            {signatures.map((signature) => (
-              <option key={signature.id} value={signature.id}>
-                {signature.name}
-              </option>
-            ))}
-          </select>
-        </label>
+          {signatures.length >= SIGNATURE_SELECTOR_MIN_COUNT && (
+            <label className="flex items-center gap-2 border-0 border-b border-line py-1 text-[11px] uppercase tracking-wide text-muted focus-within:border-accent">
+              {t("composer.signature")}
+              <select
+                aria-label={t("composer.signature")}
+                value={appliedSignatureId}
+                onChange={(event) => handleSignatureChange(event.target.value)}
+                className="flex-1 appearance-none bg-transparent py-1 text-[13px] normal-case tracking-normal text-ink field-focus-line"
+              >
+                <option value="">{t("composer.noSignature")}</option>
+                {signatures.map((signature) => (
+                  <option key={signature.id} value={signature.id}>
+                    {signature.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
-        <RichTextEditor
-          html={state.draft.bodyHtml}
-          onChange={(html) => setField("bodyHtml", html)}
-          ariaLabel={t("composer.body")}
-        />
+          {/* GH #142: only the editable half reaches the editor; the quoted
+              original stays out of the ProseMirror document entirely and is
+              concatenated back on every change (see quoteSplit.ts). */}
+          <RichTextEditor
+            html={bodySplit.editable}
+            onChange={(html) => setField("bodyHtml", joinQuotedTail(html, bodySplit.quoted))}
+            ariaLabel={t("composer.body")}
+            // GH #292: drop the "…or ask the AI" hint when AI is disabled.
+            placeholder={aiEnabled ? t("composer.bodyPlaceholder") : t("composer.bodyPlaceholderNoAi")}
+          />
 
-        <div className="flex flex-col gap-2">
-          <label className="text-sm">
-            {t("composer.attach")}
-            <input
-              type="file"
-              multiple
-              aria-label={t("composer.attach")}
-              onChange={handleFileChange}
-              className="mt-1 block text-sm"
-            />
-          </label>
-          {(state.attachments.length > 0 || state.uploads.length > 0) && (
-            <ul className="flex flex-col gap-1">
-              {state.attachments.map((attachment) => (
-                <li key={attachment.blobId} className="flex items-center justify-between gap-2 text-xs">
-                  <span>
-                    {attachment.name} ({formatSizeKb(attachment.size)})
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={t("composer.removeAttachment", { name: attachment.name })}
-                    onClick={() => removeAttachment(attachment.blobId)}
-                    className="text-muted"
-                  >
-                    <CloseIcon size={14} />
-                  </button>
-                </li>
-              ))}
-              {state.uploads.map((upload) => (
-                <li key={upload.id} className="flex items-center justify-between gap-2 text-xs">
-                  <span>{upload.name}</span>
-                  {upload.error ? (
-                    <span role="alert" className="text-warn">
-                      {t("composer.errors.generic")}
-                    </span>
-                  ) : (
-                    <progress value={upload.progress} max={1} />
-                  )}
-                </li>
-              ))}
-            </ul>
+          {bodySplit.quoted && (
+            <div className="border-t border-line pt-2">
+              <button
+                type="button"
+                onClick={() => setQuoteRevealed((open) => !open)}
+                aria-expanded={quoteRevealed}
+                className="flex items-center gap-1.5 text-xs font-semibold text-muted transition hover:text-ink"
+              >
+                <span aria-hidden="true">•••</span>
+                {quoteRevealed ? t("composer.hideQuoted") : t("composer.showQuoted")}
+              </button>
+              {quoteRevealed && (
+                <>
+                  {/* Rendered as PLAIN TEXT, never as live markup. This block
+                      sits in the app's own document, which — unlike the
+                      reader's `sandbox=""` iframe — has nothing isolating it,
+                      the same reasoning that made ContentEditableFallback a
+                      text-only seed (GH #213). The structure the user cannot
+                      see here is still preserved exactly in what gets sent;
+                      this is a read-only confirmation of what is attached,
+                      not the copy of record. */}
+                  <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-md bg-soft px-2 py-1.5 text-xs leading-[1.6] text-muted">
+                    {htmlToPlainText(bodySplit.quoted)}
+                  </pre>
+                  <p className="mt-1 text-[11px] text-muted">{t("composer.quotedReadOnly")}</p>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                aria-label={t("composer.attach")}
+                onChange={handleFileChange}
+                className="sr-only"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="rounded-md border border-line-strong px-3 py-1 text-sm hover:bg-hover"
+              >
+                {t("composer.attachFiles")}
+              </button>
+            </div>
+            {(state.attachments.length > 0 || state.uploads.length > 0) && (
+              <div className="flex flex-wrap gap-2">
+                {state.attachments.map((attachment) => (
+                  <AttachmentCard
+                    key={attachment.blobId}
+                    attachment={{ ...attachment, cid: null }}
+                    onRemove={() => removeAttachment(attachment.blobId)}
+                  />
+                ))}
+                {state.uploads.map((upload) => (
+                  <PendingUploadCard key={upload.id} upload={upload} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {state.sendError && (
+            <p role="alert" className="text-sm text-warn">
+              {t(state.sendError)}
+            </p>
+          )}
+
+          {state.aiDraftError && (
+            <p role="alert" className="text-sm text-warn">
+              {t(state.aiDraftError)}
+            </p>
+          )}
+          {state.aiDraftNotice && (
+            <p className="text-xs text-muted">{t("composer.aiDraftNotice")}</p>
           )}
         </div>
 
-        {state.sendError && (
-          <p role="alert" className="text-sm text-warn">
-            {t(state.sendError)}
-          </p>
-        )}
-
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded-md border border-line px-3 py-1 text-sm hover:bg-hover">
-            {t("composer.cancel")}
-          </button>
-          <button
-            type="button"
+        {/* GH #249: Enviar + "Redactar con IA" + Descartar want ~370px, and a
+            375px phone leaves ~287px here once the overlay padding and the
+            panel's own px-5 are taken out — so without flex-wrap the row
+            overflowed and Descartar was unreachable. Same treatment #214 gave
+            the dialog rows (see DiscardConfirmDialog above): wrap rather than
+            scroll, since every control has to stay reachable, and shrink-0 on
+            each control so wrapping happens between buttons instead of
+            squeezing their labels. */}
+        <div
+          data-testid="composer-actions"
+          className="flex shrink-0 flex-wrap items-center gap-2.5 px-5 py-4"
+        >
+          <Button
+            variant="primary"
             onClick={handleSend}
             disabled={state.sending}
-            className="flex items-center gap-2 rounded-[11px] bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-cta transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            {state.sending ? t("composer.sending") : t("composer.send")}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M22 2 11 13" />
               <path d="M22 2 15 22l-4-9-9-4Z" />
             </svg>
-            {state.sending ? t("composer.sending") : t("composer.send")}
-          </button>
+          </Button>
+          {aiEnabled && !state.aiUnavailable && (
+            <button
+              type="button"
+              onClick={() => void draftWithAi()}
+              disabled={state.aiDrafting}
+              className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] border border-accent px-4 text-[13.5px] font-semibold text-accent-text transition hover:brightness-[1.07] active:scale-[0.98] disabled:opacity-50"
+            >
+              {state.aiDrafting ? t("composer.draftingWithAi") : t("composer.draftWithAi")}
+            </button>
+          )}
+          {/* GH #249: `ml-auto` on the trailing group replaces the old
+              `<span className="flex-1" />` spacer. A zero-basis growing spacer
+              cannot survive wrapping — it stays behind on the first line and
+              leaves Descartar stranded on the left of the second — whereas the
+              auto margin pushes this group to the right edge of whichever line
+              it lands on. */}
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            {/* GH #178: subtle autosave status. Hidden while idle so an untouched
+                composer shows nothing; aria-live so a screen reader hears the
+                transition to "saved" without it stealing focus. */}
+            {state.autosaveStatus !== "idle" && (
+              <span
+                data-testid="autosave-indicator"
+                aria-live="polite"
+                className={`text-xs ${state.autosaveStatus === "error" ? "text-warn" : "text-muted"}`}
+              >
+                {state.autosaveStatus === "saving" && t("composer.autosave.saving")}
+                {state.autosaveStatus === "saved" && t("composer.autosave.saved")}
+                {state.autosaveStatus === "error" && t("composer.autosave.error")}
+              </span>
+            )}
+            <Button
+              variant="secondary"
+              onClick={requestClose}
+              className="shrink-0 rounded-lg px-3 py-2 text-[13px] font-semibold"
+            >
+              {t("composer.cancel")}
+            </Button>
+          </div>
         </div>
       </div>
+      {discardConfirmOpen && (
+        <DiscardConfirmDialog
+          saving={state.savingDraft}
+          saveError={state.saveDraftError}
+          onDiscard={handleDiscard}
+          onSaveToDrafts={() => void handleSaveToDrafts()}
+          onKeepEditing={handleKeepEditing}
+        />
+      )}
     </div>
   );
 }

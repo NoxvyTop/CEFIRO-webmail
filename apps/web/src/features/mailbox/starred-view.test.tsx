@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
@@ -65,7 +66,7 @@ describe("starred view", () => {
   it("clicking Destacados requests flagged messages without a mailboxId and shows the starred title", async () => {
     const { fetchMock } = renderAt("/");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     const starredEntry = await screen.findByText(i18n.t("mail.starredView"));
     fireEvent.click(starredEntry);
 
@@ -84,7 +85,7 @@ describe("starred view", () => {
   it("excludes the archive mailbox from the starred view query", async () => {
     const { fetchMock } = renderAt("/?starred=1");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
 
     const flaggedCall = await vi.waitFor(() => {
       const found = messagesCalls(fetchMock).find(
@@ -100,14 +101,14 @@ describe("starred view", () => {
   it("marks the starred entry as current and does not highlight any mailbox", async () => {
     renderAt("/?starred=1");
 
-    await screen.findAllByText("Inbox");
+    await screen.findAllByText(i18n.t("mail.folders.inbox"));
     const starredEntries = await screen.findAllByText(i18n.t("mail.starredView"));
     const starredButton = starredEntries
       .map((el) => el.closest("button"))
       .find((button): button is HTMLButtonElement => button !== null);
     expect(starredButton).toHaveAttribute("aria-current", "true");
 
-    const inboxEntry = screen.getAllByText("Inbox")[0];
+    const inboxEntry = screen.getAllByText(i18n.t("mail.folders.inbox"))[0];
     expect(inboxEntry!.closest("button")).not.toHaveAttribute("aria-current");
   });
 });

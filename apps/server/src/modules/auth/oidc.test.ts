@@ -1,16 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SignJWT,
   createLocalJWKSet,
   exportJWK,
   generateKeyPair,
 } from "jose";
+import { DEFAULT_OIDC_TIMEOUT_MS } from "../../core/deadline";
+import { DomainError } from "../../core/errors";
 import {
   buildAuthUrl,
   createIdTokenVerifier,
   createPkce,
   discover,
   exchangeCode,
+  withOidcTransportErrors,
 } from "./oidc";
 
 describe("pkce", () => {
@@ -86,6 +89,133 @@ describe("exchangeCode", () => {
     await expect(exchangeCode({ ...base, fetchFn })).rejects.toMatchObject({
       code: "oidc_exchange_failed",
     });
+  });
+});
+
+// GH #236: an identity provider that is DOWN makes fetch reject with a
+// TypeError instead of answering, so it never reached the `!res.ok` mapping
+// these two functions had — it sailed into app.onError and came back as a 500
+// `internal`, this server taking the blame for a third party being unreachable.
+// Every test here drives a REJECTING fetch; a `!ok` response is a different
+// failure and is covered above.
+describe("unreachable identity provider (GH #236)", () => {
+  /** What fetch does when the connection cannot be made at all. */
+  function refusedFetch(): typeof fetch {
+    return (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+  }
+
+  const exchangeBase = {
+    tokenEndpoint: "https://auth.test/token",
+    clientId: "webmail",
+    clientSecret: "s",
+    code: "c",
+    redirectUri: "http://localhost:5173/api/auth/callback",
+    verifier: "v",
+  };
+
+  it("maps a refused discovery to 502 oidc_unavailable, not an internal error", async () => {
+    await expect(discover("https://auth.test", refusedFetch())).rejects.toMatchObject({
+      code: "oidc_unavailable",
+      httpStatus: 502,
+    });
+  });
+
+  it("maps a refused token exchange to 502 oidc_unavailable", async () => {
+    await expect(
+      exchangeCode({ ...exchangeBase, fetchFn: refusedFetch() }),
+    ).rejects.toMatchObject({ code: "oidc_unavailable", httpStatus: 502 });
+  });
+
+  it("leaves a DomainError already in flight alone", async () => {
+    // The 504 upstream_timeout withDeadlineFetch raises is a correct, more
+    // precise dependency error: "went silent" must not become "unreachable".
+    const timedOut = withOidcTransportErrors((async () => {
+      throw new DomainError("upstream_timeout", 504, "errors.upstream_timeout");
+    }) as unknown as typeof fetch);
+    await expect(timedOut("https://auth.test")).rejects.toMatchObject({
+      code: "upstream_timeout",
+      httpStatus: 504,
+    });
+  });
+
+  it("passes a successful response straight through", async () => {
+    const ok = withOidcTransportErrors((async () =>
+      new Response("{}", { status: 200 })) as unknown as typeof fetch);
+    expect((await ok("https://auth.test")).status).toBe(200);
+  });
+});
+
+describe("outbound deadline (GH #165)", () => {
+  /** The identity provider accepts the connection and then never answers. */
+  function silentFetch(): typeof fetch {
+    return vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fails discovery with upstream_timeout, not oidc_discovery_failed", async () => {
+    vi.useFakeTimers();
+
+    const pending = discover("https://auth.test", silentFetch());
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: "upstream_timeout",
+      httpStatus: 504,
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_OIDC_TIMEOUT_MS);
+    await assertion;
+  });
+
+  it("fails the token exchange with upstream_timeout when the provider never answers", async () => {
+    vi.useFakeTimers();
+
+    const pending = exchangeCode({
+      tokenEndpoint: "https://auth.test/token",
+      clientId: "webmail",
+      clientSecret: "s",
+      code: "c",
+      redirectUri: "http://localhost:5173/api/auth/callback",
+      verifier: "v",
+      fetchFn: silentFetch(),
+    });
+    const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+    await vi.advanceTimersByTimeAsync(DEFAULT_OIDC_TIMEOUT_MS);
+    await assertion;
+  });
+
+  it("honours a configured timeoutMs on discovery", async () => {
+    vi.useFakeTimers();
+
+    const pending = discover("https://auth.test", silentFetch(), 3_000);
+    const settled = vi.fn();
+    pending.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled).not.toHaveBeenCalled();
+
+    const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+  });
+
+  it("honours a configured timeoutMs on the token exchange", async () => {
+    vi.useFakeTimers();
+
+    const pending = exchangeCode({
+      tokenEndpoint: "https://auth.test/token",
+      clientId: "webmail",
+      clientSecret: "s",
+      code: "c",
+      redirectUri: "http://localhost:5173/api/auth/callback",
+      verifier: "v",
+      fetchFn: silentFetch(),
+      timeoutMs: 3_000,
+    });
+    const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
   });
 });
 
