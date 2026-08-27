@@ -233,7 +233,9 @@ describe("health budget (GH #212)", () => {
       });
 
       let settled = false;
-      const pending = app.request("/api/health").then((res) => {
+      // Hono types `app.request` as `Response | Promise<Response>`; wrap it so
+      // the settle probe is a real promise chain either way.
+      const pending = Promise.resolve(app.request("/api/health")).then((res: Response) => {
         settled = true;
         return res;
       });
