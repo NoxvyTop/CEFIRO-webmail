@@ -418,11 +418,19 @@ jobs:
           STALWART_SMTP_PORT: "465"
           STALWART_SMTP_PLAIN_PORT: "25"
           CI: "true"
+      # Artifacts are evidence, not the verdict: the job's result is the
+      # Playwright exit code above. Uploads share one storage quota across the
+      # whole organisation, and when it is full GitHub refuses every new
+      # artifact for 6-12 hours — that must read as "no report attached", never
+      # as a red job over a suite that passed. Reports of failed runs rarely
+      # matter after a week, so they expire before they can fill the quota.
       - uses: actions/upload-artifact@v4
         if: failure()
+        continue-on-error: true
         with:
           name: playwright-report
           path: e2e/playwright-report
+          retention-days: 7
       # The retry record (GH #246), published on EVERY run — including the green
       # ones, which are the whole point. `retries: 1` means a spec that fails
       # half the time still exits this job 0, so the only place the instability
@@ -433,11 +441,15 @@ jobs:
       # same spec keeps showing up in it.
       - name: publish the e2e retry record
         if: always()
+        # Same rule as the report above: a quota refusal loses one retry record,
+        # it does not fail a green suite.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: e2e-retries
           path: e2e/test-results/retries.json
           if-no-files-found: warn
+          retention-days: 30
       # A containerised job runs as root, so everything it writes into the
       # shared workspace ends up root-owned. On a self-hosted runner that
       # workspace persists between runs, and the next job that is NOT
