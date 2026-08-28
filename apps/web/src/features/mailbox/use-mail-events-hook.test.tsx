@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -170,6 +170,129 @@ describe("useMailEvents (hook lifecycle)", () => {
       ["mail", "thread"],
       ["mail", "mailboxes"],
     ]);
+  });
+
+  // #349/review-fix: a user scrolled N pages deep into the infinite messages
+  // list used to pay N sequential /api/mail/messages requests for every
+  // single StateChange (GH #167 narrowed WHICH keys get invalidated; this
+  // bounds the messages key's own refetch cost). The FIRST attempt at this
+  // invalidated the messages key with `refetchType: "none"` — that stopped
+  // the storm, but it also stopped the inbox from updating live on a
+  // StateChange at all (a regression on the exact #340/#342 "inbox does not
+  // update" behavior this whole audit started from). TanStack Query v5
+  // removed v4's `refetchPage` predicate (the one primitive that could have
+  // refetched just the first page) and `maxPages` EVICTS pages beyond the
+  // cap from the query's own data — that would drop already-visible rows
+  // mid-scroll during ordinary scrolling, not just on an SSE event. So
+  // instead: every cached infinite messages query is trimmed down to its
+  // first page BEFORE the (now-default, eager) invalidation, bounding the
+  // refetch to exactly one page while the query stays live. See the
+  // "keeps the message list live" test below for the actual refetch-count
+  // assertion this trims for.
+  it("invalidates the messages key with the default (eager) refetchType, like thread/mailboxes", () => {
+    const { invalidate, wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    FakeEventSource.instances[0]?.emitMessage(
+      JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1", Mailbox: "s2" } } }),
+    );
+
+    const calls = invalidate.mock.calls.map(
+      ([arg]) => arg as { queryKey: string[]; refetchType?: string },
+    );
+    const messagesCall = calls.find(
+      (call) => call.queryKey.join(".") === "mail.messages",
+    );
+    const threadCall = calls.find((call) => call.queryKey.join(".") === "mail.thread");
+    const mailboxesCall = calls.find((call) => call.queryKey.join(".") === "mail.mailboxes");
+
+    expect(messagesCall?.refetchType).toBeUndefined();
+    expect(threadCall?.refetchType).toBeUndefined();
+    expect(mailboxesCall?.refetchType).toBeUndefined();
+  });
+
+  // Regression test for the review fix above: an ACTIVE (mounted) infinite
+  // messages query must refetch on a StateChange WITHOUT any window focus —
+  // this is the live-update behavior #340/#342 depend on, and the
+  // `refetchType: "none"` first attempt silently broke it.
+  it("keeps the message list live: an ACTIVE messages query refetches on a StateChange, with no window focus involved", async () => {
+    const queryFn = vi.fn(async ({ pageParam }: { pageParam: number }) => ({
+      emails: [],
+      total: 0,
+      position: pageParam,
+    }));
+    const { wrapper } = makeWrapper();
+    renderHook(
+      () => {
+        useInfiniteQuery({
+          queryKey: ["mail", "messages", "mb-inbox"],
+          queryFn,
+          initialPageParam: 0,
+          getNextPageParam: () => undefined,
+        });
+        return useMailEvents(true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitState(
+        JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
+      );
+    });
+
+    // No focus/visibility event fired anywhere above — the refetch must come
+    // from the StateChange invalidation alone.
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
+  });
+
+  // The trim-to-first-page half of the fix: a query that had already loaded
+  // several pages must not replay all of them on a StateChange — only the
+  // first page's queryFn call should fire (pageParam 0), even though the
+  // query had reached page 2 before the event.
+  it("trims an already-multi-page messages query back to its first page before refetching, instead of replaying every loaded page", async () => {
+    const queryFn = vi.fn(async ({ pageParam }: { pageParam: number }) => ({
+      emails: [{ id: `e${pageParam}` }],
+      total: 999,
+      position: pageParam,
+    }));
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => {
+        const query = useInfiniteQuery({
+          queryKey: ["mail", "messages", "mb-inbox"],
+          queryFn,
+          initialPageParam: 0,
+          getNextPageParam: (lastPage: { position: number; total: number }) =>
+            lastPage.position + 1 < lastPage.total ? lastPage.position + 1 : undefined,
+        });
+        useMailEvents(true);
+        return query;
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+
+    // Scroll down to page 2 — three pages now cached.
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    expect(queryFn).toHaveBeenCalledTimes(3);
+    queryFn.mockClear();
+
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitState(
+        JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
+      );
+    });
+
+    // Exactly one request — the trimmed first page — not three.
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+    expect(queryFn).toHaveBeenCalledWith(expect.objectContaining({ pageParam: 0 }));
   });
 
   // GH #265. This is the production path: the server proxies Stalwart's stream

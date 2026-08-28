@@ -13,7 +13,8 @@
       "genericTitle": "Algo salió mal",
       "genericDescription": "No se pudo mostrar esta pantalla. Recargar la página suele solucionarlo.",
       "reload": "Recargar"
-    }
+    },
+    "toastDismiss": "Cerrar aviso"
   },
   "admin": {
     "title": "Administración",
@@ -72,7 +73,10 @@
       "role": "Rol",
       "archive": "Archivar",
       "reactivate": "Reactivar",
-      "confirmArchive": "Confirmar archivado"
+      "confirmArchive": "Confirmar archivado",
+      "confirmRoleChangeQuestion": "¿Cambiar el rol a {{role}}?",
+      "confirmRoleChange": "Confirmar",
+      "cancelRoleChange": "Cancelar"
     },
     "new": {
       "title": "Nuevo usuario",
@@ -165,6 +169,8 @@
     "connecting": "Conectando…",
     "disabled": "El modo de configuración está desactivado",
     "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
+    "yes": "Sí",
+    "no": "No",
     "ssoTitle": "Proveedor SSO (OIDC)",
     "userTitle": "Nuevo usuario",
     "save": "Guardar",
@@ -193,6 +199,10 @@
       "displayName": "Nombre",
       "role": "Rol",
       "locale": "Idioma",
+      "localeOptions": {
+        "es": "Español",
+        "en": "Inglés"
+      },
       "mailPassword": "Contraseña del buzón"
     }
   },
@@ -317,7 +327,7 @@
     },
     "bodyTruncated": {
       "title": "Este mensaje está incompleto",
-      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondés o reenviás, se citará únicamente la parte que se ve acá."
+      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondes o reenvías, se citará únicamente la parte que se ve acá."
     },
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
@@ -343,8 +353,8 @@
   },
   "sharedMailboxes": {
     "title": "Buzones compartidos",
-    "description": "Los buzones compartidos a los que tenés acceso. Entrá a cualquiera o pedí que sus correos también lleguen a tu bandeja.",
-    "empty": "Todavía no tenés buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
+    "description": "Los buzones compartidos a los que tienes acceso. Entra a cualquiera o pide que sus correos también lleguen a tu bandeja.",
+    "empty": "Todavía no tienes buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
     "enter": "Entrar",
     "copyLabel": "Recibir copia en mi bandeja",
     "copyToggle": "Recibir copia de {{name}} en mi bandeja",
@@ -454,7 +464,7 @@
     "print": "Imprimir",
     "close": "Cerrar",
     "previewLoading": "Cargando vista previa…",
-    "previewError": "No se pudo cargar la vista previa. Probá descargarlo.",
+    "previewError": "No se pudo cargar la vista previa. Prueba descargarlo.",
     "count_one": "{{count}} adjunto",
     "count_other": "{{count}} adjuntos"
   },
@@ -479,9 +489,13 @@
       "current": "Este dispositivo",
       "unknownDevice": "Dispositivo desconocido",
       "lastActivity": "Última actividad: {{time}}",
+      "created": "Creada: {{time}}",
       "location": "IP aproximada: {{ip}}",
       "close": "Cerrar",
-      "closeOthers": "Cerrar las demás"
+      "closeOthers": "Cerrar las demás",
+      "confirmCloseOthersQuestion": "¿Cerrar sesión en todos los demás dispositivos?",
+      "confirmCloseOthersAction": "Cerrar las demás",
+      "cancelCloseOthers": "Cancelar"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
@@ -493,6 +507,9 @@
     "save": "Guardar",
     "saved": "Guardado",
     "delete": "Eliminar",
+    "confirmDeleteSignatureQuestion": "¿Eliminar la firma «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar",
     "edit": "Editar",
     "retry": "Reintentar",
     "errors": {
@@ -513,6 +530,9 @@
   "filters": {
     "title": "Filtros",
     "newRule": "Nueva regla",
+    "confirmDeleteRuleQuestion": "¿Eliminar la regla «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar",
     "name": "Nombre",
     "matchType": "Coincidencia",
     "matchAll": "Todas las condiciones",

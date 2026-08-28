@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatRelativeTime } from "./relative-time";
+import { formatAbsoluteDateTime, formatRelativeTime } from "./relative-time";
 
 const YESTERDAY_LABEL = "Ayer";
 
@@ -41,6 +41,26 @@ describe("formatRelativeTime", () => {
     expect(result).not.toBe(YESTERDAY_LABEL);
     expect(result).not.toMatch(/^\d{1,2}:\d{2}$/);
     expect(result).toContain("13");
+  });
+
+  // #348: a short date with no year is ambiguous once the email is over a
+  // year old — "13 jul" from last year reads as if it just happened.
+  it("includes the year for a timestamp from a different calendar year than `now`", () => {
+    const now = new Date(2026, 6, 21, 12, 0, 0);
+    const date = new Date(2024, 6, 13, 9, 0, 0);
+
+    const result = formatRelativeTime(date, { now, yesterdayLabel: YESTERDAY_LABEL, locale: "en-US" });
+
+    expect(result).toContain("2024");
+  });
+
+  it("omits the year for an older date still within the same calendar year", () => {
+    const now = new Date(2026, 6, 21, 12, 0, 0);
+    const date = new Date(2026, 0, 13, 9, 0, 0);
+
+    const result = formatRelativeTime(date, { now, yesterdayLabel: YESTERDAY_LABEL, locale: "en-US" });
+
+    expect(result).not.toContain("2026");
   });
 
   it("accepts an ISO string as well as a Date", () => {
@@ -85,5 +105,30 @@ describe("formatRelativeTime", () => {
 
       expect(formatRelativeTime(date, { yesterdayLabel: YESTERDAY_LABEL })).toBe(YESTERDAY_LABEL);
     });
+  });
+});
+
+// #348: formatRelativeTime's compact label ("10:12", "Ayer", "13 jul") is
+// meant to be skimmed, not to name a moment precisely — the reader needs the
+// full date and time available too, as a `title` attribute a keyboard/mouse
+// user can inspect, and a screen reader can announce.
+describe("formatAbsoluteDateTime", () => {
+  it("includes the full date and time", () => {
+    const date = new Date(2026, 6, 21, 10, 12, 0);
+
+    const result = formatAbsoluteDateTime(date, { locale: "en-US" });
+
+    expect(result).toContain("2026");
+    expect(result).toMatch(/10:12/);
+  });
+
+  it("accepts an ISO string as well as a Date", () => {
+    const result = formatAbsoluteDateTime("2026-07-21T10:12:00", { locale: "en-US" });
+
+    expect(result).toContain("2026");
+  });
+
+  it("returns an empty string for an invalid date", () => {
+    expect(formatAbsoluteDateTime("not-a-date", { locale: "en-US" })).toBe("");
   });
 });

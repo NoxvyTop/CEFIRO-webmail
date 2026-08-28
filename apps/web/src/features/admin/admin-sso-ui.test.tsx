@@ -61,6 +61,9 @@ describe("AdminPage SSO config panel", () => {
     const secretInput = screen.getByLabelText("Client Secret") as HTMLInputElement;
     expect(secretInput).toHaveAttribute("type", "password");
     expect(secretInput.value).toBe("");
+    // #348: not a login credential — the browser must not offer to save this
+    // as a password, nor autofill an unrelated saved password into it.
+    expect(secretInput).toHaveAttribute("autocomplete", "off");
   });
 
   it("shows the not-configured status when sso is not set up", async () => {

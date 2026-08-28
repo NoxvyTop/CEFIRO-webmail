@@ -2,16 +2,17 @@ import "./app/ui/themeInit";
 import "@fontsource-variable/space-grotesk";
 import "./index.css";
 import "./app/i18n";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { AppErrorBoundary } from "./app/AppErrorBoundary";
+import { createQueryClient } from "./app/queryClient";
 import { routes } from "./app/routes";
 import { registerPushServiceWorker } from "./features/notifications/push";
 
-const client = new QueryClient();
+const client = createQueryClient();
 const router = createBrowserRouter(routes);
 
 // #294 (delivery slice): register the Web Push service worker at boot (idempotent

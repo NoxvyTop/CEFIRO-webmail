@@ -104,7 +104,11 @@ export function App() {
 
   return (
     <ToastProvider>
-      <div className="flex h-screen flex-col">
+      {/* #348: h-screen resolves against iOS Safari's LARGE viewport, which
+          includes the area the address/toolbar chrome covers before it
+          collapses on scroll — h-dvh tracks the dynamic viewport instead, so
+          the shell isn't taller than what's actually visible on first paint. */}
+      <div className="flex h-dvh flex-col">
         <a
           href="#main-content"
           className="sr-only left-4 top-4 z-50 rounded-md bg-accent px-4 py-2 text-sm font-bold text-accent-ink shadow-cta focus:not-sr-only focus:absolute"

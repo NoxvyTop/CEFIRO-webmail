@@ -1,11 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
-import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
+
+// The "applies locale" test below switches the shared i18n instance to
+// "en" — reset it so later tests in this file (or this file's own next run)
+// keep asserting the default Spanish copy.
+afterEach(async () => {
+  await i18n.changeLanguage("es");
+  document.documentElement.lang = "es";
+});
 
 function renderAt(path: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -100,6 +107,31 @@ describe("auth flow", () => {
     fireEvent.click(screen.getByRole("button", { name: i18n.t("auth.serviceUnavailable.retry") }));
 
     expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
+  });
+
+  // #348: i18n.ts always initialized in "es" and nothing ever applied the
+  // session user's own `locale`, so an English-preference user still got a
+  // Spanish UI. Loading a session with locale "en" must switch the active
+  // language and the document's lang attribute.
+  it("applies the session user's locale once /me resolves", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) {
+          return new Response(JSON.stringify({ ...user, locale: "en" }));
+        }
+        return new Response(JSON.stringify({ status: "ok", checks: {} }));
+      }),
+    );
+    renderAt("/");
+    expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
+    const avatarButton = await screen.findByRole("button", {
+      name: `Signed in as ${user.email}`,
+    });
+    fireEvent.click(avatarButton);
+    expect(await screen.findByText("Sign out")).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("en");
   });
 
   it("redirects unknown routes to the home page", async () => {

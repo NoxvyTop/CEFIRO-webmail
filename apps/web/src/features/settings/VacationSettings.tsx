@@ -110,6 +110,7 @@ export function VacationSettings() {
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
+          name="vacation-enabled"
           checked={form.enabled}
           onChange={(event) => update({ enabled: event.target.checked })}
         />

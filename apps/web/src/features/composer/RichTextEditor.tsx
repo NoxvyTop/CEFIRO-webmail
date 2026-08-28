@@ -15,6 +15,14 @@ import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import TextAlign from "@tiptap/extension-text-align";
 import { useTranslation } from "react-i18next";
+import {
+  AlignCenterIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
+  SizeLargeIcon,
+  SizeMediumIcon,
+  SizeSmallIcon,
+} from "../../app/ui/icons";
 import { MarkerBlock } from "./markerBlockExtension";
 import { htmlToPlainText } from "./plainText";
 import {
@@ -665,27 +673,27 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-label={t("composer.textAlignLeft")}
             aria-pressed={editor.isActive({ textAlign: "left" })}
             onClick={() => setParagraphAlign("left")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel"
           >
-            L
+            <AlignLeftIcon size={15} />
           </button>
           <button
             type="button"
             aria-label={t("composer.textAlignCenter")}
             aria-pressed={editor.isActive({ textAlign: "center" })}
             onClick={() => setParagraphAlign("center")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel"
           >
-            C
+            <AlignCenterIcon size={15} />
           </button>
           <button
             type="button"
             aria-label={t("composer.textAlignRight")}
             aria-pressed={editor.isActive({ textAlign: "right" })}
             onClick={() => setParagraphAlign("right")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel"
           >
-            R
+            <AlignRightIcon size={15} />
           </button>
         </div>
         <button
@@ -741,9 +749,9 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-pressed={selectedImageAttrs?.width === IMAGE_SIZE_PRESETS.small}
             disabled={!isImageSelected}
             onClick={() => setImageSize("small")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
           >
-            S
+            <SizeSmallIcon size={15} />
           </button>
           <button
             type="button"
@@ -751,9 +759,9 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-pressed={selectedImageAttrs?.width === IMAGE_SIZE_PRESETS.medium}
             disabled={!isImageSelected}
             onClick={() => setImageSize("medium")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
           >
-            M
+            <SizeMediumIcon size={15} />
           </button>
           <button
             type="button"
@@ -761,9 +769,9 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-pressed={selectedImageAttrs?.width === IMAGE_SIZE_PRESETS.large}
             disabled={!isImageSelected}
             onClick={() => setImageSize("large")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
           >
-            L
+            <SizeLargeIcon size={15} />
           </button>
         </div>
         <div role="group" className="flex items-center gap-1 border-l border-line pl-1.5 ml-0.5">
@@ -773,9 +781,9 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-pressed={selectedImageAttrs?.align === "left"}
             disabled={!isImageSelected}
             onClick={() => setImageAlign("left")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
           >
-            L
+            <AlignLeftIcon size={15} />
           </button>
           <button
             type="button"
@@ -783,9 +791,9 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-pressed={selectedImageAttrs?.align === "center"}
             disabled={!isImageSelected}
             onClick={() => setImageAlign("center")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
           >
-            C
+            <AlignCenterIcon size={15} />
           </button>
           <button
             type="button"
@@ -793,9 +801,9 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
             aria-pressed={selectedImageAttrs?.align === "right"}
             disabled={!isImageSelected}
             onClick={() => setImageAlign("right")}
-            className="rounded px-2 py-1 text-sm hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
+            className="rounded px-2 py-1 hover:bg-hover aria-pressed:bg-sel disabled:pointer-events-none disabled:opacity-40"
           >
-            R
+            <AlignRightIcon size={15} />
           </button>
         </div>
         {imageError && <p className="text-xs text-warn">{imageError}</p>}

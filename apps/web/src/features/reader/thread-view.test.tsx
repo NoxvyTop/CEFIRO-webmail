@@ -371,6 +371,25 @@ describe("ThreadView", () => {
 
       expect(await screen.findByText("11:05")).toBeInTheDocument();
     });
+
+    // #348: the compact "11:05"/"Ayer"/"13 jul" label is meant to be
+    // skimmed — the exact date/time must still be available on demand.
+    it("carries the full absolute date/time as a title attribute on the compact label", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.receivedAt = new Date(2026, 6, 21, 11, 5, 0).toISOString();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const dateLabel = await screen.findByText("11:05");
+      expect(dateLabel).toHaveAttribute("title", expect.stringContaining("2026"));
+    });
   });
 
   it("keeps action buttons from wrapping and lets the hint shrink so it truncates as a unit", async () => {
@@ -548,7 +567,8 @@ describe("ThreadView", () => {
       const actionsBar = await screen.findByTestId("thread-actions-bar");
       fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.copyToInbox") }));
 
-      expect(await screen.findByText(i18n.t("mail.errors.copy_failed"))).toBeInTheDocument();
+      // #348: an error toast is an assertive alert, not a polite status.
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.copy_failed"));
     });
   });
 
@@ -972,6 +992,28 @@ describe("ThreadView", () => {
       expect(ventasItem).toHaveAttribute("aria-checked", "false");
       expect(within(menu).getByRole("menuitemcheckbox", { name: "Soporte" })).toBeInTheDocument();
       expect(within(menu).queryByRole("menuitemcheckbox", { name: "urgente" })).not.toBeInTheDocument();
+    });
+
+    // #348: WAI-ARIA menu pattern — opening the menu must move focus onto
+    // its first item, and ArrowDown/ArrowUp must move between items.
+    it("focuses the first label on open and moves focus with arrow keys", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const soporte: CustomLabel = { slug: "soporte", name: "Soporte", color: "#2FB8C4" };
+      stubFetch(NO_IDENTITIES, [ventas, soporte]);
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+
+      const menu = await screen.findByRole("menu");
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      const soporteItem = within(menu).getByRole("menuitemcheckbox", { name: "Soporte" });
+      expect(ventasItem).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: "ArrowDown" });
+      expect(soporteItem).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: "ArrowUp" });
+      expect(ventasItem).toHaveFocus();
     });
 
     it("toggling a custom label applies the keyword and shows it as a chip next to the subject", async () => {
@@ -2885,7 +2927,8 @@ describe("sender trust badge and trust-this-service action (GH #314)", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: trustAction() }));
 
-    expect(await screen.findByText(i18n.t("mail.errors.invalid_domain"))).toBeInTheDocument();
+    // #348: an error toast is an assertive alert, not a polite status.
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.invalid_domain"));
     expect(screen.getByRole("button", { name: trustAction() })).toBeInTheDocument();
   });
 });

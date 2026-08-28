@@ -20,10 +20,11 @@ import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon, TrashIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { PanelError } from "../../app/ui/PanelError";
-import { formatRelativeTime } from "../../app/ui/relative-time";
+import { formatAbsoluteDateTime, formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
+import { useMenuKeyboardNav } from "../../app/ui/useMenuKeyboardNav";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { describeAudience } from "./audience";
 import { AttachmentCard } from "./AttachmentCard";
@@ -289,6 +290,11 @@ export function ThreadView({
   const labelButtonRef = useRef<HTMLButtonElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  // #348: WAI-ARIA menu keyboard behavior — focus the first label on open,
+  // ArrowUp/ArrowDown/Home/End move between labels. Shares labelMenuRef
+  // (rather than creating its own ref) since the click-outside handler below
+  // already needs a ref to this same portaled element.
+  useMenuKeyboardNav(labelMenuOpen, labelMenuRef);
 
   function toggleLabelMenu() {
     setLabelMenuOpen((open) => {
@@ -483,7 +489,9 @@ export function ThreadView({
       // Same mapped-key treatment the destroy path uses (GH #215): an unmapped
       // server code resolves to the namespace's generic message rather than
       // being shown to the user as a literal i18n key.
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -524,7 +532,9 @@ export function ThreadView({
     onError: (err) => {
       // Mapped-key treatment (GH #215): an unmapped server code resolves to
       // the namespace's generic message, never to a literal i18n key.
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -535,7 +545,9 @@ export function ThreadView({
       showToast(t("mail.senderTrust.untrusted", { domain }));
     },
     onError: (err) => {
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -956,6 +968,9 @@ export function ThreadView({
               yesterdayLabel: t("mail.yesterday"),
               locale: i18n.language,
             });
+            // #348: the compact label above is meant to be skimmed — this is
+            // the exact moment, available on demand via the title attribute.
+            const dateTitle = formatAbsoluteDateTime(email.receivedAt, { locale: i18n.language });
 
             if (!isExpanded) {
               return (
@@ -972,7 +987,9 @@ export function ThreadView({
                       <span className="font-semibold text-ink">{addressLabel(sender)}</span>
                       <span className="text-muted"> — {bodySnippet(email)}</span>
                     </span>
-                    <span className="shrink-0 text-[12px] text-muted">{dateLabel}</span>
+                    <span className="shrink-0 text-[12px] text-muted" title={dateTitle}>
+                      {dateLabel}
+                    </span>
                   </button>
                 </article>
               );
@@ -1086,7 +1103,9 @@ export function ThreadView({
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
+                <span className="shrink-0 text-[12.5px] text-muted" title={dateTitle}>
+                  {dateLabel}
+                </span>
               </>
             );
 

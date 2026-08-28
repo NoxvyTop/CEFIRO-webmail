@@ -54,7 +54,7 @@ export function SharedMailboxesPage() {
       if (context?.previous) {
         queryClient.setQueryData(SHARED_ACCOUNTS_QUERY_KEY, context.previous);
       }
-      showToast(t("sharedMailboxes.copyError"));
+      showToast(t("sharedMailboxes.copyError"), { variant: "error" });
     },
     // Reconcile with the server either way — a success confirms the flip, a
     // failure has already been reverted above and this just re-reads the truth.

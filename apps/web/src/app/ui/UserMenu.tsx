@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { Avatar } from "./Avatar";
 import { BellIcon, KeyboardIcon, LogoutIcon, MoonIcon, SettingsIcon, SunIcon, UsersIcon } from "./icons";
+import { useMenuKeyboardNav } from "./useMenuKeyboardNav";
 
 interface UserMenuUser {
   email: string;
@@ -46,6 +47,9 @@ export function UserMenu({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // #348: WAI-ARIA menu keyboard behavior — focus the first item on open,
+  // ArrowUp/ArrowDown/Home/End move between items.
+  const menuRef = useMenuKeyboardNav<HTMLDivElement>(open);
 
   useEffect(() => {
     if (!open) return;
@@ -85,6 +89,7 @@ export function UserMenu({
       </button>
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           className="absolute right-0 top-[calc(100%+8px)] z-50 flex min-w-[230px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
         >

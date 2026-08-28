@@ -137,6 +137,7 @@ export function ProfileSettings() {
           <input
             ref={fileInputRef}
             type="file"
+            name="avatar"
             accept={Array.from(ALLOWED_AVATAR_TYPES).join(",")}
             aria-label={t("settings.photo")}
             onChange={(event) => void handleFileSelected(event)}

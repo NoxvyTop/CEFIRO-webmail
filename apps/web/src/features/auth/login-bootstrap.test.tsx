@@ -175,6 +175,9 @@ describe("login screen bootstrap form", () => {
 
     const emailInput = await screen.findByLabelText("Usuario");
     const passwordInput = screen.getByLabelText("Contraseña");
+    // #348: the emergency bootstrap login is an existing account's password,
+    // so the browser should offer its normal saved-password autofill.
+    expect(passwordInput).toHaveAttribute("autocomplete", "current-password");
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByText(i18n.t("auth.bootstrap.errors.emptyUser"))).toBeInTheDocument();
@@ -387,6 +390,9 @@ describe("login screen bootstrap form", () => {
 
     const emailInput = await screen.findByLabelText("Usuario");
     const passwordInput = screen.getByLabelText("Contraseña");
+    // #348: the emergency bootstrap login is an existing account's password,
+    // so the browser should offer its normal saved-password autofill.
+    expect(passwordInput).toHaveAttribute("autocomplete", "current-password");
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     // Both field errors must be exposed as live alerts so a screen reader
