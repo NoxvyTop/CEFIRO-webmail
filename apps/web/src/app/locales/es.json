@@ -165,6 +165,8 @@
     "connecting": "Conectando…",
     "disabled": "El modo de configuración está desactivado",
     "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
+    "yes": "Sí",
+    "no": "No",
     "ssoTitle": "Proveedor SSO (OIDC)",
     "userTitle": "Nuevo usuario",
     "save": "Guardar",
@@ -193,6 +195,10 @@
       "displayName": "Nombre",
       "role": "Rol",
       "locale": "Idioma",
+      "localeOptions": {
+        "es": "Español",
+        "en": "Inglés"
+      },
       "mailPassword": "Contraseña del buzón"
     }
   },
@@ -317,7 +323,7 @@
     },
     "bodyTruncated": {
       "title": "Este mensaje está incompleto",
-      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondés o reenviás, se citará únicamente la parte que se ve acá."
+      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondes o reenvías, se citará únicamente la parte que se ve acá."
     },
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
@@ -343,8 +349,8 @@
   },
   "sharedMailboxes": {
     "title": "Buzones compartidos",
-    "description": "Los buzones compartidos a los que tenés acceso. Entrá a cualquiera o pedí que sus correos también lleguen a tu bandeja.",
-    "empty": "Todavía no tenés buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
+    "description": "Los buzones compartidos a los que tienes acceso. Entra a cualquiera o pide que sus correos también lleguen a tu bandeja.",
+    "empty": "Todavía no tienes buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
     "enter": "Entrar",
     "copyLabel": "Recibir copia en mi bandeja",
     "copyToggle": "Recibir copia de {{name}} en mi bandeja",
@@ -454,7 +460,7 @@
     "print": "Imprimir",
     "close": "Cerrar",
     "previewLoading": "Cargando vista previa…",
-    "previewError": "No se pudo cargar la vista previa. Probá descargarlo.",
+    "previewError": "No se pudo cargar la vista previa. Prueba descargarlo.",
     "count_one": "{{count}} adjunto",
     "count_other": "{{count}} adjuntos"
   },

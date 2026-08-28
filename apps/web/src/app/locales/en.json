@@ -165,6 +165,8 @@
     "connecting": "Connecting…",
     "disabled": "Setup mode is disabled",
     "status": "SSO configured: {{sso}} — Users: {{count}}",
+    "yes": "Yes",
+    "no": "No",
     "ssoTitle": "SSO provider (OIDC)",
     "userTitle": "New user",
     "save": "Save",
@@ -193,6 +195,10 @@
       "displayName": "Name",
       "role": "Role",
       "locale": "Language",
+      "localeOptions": {
+        "es": "Spanish",
+        "en": "English"
+      },
       "mailPassword": "Mailbox password"
     }
   },
