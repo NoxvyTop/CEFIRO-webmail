@@ -1,3 +1,5 @@
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { EmailDetail, Identity } from "@webmail/shared";
@@ -6,6 +8,19 @@ import { applySignature, SIGNATURE_MARKER_ATTR, type SignatureContent } from "./
 import { useComposer } from "./useComposer";
 
 const { saveDraftApi } = vi.hoisted(() => ({ saveDraftApi: vi.fn() }));
+
+// GH #336: useComposer now invalidates queries through useQueryClient on a
+// successful save, so every renderHook below needs a real QueryClient in
+// scope. Kept as a plain function component (not JSX) so this file can stay
+// .ts rather than becoming .tsx for one wrapper. A fresh client per call (not
+// a shared module-level one) so the wrapper component never hands React a
+// different client instance across re-renders of the same renderHook tree.
+function createWrapper() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return function wrapper({ children }: { children: ReactNode }) {
+    return createElement(QueryClientProvider, { client }, children);
+  };
+}
 
 vi.mock("./api", () => ({
   uploadAttachment: vi.fn(),
@@ -86,7 +101,7 @@ describe("signature persistence across save/reopen cycles (GH #156)", () => {
     for (let cycle = 0; cycle < 3; cycle++) {
       // 2. Save as a draft through the real useComposer hook -- this is what
       //    actually gets sent to the server.
-      const { result } = renderHook(() => useComposer(draftWith(bodyHtml)));
+      const { result } = renderHook(() => useComposer(draftWith(bodyHtml)), { wrapper: createWrapper() });
       await act(async () => {
         await result.current.saveDraft();
       });
@@ -113,7 +128,7 @@ describe("signature persistence across save/reopen cycles (GH #156)", () => {
 
     // Open, auto-apply default signature A, save.
     const applied = applySignature("<p>Hello</p>", signatureA);
-    const { result } = renderHook(() => useComposer(draftWith(applied)));
+    const { result } = renderHook(() => useComposer(draftWith(applied)), { wrapper: createWrapper() });
     await act(async () => {
       await result.current.saveDraft();
     });

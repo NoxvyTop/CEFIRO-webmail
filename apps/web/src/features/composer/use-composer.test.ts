@@ -1,3 +1,5 @@
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MailApiError } from "../mailbox/api";
@@ -21,6 +23,21 @@ vi.mock("../mailbox/api", async (importOriginal) => {
   return { ...actual, updateMessage };
 });
 
+// GH #336: send() and persistDraft() now invalidate through useQueryClient,
+// so every renderHook below needs a real QueryClient in scope — a fresh one
+// per test (reset in beforeEach) so invalidation call counts asserted in one
+// test never leak into the next. Kept as a plain function component (not
+// JSX) so this file can stay .ts rather than becoming .tsx for one wrapper.
+let queryClient: QueryClient;
+
+beforeEach(() => {
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+});
+
+function wrapper({ children }: { children: ReactNode }) {
+  return createElement(QueryClientProvider, { client: queryClient }, children);
+}
+
 function baseDraft(): ComposerDraft {
   return {
     identityId: "id1",
@@ -35,7 +52,7 @@ function baseDraft(): ComposerDraft {
 describe("useComposer", () => {
   it("addFiles: success path moves the upload into attachments and clears pending", async () => {
     uploadAttachment.mockResolvedValueOnce({ blobId: "blob1", type: "image/png", size: 5 });
-    const { result } = renderHook(() => useComposer(baseDraft()));
+    const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
     act(() => {
       result.current.addFiles([new File(["hello"], "a.png", { type: "image/png" })]);
@@ -52,7 +69,7 @@ describe("useComposer", () => {
 
   it("addFiles: error path marks the pending upload as errored", async () => {
     uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
-    const { result } = renderHook(() => useComposer(baseDraft()));
+    const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
     act(() => {
       result.current.addFiles([new File(["hello"], "b.png", { type: "image/png" })]);
@@ -72,7 +89,7 @@ describe("useComposer", () => {
 
     it("skips a file that duplicates an already-uploaded attachment (same name+size) and reports it as skipped", async () => {
       uploadAttachment.mockResolvedValueOnce({ blobId: "blob1", type: "image/png", size: 5 });
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       act(() => {
         result.current.addFiles([new File(["hello"], "dup.png", { type: "image/png" })]);
@@ -92,7 +109,7 @@ describe("useComposer", () => {
 
     it("skips a file that duplicates an already-pending upload (same name+size, not yet resolved)", async () => {
       uploadAttachment.mockReturnValueOnce(new Promise(() => {})); // never resolves — stays pending
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       act(() => {
         result.current.addFiles([new File(["hello"], "pending.png", { type: "image/png" })]);
@@ -111,7 +128,7 @@ describe("useComposer", () => {
 
     it("skips a duplicate within the same addFiles call (two identical files selected at once)", () => {
       uploadAttachment.mockReturnValueOnce(new Promise(() => {}));
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       let outcome: { skipped: string[] } | undefined;
       act(() => {
@@ -129,7 +146,7 @@ describe("useComposer", () => {
     it("does not skip files with the same name but a different size", async () => {
       uploadAttachment.mockResolvedValueOnce({ blobId: "blob1", type: "image/png", size: 5 });
       uploadAttachment.mockResolvedValueOnce({ blobId: "blob2", type: "image/png", size: 9 });
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       act(() => {
         result.current.addFiles([new File(["hello"], "same-name.png", { type: "image/png" })]);
@@ -149,7 +166,7 @@ describe("useComposer", () => {
   });
 
   it("send: without a recipient sets noRecipients error and does not call sendEmail", async () => {
-    const { result } = renderHook(() => useComposer(baseDraft()));
+    const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
     let sent: boolean | undefined;
     await act(async () => {
@@ -167,7 +184,7 @@ describe("useComposer", () => {
       ...baseDraft(),
       to: [{ name: "Bob", email: "bob@example.com" }],
     };
-    const { result } = renderHook(() => useComposer(draft));
+    const { result } = renderHook(() => useComposer(draft), { wrapper });
 
     let sent: boolean | undefined;
     await act(async () => {
@@ -189,6 +206,48 @@ describe("useComposer", () => {
     );
   });
 
+  // GH #336: Sent/Drafts and the sidebar's unread counters used to refresh
+  // only via the SSE stream (useMailEvents.ts) or the browser's default
+  // refetchOnWindowFocus — invisible if the tab is over the per-user stream
+  // cap or the SSE connection is otherwise degraded. A successful send now
+  // invalidates the same query keys ThreadView's own mutations already do
+  // (see reader/ThreadView.tsx's starMutation), so Sent/Drafts and the
+  // mailbox counters are correct the instant send() resolves, independent of
+  // any stream.
+  it("send: invalidates email and mailbox queries on success (#336)", async () => {
+    sendEmail.mockResolvedValueOnce(undefined);
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const draft: ComposerDraft = {
+      ...baseDraft(),
+      to: [{ name: "Bob", email: "bob@example.com" }],
+    };
+    const { result } = renderHook(() => useComposer(draft), { wrapper });
+
+    await act(async () => {
+      await result.current.send();
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "messages"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "thread"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "mailboxes"] });
+  });
+
+  it("send: does not invalidate anything when the send fails", async () => {
+    sendEmail.mockRejectedValueOnce(new MailApiError(503, "mail_not_configured"));
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const draft: ComposerDraft = {
+      ...baseDraft(),
+      to: [{ name: "Bob", email: "bob@example.com" }],
+    };
+    const { result } = renderHook(() => useComposer(draft), { wrapper });
+
+    await act(async () => {
+      await result.current.send();
+    });
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
   it("send: strips internal signature/quote marker attributes from the outgoing htmlBody", async () => {
     sendEmail.mockResolvedValueOnce(undefined);
     const draft: ComposerDraft = {
@@ -198,7 +257,7 @@ describe("useComposer", () => {
         '<p>Hi</p><div data-cefiro-signature="true"><p>Thanks, Alice</p></div>' +
         '<div data-cefiro-quote="true"><blockquote><p>Original</p></blockquote></div>',
     };
-    const { result } = renderHook(() => useComposer(draft));
+    const { result } = renderHook(() => useComposer(draft), { wrapper });
 
     await act(async () => {
       await result.current.send();
@@ -232,7 +291,7 @@ describe("useComposer", () => {
         inReplyTo: ["parent@example.com"],
         references: ["grandparent@example.com", "parent@example.com"],
       };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -253,7 +312,7 @@ describe("useComposer", () => {
         ...baseDraft(),
         to: [{ name: "Bob", email: "bob@example.com" }],
       };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -274,7 +333,7 @@ describe("useComposer", () => {
       ...baseDraft(),
       to: [{ name: "Bob", email: "bob@example.com" }],
     };
-    const { result } = renderHook(() => useComposer(draft));
+    const { result } = renderHook(() => useComposer(draft), { wrapper });
 
     let sent: boolean | undefined;
     await act(async () => {
@@ -294,7 +353,7 @@ describe("useComposer", () => {
       // A subject is present but the body is empty — the old gate would have let
       // this through; the new one must not.
       const draft: ComposerDraft = { ...baseDraft(), subject: "Reunión", bodyHtml: "   " };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.draftWithAi();
@@ -306,7 +365,7 @@ describe("useComposer", () => {
 
     it("happy path uses the typed body as the intent, fills the body and shows the review notice", async () => {
       fetchAiDraft.mockResolvedValueOnce("Estimado equipo, este es el borrador.");
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       await act(async () => {
         await result.current.draftWithAi();
@@ -325,7 +384,7 @@ describe("useComposer", () => {
       fetchAiDraft.mockClear();
       fetchAiDraft.mockResolvedValueOnce("Borrador.");
       const draft: ComposerDraft = { ...baseDraft(), subject: "   ", bodyHtml: "<p>quiero avisar que no voy</p>" };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.draftWithAi();
@@ -355,7 +414,7 @@ describe("useComposer", () => {
           '<div data-cefiro-quote="true"><p>2026-07-01 — Alice:</p>' +
           "<blockquote><p>¿Puedes confirmar el total antes del viernes?</p></blockquote></div>",
       };
-      const { result } = renderHook(() => useComposer(replyDraft));
+      const { result } = renderHook(() => useComposer(replyDraft), { wrapper });
 
       await act(async () => {
         await result.current.draftWithAi();
@@ -382,8 +441,9 @@ describe("useComposer", () => {
       fetchAiDraft.mockClear();
       fetchAiDraft.mockResolvedValueOnce("Primer borrador.");
       fetchAiDraft.mockResolvedValueOnce("Segundo borrador.");
-      const { result } = renderHook(() =>
-        useComposer({ ...baseDraft(), subject: "Hi", bodyHtml: "<p>primera idea</p>" }),
+      const { result } = renderHook(
+        () => useComposer({ ...baseDraft(), subject: "Hi", bodyHtml: "<p>primera idea</p>" }),
+        { wrapper },
       );
 
       await act(async () => {
@@ -410,7 +470,7 @@ describe("useComposer", () => {
 
     it("hides the feature (aiUnavailable) without an inline error when the backend reports ai_disabled", async () => {
       fetchAiDraft.mockRejectedValueOnce(new MailApiError(501, "ai_disabled"));
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       await act(async () => {
         await result.current.draftWithAi();
@@ -423,7 +483,7 @@ describe("useComposer", () => {
 
     it("maps other provider failures to a namespaced inline error", async () => {
       fetchAiDraft.mockRejectedValueOnce(new MailApiError(502, "ai_provider_error"));
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       await act(async () => {
         await result.current.draftWithAi();
@@ -453,7 +513,7 @@ describe("useComposer", () => {
     it("moves the original draft to Trash after a successful send when both originalDraftId and trashMailboxId are present", async () => {
       sendEmail.mockResolvedValueOnce(undefined);
       updateMessage.mockResolvedValueOnce(undefined);
-      const { result } = renderHook(() => useComposer(draftWithOriginal(), "trash1"));
+      const { result } = renderHook(() => useComposer(draftWithOriginal(), "trash1"), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -464,8 +524,9 @@ describe("useComposer", () => {
 
     it("does not call updateMessage when the draft has no originalDraftId (a brand new email)", async () => {
       sendEmail.mockResolvedValueOnce(undefined);
-      const { result } = renderHook(() =>
-        useComposer({ ...baseDraft(), to: [{ name: "Bob", email: "bob@example.com" }] }, "trash1"),
+      const { result } = renderHook(
+        () => useComposer({ ...baseDraft(), to: [{ name: "Bob", email: "bob@example.com" }] }, "trash1"),
+        { wrapper },
       );
 
       await act(async () => {
@@ -477,7 +538,7 @@ describe("useComposer", () => {
 
     it("does not call updateMessage when no trashMailboxId is supplied", async () => {
       sendEmail.mockResolvedValueOnce(undefined);
-      const { result } = renderHook(() => useComposer(draftWithOriginal()));
+      const { result } = renderHook(() => useComposer(draftWithOriginal()), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -489,7 +550,7 @@ describe("useComposer", () => {
     it("still reports the send as successful even if trashing the original draft fails (best-effort cleanup)", async () => {
       sendEmail.mockResolvedValueOnce(undefined);
       updateMessage.mockRejectedValueOnce(new MailApiError(500, "internal"));
-      const { result } = renderHook(() => useComposer(draftWithOriginal(), "trash1"));
+      const { result } = renderHook(() => useComposer(draftWithOriginal(), "trash1"), { wrapper });
 
       let sent: boolean | undefined;
       await act(async () => {
@@ -502,7 +563,7 @@ describe("useComposer", () => {
 
     it("does not call updateMessage when the send itself fails", async () => {
       sendEmail.mockRejectedValueOnce(new MailApiError(503, "mail_not_configured"));
-      const { result } = renderHook(() => useComposer(draftWithOriginal(), "trash1"));
+      const { result } = renderHook(() => useComposer(draftWithOriginal(), "trash1"), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -535,7 +596,7 @@ describe("useComposer", () => {
         bodyHtml: REPLY_BODY,
         to: [{ name: null, email: "alice@example.com" }],
       };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -557,7 +618,7 @@ describe("useComposer", () => {
         bodyHtml: "<p>Just saying hi</p>",
         to: [{ name: null, email: "alice@example.com" }],
       };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.send();
@@ -586,7 +647,7 @@ describe("useComposer", () => {
         ...baseDraft(),
         to: [{ name: "Bob", email: "bob@example.com" }],
       };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       let ok: boolean | undefined;
       await act(async () => {
@@ -610,7 +671,7 @@ describe("useComposer", () => {
 
     it("does not require a recipient — a draft is work in progress (GH #149)", async () => {
       saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       let ok: boolean | undefined;
       await act(async () => {
@@ -638,7 +699,7 @@ describe("useComposer", () => {
           '<p>Hi</p><div data-cefiro-signature="true"><p>Thanks, Alice</p></div>' +
           '<div data-cefiro-quote="true"><blockquote><p>Original</p></blockquote></div>',
       };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.saveDraft();
@@ -650,10 +711,40 @@ describe("useComposer", () => {
       expect(sentHtml).toContain("data-cefiro-quote");
     });
 
+    // GH #336: saveDraft() routes through the same persistDraft() autosave
+    // uses, so both refresh Drafts/the sidebar counters on success without
+    // waiting on SSE.
+    it("invalidates email and mailbox queries on success (#336)", async () => {
+      saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const draft: ComposerDraft = { ...baseDraft(), to: [{ name: "Bob", email: "bob@example.com" }] };
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
+
+      await act(async () => {
+        await result.current.saveDraft();
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "messages"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "thread"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "mailboxes"] });
+    });
+
+    it("does not invalidate anything when the save fails", async () => {
+      saveDraftApi.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+      await act(async () => {
+        await result.current.saveDraft();
+      });
+
+      expect(invalidateSpy).not.toHaveBeenCalled();
+    });
+
     it("carries originalDraftId through to the saveDraft payload when editing an existing draft", async () => {
       saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
       const draft: ComposerDraft = { ...baseDraft(), originalDraftId: "orig-1" };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       await act(async () => {
         await result.current.saveDraft();
@@ -665,7 +756,7 @@ describe("useComposer", () => {
     it("maps MailApiError to a namespaced error code and returns false, keeping the draft intact", async () => {
       saveDraftApi.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
       const draft: ComposerDraft = { ...baseDraft(), subject: "Keep me" };
-      const { result } = renderHook(() => useComposer(draft));
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
 
       let ok: boolean | undefined;
       await act(async () => {
@@ -688,7 +779,7 @@ describe("useComposer", () => {
             resolveFirst = resolve;
           }),
       );
-      const { result } = renderHook(() => useComposer(baseDraft()));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
 
       let firstResult: Promise<boolean> = Promise.resolve(false);
       let secondResult: boolean | undefined;
@@ -738,7 +829,7 @@ describe("useComposer", () => {
 
     it("autosaves after the idle debounce once meaningful content is typed", async () => {
       saveDraftApi.mockResolvedValue({ id: "draft-1" });
-      const { result } = renderHook(() => useComposer(emptyDraft()));
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "Reunión de mañana");
@@ -757,8 +848,28 @@ describe("useComposer", () => {
       expect(result.current.state.autosaveStatus).toBe("saved");
     });
 
+    // GH #336: autosave shares persistDraft() with the explicit "Save to
+    // drafts" action, so a debounced autosave also keeps Drafts/the sidebar
+    // counters fresh.
+    it("invalidates email and mailbox queries after a debounced autosave (#336)", async () => {
+      saveDraftApi.mockResolvedValue({ id: "draft-1" });
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
+
+      act(() => {
+        result.current.setField("subject", "Reunión de mañana");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "messages"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "thread"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["mail", "mailboxes"] });
+    });
+
     it("does not autosave an empty draft (only whitespace typed)", async () => {
-      const { result } = renderHook(() => useComposer(emptyDraft()));
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "   ");
@@ -775,7 +886,7 @@ describe("useComposer", () => {
     it("supersedes the same draft on the next save instead of creating a duplicate", async () => {
       saveDraftApi.mockResolvedValueOnce({ id: "draft-1" });
       saveDraftApi.mockResolvedValueOnce({ id: "draft-2" });
-      const { result } = renderHook(() => useComposer(emptyDraft()));
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "First");
@@ -806,7 +917,7 @@ describe("useComposer", () => {
       saveDraftApi.mockImplementationOnce(
         () => new Promise((resolve) => { resolveSave = resolve; }),
       );
-      const { result } = renderHook(() => useComposer(emptyDraft()));
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "Reunión");
@@ -828,7 +939,7 @@ describe("useComposer", () => {
 
     it("surfaces an error status when the autosave request fails", async () => {
       saveDraftApi.mockRejectedValueOnce(new MailApiError(500, "save_draft_failed"));
-      const { result } = renderHook(() => useComposer(emptyDraft()));
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "Reunión");
@@ -846,7 +957,7 @@ describe("useComposer", () => {
       saveDraftApi
         .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
         .mockResolvedValueOnce({ id: "draft-2" });
-      const { result } = renderHook(() => useComposer(emptyDraft()));
+      const { result } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "First");
@@ -885,7 +996,7 @@ describe("useComposer", () => {
     // not drop the draft. The unmount flush persists it on the way out.
     it("flushes unsaved content on unmount, before the debounce would have fired (#176)", async () => {
       saveDraftApi.mockResolvedValue({ id: "draft-1" });
-      const { result, unmount } = renderHook(() => useComposer(emptyDraft()));
+      const { result, unmount } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "Do not lose me");
@@ -902,7 +1013,7 @@ describe("useComposer", () => {
     });
 
     it("does not flush on unmount when the draft is empty", async () => {
-      const { result, unmount } = renderHook(() => useComposer(emptyDraft()));
+      const { result, unmount } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "   ");
@@ -917,8 +1028,9 @@ describe("useComposer", () => {
     it("does not resave the message as a draft on unmount after a successful send", async () => {
       sendEmail.mockReset();
       sendEmail.mockResolvedValueOnce(undefined);
-      const { result, unmount } = renderHook(() =>
-        useComposer({ ...emptyDraft(), to: [{ name: null, email: "bob@example.com" }] }),
+      const { result, unmount } = renderHook(
+        () => useComposer({ ...emptyDraft(), to: [{ name: null, email: "bob@example.com" }] }),
+        { wrapper },
       );
 
       act(() => {
@@ -937,7 +1049,7 @@ describe("useComposer", () => {
     // Guards against the unmount flush re-saving a draft the user explicitly
     // discarded (Discard anyway → onClose → unmount).
     it("does not resave a discarded draft on unmount", async () => {
-      const { result, unmount } = renderHook(() => useComposer(emptyDraft()));
+      const { result, unmount } = renderHook(() => useComposer(emptyDraft()), { wrapper });
 
       act(() => {
         result.current.setField("subject", "Throw me away");
@@ -968,8 +1080,9 @@ describe("useComposer", () => {
         () => new Promise((resolve) => { resolveAutosave = resolve; }),
       );
 
-      const { result } = renderHook(() =>
-        useComposer({ ...emptyDraft(), to: [{ name: null, email: "bob@example.com" }] }, "trash1"),
+      const { result } = renderHook(
+        () => useComposer({ ...emptyDraft(), to: [{ name: null, email: "bob@example.com" }] }, "trash1"),
+        { wrapper },
       );
 
       act(() => {
@@ -1013,7 +1126,7 @@ describe("useComposer", () => {
 
       it("flushes the outgoing session's work once, then starts the new one clean", async () => {
         saveDraftApi.mockResolvedValue({ id: "draft-alpha" });
-        const first = renderHook(() => useComposer(draftFor("Alpha")));
+        const first = renderHook(() => useComposer(draftFor("Alpha")), { wrapper });
 
         act(() => {
           first.result.current.setField("bodyHtml", "<p>half-written reply to Alpha</p>");
@@ -1027,7 +1140,7 @@ describe("useComposer", () => {
           expect.objectContaining({ subject: "Alpha", originalDraftId: undefined }),
         );
 
-        const second = renderHook(() => useComposer(draftFor("Beta")));
+        const second = renderHook(() => useComposer(draftFor("Beta")), { wrapper });
         expect(second.result.current.state.draft.subject).toBe("Beta");
         expect(second.result.current.state.draft.bodyHtml).toBe("");
         // Nothing about the new session is dirty yet, so the debounce must not
@@ -1045,7 +1158,7 @@ describe("useComposer", () => {
       // would overwrite the previous message's draft instead of creating one.
       it("does not carry the previous session's owned draft id into the new one", async () => {
         saveDraftApi.mockResolvedValue({ id: "draft-alpha" });
-        const first = renderHook(() => useComposer(draftFor("Alpha")));
+        const first = renderHook(() => useComposer(draftFor("Alpha")), { wrapper });
 
         act(() => {
           first.result.current.setField("bodyHtml", "<p>Alpha body</p>");
@@ -1058,7 +1171,7 @@ describe("useComposer", () => {
         first.unmount();
 
         saveDraftApi.mockResolvedValue({ id: "draft-beta" });
-        const second = renderHook(() => useComposer(draftFor("Beta")));
+        const second = renderHook(() => useComposer(draftFor("Beta")), { wrapper });
         act(() => {
           second.result.current.setField("bodyHtml", "<p>Beta body</p>");
         });
@@ -1078,7 +1191,7 @@ describe("useComposer", () => {
       // the new `initial`, it does not clear it.
       it("adopts the new session's own originalDraftId when one is reopened", async () => {
         saveDraftApi.mockResolvedValue({ id: "draft-x" });
-        const { result } = renderHook(() => useComposer(draftFor("Reopened", "draft-x")));
+        const { result } = renderHook(() => useComposer(draftFor("Reopened", "draft-x")), { wrapper });
 
         act(() => {
           result.current.setField("bodyHtml", "<p>edited</p>");
@@ -1099,8 +1212,9 @@ describe("useComposer", () => {
       // deliberate close.
       it("does not flush a sent message on the teardown that follows the send", async () => {
         sendEmail.mockResolvedValueOnce({ id: "sent-1" });
-        const { result, unmount } = renderHook(() =>
-          useComposer({ ...draftFor("Sent one"), to: [{ name: null, email: "b@example.com" }] }),
+        const { result, unmount } = renderHook(
+          () => useComposer({ ...draftFor("Sent one"), to: [{ name: null, email: "b@example.com" }] }),
+          { wrapper },
         );
 
         await act(async () => {

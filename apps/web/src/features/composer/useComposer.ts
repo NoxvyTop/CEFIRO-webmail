@@ -1,9 +1,11 @@
 import { DRAFT_CONTEXT_MAX_CHARS, type SaveDraftInput, type SendEmailInput } from "@webmail/shared";
 import { useEffect, useReducer, useRef } from "react";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { saveDraft as saveDraftRequest, sendEmail, uploadAttachment } from "./api";
 import { fetchAiDraft } from "./aiApi";
 import { isComposerDraftEmpty } from "./emptiness";
 import { MailApiError, updateMessage } from "../mailbox/api";
+import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
 import { errorMessageKey } from "../../app/errorMessages";
 import { composeTextBody, htmlToPlainText } from "./plainText";
 import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
@@ -133,6 +135,21 @@ function reducer(state: ComposerState, action: Action): ComposerState {
       return { ...state, aiDrafting: false, aiDraftError: action.error, aiUnavailable: action.unavailable };
     default:
       return state;
+  }
+}
+
+// GH #336: Sent/Drafts and the sidebar's unread counters used to refresh only
+// through the SSE stream (useMailEvents.ts's StateChange handler) or the
+// browser's default refetchOnWindowFocus — invisible whenever a tab is over
+// the per-user stream cap (429, see MailPage.tsx) or the stream otherwise
+// fails to deliver. Every other mutating path in this app already invalidates
+// on its own success (see reader/ThreadView.tsx's starMutation); send() and
+// persistDraft() were the two exceptions. Reuses the exact same query keys
+// useMailEvents derives a StateChange into, so a manual send/save and a real
+// server push refresh exactly the same data.
+function invalidateMailData(queryClient: QueryClient): void {
+  for (const queryKey of [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS]) {
+    queryClient.invalidateQueries({ queryKey });
   }
 }
 
@@ -280,6 +297,7 @@ export function useComposer(
   draftWithAi(): Promise<void>;
 } {
   const [state, dispatch] = useReducer(reducer, initial, initState);
+  const queryClient = useQueryClient();
 
   // Always-current mirror of state for the async save pipeline. Autosave runs
   // out of a debounce timer and can re-run after an await (see the coalescing
@@ -355,6 +373,9 @@ export function useComposer(
     const result = await saveDraftRequest(input);
     currentDraftIdRef.current = result.id;
     lastSavedPayloadRef.current = snapshot;
+    // GH #336: shared by autosave and the explicit "Save to drafts" action, so
+    // both keep Drafts/the sidebar counters fresh without waiting on SSE.
+    invalidateMailData(queryClient);
   }
 
   async function autosave(): Promise<void> {
@@ -520,6 +541,9 @@ export function useComposer(
     dispatch({ type: "sendStart" });
     try {
       await sendEmail(input);
+      // GH #336: Sent (and, when replying, the source thread/mailbox) just
+      // changed server-side — refresh without waiting on SSE/window focus.
+      invalidateMailData(queryClient);
       // The message left as mail, not a draft: block the unmount flush so the
       // onClose that follows a successful send can't recreate it as a draft.
       // GH #278: setting this before the trash below also stops any autosave
