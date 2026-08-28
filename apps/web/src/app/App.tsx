@@ -23,7 +23,15 @@ export function App() {
   const { user, logout } = useAuth();
   const profile = useProfile();
   const { theme, toggleTheme } = useTheme();
-  const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
+  // GH #342: used to run exactly once (on mount), so a backend that degraded
+  // mid-session never surfaced "Servicio degradado" — the banner only ever
+  // reflected the state at page load. Polling lets it appear at any point in
+  // an open session, not just after a fresh navigation.
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: fetchHealth,
+    refetchInterval: 60_000,
+  });
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();

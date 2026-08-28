@@ -47,7 +47,12 @@ export function MailPage() {
   // (the 8/user cap of #241). When it does, the hook stops the silent retry loop
   // and reports it here so the tab can say live updates are limited rather than
   // spinning forever with no sign to the user.
-  const { liveUpdatesLimited } = useMailEvents(true);
+  // GH #342: `streamOpen` is false for every reason live updates aren't
+  // flowing right now (reconnecting, limited, offline) — used below as the
+  // single signal for whether the mailboxes/messages queries need to fall
+  // back to polling.
+  const { liveUpdatesLimited, streamOpen } = useMailEvents(true);
+  const pollWhileStreamDown = !streamOpen;
   // GH #338: the unread count in the tab title and on the favicon. Mounted here
   // rather than in the shell because this is the screen that holds the live
   // stream — and keeping the PERSONAL mailboxes query active is also what lets
@@ -78,6 +83,10 @@ export function MailPage() {
     queryKey: ["mail", "mailboxes", accountParam ?? null],
     queryFn: () => fetchMailboxes(accountParam),
     retry: mailRetry,
+    // GH #342: same polling fallback as MessageList's messages query — see
+    // its comment for why.
+    refetchInterval: pollWhileStreamDown ? 60_000 : undefined,
+    refetchIntervalInBackground: false,
   });
 
   const identitiesQuery = useQuery({
@@ -633,6 +642,7 @@ export function MailPage() {
             onArchived={handleArchived}
             customLabels={customLabels}
             accountId={accountParam}
+            pollWhileStreamDown={pollWhileStreamDown}
           />
         )}
       </section>

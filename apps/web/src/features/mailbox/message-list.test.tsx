@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CustomLabel, EmailSummary } from "@webmail/shared";
 import "../../app/i18n";
@@ -1155,5 +1155,54 @@ describe("MessageList — conversation-wide archive (#343)", () => {
     await vi.waitFor(() =>
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth", "me"] }),
     );
+  });
+});
+
+async function flushMicrotasks() {
+  await act(async () => {
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+  });
+}
+
+// GH #342: while the SSE stream is not open (dropped, limited, offline), there
+// was no backup source of freshness at all — a folder loaded once could sit
+// stale for the rest of the session. MailPage derives `pollWhileStreamDown`
+// from useMailEvents' `streamOpen` and threads it through as this prop.
+describe("polling fallback while the stream is down (GH #342)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("refetches on a 60s interval when pollWhileStreamDown is true", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubFetch({ total: 0, position: 0, emails: [] });
+    renderList(vi.fn(), { pollWhileStreamDown: true });
+
+    await flushMicrotasks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not poll while the stream is open (pollWhileStreamDown false/unset)", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubFetch({ total: 0, position: 0, emails: [] });
+    renderList(vi.fn(), { pollWhileStreamDown: false });
+
+    await flushMicrotasks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

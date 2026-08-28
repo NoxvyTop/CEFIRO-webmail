@@ -24,6 +24,19 @@ const MAIL_EVENTS_URL = "/api/mail/events";
 const RETRY_BASE_DELAY_MS = 2_000;
 const RETRY_MAX_DELAY_MS = 60_000;
 
+// GH #342: handleOpen used to reset `attempt` to 0 unconditionally, on the
+// theory that an "open" event proves the server is serving again. It does
+// not: an intermediary that accepts the SSE handshake and then cuts it (a
+// proxy_read_timeout, an upstream that closes right after headers) also
+// fires "open" — and then "error" a moment later — so the ladder never grew
+// past its first rung, turning the backoff into a flat ~1-2s retry loop
+// (each attempt also paying for the classifyRefusedHandshake probe below).
+// A stream now has to stay open for this long before it is trusted enough
+// to reset the ladder; receiving actual data (the first frame) is treated
+// as proof sooner, since a frame cannot arrive over a connection an
+// intermediary already dropped.
+export const STREAM_STABLE_MS = 30_000;
+
 // EventSource never surfaces the HTTP status of the request that failed: the
 // error event carries none, and a 401 arrives looking exactly like a dropped
 // socket. What it does expose is readyState — the browser leaves it at
@@ -79,6 +92,12 @@ export function retryDelayMs(attempt: number, random: number = Math.random()): n
 type HandshakeVerdict = "sessionExpired" | "streamLimited" | "transient";
 
 async function classifyRefusedHandshake(): Promise<HandshakeVerdict> {
+  // GH #342: while the browser is offline, the probe cannot possibly answer
+  // (it would just fail too) — it can only add a doomed second request on
+  // top of the doomed EventSource. There is nothing to distinguish yet: once
+  // connectivity returns, the ordinary backoff's next attempt re-opens the
+  // stream and can classify a refusal properly then.
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "transient";
   try {
     const controller = new AbortController();
     const res = await fetch(MAIL_EVENTS_URL, {
@@ -159,11 +178,16 @@ export function invalidationKeysForStateChange(raw: string): string[][] {
   return keys.length > 0 ? keys : ALL_MAIL_DATA_KEYS;
 }
 
-/** What the hook reports back to its one consumer (MailPage). */
+/** What the hook reports back to its consumers (MailPage, MessageList). */
 export interface MailEventsStatus {
   // GH #274: true once the stream was refused with 429 too_many_streams and the
   // hook gave up retrying — the tab is live-update-limited until it is reloaded.
   liveUpdatesLimited: boolean;
+  // GH #342: true only while an EventSource is actually connected right now —
+  // not merely "enabled". Consumers use this to fall back to polling
+  // (refetchInterval) for exactly as long as live updates are not flowing:
+  // while reconnecting, while liveUpdatesLimited, or while offline.
+  streamOpen: boolean;
 }
 
 export function useMailEvents(enabled: boolean): MailEventsStatus {
@@ -172,17 +196,24 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
   const tRef = useRef(t);
   tRef.current = t;
   const [liveUpdatesLimited, setLiveUpdatesLimited] = useState(false);
+  const [streamOpen, setStreamOpen] = useState(false);
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return undefined;
     // A fresh effect run (re-enabled) starts from a clean slate; the flag only
     // latches back on if this run's stream is refused for the cap again.
     setLiveUpdatesLimited(false);
+    setStreamOpen(false);
 
     let source: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // GH #342: pending proof that the currently-open stream has stayed open
+    // long enough (STREAM_STABLE_MS) to trust it and reset the ladder. Only
+    // ever armed while a stream is actually open; cleared the moment it stops
+    // being open, one way or another.
+    let stableTimer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
-    // Consecutive failures since the last stream that reached "open"; the only
+    // Consecutive failures since the last stream trusted stable; the only
     // input to the backoff curve.
     let attempt = 0;
     // Latched once the session is known to be gone. Nothing can reconnect until
@@ -198,6 +229,21 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
         body: tRef.current("mail.newMailNotificationBody", { count }),
       }),
     });
+
+    function clearStableTimer() {
+      if (stableTimer) {
+        clearTimeout(stableTimer);
+        stableTimer = null;
+      }
+    }
+
+    // The one place `attempt` is actually reset — called once a stream has
+    // proven itself stable, either by staying open past STREAM_STABLE_MS or
+    // by delivering its first data frame (handleFirstFrame below).
+    function markStreamStable() {
+      attempt = 0;
+      clearStableTimer();
+    }
 
     function handleMessage(event: MessageEvent<string>) {
       // GH #338: read BEFORE the invalidation, compare AFTER it settles. The
@@ -222,11 +268,25 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
         });
     }
 
-    // A stream that opened is proof the server is serving again, so the next
-    // outage starts its backoff from scratch instead of inheriting the ladder
-    // climbed during the previous one.
+    // GH #342: an "open" event does NOT by itself prove the server is
+    // serving again — an intermediary can accept the handshake and cut it a
+    // moment later. It only starts the clock on trusting this stream; the
+    // ladder resets once that clock reaches STREAM_STABLE_MS (or a data
+    // frame arrives first, see handleFirstFrame).
     function handleOpen() {
-      attempt = 0;
+      setStreamOpen(true);
+      clearStableTimer();
+      stableTimer = setTimeout(markStreamStable, STREAM_STABLE_MS);
+    }
+
+    // GH #342: a frame can only arrive over a connection that is genuinely
+    // relaying the server's stream, so it is stronger proof of health than
+    // merely staying open — no need to wait out the rest of the stability
+    // window once one has been seen. Registered as its own listener (see
+    // connect() below) rather than folded into handleMessage, which owns the
+    // StateChange/notification handling this hook does elsewhere.
+    function handleFirstFrame() {
+      markStreamStable();
     }
 
     function scheduleRetry() {
@@ -236,6 +296,8 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
     }
 
     function handleError() {
+      setStreamOpen(false);
+      clearStableTimer();
       // Read before close(): closing sets readyState to CLOSED itself, which
       // would make every error look like a refused handshake.
       const refusedHandshake = source?.readyState === EVENT_SOURCE_CLOSED;
@@ -285,6 +347,11 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
       // idempotent, and no server sends both for one change.
       source.addEventListener("state", handleMessage);
       source.addEventListener("message", handleMessage);
+      // GH #342: a second, independent listener for the same two frame
+      // types — see handleFirstFrame's own comment for why this isn't
+      // folded into handleMessage above.
+      source.addEventListener("state", handleFirstFrame);
+      source.addEventListener("message", handleFirstFrame);
       source.addEventListener("error", handleError);
     }
 
@@ -292,10 +359,11 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
 
     return () => {
       cancelled = true;
+      clearStableTimer();
       source?.close();
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [enabled, queryClient]);
 
-  return { liveUpdatesLimited };
+  return { liveUpdatesLimited, streamOpen };
 }

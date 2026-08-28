@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "./i18n";
@@ -152,5 +152,54 @@ describe("App accessibility shell", () => {
     // that in a real browser.
     await screen.findByRole("link", { name: i18n.t("app.skipToContent") });
     await expectNoShellAxeViolations(container);
+  });
+});
+
+// GH #342: the health query used to run exactly once (mount), so a backend
+// that degraded mid-session never surfaced "Servicio degradado" — the banner
+// only ever reflected the state at page load.
+describe("App health check polling (GH #342)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("polls /api/health every 60s so a mid-session outage can surface", async () => {
+    vi.useFakeTimers();
+    let healthCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) return new Response(JSON.stringify(user));
+        if (path.includes("/api/health")) {
+          healthCalls += 1;
+          const status = healthCalls === 1 ? "ok" : "degraded";
+          return new Response(JSON.stringify({ status, checks: {} }));
+        }
+        return new Response(JSON.stringify({}));
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter(routes, { initialEntries: ["/"] });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await act(async () => {
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    });
+    expect(screen.queryByText(i18n.t("health.degraded"))).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    });
+
+    // Not findByText/waitFor: those poll via a real setTimeout, which never
+    // fires once fake timers own the clock and nothing advances them further.
+    expect(healthCalls).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(i18n.t("health.degraded"))).toBeInTheDocument();
   });
 });
