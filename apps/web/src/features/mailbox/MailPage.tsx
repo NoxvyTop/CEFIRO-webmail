@@ -14,6 +14,7 @@ import { MessageList } from "./MessageList";
 import { SharedMailboxBanner } from "./SharedMailboxBanner";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
+import { useUnreadBadge } from "./useUnreadBadge";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { MenuIcon } from "../../app/ui/icons";
@@ -47,6 +48,11 @@ export function MailPage() {
   // and reports it here so the tab can say live updates are limited rather than
   // spinning forever with no sign to the user.
   const { liveUpdatesLimited } = useMailEvents(true);
+  // GH #338: the unread count in the tab title and on the favicon. Mounted here
+  // rather than in the shell because this is the screen that holds the live
+  // stream — and keeping the PERSONAL mailboxes query active is also what lets
+  // an arrival be detected while a shared mailbox is the one on screen.
+  useUnreadBadge();
 
   const mailboxParam = searchParams.get("mailbox");
   // GH #13/#50: the active shared mailbox (the account selector in the header

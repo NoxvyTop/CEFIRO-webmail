@@ -9,7 +9,11 @@ Status: **design approved (owner)** — build pending. No Firebase.
   server pushes directly to each browser's push endpoint with the `web-push` protocol.
   Owner rejected FCM/Firebase explicitly.
 - **Trigger: Stalwart webhook** (`store.ingest`), HMAC-signed. Fallback: a server-side
-  per-user JMAP EventSource worker (see Trigger below).
+  per-user JMAP EventSource worker (see Trigger below). **Built (GH #337):** the fallback
+  shape, on the stream the SPA already holds — `modules/push/new-mail.ts`, tapped from
+  `GET /api/mail/events`. It therefore covers a session with a tab open; a server-held
+  connection (or the webhook, once its payload spike lands) is what extends it to a
+  closed app.
 - **Surfaces in scope:** desktop and mobile browsers, and the **installed PWA**
   ("Add to Home Screen"). This is how privacy-first webmail (Proton, Tuta) does it.
 - **Deferred:** background push inside the native Capacitor thin-shell APK. Android
@@ -83,7 +87,15 @@ Preference: per-user opt-in flag (reuse the profile/settings store).
 ## Web pieces
 
 - **Service worker** (`push`, `notificationclick`): show the notification, focus/open the
-  thread on click.
+  thread on click. Icon and badge are PNG (GH #350): Android Chrome ignores an SVG icon,
+  and `badge` is rendered as a monochrome mask. A push about a shared mailbox carries the
+  account id and opens `/?account=<id>&thread=<id>` (GH #337).
+- **Installed PWA** (GH #350): `public/manifest.webmanifest` (`display: standalone`, 192/512
+  and maskable icons) plus a `theme-color` per scheme in `index.html`. The PNGs are generated
+  from `public/favicon.svg`'s own geometry by `apps/web/scripts/generate-pwa-icons.mjs` — no
+  image dependency; the output is committed and the script is re-run only when the mark
+  changes. `registerPushServiceWorker` also calls `registration.update()` so a fixed worker
+  reaches an installed PWA on the next load rather than on the browser's own schedule.
 - Subscribe flow: request `Notification` permission (only on an explicit user gesture —
   a "Activar notificaciones" toggle in settings, never on load), `PushManager.subscribe`
   with the VAPID public key, POST the subscription.

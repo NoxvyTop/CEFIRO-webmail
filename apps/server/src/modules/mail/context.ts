@@ -1,6 +1,8 @@
 import type { MiddlewareHandler } from "hono";
 import { errorResponse } from "../../core/error-response";
+import type { PushSender } from "../../core/push";
 import type { ContactsRepo } from "../../infra/repos/contacts";
+import type { PushSubscriptionsRepo } from "../../infra/repos/push-subscriptions";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import type { SharedMailboxCopiesRepo } from "../../infra/repos/shared-mailbox-copies";
@@ -65,6 +67,14 @@ export type MailDeps = {
   // `sentRecipients` is: a deployment that omits it keeps behaving exactly as
   // before, with the button simply recording nothing.
   sharedMailboxCopies?: SharedMailboxCopiesRepo;
+  // GH #337: the Web Push emitter's two halves. `pushSubscriptions` is the
+  // store of devices to fan out to; `pushClient` is null whenever push is
+  // unconfigured (no VAPID keys) — the same "null adapter means off"
+  // convention as `jmap` and `aiClient`. Both optional and both required
+  // together: with either absent the /events tap behaves exactly as it did
+  // before the emitter existed, and no push is ever attempted.
+  pushClient?: PushSender | null;
+  pushSubscriptions?: PushSubscriptionsRepo;
 };
 
 // Narrow slice of MailDeps that requireMail actually needs. Extracted so other

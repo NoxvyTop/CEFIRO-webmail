@@ -10,16 +10,12 @@ import { CefiroLogo } from "./ui/CefiroLogo";
 import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { isPlainShortcut } from "./ui/shortcuts";
 import { ToastProvider } from "./ui/toast";
-import { UserMenu } from "./ui/UserMenu";
+import { AppUserMenu } from "./ui/AppUserMenu";
 import { useTheme } from "./ui/useTheme";
 
 async function fetchHealth() {
   const res = await fetch("/api/health");
   return healthResponseSchema.parse(await res.json());
-}
-
-function currentNotificationPermission(): NotificationPermission | null {
-  return typeof Notification === "undefined" ? null : Notification.permission;
 }
 
 export function App() {
@@ -33,7 +29,6 @@ export function App() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryParam = searchParams.get("q") ?? "";
   const [searchValue, setSearchValue] = useState(queryParam);
-  const [notificationPermission, setNotificationPermission] = useState(currentNotificationPermission);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -74,12 +69,6 @@ export function App() {
       next.delete("thread");
       return next;
     });
-  }
-
-  async function handleEnableNotifications() {
-    if (typeof Notification === "undefined") return;
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
   }
 
   // MailPage (the "/" route) renders no landmark of its own, so the shell
@@ -151,14 +140,15 @@ export function App() {
                   the "Buzones compartidos" page (left sidebar), and "Atajos"
                   moved into the profile menu below. The `?`/Escape handlers stay
                   wired regardless. */}
-              <UserMenu
+              {/* GH #337 (b): the notification opt-in moved into AppUserMenu,
+                  which lives inside ToastProvider and can therefore report what
+                  the browser answered. */}
+              <AppUserMenu
                 user={user}
                 avatarUrl={profile.data?.avatarDataUrl}
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onLogout={() => void logout()}
-                showNotifications={notificationPermission === "default"}
-                onEnableNotifications={() => void handleEnableNotifications()}
                 onShowShortcuts={() => setShowShortcuts(true)}
               />
             </div>

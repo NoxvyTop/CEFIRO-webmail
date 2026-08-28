@@ -211,6 +211,10 @@
     "newMailNotification": "Correo nuevo",
     "liveUpdatesLimited": "Las actualizaciones en vivo están limitadas en esta pestaña porque hay demasiadas abiertas. Cierra otra y recarga para reanudarlas aquí.",
     "enableNotifications": "Activar notificaciones",
+    "notificationsBlocked": "Avisos bloqueados por el navegador",
+    "newMailNotificationBody_one": "{{count}} mensaje sin leer en la bandeja de entrada",
+    "newMailNotificationBody_other": "{{count}} mensajes sin leer en la bandeja de entrada",
+    "unreadTitle": "({{count}}) Céfiro",
     "resizeList": "Ajustar ancho de la lista",
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",
@@ -590,6 +594,16 @@
     "enabledOnThisDevice": "Notificaciones activadas en este dispositivo",
     "working": "Un momento…",
     "unsupported": "Tu navegador no admite notificaciones push.",
+    "unavailableOnServer": "Las notificaciones en segundo plano no están disponibles en este servidor.",
+    "pushTitle": "En segundo plano",
+    "browser": {
+      "title": "Avisos mientras Céfiro está abierto",
+      "description": "Muestra un aviso del sistema cuando llegue correo nuevo a tu bandeja de entrada y la pestaña no esté en primer plano.",
+      "enable": "Permitir avisos",
+      "granted": "Avisos permitidos en este navegador",
+      "denied": "Avisos bloqueados en este navegador. Vuelve a permitirlos desde los ajustes del navegador.",
+      "unsupported": "Este navegador no admite avisos del sistema."
+    },
     "errors": {
       "permissionDenied": "No se concedió el permiso de notificaciones. Actívalo en los ajustes del navegador.",
       "unavailable": "Las notificaciones no están disponibles ahora mismo. Inténtalo de nuevo.",

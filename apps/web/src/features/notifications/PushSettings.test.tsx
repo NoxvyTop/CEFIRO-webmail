@@ -5,22 +5,22 @@ import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { PushSettings } from "./PushSettings";
 
-const { fetchPushStatus, enablePush, disablePush, getExistingPushSubscription, isPushSupported } =
+const { fetchPushStatus, enablePush, disablePush, resyncPushSubscription, isPushSupported } =
   vi.hoisted(() => ({
     fetchPushStatus: vi.fn(),
     enablePush: vi.fn(),
     disablePush: vi.fn(),
-    getExistingPushSubscription: vi.fn(),
+    resyncPushSubscription: vi.fn(),
     isPushSupported: vi.fn(),
   }));
 
 vi.mock("./pushApi", () => ({ fetchPushStatus }));
-vi.mock("./push", () => ({ enablePush, disablePush, getExistingPushSubscription, isPushSupported }));
+vi.mock("./push", () => ({ enablePush, disablePush, resyncPushSubscription, isPushSupported }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   isPushSupported.mockReturnValue(true);
-  getExistingPushSubscription.mockResolvedValue(null);
+  resyncPushSubscription.mockResolvedValue(false);
 });
 
 function renderPanel() {
@@ -33,12 +33,16 @@ function renderPanel() {
 }
 
 describe("PushSettings", () => {
-  it("renders nothing when push is disabled on the server", async () => {
+  // GH #337: the panel used to render null when the server had no VAPID keys,
+  // and the Settings nav hid the section with it — so "Notificaciones" simply
+  // did not exist, with nothing to tell the user why.
+  it("explains that background push is unavailable on this server instead of vanishing", async () => {
     fetchPushStatus.mockResolvedValue(false);
     renderPanel();
 
-    await waitFor(() => expect(fetchPushStatus).toHaveBeenCalled());
-    expect(screen.queryByText(i18n.t("notifications.description"))).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(i18n.t("notifications.unavailableOnServer")),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: i18n.t("notifications.enable") }),
     ).not.toBeInTheDocument();
@@ -46,7 +50,7 @@ describe("PushSettings", () => {
 
   it("shows the enable opt-in when push is enabled and this device is not subscribed", async () => {
     fetchPushStatus.mockResolvedValue(true);
-    getExistingPushSubscription.mockResolvedValue(null);
+    resyncPushSubscription.mockResolvedValue(false);
     renderPanel();
 
     expect(
@@ -57,7 +61,7 @@ describe("PushSettings", () => {
 
   it("subscribes on click and then shows the enabled state with a disable button", async () => {
     fetchPushStatus.mockResolvedValue(true);
-    getExistingPushSubscription.mockResolvedValue(null);
+    resyncPushSubscription.mockResolvedValue(false);
     enablePush.mockResolvedValue("subscribed");
     renderPanel();
 
@@ -72,7 +76,7 @@ describe("PushSettings", () => {
 
   it("shows the disable button first when this device is already subscribed, and unsubscribes on click", async () => {
     fetchPushStatus.mockResolvedValue(true);
-    getExistingPushSubscription.mockResolvedValue({ endpoint: "https://push/abc" });
+    resyncPushSubscription.mockResolvedValue(true);
     disablePush.mockResolvedValue(undefined);
     renderPanel();
 
@@ -86,7 +90,7 @@ describe("PushSettings", () => {
 
   it("surfaces a denied permission as an alert without flipping to the enabled state", async () => {
     fetchPushStatus.mockResolvedValue(true);
-    getExistingPushSubscription.mockResolvedValue(null);
+    resyncPushSubscription.mockResolvedValue(false);
     enablePush.mockResolvedValue("denied");
     renderPanel();
 
@@ -98,6 +102,25 @@ describe("PushSettings", () => {
     expect(
       screen.queryByText(i18n.t("notifications.enabledOnThisDevice")),
     ).not.toBeInTheDocument();
+  });
+
+  // GH #337 (d): the browser holding a PushSubscription is not proof the server
+  // still has the row, so the panel re-announces it on every load.
+  it("re-posts this device's subscription to the server on load", async () => {
+    fetchPushStatus.mockResolvedValue(true);
+    resyncPushSubscription.mockResolvedValue(true);
+    renderPanel();
+
+    await waitFor(() => expect(resyncPushSubscription).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(i18n.t("notifications.enabledOnThisDevice"))).toBeInTheDocument();
+  });
+
+  it("does not touch the network when push is off on the server", async () => {
+    fetchPushStatus.mockResolvedValue(false);
+    renderPanel();
+
+    await waitFor(() => expect(fetchPushStatus).toHaveBeenCalled());
+    expect(resyncPushSubscription).not.toHaveBeenCalled();
   });
 
   it("shows an unsupported note when push is enabled but the browser cannot do it", async () => {

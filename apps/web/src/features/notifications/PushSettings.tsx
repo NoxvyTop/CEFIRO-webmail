@@ -2,12 +2,17 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { fetchPushStatus } from "./pushApi";
-import { disablePush, enablePush, getExistingPushSubscription, isPushSupported } from "./push";
+import { disablePush, enablePush, isPushSupported, resyncPushSubscription } from "./push";
 
-// #294 (delivery slice): the settings opt-in for Web Push. The whole panel is
-// gated on GET /api/push/status being enabled — hidden otherwise — mirroring how
-// the composer hides the "draft with AI" CTA on /ai/status. Permission is
+// #294 (delivery slice): the settings opt-in for Web Push. Permission is
 // requested only on an explicit click, never on load.
+//
+// GH #337: this panel used to render null whenever GET /api/push/status said
+// the feature was off, and SettingsPage hid the whole "Notificaciones" nav
+// entry with it — so on a server without VAPID keys the section did not exist
+// and nothing explained its absence. It now says so instead of disappearing;
+// deciding whether to offer the section at all is no longer this component's
+// job (see NotificationSettings).
 
 export const PUSH_STATUS_QUERY_KEY = ["push", "status"] as const;
 
@@ -27,9 +32,12 @@ export function PushSettings() {
   useEffect(() => {
     if (!enabled || !supported) return;
     let active = true;
-    getExistingPushSubscription()
-      .then((sub) => {
-        if (active) setSubscribed(sub != null);
+    // GH #337 (d): re-announce the browser's subscription to the server rather
+    // than only reading it locally — the endpoint the server pushes to can be
+    // gone while the browser's own object is still perfectly valid.
+    resyncPushSubscription()
+      .then((isSubscribed) => {
+        if (active) setSubscribed(isSubscribed);
       })
       .catch(() => {
         if (active) setSubscribed(false);
@@ -39,9 +47,13 @@ export function PushSettings() {
     };
   }, [enabled, supported]);
 
-  // Hidden entirely when push is off on the server (or the status has not
-  // resolved yet) — the opt-in is never even offered.
-  if (!enabled) return null;
+  // Still asking the server: say nothing rather than flash "unavailable" and
+  // then replace it with the opt-in a moment later.
+  if (statusQuery.isPending) return null;
+
+  if (!enabled) {
+    return <p className="text-sm text-muted">{t("notifications.unavailableOnServer")}</p>;
+  }
 
   if (!supported) {
     return <p className="text-sm text-muted">{t("notifications.unsupported")}</p>;

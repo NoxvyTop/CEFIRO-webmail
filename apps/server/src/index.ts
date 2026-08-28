@@ -464,6 +464,12 @@ const app = createApp({
     // worker reads, so a message the member pulled themselves is not
     // delivered to them again by the next cycle.
     sharedMailboxCopies,
+    // GH #337: the /events tap is where Web Push is emitted from — an Email
+    // state advance on this user's subscription becomes one push per device.
+    // `pushClient` is null when VAPID is unconfigured, which turns the emitter
+    // off without turning the tap off.
+    pushClient,
+    pushSubscriptions,
     timeoutMs: config.jmapTimeoutMs,
     // The raw-fetch routes (SSE, blob up/download) must present the mailbox
     // credential the same way the JMAP client does, or `bearer` would work for

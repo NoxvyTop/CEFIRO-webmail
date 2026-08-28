@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { ContactsSettings } from "./ContactsSettings";
@@ -8,8 +7,7 @@ import { ProfileSettings } from "./ProfileSettings";
 import { SessionsSettings } from "./SessionsSettings";
 import { SignatureSettings } from "./SignatureSettings";
 import { VacationSettings } from "./VacationSettings";
-import { PushSettings, PUSH_STATUS_QUERY_KEY } from "../notifications/PushSettings";
-import { fetchPushStatus } from "../notifications/pushApi";
+import { NotificationSettings } from "../notifications/NotificationSettings";
 
 type Section =
   | "profile"
@@ -29,18 +27,17 @@ const NAV_ITEMS: { id: Section; labelKey: string }[] = [
   // #302: active sessions / devices with individual revocation. Always shown —
   // every user has at least their current session.
   { id: "sessions", labelKey: "settings.nav.sessions" },
+  // GH #337: always shown too. It used to appear only when GET /api/push/status
+  // reported push enabled, which made the whole section — the in-tab browser
+  // permission included, which needs no server support at all — vanish on a
+  // deployment without VAPID keys, with nothing to explain the absence. The
+  // panel now says background push is unavailable instead (see PushSettings).
+  { id: "notifications", labelKey: "settings.nav.notifications" },
 ];
 
 export function SettingsPage() {
   const { t } = useTranslation();
   const [section, setSection] = useState<Section>("profile");
-  // #294: the Notifications section is offered only when push is enabled on the
-  // server — the same /push/status gate the panel itself checks, hidden here so
-  // the nav entry never appears when the feature is off (the default).
-  const pushStatus = useQuery({ queryKey: PUSH_STATUS_QUERY_KEY, queryFn: fetchPushStatus });
-  const navItems = pushStatus.data
-    ? [...NAV_ITEMS, { id: "notifications" as const, labelKey: "settings.nav.notifications" }]
-    : NAV_ITEMS;
 
   return (
     // GH #253: no role="main" — <main> already has it, and spelling it out
@@ -67,7 +64,7 @@ export function SettingsPage() {
           aria-label={t("settings.nav.label")}
           className="flex w-full shrink-0 flex-row flex-wrap gap-1 rounded-[14px] border border-line bg-panel p-3 md:w-[184px] md:flex-col md:flex-nowrap"
         >
-          {navItems.map((item) => (
+          {NAV_ITEMS.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -128,7 +125,7 @@ export function SettingsPage() {
           {section === "notifications" && (
             <section className="flex flex-col gap-3 rounded-[14px] border border-line bg-panel p-5">
               <h2 className="text-lg font-medium">{t("notifications.title")}</h2>
-              <PushSettings />
+              <NotificationSettings />
             </section>
           )}
         </div>
