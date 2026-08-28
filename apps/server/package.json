@@ -13,7 +13,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
     "@webmail/shared": "workspace:*",
-    "hono": "^4.6.0",
+    "hono": "^4.13.5",
     "jose": "^5.9.0",
     "postgres": "^3.4.0",
     "web-push": "^3.6.7",

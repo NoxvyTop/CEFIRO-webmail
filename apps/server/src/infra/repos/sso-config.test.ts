@@ -51,6 +51,69 @@ describe("sso config repo", () => {
     expect(rawText).not.toContain("super-secret-2");
   });
 
+  // GH #347: the client secret is sealed with additionalData = "sso"
+  // (crypto.ts aadFor), so it can no longer be decrypted as if it were a
+  // different kind of secret (a mail credential, an oidc_state cookie) even
+  // under the SAME master key.
+  it("binds the client secret to the \"sso\" purpose", async () => {
+    const key = await importMasterKey(
+      btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
+    );
+    const repo = createSsoConfigRepo(sql, key);
+    await repo.set({
+      issuer: "https://auth.noxvytop.com/application/o/webmail/",
+      clientId: "webmail",
+      clientSecret: "bound-secret",
+      scopes: "openid profile email",
+    });
+
+    const [row] = await sql<
+      { client_secret_ciphertext: Uint8Array; client_secret_iv: Uint8Array }[]
+    >`select client_secret_ciphertext, client_secret_iv from sso_config where id = 1`;
+    const { decryptSecret, aadFor } = await import("../../modules/credentials/crypto");
+    expect(
+      await decryptSecret(
+        key,
+        new Uint8Array(row!.client_secret_ciphertext),
+        new Uint8Array(row!.client_secret_iv),
+        aadFor("sso"),
+      ),
+    ).toBe("bound-secret");
+    // A different purpose must not decrypt it, even under the same key.
+    await expect(
+      decryptSecret(
+        key,
+        new Uint8Array(row!.client_secret_ciphertext),
+        new Uint8Array(row!.client_secret_iv),
+        aadFor("mail:someone"),
+      ),
+    ).rejects.toThrow();
+  });
+
+  // Migration safety: every row in the database predates AAD. Backward
+  // compatibility comes from crypto.ts's decryptSecret fallback, not from
+  // anything sso-config.ts does specially.
+  it("still reads a client secret sealed before AAD existed", async () => {
+    const key = await importMasterKey(
+      btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
+    );
+    // Bypasses the repo's set() (which now always binds AAD = "sso") to write
+    // exactly what every pre-#347 row looks like.
+    const { encryptSecret } = await import("../../modules/credentials/crypto");
+    const { ciphertext, iv } = await encryptSecret(key, "legacy-client-secret");
+    await sql`
+      insert into sso_config (id, issuer, client_id, client_secret_ciphertext, client_secret_iv, key_version, scopes)
+      values (1, 'https://auth.noxvytop.com/application/o/webmail/', 'webmail', ${ciphertext}, ${iv}, 1, 'openid profile email')
+      on conflict (id) do update set
+        client_secret_ciphertext = excluded.client_secret_ciphertext,
+        client_secret_iv = excluded.client_secret_iv,
+        key_version = excluded.key_version
+    `;
+
+    const repo = createSsoConfigRepo(sql, key);
+    expect((await repo.get())?.clientSecret).toBe("legacy-client-secret");
+  });
+
   // #290: the optional login-button provider name round-trips through set/get.
   it("stores and reads back the provider name, defaulting to null when unset", async () => {
     const key = await importMasterKey(

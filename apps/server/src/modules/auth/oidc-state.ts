@@ -1,6 +1,11 @@
-import { decryptSecret, encryptSecret } from "../credentials/crypto";
+import { aadFor, decryptSecret, encryptSecret } from "../credentials/crypto";
 
 export const OIDC_STATE_COOKIE = "oidc_state";
+
+// GH #347: binds this cookie to "this is the OIDC state cookie", so it cannot
+// be replayed as a decryption of a differently-purposed ciphertext (a mail
+// credential, the SSO client secret) even under the same master key.
+const OIDC_STATE_AAD = aadFor("oidc_state");
 
 export type OidcState = { state: string; verifier: string; issuedAt: number };
 
@@ -18,7 +23,7 @@ function fromB64Url(value: string): Uint8Array {
 }
 
 export async function sealState(key: CryptoKey, data: OidcState): Promise<string> {
-  const { ciphertext, iv } = await encryptSecret(key, JSON.stringify(data));
+  const { ciphertext, iv } = await encryptSecret(key, JSON.stringify(data), OIDC_STATE_AAD);
   return `${toB64Url(iv)}.${toB64Url(ciphertext)}`;
 }
 
@@ -30,7 +35,7 @@ export async function openState(
   try {
     const [ivPart, cipherPart] = sealed.split(".");
     if (!ivPart || !cipherPart) return null;
-    const plain = await decryptSecret(key, fromB64Url(cipherPart), fromB64Url(ivPart));
+    const plain = await decryptSecret(key, fromB64Url(cipherPart), fromB64Url(ivPart), OIDC_STATE_AAD);
     const data = JSON.parse(plain) as OidcState;
     if (typeof data.state !== "string" || typeof data.verifier !== "string") return null;
     if (typeof data.issuedAt !== "number" || Date.now() - data.issuedAt > maxAgeMs) {

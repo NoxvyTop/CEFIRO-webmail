@@ -372,7 +372,8 @@ log("info", "push features", { enabled: pushClient !== null });
 // outbound deadline reaches it (GH #165). The JWKS fetch behind createVerifier
 // carries jose's own 5s `timeoutDuration` default and needs nothing from us.
 const oidcClient: OidcClient = {
-  discover: (issuer) => discover(issuer, undefined, config.oidcTimeoutMs),
+  discover: (issuer) =>
+    discover(issuer, undefined, config.oidcTimeoutMs, config.oidcAllowInsecureIssuer),
   exchangeCode: (input) => exchangeCode({ ...input, timeoutMs: config.oidcTimeoutMs }),
   createVerifier: ({ jwksUri, issuer, clientId }) =>
     createIdTokenVerifier({ issuer, clientId, keySource: remoteKeySource(jwksUri) }),

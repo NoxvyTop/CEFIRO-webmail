@@ -3,10 +3,11 @@ import { setupSsoSchema, setupUserSchema, type SetupStatus } from "@webmail/shar
 import { clientIp, DEFAULT_TRUSTED_PROXY_HOPS, rateLimitKey } from "../../core/client-ip";
 import { errorResponse } from "../../core/error-response";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
+import { isUniqueViolation } from "../../infra/db/client";
 import type { AuditRepo } from "../../infra/repos/audit";
 import type { MailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import type { SsoConfigRepo } from "../../infra/repos/sso-config";
-import type { UsersRepo } from "../../infra/repos/users";
+import type { UserRecord, UsersRepo } from "../../infra/repos/users";
 import type { Bootstrap } from "./bootstrap";
 import { createSetupCompletion, type SetupCompletion } from "./completion";
 
@@ -165,7 +166,23 @@ export function createSetupRouter(deps: SetupRouterDeps) {
     if (await deps.users.findByEmail(email)) {
       return errorResponse(c, "user_exists", 409);
     }
-    const user = await deps.users.create({ email, displayName, role, locale });
+    // The findByEmail pre-check is a courtesy, not the guarantee: two requests
+    // creating the same email concurrently both read "not found" and both
+    // reach the insert, where the unique index on users.email
+    // (0001_initial.sql) lets exactly one win. The loser used to escape as a
+    // raw 23505 → 500 `internal` (this server blaming itself for a client's
+    // duplicate); catching it here gives the loser the same 409 `user_exists`
+    // the pre-check returns — same fix as admin/router.ts's POST /users
+    // (GH #277), applied here too (GH #347).
+    let user: UserRecord;
+    try {
+      user = await deps.users.create({ email, displayName, role, locale });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        return errorResponse(c, "user_exists", 409);
+      }
+      throw error;
+    }
     await deps.mailCredentials.set(user.id, mailPassword);
     await deps.audit.record({
       actor: SETUP_ACTOR,

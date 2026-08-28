@@ -57,6 +57,7 @@ describe("discover", () => {
     const fetchFn = (async () =>
       new Response(
         JSON.stringify({
+          issuer: "https://auth.test",
           authorization_endpoint: "https://auth.test/authorize",
           token_endpoint: "https://auth.test/token",
           jwks_uri: "https://auth.test/jwks",
@@ -64,6 +65,84 @@ describe("discover", () => {
       )) as unknown as typeof fetch;
     const endpoints = await discover("https://auth.test", fetchFn);
     expect(endpoints.tokenEndpoint).toBe("https://auth.test/token");
+  });
+
+  // GH #347: an http issuer lets whoever controls the network path answer
+  // discovery on the IdP's behalf. setupSsoSchema (packages/shared) already
+  // refuses this at write time; this is the read-time check for a row written
+  // before that existed, or written directly against the database.
+  it("rejects a non-https issuer", async () => {
+    const fetchFn = vi.fn();
+    await expect(discover("http://auth.test", fetchFn as unknown as typeof fetch)).rejects.toMatchObject(
+      { code: "oidc_discovery_invalid" },
+    );
+    // Refused before any outbound call — an insecure issuer never even gets to
+    // amplify into a fetch against whatever it names.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  // GH #347, OIDC Discovery §4.3: "The issuer value returned MUST be
+  // identical to the Issuer URL that was directly used to retrieve the
+  // configuration information" — case-sensitive, trailing slash and all. A
+  // mismatch means the document did not come from the issuer the operator
+  // configured, which is exactly what a malicious or misconfigured discovery
+  // response would produce.
+  it("rejects a discovery document whose issuer does not match, trailing slash and all", async () => {
+    const fetchFn = (async () =>
+      new Response(
+        JSON.stringify({
+          issuer: "https://auth.test/", // configured issuer has no trailing slash
+          authorization_endpoint: "https://auth.test/authorize",
+          token_endpoint: "https://auth.test/token",
+          jwks_uri: "https://auth.test/jwks",
+        }),
+      )) as unknown as typeof fetch;
+    await expect(discover("https://auth.test", fetchFn)).rejects.toMatchObject({
+      code: "oidc_issuer_mismatch",
+    });
+  });
+
+  // GH #347: `token_endpoint`/`jwks_uri`/`authorization_endpoint` are used
+  // verbatim (auth/router.ts sends the client_secret to token_endpoint) — an
+  // http endpoint in an otherwise-https discovery document would leak it to
+  // whoever sits on that path even though the issuer itself checked out.
+  it("rejects a discovery document naming a non-https endpoint", async () => {
+    const fetchFn = (async () =>
+      new Response(
+        JSON.stringify({
+          issuer: "https://auth.test",
+          authorization_endpoint: "https://auth.test/authorize",
+          token_endpoint: "http://auth.test/token",
+          jwks_uri: "https://auth.test/jwks",
+        }),
+      )) as unknown as typeof fetch;
+    await expect(discover("https://auth.test", fetchFn)).rejects.toMatchObject({
+      code: "oidc_discovery_invalid",
+    });
+  });
+
+  // The one legitimate exception: a local IdP double that cannot terminate
+  // TLS (e2e/oidc-idp.ts, served over plain HTTP). Opt-in via an explicit
+  // parameter rather than NODE_ENV, because the e2e suite deliberately boots
+  // its app servers with NODE_ENV=production (core/config.ts). See
+  // OIDC_ALLOW_INSECURE_ISSUER in core/config.ts.
+  it("allows an insecure issuer and endpoints when explicitly opted in", async () => {
+    const fetchFn = (async () =>
+      new Response(
+        JSON.stringify({
+          issuer: "http://127.0.0.1:4000",
+          authorization_endpoint: "http://127.0.0.1:4000/authorize",
+          token_endpoint: "http://127.0.0.1:4000/token",
+          jwks_uri: "http://127.0.0.1:4000/jwks",
+        }),
+      )) as unknown as typeof fetch;
+    const endpoints = await discover(
+      "http://127.0.0.1:4000",
+      fetchFn,
+      DEFAULT_OIDC_TIMEOUT_MS,
+      true,
+    );
+    expect(endpoints.tokenEndpoint).toBe("http://127.0.0.1:4000/token");
   });
 });
 
