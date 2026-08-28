@@ -161,12 +161,27 @@ const DEFAULT_CSP = [
   "connect-src 'self'",
 ].join("; ");
 
+// GH #347: browser features this SPA never uses and has no legitimate reason
+// to be asked for — camera, microphone, geolocation, payment, and usb — denied
+// outright rather than left to their (permissive) per-browser defaults. `()`
+// means no origin at all, not even this one, may use the feature: if a
+// compromised dependency, or a sanitizer bypass in a rendered email body
+// (reader/sanitize.ts), ever tried to invoke one of these, the browser refuses
+// before the permission prompt a user might otherwise click through.
+const PERMISSIONS_POLICY =
+  "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
+
 const SECURITY_HEADERS: Record<string, string> = {
   "content-security-policy": DEFAULT_CSP,
   "x-frame-options": "DENY",
   "x-content-type-options": "nosniff",
   "referrer-policy": "strict-origin-when-cross-origin",
-  "strict-transport-security": "max-age=31536000; includeSubDomains",
+  // `preload` (GH #347) opts this origin into browsers' built-in HSTS preload
+  // list (hstspreload.org), so the very FIRST connection a browser ever makes
+  // to it is already forced to https — without it, HSTS only protects a
+  // browser that has already visited this origin over https once before.
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "permissions-policy": PERMISSIONS_POLICY,
 };
 
 export function createApp(options: CreateAppOptions = {}) {

@@ -60,6 +60,16 @@ describe("app", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
     expect(res.headers.get("strict-transport-security")).toContain("max-age=");
+    // GH #347: HSTS without `preload` only protects a browser that has already
+    // seen this origin over https once; `preload` is what lets it ship in
+    // Chrome's/Firefox's built-in preload list instead.
+    expect(res.headers.get("strict-transport-security")).toContain("preload");
+    // GH #347: this SPA never uses the camera, microphone, geolocation,
+    // payment, or usb APIs, so a compromised dependency (or a message body
+    // that somehow escaped sanitization) gets no access to any of them either.
+    expect(res.headers.get("permissions-policy")).toBe(
+      "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    );
   });
 
   it("returns the error envelope for unknown routes", async () => {
@@ -135,6 +145,10 @@ describe("security headers on error responses (GH #48)", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
     expect(res.headers.get("strict-transport-security")).toContain("max-age=");
+    expect(res.headers.get("strict-transport-security")).toContain("preload");
+    expect(res.headers.get("permissions-policy")).toBe(
+      "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    );
   }
 
   it("sets them on a DomainError answered by onError", async () => {
