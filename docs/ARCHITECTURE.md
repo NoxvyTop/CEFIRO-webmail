@@ -124,11 +124,9 @@ cookie igual. Por eso todo método que no sea GET/HEAD/OPTIONS pasa antes por
    del subdominio hermano.
 2. Si no llega (navegadores sin Fetch Metadata), se compara el `Origin` con el
    origen de `APP_URL`; si tampoco hay `Origin`, el del `Referer`.
-3. Sin ninguna de las tres cabeceras se rechaza con `403 csrf`. No se hace
-   excepción para clientes no-navegador: **ninguna** ruta mutante de esta API
-   se autentica con bearer token — la cookie es la única credencial que una
-   mutación puede llevar, así que la excepción sería un agujero con un
-   comentario encima. `/metrics` sí usa bearer, pero es un GET.
+3. Sin ninguna de las tres cabeceras hay **una sola** excepción: que la
+   petición traiga la cabecera `x-setup-token`. Cualquier otra se rechaza con
+   `403 csrf`.
 4. Además, un cuerpo cuyo `Content-Type` no sea `application/json` se rechaza
    con `415 unsupported_media_type`. Es defensa en profundidad: un formulario
    HTML cross-site solo puede producir tres tipos, ninguno de ellos JSON. La
@@ -144,9 +142,32 @@ navegador y que el JavaScript de la página no puede falsificar (`Origin` y
 `POST /api/auth/logout` no exige sesión a propósito, pero sí pasa por esta
 puerta: si no, cualquier página ajena podría cerrar la sesión del usuario.
 
-Un cliente que no sea navegador (un script de operación, un `curl`) tiene que
-mandar `Origin: <APP_URL>` y `Content-Type: application/json` para que una
-mutación se acepte.
+#### Clientes que no son navegadores
+
+Un `curl` no manda ninguna de las tres cabeceras, así que por defecto no puede
+mutar. Se admite **solo** por una cabecera de autenticación propia, y hoy esa
+cabecera es exactamente una: `x-setup-token`, la del asistente de instalación.
+
+Es segura por construcción, y el motivo no tiene que ver con su valor: una
+petición cross-site que lleve **cualquier** cabecera fuera de la lista blanca de
+CORS deja de ser una *simple request*, así que el navegador tiene que ganar
+antes un *preflight*. Esta app no monta middleware de CORS y el nginx de delante
+no añade cabeceras `Access-Control-*`, así que ese preflight no se contesta
+nunca y la petición no llega a salir. La presencia de la cabecera **es** la
+prueba de que quien llama no es una página dirigida desde otro origen.
+
+La cabecera **admite** la petición, no la autentica: el router de setup verifica
+él mismo el secreto de 144 bits, limita los intentos y se cierra para siempre
+cuando la instalación ya se ha completado. Y la excepción solo vale cuando el
+navegador no ha dicho nada: con un `Origin` o un `Sec-Fetch-Site` ajenos, la
+petición se rechaza aunque traiga la cabecera.
+
+`POST /api/auth/bootstrap` **no** entra en la excepción, aunque tampoco exija
+cookie: su credencial viaja en el cuerpo, no en una cabecera infalsificable, y
+quien lo llama es la pantalla de login de la SPA. Sigue exigiendo origen.
+
+Para cualquier otra mutación desde un script hay que mandar `Origin: <APP_URL>`
+y `Content-Type: application/json`.
 
 ### Puente SSO → buzón
 

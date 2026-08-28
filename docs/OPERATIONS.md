@@ -609,7 +609,7 @@ no texto para el operador. El `code` es lo que se busca.
 | `invalid_body`, `invalid_query`, `invalid_identity`, `invalid_order` | 400 | El cliente mandó algo que no valida. |
 | `unauthorized` | 401 | Sin sesión o sesión caducada. Normal en `/api/auth/me`. |
 | `forbidden` | 403 | Sesión válida sin permiso de administración. |
-| `csrf` | 403 | Mutación rechazada por la puerta CSRF (#335): `Sec-Fetch-Site: same-site`/`cross-site`, `Origin`/`Referer` que no es el de `APP_URL`, o ninguna de las tres cabeceras. Un cliente que no sea navegador debe mandar `Origin: <APP_URL>`. Deja una línea `csrf refused` con la ruta y el motivo. |
+| `csrf` | 403 | Mutación rechazada por la puerta CSRF (#335): `Sec-Fetch-Site: same-site`/`cross-site`, `Origin`/`Referer` que no es el de `APP_URL`, o ninguna de las tres cabeceras. Un cliente que no sea navegador (`curl`, script de operación) se admite **solo** con una cabecera de autenticación propia — hoy únicamente `x-setup-token`, la del asistente de instalación; para todo lo demás debe mandar `Origin: <APP_URL>`. Deja una línea `csrf refused` con la ruta y el motivo. |
 | `not_found` | 404 | Ruta o recurso inexistente. |
 | `user_exists`, `contact_exists`, `last_admin`, `self_demotion`, `self_archive`, `not_in_trash`, `destroy_failed`, `update_failed` | 409 | Conflicto de estado; la operación se rechaza a propósito. |
 | `payload_too_large` | 413 | Cuerpo por encima de `MAX_BODY_BYTES`. |

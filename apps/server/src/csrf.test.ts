@@ -46,8 +46,15 @@ function makeApp() {
 
   const authRouter = new Hono();
   authRouter.post("/logout", (c) => c.json({ ok: true }));
+  authRouter.post("/bootstrap", (c) => c.json({ reached: "bootstrap" }));
 
-  return createApp({ appUrl: APP_URL, mailRouter, authRouter });
+  // The real one verifies the token itself and 401s a wrong one; what matters
+  // here is only whether the CSRF gate let the request get that far.
+  const setupRouter = new Hono();
+  setupRouter.put("/sso", (c) => c.json({ reached: "setup-sso" }));
+  setupRouter.post("/users", (c) => c.json({ reached: "setup-users" }));
+
+  return createApp({ appUrl: APP_URL, mailRouter, authRouter, setupRouter });
 }
 
 function jsonBody(extra: Record<string, string> = {}): RequestInit {
@@ -270,5 +277,88 @@ describe("JSON Content-Type enforcement (GH #335)", () => {
       body: new Uint8Array([1, 2, 3]),
     });
     expect(res.status).toBe(415);
+  });
+});
+
+// GH #335 follow-up. A custom request header cannot be attached to a cross-site
+// request without a successful CORS preflight, and this server runs no CORS
+// middleware (nor does the nginx in front of it), so the preflight never gets an
+// `Access-Control-Allow-Origin` and the request is never sent. That makes
+// `x-setup-token` proof of a non-simple request by construction — which is what
+// lets the token-authenticated setup router serve a `curl` that has no Origin.
+describe("the x-setup-token carve-out (GH #335)", () => {
+  it("admits a setup mutation carrying the token and no browser headers", async () => {
+    const res = await makeApp().request("/api/setup/sso", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-setup-token": "s3cret" },
+      body: JSON.stringify({ issuer: "https://idp.example.com" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ reached: "setup-sso" });
+  });
+
+  it("admits POST /api/setup/users the same way", async () => {
+    const res = await makeApp().request("/api/setup/users", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-setup-token": "s3cret" },
+      body: JSON.stringify({ email: "a@b.c" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ reached: "setup-users" });
+  });
+
+  it("refuses the same setup mutation without the token", async () => {
+    const res = await makeApp().request("/api/setup/sso", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ issuer: "https://idp.example.com" }),
+    });
+    expect(res.status).toBe(403);
+    expect(apiErrorSchema.parse(await res.json()).code).toBe("csrf");
+  });
+
+  it("still refuses a cross-site Origin even when the token is present", async () => {
+    // Belt and braces: the header alone should never be able to launder an
+    // Origin the browser itself declared foreign.
+    const res = await makeApp().request("/api/setup/sso", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "x-setup-token": "s3cret",
+        origin: SIBLING_ORIGIN,
+      },
+      body: JSON.stringify({ issuer: "https://idp.example.com" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("keeps the media-type rule for a token-bearing request", async () => {
+    const res = await makeApp().request("/api/setup/sso", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-setup-token": "s3cret",
+      },
+      body: "issuer=x",
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("leaves POST /api/auth/bootstrap origin-gated: it is a password in a body", async () => {
+    // Cookie-less, but the SPA login page is the only thing that calls it, and
+    // its credential travels in the body rather than in an unforgeable header.
+    const headerless = await makeApp().request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "a@b.c", password: "hunter2" }),
+    });
+    expect(headerless.status).toBe(403);
+
+    const fromTheSpa = await makeApp().request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ email: "a@b.c", password: "hunter2" }),
+    });
+    expect(fromTheSpa.status).toBe(200);
   });
 });

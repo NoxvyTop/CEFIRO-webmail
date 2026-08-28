@@ -31,6 +31,25 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  */
 const ALLOWED_FETCH_SITES = new Set(["same-origin", "none"]);
 
+/**
+ * The one header that admits a client which sent no origin information at all.
+ *
+ * It is safe for a reason that has nothing to do with the value: a cross-site
+ * request carrying ANY header outside the CORS-safelisted set is not a simple
+ * request, so the browser must win a preflight before it is sent. This server
+ * runs no CORS middleware and the nginx in front of it adds no
+ * `Access-Control-*` headers, so that preflight is never answered and the
+ * request never leaves the browser. Presence of the header is therefore proof,
+ * by construction, that the caller is not a page being driven cross-site.
+ *
+ * Only the setup router reads it, and it verifies the 144-bit secret itself,
+ * rate-limits the attempts and latches shut once setup has completed
+ * (modules/setup/router.ts) — so this admits a request to be authenticated, it
+ * does not authenticate it. It is deliberately the ONLY such header: nothing
+ * else in this API authenticates a mutation outside the session cookie.
+ */
+const NON_BROWSER_AUTH_HEADER = "x-setup-token";
+
 export type CsrfDecision =
   | { allowed: true }
   | { allowed: false; status: 403; code: "csrf"; reason: string }
@@ -97,13 +116,18 @@ export function csrfDecision(
     // signal — but when it IS present its origin is equally unforgeable.
     const claimed = originOf(req.header("origin")) ?? originOf(req.header("referer"));
     if (!claimed) {
-      // Neither Fetch Metadata, nor Origin, nor Referer: not a browser. Refused
-      // rather than waved through, because this API has no route that both
-      // mutates and authenticates with a bearer token — the cookie is the only
-      // credential a mutation can carry, so an "API client" exemption here would
-      // just be a hole with a comment on it. /metrics is bearer-authenticated but
-      // is a GET, and so never reaches this branch. A non-browser client that
-      // must drive a mutation sends `Origin: <APP_URL>` (see docs/OPERATIONS.md).
+      // Neither Fetch Metadata, nor Origin, nor Referer: not a browser. One
+      // carve-out, and only here — where the browser has told us nothing, rather
+      // than told us the request is foreign. See NON_BROWSER_AUTH_HEADER above
+      // for why a custom header cannot be forged cross-site.
+      if (req.header(NON_BROWSER_AUTH_HEADER)) return mediaTypeDecision(req, binaryPaths);
+      // Everything else is refused rather than waved through: apart from that
+      // header, this API has no route that both mutates and authenticates with a
+      // token, so the session cookie is the only credential a mutation can carry
+      // and a general "API client" exemption would just be a hole with a comment
+      // on it. /metrics is bearer-authenticated but is a GET, and so never
+      // reaches this branch. A non-browser client that must drive some other
+      // mutation sends `Origin: <APP_URL>` (see docs/OPERATIONS.md).
       return { allowed: false, status: 403, code: "csrf", reason: "no origin headers" };
     }
     if (claimed !== self) {
@@ -111,14 +135,23 @@ export function csrfDecision(
     }
   }
 
-  // Defence in depth behind the same gate (GH #335). A cross-site HTML form can
-  // only produce three content types, none of them JSON; requiring JSON on the
-  // routes that parse JSON means a forged form submission is refused a second
-  // time, by a rule that does not depend on any header the browser adds.
-  //
-  // Keyed on the presence of a body, not on the method: the SPA sends several
-  // body-less mutations (`POST /api/mail/filters/sync`, `POST /api/auth/logout`,
-  // `DELETE /api/mail/signatures/:id`), and those carry no content type at all.
+  return mediaTypeDecision(req, binaryPaths);
+}
+
+/**
+ * Defence in depth behind the same gate (GH #335). A cross-site HTML form can
+ * only produce three content types, none of them JSON; requiring JSON on the
+ * routes that parse JSON means a forged form submission is refused a second
+ * time, by a rule that does not depend on any header the browser adds.
+ *
+ * Keyed on the presence of a body, not on the method: the SPA sends several
+ * body-less mutations (`POST /api/mail/filters/sync`, `POST /api/auth/logout`,
+ * `DELETE /api/mail/signatures/:id`), and those carry no content type at all.
+ *
+ * Every path that clears the origin check ends here, the `x-setup-token`
+ * carve-out included: that header says who is calling, not what they sent.
+ */
+function mediaTypeDecision(req: CsrfRequest, binaryPaths: ReadonlySet<string>): CsrfDecision {
   if (req.hasBody && !binaryPaths.has(req.path)) {
     const type = mediaType(req.header("content-type"));
     if (type !== "application/json") {
@@ -130,7 +163,6 @@ export function csrfDecision(
       };
     }
   }
-
   return ALLOWED;
 }
 
