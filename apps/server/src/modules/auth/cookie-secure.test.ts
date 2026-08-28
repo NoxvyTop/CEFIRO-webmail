@@ -151,6 +151,35 @@ describe("Secure cookies from the effective request scheme (GH #288)", () => {
     expect(await loginStateCookie(res)).toMatch(/;\s*Secure/i);
   });
 
+  // GH #334: nginx and Cloudflare SET X-Forwarded-Proto (they do not append to
+  // it the way X-Forwarded-For accumulates), so the documented two-hop topology
+  // arrives with a ONE-entry chain. Counting two hops from the right used to
+  // land on index -1 and drop through to the container's own http socket, which
+  // is how a production session cookie went out without `Secure`.
+  it("marks Secure on a single-value X-Forwarded-Proto: https with hops=2", async () => {
+    const { app } = await makeApp({ trustedProxyHops: 2 });
+    const res = await app.request("/api/auth/login", {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    expect(await loginStateCookie(res)).toMatch(/;\s*Secure/i);
+  });
+
+  it("does not mark Secure on a single-value X-Forwarded-Proto: http with hops=2", async () => {
+    const { app } = await makeApp({ trustedProxyHops: 2, appUrl: "http://localhost:5173" });
+    const res = await app.request("http://localhost:5173/api/auth/login", {
+      headers: { "x-forwarded-proto": "http" },
+    });
+    expect(await loginStateCookie(res)).not.toMatch(/;\s*Secure/i);
+  });
+
+  it("falls back to the socket scheme when a trusted-proxy deployment sends no header", async () => {
+    // The short-chain rule only rescues a header that IS there. With none at
+    // all nothing described the client's leg, so the socket stays authoritative.
+    const { app } = await makeApp({ trustedProxyHops: 2, appUrl: "http://localhost:5173" });
+    const res = await app.request("http://localhost:5173/api/auth/login");
+    expect(await loginStateCookie(res)).not.toMatch(/;\s*Secure/i);
+  });
+
   it("falls back to the direct scheme and marks Secure on a direct https request", async () => {
     // No trusted proxy, so X-Forwarded-Proto is ignored and the socket scheme
     // this process terminates on is authoritative.

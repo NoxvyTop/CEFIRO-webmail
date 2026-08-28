@@ -1,7 +1,4 @@
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
-}
+import { secretMatches } from "../../core/constant-time";
 
 /**
  * The break-glass credential: the bootstrap login's password and the setup
@@ -37,11 +34,16 @@ export function createBootstrap(enabled: boolean, password?: string) {
       verify: async () => false,
     };
   }
-  const hashPromise = sha256Hex(password);
   return {
     enabled: true as const,
     password,
-    verify: async (candidate: string) => (await sha256Hex(candidate)) === (await hashPromise),
+    // GH #346: this used to hash both sides to hex and compare them with `===`,
+    // a compare that returns as soon as two characters differ. Both call sites
+    // for this credential — the break-glass login and the `/setup` token — now
+    // go through the constant-time compare core/metrics.ts already used for the
+    // scrape token, so there is one implementation of it rather than two, only
+    // one of which was right.
+    verify: (candidate: string) => secretMatches(candidate, password),
   };
 }
 

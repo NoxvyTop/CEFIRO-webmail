@@ -82,7 +82,7 @@ al desplegar, no a mitad de la jornada.
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha. Si se cambia, hay que ajustar también el `HEALTHCHECK` del Dockerfile. |
-| `NODE_ENV` | `development` | `production` sirve la SPA estática y **fuerza cookies `Secure`** aunque `APP_URL` sea `http://`. En producción va siempre a `production`. |
+| `NODE_ENV` | `development` | `production` sirve la SPA estática. **No decide el atributo `Secure` de las cookies**: desde #288 sale del esquema con el que el cliente llegó al edge (`X-Forwarded-Proto` dentro de `TRUSTED_PROXY_HOPS`, o el esquema del socket si no hay proxy de confianza). En producción va siempre a `production`. |
 | `BOOTSTRAP_MODE` | `false` | Modo de primer arranque/recuperación. Ver el checklist. **En operación normal, `false`.** |
 | `BOOTSTRAP_PASSWORD` | — | Credencial de emergencia. **Obligatoria si `BOOTSTRAP_MODE=true`** (el proceso no arranca sin ella) e ignorada si no. Mínimo 24 caracteres; se genera con `openssl rand -base64 24`. Es contraseña del login de emergencia **y** token de `/setup`: va en el mismo gestor de secretos que `MASTER_KEY` y se retira al volver a `false`. |
 | `SESSION_TTL_HOURS` | `12` | Vida absoluta de la sesión (tope no extensible). |
@@ -300,6 +300,14 @@ Traefik (`forwardedHeaders`) y Caddy (`X-Forwarded-For`) anexan por defecto y no
 necesitan nada más. Un proxy configurado con `proxy_set_header X-Forwarded-For
 $remote_addr` (sustituir) **también funciona** con `1`: deja una cadena de un
 solo elemento escrito por él.
+
+**`X-Forwarded-Proto` no se anexa.** `$scheme` **sustituye** la cabecera entera,
+y lo mismo hacen Cloudflare y el resto de CDN, así que con `TRUSTED_PROXY_HOPS=2`
+llega **un solo valor**, no dos. De ahí sale el atributo `Secure` de las cookies
+(#288): cuando la cadena es más corta que el número de saltos declarado se lee la
+entrada **de más a la derecha**, la que escribió el proxy más interno — antes se
+caía al esquema del socket del contenedor (`http`) y la cookie de sesión salía
+sin `Secure` (#334). Sin la cabecera, manda el esquema del socket.
 
 **Streaming (SSE).** `/api/mail/events` es una respuesta de larga duración.
 Responde con `X-Accel-Buffering: no` para que un nginx con `proxy_buffering on`
