@@ -1,10 +1,40 @@
 import type { ReactNode } from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttachmentMeta } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import { AttachmentCard, attachmentThumbnailKind, formatSizeKb } from "./AttachmentCard";
+
+// Controllable IntersectionObserver double — same pattern as
+// useInViewport.test.tsx's own FakeIntersectionObserver. jsdom has no
+// IntersectionObserver at all, so every OTHER test in this file already
+// exercises useInViewport's "unavailable -> visible immediately" fallback;
+// only the tests below need this to actually withhold visibility.
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  callback: IntersectionObserverCallback;
+  observed: Element[] = [];
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    FakeIntersectionObserver.instances.push(this);
+  }
+
+  observe(target: Element) {
+    this.observed.push(target);
+  }
+
+  unobserve() {}
+  disconnect() {}
+
+  intersect(target: Element, isIntersecting: boolean) {
+    this.callback(
+      [{ target, isIntersecting } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
 
 // PdfThumbnail itself does real pdf.js work (covered separately, with its
 // own dynamic-import mocking, in pdf-thumbnail.test.tsx) — here we only care
@@ -274,5 +304,43 @@ describe("formatSizeKb", () => {
 
   it("formats a multi-MB size in MB with a decimal, not thousands of KB", () => {
     expect(formatSizeKb(1024 * 1024 * 5.5)).toBe("5.5 MB");
+  });
+});
+
+// #349: PdfThumbnail fetches the whole PDF and pulls in an extra ~1MB pdf.js
+// chunk the moment it mounts, and the image thumbnail's <img> fetches the
+// full attachment — both used to fire immediately for every attachment card
+// on screen, so a thread with 10 attachments meant 10 full downloads at
+// once. Gated behind useInViewport (app/ui/useInViewport.ts) instead.
+describe("AttachmentCard thumbnail viewport gating", () => {
+  beforeEach(() => {
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("does not render the real PdfThumbnail until the card scrolls into view", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "report.pdf", type: "application/pdf" })} />);
+
+    expect(screen.queryByTestId("pdf-thumbnail")).not.toBeInTheDocument();
+
+    const observer = FakeIntersectionObserver.instances[0]!;
+    act(() => observer.intersect(observer.observed[0]!, true));
+
+    expect(screen.getByTestId("pdf-thumbnail")).toHaveAttribute("data-blob-id", "b1");
+  });
+
+  it("does not render the real <img> until the card scrolls into view", () => {
+    render(<AttachmentCard attachment={makeAttachment({ name: "photo.png", type: "image/png" })} />);
+
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+
+    const observer = FakeIntersectionObserver.instances[0]!;
+    act(() => observer.intersect(observer.observed[0]!, true));
+
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
+import { useInViewport } from "../../app/ui/useInViewport";
 import {
   CloseIcon,
   FileArchiveIcon,
@@ -129,9 +130,17 @@ export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCa
   // (image/pdf) attachments only. See AttachmentViewer.tsx.
   const [viewerOpen, setViewerOpen] = useState(false);
 
+  // #349: PdfThumbnail fetches the whole PDF (and pulls in an extra ~1MB
+  // pdf.js chunk) the instant it mounts, and the image thumbnail's <img>
+  // fetches the full attachment — both used to fire for every card on
+  // screen regardless of visibility, so a thread with 10 attachments meant
+  // 10 full downloads at once. Deferred until the card is actually about to
+  // scroll into view; see app/ui/useInViewport.ts.
+  const [viewportRef, inViewport] = useInViewport<HTMLDivElement>();
+
   const thumbnailContent = (
     <>
-      {kind === "image" && !imageFailed && (
+      {kind === "image" && !imageFailed && inViewport && (
         <img
           src={blobUrl(attachment.blobId, name, attachment.type, { accountId })}
           alt={name}
@@ -140,7 +149,7 @@ export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCa
           className="h-full w-full object-cover"
         />
       )}
-      {kind === "pdf" && (
+      {kind === "pdf" && inViewport && (
         <PdfThumbnail
           blobId={attachment.blobId}
           name={name}
@@ -155,12 +164,15 @@ export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCa
           fallback={<Icon size={32} />}
         />
       )}
-      {(kind === "icon" || (kind === "image" && imageFailed)) && <Icon size={32} />}
+      {(kind === "icon" || (kind === "image" && imageFailed) || !inViewport) && <Icon size={32} />}
     </>
   );
 
   return (
-    <div className="relative flex w-[172px] shrink-0 flex-col overflow-hidden rounded-xl border border-line">
+    <div
+      ref={viewportRef}
+      className="relative flex w-[172px] shrink-0 flex-col overflow-hidden rounded-xl border border-line"
+    >
       {onRemove && (
         <button
           type="button"
