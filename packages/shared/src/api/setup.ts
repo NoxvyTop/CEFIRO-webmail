@@ -14,9 +14,26 @@ export const setupSsoSchema = z.object({
   issuer: z
     .string()
     .url()
-    .refine((value) => new URL(value).protocol === "https:", {
-      message: "issuer must be an https: URL",
-    }),
+    .refine(
+      (value) => {
+        // `.url()` above already reports its own issue for a string that is
+        // not a URL at all — but zod still runs a chained `.refine()` in that
+        // case (a failed string-level check like `.url()` only marks the
+        // result "dirty", not "aborted", and only "aborted" skips a chained
+        // effect). `new URL()` throws on exactly the input `.url()` already
+        // flagged, so this must not call it unguarded: an uncaught throw here
+        // escapes safeParse() as a raw TypeError instead of a clean
+        // `{ success: false }`, which is a 500 instead of a 400 at every
+        // caller (admin/setup routers both use safeParse, never the
+        // throwing parse()).
+        try {
+          return new URL(value).protocol === "https:";
+        } catch {
+          return false;
+        }
+      },
+      { message: "issuer must be an https: URL" },
+    ),
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
   scopes: z.string().min(1).default("openid profile email"),
