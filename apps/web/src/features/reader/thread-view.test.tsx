@@ -548,7 +548,8 @@ describe("ThreadView", () => {
       const actionsBar = await screen.findByTestId("thread-actions-bar");
       fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.copyToInbox") }));
 
-      expect(await screen.findByText(i18n.t("mail.errors.copy_failed"))).toBeInTheDocument();
+      // #348: an error toast is an assertive alert, not a polite status.
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.copy_failed"));
     });
   });
 
@@ -2907,7 +2908,8 @@ describe("sender trust badge and trust-this-service action (GH #314)", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: trustAction() }));
 
-    expect(await screen.findByText(i18n.t("mail.errors.invalid_domain"))).toBeInTheDocument();
+    // #348: an error toast is an assertive alert, not a polite status.
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.invalid_domain"));
     expect(screen.getByRole("button", { name: trustAction() })).toBeInTheDocument();
   });
 });

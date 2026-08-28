@@ -489,7 +489,9 @@ export function ThreadView({
       // Same mapped-key treatment the destroy path uses (GH #215): an unmapped
       // server code resolves to the namespace's generic message rather than
       // being shown to the user as a literal i18n key.
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -530,7 +532,9 @@ export function ThreadView({
     onError: (err) => {
       // Mapped-key treatment (GH #215): an unmapped server code resolves to
       // the namespace's generic message, never to a literal i18n key.
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -541,7 +545,9 @@ export function ThreadView({
       showToast(t("mail.senderTrust.untrusted", { domain }));
     },
     onError: (err) => {
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 

@@ -13,7 +13,8 @@
       "genericTitle": "Something went wrong",
       "genericDescription": "This screen could not be shown. Reloading the page usually fixes it.",
       "reload": "Reload"
-    }
+    },
+    "toastDismiss": "Dismiss notification"
   },
   "admin": {
     "title": "Administration",

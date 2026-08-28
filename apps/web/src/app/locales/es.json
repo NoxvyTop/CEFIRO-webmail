@@ -13,7 +13,8 @@
       "genericTitle": "Algo salió mal",
       "genericDescription": "No se pudo mostrar esta pantalla. Recargar la página suele solucionarlo.",
       "reload": "Recargar"
-    }
+    },
+    "toastDismiss": "Cerrar aviso"
   },
   "admin": {
     "title": "Administración",
