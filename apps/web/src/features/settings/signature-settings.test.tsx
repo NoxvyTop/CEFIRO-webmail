@@ -132,6 +132,9 @@ describe("SignatureSettings", () => {
 
       await screen.findByLabelText(i18n.t("settings.name"));
       const checkbox = screen.getByLabelText(i18n.t("settings.default")) as HTMLInputElement;
+      // #348: DevTools warns "A form field element should have an id or
+      // name attribute" — this checkbox had neither.
+      expect(checkbox).toHaveAttribute("name", "signature-is-default");
       expect(checkbox.checked).toBe(true);
       fireEvent.click(checkbox);
       expect(checkbox.checked).toBe(false);

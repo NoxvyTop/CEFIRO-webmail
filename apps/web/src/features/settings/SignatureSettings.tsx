@@ -286,6 +286,7 @@ export function SignatureSettings() {
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
+              name="signature-is-default"
               checked={form.isDefault}
               onChange={(event) => setForm({ ...form, isDefault: event.target.checked })}
             />

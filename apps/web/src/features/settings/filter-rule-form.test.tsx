@@ -87,6 +87,25 @@ describe("FilterRuleForm", () => {
     expect(screen.getByRole("option", { name: "Clients/Acme" })).toBeInTheDocument();
   });
 
+  // #348: DevTools warns "A form field element should have an id or name
+  // attribute" — the dynamic condition-value/keyword inputs and the rule
+  // enabled checkbox carried only an aria-label, no id or name.
+  it("gives the condition value, flag keyword, and enabled checkbox a name attribute", () => {
+    renderForm({
+      initial: { ...emptyRule, actions: [{ type: "flag", keyword: "" }] },
+    });
+
+    expect(screen.getByLabelText(`${i18n.t("filters.value")} 1`)).toHaveAttribute(
+      "name",
+      "condition-value",
+    );
+    expect(screen.getByLabelText(`${i18n.t("filters.keyword")} 1`)).toHaveAttribute(
+      "name",
+      "action-keyword",
+    );
+    expect(screen.getByLabelText(i18n.t("filters.enabled"))).toHaveAttribute("name", "rule-enabled");
+  });
+
   it("strips invalid characters from the flag keyword", () => {
     renderForm({
       initial: { ...emptyRule, actions: [{ type: "flag", keyword: "" }] },

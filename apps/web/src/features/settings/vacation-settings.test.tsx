@@ -67,7 +67,11 @@ describe("VacationSettings", () => {
     expect(await screen.findByLabelText(i18n.t("vacation.message"))).toHaveValue(
       "Back on the 20th",
     );
-    expect(screen.getByLabelText(i18n.t("vacation.enabled"))).not.toBeChecked();
+    const enabledCheckbox = screen.getByLabelText(i18n.t("vacation.enabled"));
+    expect(enabledCheckbox).not.toBeChecked();
+    // #348: DevTools warns "A form field element should have an id or name
+    // attribute" — this checkbox had neither.
+    expect(enabledCheckbox).toHaveAttribute("name", "vacation-enabled");
   });
 
   it("saves the edited settings", async () => {
