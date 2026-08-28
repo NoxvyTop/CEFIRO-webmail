@@ -9,7 +9,7 @@ import {
 import {
   deriveGroupAddresses, fetchPreferences, mergeGroupEntries, updatePreferences, type GroupEntry,
 } from "./groups";
-import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
+import { isUnlinkedMailboxError, mailErrorKey, mailRetry, mailRetryDelay } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { SharedMailboxBanner } from "./SharedMailboxBanner";
 import { Sidebar } from "./Sidebar";
@@ -19,6 +19,7 @@ import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { MenuIcon } from "../../app/ui/icons";
 import { folderName } from "../../app/ui/folders";
+import { PanelError } from "../../app/ui/PanelError";
 import { useToast } from "../../app/ui/toast";
 import { fetchIdentities } from "../composer/api";
 import { buildEditDraft, emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -83,6 +84,7 @@ export function MailPage() {
     queryKey: ["mail", "mailboxes", accountParam ?? null],
     queryFn: () => fetchMailboxes(accountParam),
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
     // GH #342: same polling fallback as MessageList's messages query — see
     // its comment for why.
     refetchInterval: pollWhileStreamDown ? 60_000 : undefined,
@@ -569,9 +571,10 @@ export function MailPage() {
           </p>
         )}
         {otherMailboxError && (
-          <p role="alert" className="p-4 text-sm text-warn">
-            {t(mailErrorKey(mailboxesQuery.error))}
-          </p>
+          <PanelError
+            message={t(mailErrorKey(mailboxesQuery.error))}
+            onRetry={() => void mailboxesQuery.refetch()}
+          />
         )}
         {unlinkedMailbox && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted">

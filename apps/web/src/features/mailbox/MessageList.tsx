@@ -9,11 +9,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import type { CustomLabel, EmailSummary, MessagesPage } from "@webmail/shared";
 import { fetchMessages, updateMessage, updateMessages, MailApiError, PAGE_SIZE } from "./api";
-import { mailErrorKey, mailRetry } from "./queryErrors";
+import { mailErrorKey, mailRetry, mailRetryDelay } from "./queryErrors";
 import { AUTH_QUERY_KEY } from "../auth/useAuth";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
+import { PanelError } from "../../app/ui/PanelError";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -220,6 +221,7 @@ export function MessageList({
         ? lastPage.position + lastPage.emails.length
         : undefined,
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
     // GH #342: while the SSE stream is not open there is no other source of
     // freshness for this list, so poll instead. `refetchIntervalInBackground:
     // false` keeps a backgrounded tab from spending that request — it will
@@ -719,9 +721,10 @@ export function MessageList({
 
   if (messagesQuery.isError) {
     content = (
-      <p role="alert" className="p-4 text-sm text-warn">
-        {t(mailErrorKey(messagesQuery.error))}
-      </p>
+      <PanelError
+        message={t(mailErrorKey(messagesQuery.error))}
+        onRetry={() => void messagesQuery.refetch()}
+      />
     );
   } else if (messagesQuery.isLoading) {
     // GH #272: the first page is still in flight (a fresh folder/label/search).

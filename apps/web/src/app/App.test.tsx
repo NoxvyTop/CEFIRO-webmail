@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
@@ -35,6 +35,42 @@ function renderApp() {
     </QueryClientProvider>,
   );
 }
+
+// GH #345: there was no offline signal in the UI at all — a lost connection
+// looked identical to a slow one until every in-flight request failed on
+// its own.
+describe("App offline banner (GH #345)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // GH #345: dispatching a real "offline"/"online" event on window is also
+    // exactly what @tanstack/react-query's own onlineManager listens for
+    // globally (a singleton shared by every QueryClient in the process) — an
+    // assertion failure mid-test that skips the "online" dispatch below would
+    // otherwise leave every LATER test's queries thinking the browser is
+    // offline (paused, never fetching), which showed up as unrelated tests
+    // timing out for no visible reason. Always force it back regardless of
+    // how the test ended.
+    onlineManager.setOnline(true);
+  });
+
+  it("shows a banner while offline and hides it again once back online", async () => {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    renderApp();
+    await screen.findByText("CÉFIRO");
+
+    expect(screen.queryByText(i18n.t("app.offline"))).not.toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    expect(screen.getByText(i18n.t("app.offline"))).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    expect(screen.queryByText(i18n.t("app.offline"))).not.toBeInTheDocument();
+  });
+});
 
 describe("App search input focus treatment", () => {
   it("carries the visible boxed focus indicator on the bordered wrapper, not the transparent inner input", async () => {

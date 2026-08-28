@@ -6,7 +6,7 @@ import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
 import { MailApiError, copyMessageToInbox, destroyMessages, fetchInstanceSettings, fetchThread, updateMessage, updateMessages } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
-import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
+import { mailErrorKey, mailRetry, mailRetryDelay } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
 import { AUTH_QUERY_KEY } from "../auth/useAuth";
 import { useAuth } from "../auth/useAuth";
@@ -19,6 +19,7 @@ import { Button } from "../../app/ui/Button";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon, TrashIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
+import { PanelError } from "../../app/ui/PanelError";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -196,6 +197,14 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
 // it in full, and this reuses that module's own key sets so the two can't drift.
 const MAILBOX_MOVE_INVALIDATION_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS];
 
+// GH #345: hoisted to module scope (out of the component body) so the error
+// branch below — rendered before `lastEmail` and the rest of the action-bar
+// state exist — can share the exact same button styling as the real bar,
+// instead of the error state's back button looking like a different control.
+const ACTION_BUTTON_BASE_CLASS =
+  "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
+const ACTION_BUTTON_CLASS = `${ACTION_BUTTON_BASE_CLASS} text-ink`;
+
 export function ThreadView({
   threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null, accountId,
   currentMailboxId = null,
@@ -210,6 +219,7 @@ export function ThreadView({
     queryKey: ["mail", "thread", threadId, accountId ?? null],
     queryFn: () => fetchThread(threadId, accountId),
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
   });
 
   // Used to detect messages the account itself sent (from === one of our
@@ -674,10 +684,30 @@ export function ThreadView({
   }
 
   if (threadQuery.isError) {
+    // GH #345: this used to be a bare `<p role="alert">` rendered BEFORE the
+    // action bar that holds the `lg:hidden` back button (below `lg`,
+    // MailPage hides the message list while `?thread=` is set) — a failed
+    // thread load left a mobile reader with no way back and no way to retry.
     return (
-      <p role="alert" className="p-4 text-sm text-warn">
-        {t(mailErrorKey(threadQuery.error))}
-      </p>
+      <div className="flex h-full flex-col">
+        <div
+          data-testid="thread-actions-bar"
+          className="flex h-[52px] shrink-0 items-center gap-[6px] border-b border-line px-[22px]"
+        >
+          <button
+            type="button"
+            onClick={backToList}
+            aria-label={t("mail.backToList")}
+            className={`${ACTION_BUTTON_CLASS} px-2 lg:hidden`}
+          >
+            <ArrowLeftIcon />
+          </button>
+        </div>
+        <PanelError
+          message={t(mailErrorKey(threadQuery.error))}
+          onRetry={() => void threadQuery.refetch()}
+        />
+      </div>
     );
   }
 
@@ -728,10 +758,6 @@ export function ThreadView({
   // order, so only this display copy is reversed.
   const displayEmails = [...emails].reverse();
 
-  const actionButtonBaseClass =
-    "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
-  const actionButtonClass = `${actionButtonBaseClass} text-ink`;
-
   return (
     <div className="flex h-full flex-col">
       {/* GH #214: the bar used to be overflow-x-hidden while its buttons are
@@ -752,7 +778,7 @@ export function ThreadView({
           type="button"
           onClick={backToList}
           aria-label={t("mail.backToList")}
-          className={`${actionButtonClass} px-2 lg:hidden`}
+          className={`${ACTION_BUTTON_CLASS} px-2 lg:hidden`}
         >
           <ArrowLeftIcon />
         </button>
@@ -760,7 +786,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => archiveMutation.mutate(threadMessagesInCurrentMailbox())}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <ArchiveIcon size={15} />
             {t("mail.archive")}
@@ -770,7 +796,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => unarchiveMutation.mutate(threadMessagesInCurrentMailbox())}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <InboxIcon size={15} />
             {t("mail.unarchive")}
@@ -780,7 +806,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => deleteMutation.mutate(threadMessagesInCurrentMailbox())}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <TrashIcon size={15} />
             {t("mail.delete")}
@@ -790,7 +816,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => setDeletePermanentlyConfirmOpen(true)}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <TrashIcon size={15} />
             {t("mail.deletePermanently")}
@@ -805,7 +831,7 @@ export function ThreadView({
             type="button"
             onClick={() => copyToInboxMutation.mutate(lastEmail)}
             disabled={copyToInboxMutation.isPending}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <InboxIcon size={15} />
             {t("mail.copyToInbox")}
@@ -815,7 +841,7 @@ export function ThreadView({
           type="button"
           aria-label={t(starred ? "mail.unstar" : "mail.star")}
           onClick={() => starMutation.mutate({ email: lastEmail, starred: !starred })}
-          className={`${actionButtonBaseClass} ${starred ? "text-star" : "text-ink"}`}
+          className={`${ACTION_BUTTON_BASE_CLASS} ${starred ? "text-star" : "text-ink"}`}
         >
           {starred ? <StarFilledIcon size={15} /> : <StarIcon size={15} />}
           {t(starred ? "mail.unstar" : "mail.star")}
@@ -823,7 +849,7 @@ export function ThreadView({
         <button
           type="button"
           onClick={() => openCompose(`reply:${lastEmail.id}`)}
-          className={actionButtonClass}
+          className={ACTION_BUTTON_CLASS}
         >
           <ReplyIcon size={15} />
           {t("composer.reply")}
@@ -832,7 +858,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             {t("composer.replyAll")}
           </button>
@@ -840,7 +866,7 @@ export function ThreadView({
         <button
           type="button"
           onClick={() => openCompose(`forward:${lastEmail.id}`)}
-          className={actionButtonClass}
+          className={ACTION_BUTTON_CLASS}
         >
           {t("composer.forward")}
         </button>
@@ -851,7 +877,7 @@ export function ThreadView({
           aria-haspopup="menu"
           aria-expanded={labelMenuOpen}
           onClick={toggleLabelMenu}
-          className={actionButtonClass}
+          className={ACTION_BUTTON_CLASS}
         >
           <TagIcon size={15} />
           {t("mail.labels")}

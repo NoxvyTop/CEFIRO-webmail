@@ -1962,6 +1962,48 @@ describe("ThreadView", () => {
     });
   });
 
+  // GH #345: the bare `<p role="alert">` sat ABOVE the action bar that holds
+  // the `lg:hidden` back button — below `lg`, MailPage hides the list while
+  // `?thread=` is set (MailPage.tsx), so a failed thread load left a mobile
+  // reader with no way back and no way to retry.
+  describe("thread load error state (GH #345)", () => {
+    it("offers a back button and a retry button instead of a dead-end alert", async () => {
+      // 404 (mail_not_configured): mailRetry gives up immediately for any
+      // 4xx, so the alert appears on the very first failure with no retry
+      // delay to wait out.
+      let calls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) {
+            calls += 1;
+            if (calls === 1) {
+              return new Response(JSON.stringify({ code: "mail_not_configured" }), { status: 404 });
+            }
+            return new Response(JSON.stringify(thread));
+          }
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain(i18n.t("mail.errors.mail_not_configured"));
+      expect(screen.getByRole("button", { name: i18n.t("mail.backToList") })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+      await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      expect(calls).toBe(2);
+    });
+  });
+
   // GH #92: the last message gets a subtle visual highlight — a real border
   // on an elevated bg-panel card with shadow-card — so it stands out from
   // earlier (or collapsed) messages above it.

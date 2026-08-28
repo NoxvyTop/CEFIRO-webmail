@@ -5,7 +5,15 @@
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",
-    "sealMotto": "el viento que mueve tu equipo"
+    "sealMotto": "el viento que mueve tu equipo",
+    "offline": "Sin conexión a internet",
+    "routeError": {
+      "staleTitle": "Hay una nueva versión disponible",
+      "staleDescription": "Esta pestaña llevaba abierta desde antes de una actualización y algunos archivos ya no existen en el servidor. Recarga la página para continuar.",
+      "genericTitle": "Algo salió mal",
+      "genericDescription": "No se pudo mostrar esta pantalla. Recargar la página suele solucionarlo.",
+      "reload": "Recargar"
+    }
   },
   "admin": {
     "title": "Administración",

@@ -974,6 +974,40 @@ describe("MessageList row handle (GH #225)", () => {
   });
 });
 
+// GH #345: a failed messages page rendered a bare `<p role="alert">` with no
+// way to retry — replaced with the shared PanelError (message + retry).
+describe("MessageList load error state (GH #345)", () => {
+  it("offers a retry button that refetches, instead of a dead-end alert", async () => {
+    // 404 (mail_not_configured): mailRetry gives up immediately for any 4xx
+    // (no bounded-retry delay to wait out), so the alert appears on the very
+    // first failure.
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/messages")) {
+          calls += 1;
+          if (calls === 1) {
+            return new Response(JSON.stringify({ code: "mail_not_configured" }), { status: 404 });
+          }
+          return new Response(JSON.stringify({ total: 1, position: 0, emails: [emailUnread] }));
+        }
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderList();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(i18n.t("mail.errors.mail_not_configured"));
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+    await screen.findByText("Hello there");
+    expect(calls).toBe(2);
+  });
+});
+
 // GH #272: `isLoading` used to gate only the empty state, so switching folders
 // left the list area blank until the first page arrived — indistinguishable
 // from an empty folder. A skeleton now stands in for the pending first page.
