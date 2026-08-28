@@ -1,11 +1,20 @@
 import type { Db } from "../db/client";
 import { log } from "../../core/logger";
 import {
+  aadFor,
   asKeyring,
   decryptWithKeyring,
   encryptWithKeyring,
   type Keyring,
 } from "../../modules/credentials/crypto";
+
+// GH #347: binds every ciphertext to the exact row it was sealed for. Without
+// it, a Postgres write access — not the master key — could move one user's
+// encrypted columns onto another user's row and have get() decrypt them under
+// that user's identity; a mismatched AAD fails GCM tag verification instead.
+function mailCredentialAad(userId: string): Uint8Array {
+  return aadFor(`mail:${userId}`);
+}
 
 export function createMailCredentialsRepo(sql: Db, keys: CryptoKey | Keyring) {
   const keyring = asKeyring(keys);
@@ -22,7 +31,11 @@ export function createMailCredentialsRepo(sql: Db, keys: CryptoKey | Keyring) {
     fromVersion: number,
   ): Promise<void> {
     try {
-      const { ciphertext, iv, keyVersion } = await encryptWithKeyring(keyring, password);
+      const { ciphertext, iv, keyVersion } = await encryptWithKeyring(
+        keyring,
+        password,
+        mailCredentialAad(userId),
+      );
       await sql`
         update mail_credentials
         set ciphertext = ${ciphertext}, iv = ${iv}, key_version = ${keyVersion},
@@ -41,7 +54,11 @@ export function createMailCredentialsRepo(sql: Db, keys: CryptoKey | Keyring) {
 
   return {
     async set(userId: string, password: string): Promise<void> {
-      const { ciphertext, iv, keyVersion } = await encryptWithKeyring(keyring, password);
+      const { ciphertext, iv, keyVersion } = await encryptWithKeyring(
+        keyring,
+        password,
+        mailCredentialAad(userId),
+      );
       await sql`
         insert into mail_credentials (user_id, ciphertext, iv, key_version)
         values (${userId}, ${ciphertext}, ${iv}, ${keyVersion})
@@ -60,11 +77,15 @@ export function createMailCredentialsRepo(sql: Db, keys: CryptoKey | Keyring) {
       `;
       const row = rows[0];
       if (!row) return null;
-      const password = await decryptWithKeyring(keyring, {
-        ciphertext: new Uint8Array(row.ciphertext),
-        iv: new Uint8Array(row.iv),
-        keyVersion: row.key_version,
-      });
+      const password = await decryptWithKeyring(
+        keyring,
+        {
+          ciphertext: new Uint8Array(row.ciphertext),
+          iv: new Uint8Array(row.iv),
+          keyVersion: row.key_version,
+        },
+        mailCredentialAad(userId),
+      );
       if (row.key_version !== keyring.current.version) {
         await reEncrypt(userId, password, row.key_version);
       }

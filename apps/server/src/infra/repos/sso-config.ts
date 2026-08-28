@@ -1,11 +1,19 @@
 import type { Db } from "../db/client";
 import { log } from "../../core/logger";
 import {
+  aadFor,
   asKeyring,
   decryptWithKeyring,
   encryptWithKeyring,
   type Keyring,
 } from "../../modules/credentials/crypto";
+
+// GH #347: binds the client secret to "this is the SSO client secret", so it
+// can never decrypt as if it were a different kind of stored secret (a mail
+// credential, an oidc_state cookie) even under the same master key. Not
+// per-instance: sso_config is a singleton row (id = 1), so there is no
+// "owner" to key on the way mail-credentials.ts keys on user_id.
+const SSO_CLIENT_SECRET_AAD = aadFor("sso");
 
 export type SsoConfig = {
   issuer: string;
@@ -45,6 +53,7 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
       const { ciphertext, iv, keyVersion } = await encryptWithKeyring(
         keyring,
         clientSecret,
+        SSO_CLIENT_SECRET_AAD,
       );
       await sql`
         update sso_config
@@ -74,11 +83,15 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
       `;
       const row = rows[0];
       if (!row) return null;
-      const clientSecret = await decryptWithKeyring(keyring, {
-        ciphertext: new Uint8Array(row.client_secret_ciphertext),
-        iv: new Uint8Array(row.client_secret_iv),
-        keyVersion: row.key_version,
-      });
+      const clientSecret = await decryptWithKeyring(
+        keyring,
+        {
+          ciphertext: new Uint8Array(row.client_secret_ciphertext),
+          iv: new Uint8Array(row.client_secret_iv),
+          keyVersion: row.key_version,
+        },
+        SSO_CLIENT_SECRET_AAD,
+      );
       if (row.key_version !== keyring.current.version) {
         await reEncrypt(clientSecret, row.key_version);
       }
@@ -125,6 +138,7 @@ export function createSsoConfigRepo(sql: Db, keys: CryptoKey | Keyring) {
       const { ciphertext, iv, keyVersion } = await encryptWithKeyring(
         keyring,
         config.clientSecret,
+        SSO_CLIENT_SECRET_AAD,
       );
       await sql`
         insert into sso_config
