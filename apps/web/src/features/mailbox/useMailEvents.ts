@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { MessagesPage } from "@webmail/shared";
 import { createNewMailNotice, inboxUnreadCount } from "./newMailNotice";
 import { clearAllSummaryCache } from "../reader/summaryCache";
 
@@ -259,26 +260,37 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
       // act on is the one a delivery actually produces.
       const before = inboxUnreadCount(queryClient);
       const settled = invalidationKeysForStateChange(event.data ?? "").map((queryKey) => {
-        // #349: the infinite messages list refetched EVERY already-loaded
-        // page on every single StateChange — a user 10 pages deep paid 10
-        // sequential /api/mail/messages requests per incoming event. v5
-        // dropped v4's `refetchPage` predicate (which used to let a caller
-        // refetch just the first page); `maxPages` is the only remaining
-        // page-bounding primitive, and it EVICTS pages beyond the cap from
-        // the query's own data — that would drop already-visible rows
-        // mid-scroll the moment a user reads past the cap during ordinary
-        // scrolling, not just on an SSE event. `refetchType: "none"` avoids
-        // both: nothing is evicted, nothing refetches all N pages — the
-        // list goes stale and catches up next time something already
-        // triggers a refetch (window focus once past the 30s default
-        // staleTime, a remount) instead of eagerly, mid-scroll. The
-        // thread/mailboxes keys are single, unpaginated fetches, so they
-        // keep the normal eager refetch.
+        // #349 (review fix): the infinite messages list refetched EVERY
+        // already-loaded page on every single StateChange — a user 10 pages
+        // deep paid 10 sequential /api/mail/messages requests per incoming
+        // event. The first attempt at bounding that cost invalidated the
+        // messages key with `refetchType: "none"`, which stopped the storm
+        // but also stopped the inbox from updating live on a StateChange at
+        // all — a regression on the #340/#342 "inbox does not update"
+        // behavior this whole audit started from.
+        //
+        // v5 removed v4's `refetchPage` predicate (the one primitive that
+        // could refetch just a single page), and `maxPages` EVICTS pages
+        // beyond the cap from the query's OWN data — that would drop
+        // already-visible rows mid-scroll the moment a user reads past the
+        // cap during ordinary scrolling, not just on an SSE event.
+        //
+        // So instead: every cached infinite messages query is trimmed back
+        // to its first page here, BEFORE the (now-default, eager)
+        // invalidation below. The query stays active and genuinely
+        // refetches — the list is live again — but the refetch is bounded
+        // to exactly one page no matter how deep the user had scrolled.
+        // Deeper pages reload lazily as the user scrolls back down, the
+        // same way they loaded the first time (getNextPageParam in
+        // MessageList.tsx). The thread/mailboxes keys are single,
+        // unpaginated fetches, so they were never part of this cost.
         const isMessagesKey = queryKey.length === 2 && queryKey[0] === "mail" && queryKey[1] === "messages";
-        return queryClient.invalidateQueries({
-          queryKey,
-          ...(isMessagesKey ? { refetchType: "none" as const } : {}),
-        });
+        if (isMessagesKey) {
+          queryClient.setQueriesData<InfiniteData<MessagesPage, number>>({ queryKey }, (old) =>
+            old ? { pages: old.pages.slice(0, 1), pageParams: old.pageParams.slice(0, 1) } : old,
+          );
+        }
+        return queryClient.invalidateQueries({ queryKey });
       });
       void Promise.all(settled)
         .then(() => notice(before, inboxUnreadCount(queryClient)))
