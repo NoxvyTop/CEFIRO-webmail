@@ -102,7 +102,12 @@
      with margin. Still far lighter/less saturated than solid #0fa383
      fills, so the selected state stays subtler than accent CTAs. */
   --sel: #cdece1;
-  --danger: #f26565;
+  /* #348: --danger is used as normal-size text (13-14px) in alerts and
+     error copy. The original #f26565 (0°, 84%) only clears 3.08:1 on
+     #ffffff — below WCAG AA's 4.5:1 for text. Same hue, darkened to
+     L=51% — 5.06:1 on --panel (#ffffff), clearing AA with margin. Night's
+     --danger sits on dark panels and already clears AA unchanged. */
+  --danger: #c93a3a;
   /* OM-3: same hue/sat as --warn (36°, 76%), darkened to L=34% — 5.08:1 on
      #ffffff, clearing WCAG AA (4.5:1) for warn used as text (e.g. the
      unlinked-mailbox notice). Night's --warn is unchanged (already high
