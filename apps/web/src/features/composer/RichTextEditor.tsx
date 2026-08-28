@@ -179,6 +179,64 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "im
 // (base64 itself already inflates the raw bytes by ~33%).
 const MAX_IMAGE_BYTES = 1024 * 1024;
 
+// GH #344(c): MAX_IMAGE_BYTES/ALLOWED_IMAGE_TYPES above were only enforced in
+// handleImageFileSelected (the toolbar's own file input, below). Because
+// configuredImage sets allowBase64: true, TipTap's default paste/drop
+// handling admits ANY data: image it parses out of pasted HTML — or any
+// image File dropped straight onto the editor — with no size or type check
+// at all: a pasted screenshot could produce a several-MB draft body that then
+// 413s on autosave. handlePaste/handleDrop in the editorProps below close
+// that gap using this exact same allowlist/cap, rejecting instead of
+// inserting; the two helpers here are shared by both.
+type ImageRejectionReason = "tooLarge" | "invalidType";
+
+// Approximates the decoded byte length of a base64 string without actually
+// calling atob() on (potentially attacker-controlled, multi-MB) clipboard
+// content — same 4-chars-in/3-bytes-out ratio atob would produce, minus
+// declared padding.
+function base64DecodedByteLength(base64: string): number {
+  const padding = (base64.match(/=+$/) ?? [""])[0].length;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+// True for any image File in `fileList` that fails the same checks
+// handleImageFileSelected already enforces — the first violation found wins;
+// which one is reported only changes which i18n message the caller shows.
+function rejectedImageFileReason(fileList: FileList | readonly File[] | null | undefined): ImageRejectionReason | null {
+  if (!fileList) return null;
+  for (const file of Array.from(fileList)) {
+    if (!file.type.startsWith("image/")) continue;
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) return "invalidType";
+    if (file.size > MAX_IMAGE_BYTES) return "tooLarge";
+  }
+  return null;
+}
+
+// Matches a data: URL prefix identical to what browsers emit for a pasted
+// image (data:image/png;base64,....) inside clipboard HTML. Captures the mime
+// type and payload so each embedded image can be checked against the same
+// allowlist/size cap as a file picked through the toolbar.
+const DATA_IMAGE_URL_PATTERN = /data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,([a-zA-Z0-9+/=]+)/gi;
+
+// True for the first data: image embedded in `html` that fails the allowlist
+// or decoded-size cap — the actual bypass this fix closes: pasting a
+// screenshot typically arrives as clipboard HTML with an <img src="data:...">
+// already inlined by the browser, which allowBase64 would otherwise admit
+// unchecked.
+function rejectedDataImageReason(html: string): ImageRejectionReason | null {
+  for (const match of html.matchAll(DATA_IMAGE_URL_PATTERN)) {
+    const [, mimeType, base64] = match;
+    if (!mimeType || !base64) continue;
+    if (!ALLOWED_IMAGE_TYPES.has(mimeType.toLowerCase())) return "invalidType";
+    if (base64DecodedByteLength(base64) > MAX_IMAGE_BYTES) return "tooLarge";
+  }
+  return null;
+}
+
+function imageRejectionMessageKey(reason: ImageRejectionReason): string {
+  return reason === "tooLarge" ? "composer.imageTooLarge" : "composer.imageInvalidType";
+}
+
 // allowBase64 defaults to false in @tiptap/extension-image, which sets its
 // parseHTML rule to `img[src]:not([src^="data:"])` — i.e. it silently drops
 // any data: image on parse. setImage() (used below) bypasses that on the
@@ -380,6 +438,37 @@ function TipTapEditor({ html, onChange, ariaLabel, placeholder }: RichTextEditor
           editor?.chain().focus().setTextSelection(writablePos).run();
           return true;
         },
+      },
+      // GH #344(c): checked BEFORE TipTap's own default paste handling ever
+      // parses the clipboard HTML — the html-embedded case is the actual
+      // exploit here, since browsers commonly hand a pasted screenshot to the
+      // editor as `text/html` with an already-inlined <img src="data:...">,
+      // not as a `Files` clipboard item. Returning true tells ProseMirror the
+      // paste was handled (nothing is inserted); returning false lets every
+      // other paste — text, a small/allowed image — proceed exactly as
+      // before this fix.
+      handlePaste: (_view, event) => {
+        const fileReason = rejectedImageFileReason(event.clipboardData?.files);
+        const html = event.clipboardData?.getData("text/html") ?? "";
+        const reason = fileReason ?? (html ? rejectedDataImageReason(html) : null);
+        if (!reason) return false;
+        event.preventDefault();
+        setImageError(t(imageRejectionMessageKey(reason)));
+        return true;
+      },
+      // Drop's exploitable surface is narrower (a same-origin in-page drag
+      // can carry a data: image in its own `text/html`, but an OS file drop —
+      // already routed to Composer.tsx's own attach-as-file handling — is the
+      // common case), so this mirrors handlePaste's same dual check rather
+      // than assuming only one surface matters.
+      handleDrop: (_view, event) => {
+        const fileReason = rejectedImageFileReason(event.dataTransfer?.files);
+        const html = event.dataTransfer?.getData("text/html") ?? "";
+        const reason = fileReason ?? (html ? rejectedDataImageReason(html) : null);
+        if (!reason) return false;
+        event.preventDefault();
+        setImageError(t(imageRejectionMessageKey(reason)));
+        return true;
       },
     },
     onUpdate: ({ editor: current }) => {

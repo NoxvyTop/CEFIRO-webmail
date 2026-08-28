@@ -388,6 +388,11 @@
     "removeRecipient": "Quitar {{email}}",
     "dropHint": "Suelta para adjuntar",
     "duplicateAttachment": "{{name}} ya fue adjuntado",
+    "retry": "Reintentar",
+    "remove": "Quitar",
+    "retryUpload": "Reintentar la subida de {{name}}",
+    "removeUpload": "Quitar {{name}}",
+    "uploadsPendingHint": "Espera a que terminen las subidas para poder enviar",
     "errors": {
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
@@ -401,6 +406,8 @@
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
+      "payload_too_large": "El archivo es demasiado grande",
+      "uploadsPending": "Espera a que terminen las subidas antes de enviar",
       "generic": "Ocurrió un error"
     },
     "draftWithAi": "✦ Redactar con IA",

@@ -13,7 +13,22 @@ import type { ComposerDraft } from "./reply";
 import { SIGNATURE_MARKER_ATTR, stripSignatureMarkers } from "./signature";
 
 export type Attachment = { blobId: string; name: string; type: string; size: number };
-export type PendingUpload = { id: string; name: string; size: number; progress: number; error: boolean };
+export type PendingUpload = {
+  id: string;
+  name: string;
+  size: number;
+  progress: number;
+  error: boolean;
+  // GH #344(b): the server's MailApiError code for a failed upload (null for
+  // a client-side/network failure with no server code at all), so the error
+  // card can resolve the real message — a 413 shows payload_too_large instead
+  // of the generic fallback every failure used to render as.
+  errorCode: string | null;
+  // GH #344(b): kept so a failed upload can be retried without asking the
+  // user to reselect the file — retryUpload() below re-issues the exact same
+  // upload against this reference.
+  file: File;
+};
 
 // GH #178: the idle window before an in-progress compose is autosaved. Long
 // enough that ordinary typing never triggers a save mid-word (the timer is
@@ -52,7 +67,9 @@ type Action =
   | { type: "addPendingUpload"; upload: PendingUpload }
   | { type: "setUploadProgress"; id: string; progress: number }
   | { type: "uploadSucceeded"; id: string; attachment: Attachment }
-  | { type: "uploadFailed"; id: string }
+  | { type: "uploadFailed"; id: string; code: string | null }
+  | { type: "uploadRetryStart"; id: string }
+  | { type: "removePendingUpload"; id: string }
   | { type: "removeAttachment"; blobId: string }
   | { type: "sendStart" }
   | { type: "sendFailed"; error: string }
@@ -91,8 +108,25 @@ function reducer(state: ComposerState, action: Action): ComposerState {
       return {
         ...state,
         uploads: state.uploads.map((upload) =>
-          upload.id === action.id ? { ...upload, error: true } : upload,
+          upload.id === action.id ? { ...upload, error: true, errorCode: action.code } : upload,
         ),
+      };
+    case "uploadRetryStart":
+      // GH #344(b): back to a live, non-error pending state immediately —
+      // the retry card must not keep showing the stale error while the new
+      // attempt is in flight.
+      return {
+        ...state,
+        uploads: state.uploads.map((upload) =>
+          upload.id === action.id
+            ? { ...upload, error: false, errorCode: null, progress: 0 }
+            : upload,
+        ),
+      };
+    case "removePendingUpload":
+      return {
+        ...state,
+        uploads: state.uploads.filter((upload) => upload.id !== action.id),
       };
     case "removeAttachment":
       return {
@@ -279,6 +313,37 @@ function extractDraftIntent(editable: string): string {
   return htmlToPlainText(doc.body.innerHTML).trim();
 }
 
+// GH #344(e): escapes the five ASCII characters that are ever structurally
+// significant when interpolated into an HTML source string — the same set
+// DOMPurify/browsers treat as needing escaping in text content and
+// attribute values. Used below so plain text the AI provider returns can
+// never be parsed back as markup once it lands in the composer's body.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// GH #344(e): the AI provider returns plain text with `\n` line breaks, and
+// the draft used to be injected verbatim as `<p>${body}</p>` — unescaped (any
+// literal `<`/`&`/etc. the model produced was parsed as markup instead of
+// shown as text, the same stored-content-shaped risk isSafeLinkUrl in
+// RichTextEditor.tsx already guards pasted links against) and with every line
+// collapsed into one run-on paragraph (a `\n` is not significant HTML
+// whitespace). Each non-blank line becomes its own escaped `<p>`; blank lines
+// are dropped rather than kept as empty paragraphs.
+function aiDraftBodyToHtml(body: string): string {
+  return body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("");
+}
+
 export function useComposer(
   initial: ComposerDraft,
   // Present when editing an existing draft (compose=draft:<id>, see
@@ -291,6 +356,8 @@ export function useComposer(
   setField<K extends keyof ComposerDraft>(key: K, value: ComposerDraft[K]): void;
   addFiles(files: File[]): { skipped: string[] };
   removeAttachment(blobId: string): void;
+  removePendingUpload(id: string): void;
+  retryUpload(id: string): void;
   send(): Promise<boolean>;
   saveDraft(): Promise<boolean>;
   discardDraft(): void;
@@ -486,6 +553,29 @@ export function useComposer(
     return `${name}␟${size}`;
   }
 
+  // GH #344(b): shared by the initial upload (addFiles below) and a retry
+  // off an already-errored card (retryUpload below) — both issue the exact
+  // same request against the exact same File, differing only in which
+  // dispatch already put the upload's row in state.uploads.
+  function runUpload(id: string, file: File): void {
+    uploadAttachment(file, (fraction) => {
+      dispatch({ type: "setUploadProgress", id, progress: fraction });
+    })
+      .then((result) => {
+        dispatch({
+          type: "uploadSucceeded",
+          id,
+          attachment: { blobId: result.blobId, name: file.name, type: result.type, size: result.size },
+        });
+      })
+      .catch((err) => {
+        // GH #344(b): keep the server's code (e.g. payload_too_large for a
+        // 413) so the error card can show the real message instead of the
+        // generic fallback every failure used to render as.
+        dispatch({ type: "uploadFailed", id, code: err instanceof MailApiError ? err.code : null });
+      });
+  }
+
   function addFiles(files: File[]): { skipped: string[] } {
     const seen = new Set<string>();
     for (const attachment of state.attachments) seen.add(fileSignature(attachment.name, attachment.size));
@@ -504,25 +594,30 @@ export function useComposer(
       const id = crypto.randomUUID();
       dispatch({
         type: "addPendingUpload",
-        upload: { id, name: file.name, size: file.size, progress: 0, error: false },
+        upload: { id, name: file.name, size: file.size, progress: 0, error: false, errorCode: null, file },
       });
-
-      uploadAttachment(file, (fraction) => {
-        dispatch({ type: "setUploadProgress", id, progress: fraction });
-      })
-        .then((result) => {
-          dispatch({
-            type: "uploadSucceeded",
-            id,
-            attachment: { blobId: result.blobId, name: file.name, type: result.type, size: result.size },
-          });
-        })
-        .catch(() => {
-          dispatch({ type: "uploadFailed", id });
-        });
+      runUpload(id, file);
     }
 
     return { skipped };
+  }
+
+  // GH #344(b): lets the user clear a failed upload's card without it
+  // lingering forever (previously the only outcome of a failed upload) — and,
+  // per emptiness.ts, a failed upload no longer counts as content anyway, so
+  // this is purely a tidy-up, not something that can silently discard work.
+  function removePendingUpload(id: string): void {
+    dispatch({ type: "removePendingUpload", id });
+  }
+
+  // GH #344(b): retries the exact same File a failed upload already picked,
+  // reusing runUpload so a retry is indistinguishable from a first attempt
+  // once it resolves.
+  function retryUpload(id: string): void {
+    const upload = state.uploads.find((candidate) => candidate.id === id);
+    if (!upload) return;
+    dispatch({ type: "uploadRetryStart", id });
+    runUpload(id, upload.file);
   }
 
   function removeAttachment(blobId: string): void {
@@ -530,9 +625,19 @@ export function useComposer(
   }
 
   async function send(): Promise<boolean> {
-    const { draft, attachments } = state;
+    const { draft, attachments, uploads } = state;
     if (draft.to.length + draft.cc.length + draft.bcc.length === 0) {
       dispatch({ type: "sendFailed", error: "composer.errors.noRecipients" });
+      return false;
+    }
+    // GH #344(a): send() used to read only `attachments`, so a file still
+    // uploading (no blobId yet — see addFiles below) silently never made it
+    // into the outgoing message. A FAILED upload does not block send: it
+    // already surfaced as a visible error card (PendingUploadCard) the user
+    // can remove or retry (GH #344b) — refusing to send over one they have
+    // no way to clear would trap the composer instead of protecting it.
+    if (uploads.some((upload) => !upload.error)) {
+      dispatch({ type: "sendFailed", error: "composer.errors.uploadsPending" });
       return false;
     }
 
@@ -662,7 +767,7 @@ export function useComposer(
       const body = await fetchAiDraft({ intent, subject, context });
       // Replace the composed body with the generated draft, keeping the quoted
       // reply tail intact so a reply's original message is not lost.
-      dispatch({ type: "aiDraftSucceeded", bodyHtml: joinQuotedTail(`<p>${body}</p>`, quoted) });
+      dispatch({ type: "aiDraftSucceeded", bodyHtml: joinQuotedTail(aiDraftBodyToHtml(body), quoted) });
     } catch (err) {
       if (err instanceof MailApiError && err.code === "ai_disabled") {
         // Software-level gate is off — hide the feature rather than showing
@@ -675,5 +780,16 @@ export function useComposer(
     }
   }
 
-  return { state, setField, addFiles, removeAttachment, send, saveDraft, discardDraft, draftWithAi };
+  return {
+    state,
+    setField,
+    addFiles,
+    removeAttachment,
+    removePendingUpload,
+    retryUpload,
+    send,
+    saveDraft,
+    discardDraft,
+    draftWithAi,
+  };
 }

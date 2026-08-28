@@ -80,6 +80,94 @@ describe("useComposer", () => {
     expect(result.current.state.uploads[0]?.name).toBe("b.png");
   });
 
+  // GH #344(b): a failed upload used to have no `code` at all — the card
+  // always rendered composer.errors.generic, so a 413 (payload too large)
+  // looked identical to a network blip. The MailApiError's code now survives
+  // onto the pending upload so PendingUploadCard can resolve the real key.
+  it("addFiles: error path preserves the server's MailApiError code", async () => {
+    uploadAttachment.mockRejectedValueOnce(new MailApiError(413, "payload_too_large"));
+    const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+    act(() => {
+      result.current.addFiles([new File(["hello"], "big.png", { type: "image/png" })]);
+    });
+
+    await waitFor(() => expect(result.current.state.uploads[0]?.error).toBe(true));
+    expect(result.current.state.uploads[0]?.errorCode).toBe("payload_too_large");
+  });
+
+  it("addFiles: error path falls back to a null code for a non-MailApiError failure", async () => {
+    uploadAttachment.mockRejectedValueOnce(new Error("boom"));
+    const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+    act(() => {
+      result.current.addFiles([new File(["hello"], "c.png", { type: "image/png" })]);
+    });
+
+    await waitFor(() => expect(result.current.state.uploads[0]?.error).toBe(true));
+    expect(result.current.state.uploads[0]?.errorCode).toBeNull();
+  });
+
+  describe("removePendingUpload (#344b)", () => {
+    it("removes a failed upload from state.uploads", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "b.png", { type: "image/png" })]);
+      });
+      await waitFor(() => expect(result.current.state.uploads[0]?.error).toBe(true));
+      const id = result.current.state.uploads[0]!.id;
+
+      act(() => {
+        result.current.removePendingUpload(id);
+      });
+
+      expect(result.current.state.uploads).toHaveLength(0);
+    });
+  });
+
+  describe("retryUpload (#344b)", () => {
+    it("re-uploads the same file and clears the error on success", async () => {
+      uploadAttachment.mockReset();
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "b.png", { type: "image/png" })]);
+      });
+      await waitFor(() => expect(result.current.state.uploads[0]?.error).toBe(true));
+      const id = result.current.state.uploads[0]!.id;
+
+      uploadAttachment.mockResolvedValueOnce({ blobId: "blob1", type: "image/png", size: 5 });
+      act(() => {
+        result.current.retryUpload(id);
+      });
+
+      // Immediately back to a non-error pending state, not left showing the
+      // stale error while the retry is in flight.
+      expect(result.current.state.uploads[0]?.error).toBe(false);
+
+      await waitFor(() => expect(result.current.state.attachments).toHaveLength(1));
+      expect(result.current.state.attachments[0]).toEqual({
+        blobId: "blob1", name: "b.png", type: "image/png", size: 5,
+      });
+      expect(result.current.state.uploads).toHaveLength(0);
+      expect(uploadAttachment).toHaveBeenCalledTimes(2);
+    });
+
+    it("does nothing for an id that is not a pending upload", async () => {
+      uploadAttachment.mockReset();
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+      act(() => {
+        result.current.retryUpload("does-not-exist");
+      });
+
+      expect(uploadAttachment).not.toHaveBeenCalled();
+    });
+  });
+
   describe("addFiles: dedup (#114)", () => {
     // These tests assert exact uploadAttachment call counts, so the shared
     // mock (accumulated across earlier tests in this file) must start clean.
@@ -176,6 +264,89 @@ describe("useComposer", () => {
     expect(sent).toBe(false);
     expect(result.current.state.sendError).toBe("composer.errors.noRecipients");
     expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  // GH #344(a): send() used to build its payload from `attachments` only,
+  // silently ignoring `state.uploads` — a message could leave without the
+  // file the user was still watching upload. Blocking here is the hook-level
+  // guard; Composer.tsx also disables the Send button while an upload is in
+  // flight (defense in depth, not the only guard).
+  describe("send: blocks while an upload is still in flight (#344a)", () => {
+    beforeEach(() => {
+      sendEmail.mockReset();
+      uploadAttachment.mockReset();
+    });
+
+    it("does not call sendEmail while a non-error upload is pending", async () => {
+      uploadAttachment.mockReturnValueOnce(new Promise(() => {})); // never resolves
+      const draft: ComposerDraft = { ...baseDraft(), to: [{ name: "Bob", email: "bob@example.com" }] };
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "a.png", { type: "image/png" })]);
+      });
+      expect(result.current.state.uploads).toHaveLength(1);
+
+      let sent: boolean | undefined;
+      await act(async () => {
+        sent = await result.current.send();
+      });
+
+      expect(sent).toBe(false);
+      expect(result.current.state.sendError).toBe("composer.errors.uploadsPending");
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it("does not block on a FAILED upload — only a genuinely in-flight one", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      sendEmail.mockResolvedValueOnce(undefined);
+      const draft: ComposerDraft = { ...baseDraft(), to: [{ name: "Bob", email: "bob@example.com" }] };
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "a.png", { type: "image/png" })]);
+      });
+      await waitFor(() => expect(result.current.state.uploads[0]?.error).toBe(true));
+
+      let sent: boolean | undefined;
+      await act(async () => {
+        sent = await result.current.send();
+      });
+
+      expect(sent).toBe(true);
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends normally once the pending upload resolves", async () => {
+      let resolveUpload: (value: { blobId: string; type: string; size: number }) => void = () => {};
+      uploadAttachment.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveUpload = resolve;
+        }),
+      );
+      sendEmail.mockResolvedValueOnce(undefined);
+      const draft: ComposerDraft = { ...baseDraft(), to: [{ name: "Bob", email: "bob@example.com" }] };
+      const { result } = renderHook(() => useComposer(draft), { wrapper });
+
+      act(() => {
+        result.current.addFiles([new File(["hello"], "a.png", { type: "image/png" })]);
+      });
+
+      await act(async () => {
+        resolveUpload({ blobId: "blob1", type: "image/png", size: 5 });
+      });
+      await waitFor(() => expect(result.current.state.uploads).toHaveLength(0));
+
+      let sent: boolean | undefined;
+      await act(async () => {
+        sent = await result.current.send();
+      });
+
+      expect(sent).toBe(true);
+      expect(sendEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [{ blobId: "blob1", name: "a.png", type: "image/png" }] }),
+      );
+    });
   });
 
   it("send: happy path calls sendEmail with the mapped input and returns true", async () => {
@@ -378,6 +549,39 @@ describe("useComposer", () => {
       expect(result.current.state.aiDraftError).toBeNull();
       expect(result.current.state.aiDraftNotice).toBe(true);
       expect(result.current.state.draft.bodyHtml).toContain("Estimado equipo, este es el borrador.");
+    });
+
+    // GH #344(e): the AI-generated draft used to be injected as raw
+    // `<p>${body}</p>` — the provider's text landing directly in the
+    // ProseMirror HTML source with no escaping, so a literal `<`/`&`/etc. in
+    // a generated draft was parsed as markup instead of shown as text.
+    it("escapes HTML special characters in the AI-generated body instead of injecting them as markup", async () => {
+      fetchAiDraft.mockResolvedValueOnce('Hola <b>mundo</b> & "amigos"');
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      const { bodyHtml } = result.current.state.draft;
+      expect(bodyHtml).not.toContain("<b>mundo</b>");
+      expect(bodyHtml).toContain("Hola &lt;b&gt;mundo&lt;/b&gt; &amp; &quot;amigos&quot;");
+    });
+
+    // GH #344(e): the provider returns plain text with `\n` line breaks,
+    // which the old bare wrap collapsed into one run-on paragraph.
+    it("converts newlines in the AI-generated body into separate paragraphs", async () => {
+      fetchAiDraft.mockResolvedValueOnce("Primera línea.\nSegunda línea.\n\nTercera línea.");
+      const { result } = renderHook(() => useComposer(baseDraft()), { wrapper });
+
+      await act(async () => {
+        await result.current.draftWithAi();
+      });
+
+      const { bodyHtml } = result.current.state.draft;
+      expect(bodyHtml).toContain("<p>Primera línea.</p>");
+      expect(bodyHtml).toContain("<p>Segunda línea.</p>");
+      expect(bodyHtml).toContain("<p>Tercera línea.</p>");
     });
 
     it("omits the subject hint when the subject is blank", async () => {
