@@ -104,10 +104,26 @@ describe("SignatureSettings", () => {
 
       await screen.findByLabelText(i18n.t("settings.name"));
       fetchSignatures.mockResolvedValue([]);
+      // #348: deleting is irreversible — the first click only asks for
+      // confirmation (two-step confirm, like Sidebar's label delete).
       fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.delete") }));
+      expect(deleteSignature).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.confirmDeleteAction") }));
 
       await waitFor(() => expect(deleteSignature).toHaveBeenCalledWith("sig1"));
       await waitFor(() => expect(screen.getByLabelText(i18n.t("settings.name"))).toHaveValue(""));
+    });
+
+    it("cancels the delete confirmation without deleting", async () => {
+      deleteSignature.mockClear();
+      renderSettings([signature]);
+
+      await screen.findByLabelText(i18n.t("settings.name"));
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.delete") }));
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.cancelDelete") }));
+
+      expect(deleteSignature).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: i18n.t("settings.delete") })).toBeInTheDocument();
     });
 
     it("toggling the default checkbox and saving still works from the edit-first view", async () => {
@@ -182,6 +198,7 @@ describe("SignatureSettings", () => {
 
       await screen.findByText("Alt");
       fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[1]!);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.confirmDeleteAction") }));
 
       await waitFor(() => expect(deleteSignature).toHaveBeenCalledWith("sig2"));
     });
@@ -193,6 +210,7 @@ describe("SignatureSettings", () => {
       await screen.findByText("Alt");
       fetchSignatures.mockResolvedValue([signature]);
       fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[1]!);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.confirmDeleteAction") }));
 
       await waitFor(() => expect(deleteSignature).toHaveBeenCalledWith("sig2"));
       await waitFor(() => expect(screen.getByLabelText(i18n.t("settings.name"))).toHaveValue("Default"));
@@ -309,9 +327,15 @@ describe("SignatureSettings", () => {
 
       await screen.findByText("Alt");
       fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[1]!);
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.confirmDeleteAction") }));
 
       expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("settings.errors.generic"));
-      expect(screen.getByText("Alt")).toBeInTheDocument();
+      // The signature itself was never removed — still in the list, even
+      // though its row is still showing the (still-open) confirm prompt.
+      expect(
+        screen.getByText(i18n.t("settings.confirmDeleteSignatureQuestion", { name: "Alt" })),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Default")).toBeInTheDocument();
     });
 
     it("clears the alert once a later save succeeds", async () => {

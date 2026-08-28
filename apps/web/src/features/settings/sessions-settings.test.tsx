@@ -109,16 +109,37 @@ describe("SessionsSettings", () => {
     expect(screen.getByText("Chrome · Windows")).toBeInTheDocument();
   });
 
-  it("closes every other session via the bulk action", async () => {
+  it("closes every other session via the bulk action, after confirming", async () => {
     revokeOtherSessions.mockResolvedValueOnce(1);
     renderSettings([current, other]);
 
     await screen.findByText("Safari · iOS");
     fetchSessions.mockResolvedValue([current]);
+    // #348: a bulk destructive action — first click only asks for
+    // confirmation (two-step confirm, matching Sidebar's label delete).
     fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.sessions.closeOthers") }));
+    expect(revokeOtherSessions).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("settings.sessions.confirmCloseOthersAction") }),
+    );
 
     await waitFor(() => expect(revokeOtherSessions).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByText("Safari · iOS")).not.toBeInTheDocument());
+  });
+
+  it("cancels the close-others confirmation without revoking anything", async () => {
+    renderSettings([current, other]);
+
+    await screen.findByText("Safari · iOS");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.sessions.closeOthers") }));
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("settings.sessions.cancelCloseOthers") }),
+    );
+
+    expect(revokeOtherSessions).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: i18n.t("settings.sessions.closeOthers") }),
+    ).toBeInTheDocument();
   });
 
   it("hides the bulk action and any Close button when only the current session exists", async () => {

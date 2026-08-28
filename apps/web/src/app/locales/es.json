@@ -72,7 +72,10 @@
       "role": "Rol",
       "archive": "Archivar",
       "reactivate": "Reactivar",
-      "confirmArchive": "Confirmar archivado"
+      "confirmArchive": "Confirmar archivado",
+      "confirmRoleChangeQuestion": "¿Cambiar el rol a {{role}}?",
+      "confirmRoleChange": "Confirmar",
+      "cancelRoleChange": "Cancelar"
     },
     "new": {
       "title": "Nuevo usuario",
@@ -487,7 +490,10 @@
       "lastActivity": "Última actividad: {{time}}",
       "location": "IP aproximada: {{ip}}",
       "close": "Cerrar",
-      "closeOthers": "Cerrar las demás"
+      "closeOthers": "Cerrar las demás",
+      "confirmCloseOthersQuestion": "¿Cerrar sesión en todos los demás dispositivos?",
+      "confirmCloseOthersAction": "Cerrar las demás",
+      "cancelCloseOthers": "Cancelar"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
@@ -499,6 +505,9 @@
     "save": "Guardar",
     "saved": "Guardado",
     "delete": "Eliminar",
+    "confirmDeleteSignatureQuestion": "¿Eliminar la firma «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar",
     "edit": "Editar",
     "retry": "Reintentar",
     "errors": {
@@ -519,6 +528,9 @@
   "filters": {
     "title": "Filtros",
     "newRule": "Nueva regla",
+    "confirmDeleteRuleQuestion": "¿Eliminar la regla «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar",
     "name": "Nombre",
     "matchType": "Coincidencia",
     "matchAll": "Todas las condiciones",

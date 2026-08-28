@@ -166,9 +166,24 @@ describe("FilterSettings", () => {
 
     await screen.findByText("invoices");
     const deleteButtons = screen.getAllByRole("button", { name: i18n.t("settings.delete") });
+    // #348: deleting a rule is irreversible — the first click only asks for
+    // confirmation (two-step confirm, matching Sidebar's label delete).
     fireEvent.click(deleteButtons[0]!);
+    expect(deleteFilterRule).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.confirmDeleteAction") }));
 
     await waitFor(() => expect(deleteFilterRule).toHaveBeenCalledWith("a"));
+  });
+
+  it("cancels the delete confirmation without deleting a rule", async () => {
+    renderFilters();
+
+    await screen.findByText("invoices");
+    fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.cancelDelete") }));
+
+    expect(deleteFilterRule).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: i18n.t("settings.delete") })).toHaveLength(2);
   });
 
   it("shows the sync-failed banner with a working retry button", async () => {
@@ -178,6 +193,7 @@ describe("FilterSettings", () => {
 
     await screen.findByText("invoices");
     fireEvent.click(screen.getAllByRole("button", { name: i18n.t("settings.delete") })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("filters.confirmDeleteAction") }));
 
     const banner = await screen.findByRole("alert");
     expect(banner).toHaveTextContent(i18n.t("settings.errors.sieve_sync_failed"));

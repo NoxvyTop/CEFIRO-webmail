@@ -30,6 +30,12 @@ export function SignatureSettings() {
   // data (which it would otherwise do, since the draft isn't saved yet and
   // still counts as "one signature" from the query's point of view).
   const [creatingAdditional, setCreatingAdditional] = useState(false);
+  // #348: deleting a signature is irreversible — mirrors Sidebar.tsx's
+  // inline two-step confirm for deleting a label (GH #103) rather than
+  // deleting on the first click. Shared by both the list-view row delete
+  // button and the edit-first view's delete button, since only one of the
+  // two is ever rendered at a time.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   // GH #148: the last failed create/edit/delete, or null. Held here rather than
   // read off the three mutations' own `error` fields because those keep their
   // last failure until the SAME mutation runs again — a create that failed
@@ -51,6 +57,7 @@ export function SignatureSettings() {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setCreatingAdditional(false);
+    setConfirmingDeleteId(null);
   }
 
   // A new attempt clears the previous verdict, so the alert on screen always
@@ -82,7 +89,10 @@ export function SignatureSettings() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteSignature(id),
     onMutate: beginMutation,
-    onSuccess: () => invalidateSignatures(),
+    onSuccess: async () => {
+      setConfirmingDeleteId(null);
+      await invalidateSignatures();
+    },
     onError: (error) => setMutationError(error),
   });
 
@@ -116,6 +126,7 @@ export function SignatureSettings() {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setFormOpen(true);
+    setConfirmingDeleteId(null);
   }
 
   // Reached from the edit-first view via the "New signature" button — starts
@@ -131,6 +142,7 @@ export function SignatureSettings() {
     setEditingId(signature.id);
     setForm({ name: signature.name, contentHtml: signature.contentHtml, isDefault: signature.isDefault });
     setFormOpen(true);
+    setConfirmingDeleteId(null);
   }
 
   function handleSubmit(event: FormEvent) {
@@ -180,30 +192,54 @@ export function SignatureSettings() {
               key={signature.id}
               className="flex items-center justify-between gap-2 rounded-md border border-line p-2 text-sm"
             >
-              <div className="flex items-center gap-2">
-                <span>{signature.name}</span>
-                {signature.isDefault && (
-                  <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent-text">
-                    {t("settings.default")}
+              {confirmingDeleteId === signature.id ? (
+                <div className="flex flex-1 flex-wrap items-center gap-2">
+                  <span className="flex-1 text-warn">
+                    {t("settings.confirmDeleteSignatureQuestion", { name: signature.name })}
                   </span>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => startEdit(signature)}
-                  className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
-                >
-                  {t("settings.edit")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteMutation.mutate(signature.id)}
-                  className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
-                >
-                  {t("settings.delete")}
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteMutation.mutate(signature.id)}
+                    className="rounded-[9px] px-2 py-1 text-xs font-semibold text-warn transition hover:bg-hover"
+                  >
+                    {t("settings.confirmDeleteAction")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDeleteId(null)}
+                    className="rounded-[9px] px-2 py-1 text-xs text-muted transition hover:bg-hover"
+                  >
+                    {t("settings.cancelDelete")}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span>{signature.name}</span>
+                    {signature.isDefault && (
+                      <span className="rounded-full bg-sel px-2 py-0.5 text-xs text-accent-text">
+                        {t("settings.default")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(signature)}
+                      className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
+                    >
+                      {t("settings.edit")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingDeleteId(signature.id)}
+                      className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
+                    >
+                      {t("settings.delete")}
+                    </button>
+                  </div>
+                </>
+              )}
             </li>
           ))}
         </ul>
@@ -256,15 +292,38 @@ export function SignatureSettings() {
             {t("settings.default")}
           </label>
 
-          <div className="flex justify-end gap-2">
-            {!isListView && editingId && (
-              <button
-                type="button"
-                onClick={() => deleteMutation.mutate(editingId)}
-                className="mr-auto rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
-              >
-                {t("settings.delete")}
-              </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {!isListView && editingId && confirmingDeleteId === editingId ? (
+              <div className="mr-auto flex flex-wrap items-center gap-2">
+                <span className="text-sm text-warn">
+                  {t("settings.confirmDeleteSignatureQuestion", { name: form.name })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => deleteMutation.mutate(editingId)}
+                  className="rounded-[9px] border border-line-strong px-3 py-1 text-sm font-semibold text-warn transition hover:border-accent hover:bg-hover"
+                >
+                  {t("settings.confirmDeleteAction")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDeleteId(null)}
+                  className="rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+                >
+                  {t("settings.cancelDelete")}
+                </button>
+              </div>
+            ) : (
+              !isListView &&
+              editingId && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDeleteId(editingId)}
+                  className="mr-auto rounded-[9px] border border-line-strong px-3 py-1 text-sm transition hover:border-accent hover:bg-hover"
+                >
+                  {t("settings.delete")}
+                </button>
+              )
             )}
             <button
               type="button"

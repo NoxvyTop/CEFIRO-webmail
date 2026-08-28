@@ -72,7 +72,10 @@
       "role": "Role",
       "archive": "Archive",
       "reactivate": "Reactivate",
-      "confirmArchive": "Confirm archive"
+      "confirmArchive": "Confirm archive",
+      "confirmRoleChangeQuestion": "Change the role to {{role}}?",
+      "confirmRoleChange": "Confirm",
+      "cancelRoleChange": "Cancel"
     },
     "new": {
       "title": "New user",
@@ -487,7 +490,10 @@
       "lastActivity": "Last activity: {{time}}",
       "location": "Approx. IP: {{ip}}",
       "close": "Close",
-      "closeOthers": "Close the others"
+      "closeOthers": "Close the others",
+      "confirmCloseOthersQuestion": "Sign out of every other device?",
+      "confirmCloseOthersAction": "Close the others",
+      "cancelCloseOthers": "Cancel"
     },
     "newSignature": "New signature",
     "name": "Name",
@@ -499,6 +505,9 @@
     "save": "Save",
     "saved": "Saved",
     "delete": "Delete",
+    "confirmDeleteSignatureQuestion": "Delete the signature \"{{name}}\"? This can't be undone.",
+    "confirmDeleteAction": "Delete permanently",
+    "cancelDelete": "Cancel",
     "edit": "Edit",
     "retry": "Try again",
     "errors": {
@@ -519,6 +528,9 @@
   "filters": {
     "title": "Filters",
     "newRule": "New rule",
+    "confirmDeleteRuleQuestion": "Delete the rule \"{{name}}\"? This can't be undone.",
+    "confirmDeleteAction": "Delete permanently",
+    "cancelDelete": "Cancel",
     "name": "Name",
     "matchType": "Match",
     "matchAll": "All conditions",
