@@ -133,6 +133,9 @@ describe("AdminPage users table", () => {
     fireEvent.click(within(row).getByRole("button", { name: i18n.t("admin.actions.linkMailbox") }));
 
     const passwordInput = within(row).getByLabelText(i18n.t("admin.actions.linkMailbox"));
+    // #348: a mailbox credential, not the admin's own login — must not be
+    // offered as an autofill candidate for the admin's saved password.
+    expect(passwordInput).toHaveAttribute("autocomplete", "new-password");
     fireEvent.change(passwordInput, { target: { value: "supersecret1" } });
     fireEvent.click(within(row).getByRole("button", { name: i18n.t("admin.actions.saveCredential") }));
 

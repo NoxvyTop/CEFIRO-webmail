@@ -86,7 +86,11 @@ describe("setup page", () => {
       target: { value: "https://auth.noxvytop.com" },
     });
     fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "webmail" } });
-    fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "secret-1" } });
+    const clientSecretInput = screen.getByLabelText("Client Secret");
+    // #348: not a login credential — the browser must not offer to save this
+    // as a password, nor autofill an unrelated saved password into it.
+    expect(clientSecretInput).toHaveAttribute("autocomplete", "off");
+    fireEvent.change(clientSecretInput, { target: { value: "secret-1" } });
     fireEvent.click(screen.getByText("Guardar"));
 
     await waitFor(() => {

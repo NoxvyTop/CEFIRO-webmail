@@ -166,6 +166,12 @@ describe("the admin console explains WHY an action was refused (GH #46)", () => 
     fireEvent.change(screen.getByLabelText(i18n.t("admin.new.name")), {
       target: { value: "Taken" },
     });
+    // #348: the new mailbox's password, not the admin's own login — must not
+    // be offered as an autofill candidate for the admin's saved password.
+    expect(screen.getByLabelText(i18n.t("admin.new.mailPassword"))).toHaveAttribute(
+      "autocomplete",
+      "new-password",
+    );
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.new.create") }));
 
     expect(await screen.findByText(i18n.t("admin.errors.user_exists"))).toBeInTheDocument();

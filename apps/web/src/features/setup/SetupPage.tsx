@@ -218,6 +218,7 @@ export function SetupPage() {
             <input
               id="sso-client-secret"
               type="password"
+              autoComplete="off"
               value={sso.clientSecret}
               onChange={(event) => setSso({ ...sso, clientSecret: event.target.value })}
               className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"

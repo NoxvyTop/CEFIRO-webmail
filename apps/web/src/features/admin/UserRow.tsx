@@ -129,6 +129,7 @@ export function UserRow({ user }: { user: AdminUser }) {
             <form onSubmit={handleCredentialSubmit} className="flex items-center gap-1">
               <input
                 type="password"
+                autoComplete="new-password"
                 aria-label={t("admin.actions.linkMailbox")}
                 minLength={8}
                 required
