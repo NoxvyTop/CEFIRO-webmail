@@ -62,6 +62,33 @@ export async function getExistingPushSubscription(): Promise<PushSubscription | 
   return registration.pushManager.getSubscription();
 }
 
+/**
+ * Re-announce this device's existing subscription to the server, and report
+ * whether the device has one at all (GH #337).
+ *
+ * The settings panel used to read the browser alone: a `PushSubscription`
+ * object was taken as proof the server would push here. It is not — the row
+ * can be gone (pruned after a `410`, lost with a restore, dropped when the
+ * endpoint was re-pointed at another user) while the browser still holds a
+ * perfectly valid subscription, and the user is then shown "enabled on this
+ * device" for a device that will never be pushed to again.
+ *
+ * `POST /api/push/subscribe` is an upsert by endpoint, so re-posting on load is
+ * idempotent and cheap. A failed POST is swallowed on purpose: the device IS
+ * subscribed in the browser, and saying otherwise because the network blinked
+ * would ask the user to re-grant a permission they already gave.
+ */
+export async function resyncPushSubscription(): Promise<boolean> {
+  const subscription = await getExistingPushSubscription();
+  if (!subscription) return false;
+  try {
+    await subscribePush(subscription.toJSON() as PushSubscriptionInput);
+  } catch {
+    // non-fatal — the browser subscription stands whatever the server said
+  }
+  return true;
+}
+
 export type EnablePushOutcome = "subscribed" | "denied" | "unsupported" | "unavailable";
 
 /**

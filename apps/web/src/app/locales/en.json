@@ -211,6 +211,10 @@
     "newMailNotification": "New mail",
     "liveUpdatesLimited": "Live updates are limited in this tab because too many are open. Close another tab and reload to resume here.",
     "enableNotifications": "Enable notifications",
+    "notificationsBlocked": "Alerts blocked by the browser",
+    "newMailNotificationBody_one": "{{count}} unread message in the inbox",
+    "newMailNotificationBody_other": "{{count}} unread messages in the inbox",
+    "unreadTitle": "({{count}}) Céfiro",
     "resizeList": "Resize message list",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
@@ -582,6 +586,16 @@
     "enabledOnThisDevice": "Notifications enabled on this device",
     "working": "One moment…",
     "unsupported": "Your browser does not support push notifications.",
+    "unavailableOnServer": "Background notifications are not available on this server.",
+    "pushTitle": "In the background",
+    "browser": {
+      "title": "Alerts while Céfiro is open",
+      "description": "Show a system alert when new mail reaches your inbox and the tab is not in the foreground.",
+      "enable": "Allow alerts",
+      "granted": "Alerts allowed in this browser",
+      "denied": "Alerts blocked in this browser. Re-allow them from your browser settings.",
+      "unsupported": "This browser does not support system alerts."
+    },
     "errors": {
       "permissionDenied": "Notification permission was not granted. Enable it in your browser settings.",
       "unavailable": "Notifications are not available right now. Try again.",

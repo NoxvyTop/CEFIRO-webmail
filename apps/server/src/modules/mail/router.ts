@@ -28,6 +28,7 @@ import { currentLogContext, log, withLogContext } from "../../core/logger";
 import { requireMail, type MailDeps, type MailVariables } from "./context";
 import { harvestOnMailArrival } from "./contacts-harvest";
 import { tapEmailStateChanges } from "./contacts-harvest-stream";
+import { createNewMailNotifier } from "../push/new-mail";
 import { deriveSenderAuthFacts } from "./sender-auth";
 import { resolveSenderTrust } from "./sender-trust";
 import { backfillSentRecipients } from "./sent-recipients-backfill";
@@ -777,33 +778,66 @@ export function createMailRouter(deps: MailDeps) {
     // of messages landing in Sent — mail sent from other clients that never
     // passes through POST /send below). Either store alone is enough to tap;
     // with neither wired the stream is proxied untouched, exactly as before.
+    //
+    // GH #337: the same tap is now also where Web Push is EMITTED. The delivery
+    // slice of #294 shipped a `PushSender` nothing ever called; this is the
+    // caller, and it is the design doc's "camino B" trigger (an Email state
+    // advance on the EventSource subscription) rather than a webhook that is
+    // still blocked on a Stalwart payload spike. Wired only when a push client
+    // and a subscription store are both present, so a deployment without VAPID
+    // keys taps exactly what it used to.
     const contacts = deps.contacts;
     const sentRecipients = deps.sentRecipients;
     const jmap = deps.jmap;
-    if ((contacts || sentRecipients) && jmap) {
+    if (jmap) {
       const user = streamUser;
       const auth = c.get("jmapAuth");
-      // The harvest runs whenever mail arrives, which is long after this
-      // handler returned — carry the request's log context with it so its
-      // diagnostics are still findable by this stream's traceId (GH #219).
-      const logContext = currentLogContext();
-      const tapped = tapEmailStateChanges({
-        source: upstream.body,
-        accountId: session.accountId,
-        onEmailStateChange: () =>
-          withLogContext(logContext, () =>
-            harvestOnMailArrival({
-              contacts,
-              sentRecipients,
-              jmap,
-              auth,
-              session,
-              userId: user.userId,
-              ownerEmail: user.email,
+      const harvest =
+        contacts || sentRecipients
+          ? () =>
+              harvestOnMailArrival({
+                contacts,
+                sentRecipients,
+                jmap,
+                auth,
+                session,
+                userId: user.userId,
+                ownerEmail: user.email,
+              })
+          : undefined;
+      const notifyPush = deps.pushSubscriptions
+        ? createNewMailNotifier({
+            pushClient: deps.pushClient ?? null,
+            pushSubscriptions: deps.pushSubscriptions,
+            jmap,
+            auth,
+            session,
+            userId: user.userId,
+          })
+        : undefined;
+
+      if (harvest || notifyPush) {
+        // Both side effects run whenever mail arrives, which is long after this
+        // handler returned — carry the request's log context with them so their
+        // diagnostics are still findable by this stream's traceId (GH #219).
+        const logContext = currentLogContext();
+        const tapped = tapEmailStateChanges({
+          source: upstream.body,
+          accountId: session.accountId,
+          onEmailStateChange: (change) =>
+            withLogContext(logContext, async () => {
+              // Concurrently and independently: each swallows its own failures,
+              // and neither is allowed to delay or break the other (a slow
+              // harvest must not hold back the notification a phone is waiting
+              // for). allSettled makes that structural rather than a promise.
+              await Promise.allSettled([
+                harvest ? harvest() : undefined,
+                notifyPush ? notifyPush(change) : undefined,
+              ]);
             }),
-          ),
-      });
-      return new Response(guardStream({ source: tapped, handle: stream }), { headers });
+        });
+        return new Response(guardStream({ source: tapped, handle: stream }), { headers });
+      }
     }
 
     return new Response(guardStream({ source: upstream.body, handle: stream }), { headers });

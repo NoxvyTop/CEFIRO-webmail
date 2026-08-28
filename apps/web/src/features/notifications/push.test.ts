@@ -4,6 +4,7 @@ import {
   enablePush,
   getExistingPushSubscription,
   isPushSupported,
+  resyncPushSubscription,
   urlBase64ToUint8Array,
 } from "./push";
 import { fetchVapidPublicKey, subscribePush, unsubscribePush } from "./pushApi";
@@ -143,5 +144,35 @@ describe("getExistingPushSubscription / disablePush", () => {
     stubSupportedBrowser({ getSubscription: async () => null });
     await disablePush();
     expect(unsubscribePushMock).not.toHaveBeenCalled();
+  });
+});
+
+// GH #337: the panel used to trust the browser alone ("this device has a
+// PushSubscription, therefore the server knows about it"). A server that lost
+// the row — restored backup, pruned as expired, a user re-linked on another
+// machine — then never pushed again, and nothing in the UI said so.
+describe("resyncPushSubscription", () => {
+  it("re-posts this device's existing subscription to the server", async () => {
+    const sub = { endpoint: SUBSCRIPTION_JSON.endpoint, toJSON: () => SUBSCRIPTION_JSON };
+    stubSupportedBrowser({ getSubscription: async () => sub });
+    subscribePushMock.mockResolvedValue(undefined);
+
+    expect(await resyncPushSubscription()).toBe(true);
+    expect(subscribePushMock).toHaveBeenCalledWith(SUBSCRIPTION_JSON);
+  });
+
+  it("reports no subscription without calling the server", async () => {
+    stubSupportedBrowser({ getSubscription: async () => null });
+
+    expect(await resyncPushSubscription()).toBe(false);
+    expect(subscribePushMock).not.toHaveBeenCalled();
+  });
+
+  it("still reports the device as subscribed when the re-post fails", async () => {
+    const sub = { endpoint: SUBSCRIPTION_JSON.endpoint, toJSON: () => SUBSCRIPTION_JSON };
+    stubSupportedBrowser({ getSubscription: async () => sub });
+    subscribePushMock.mockRejectedValue(new Error("offline"));
+
+    expect(await resyncPushSubscription()).toBe(true);
   });
 });
