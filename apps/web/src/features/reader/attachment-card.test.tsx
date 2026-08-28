@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AttachmentMeta } from "@webmail/shared";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
-import { AttachmentCard, attachmentThumbnailKind } from "./AttachmentCard";
+import { AttachmentCard, attachmentThumbnailKind, formatSizeKb } from "./AttachmentCard";
 
 // PdfThumbnail itself does real pdf.js work (covered separately, with its
 // own dynamic-import mocking, in pdf-thumbnail.test.tsx) — here we only care
@@ -253,5 +253,26 @@ describe("AttachmentCard", () => {
 
       expect(onRemove).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// #348: formatSizeKb printed "1024.0 KB" instead of rolling over to MB once
+// a file crossed the 1 MB mark — Intl.NumberFormat, plus a KB/MB switch,
+// fixes both the ugly trailing zero and the missing unit rollover.
+describe("formatSizeKb", () => {
+  it("formats a sub-1MB size in KB", () => {
+    expect(formatSizeKb(2048)).toBe("2 KB");
+  });
+
+  it("keeps one decimal for a fractional KB size", () => {
+    expect(formatSizeKb(1536)).toBe("1.5 KB");
+  });
+
+  it("rolls over to MB at the 1 MB boundary instead of printing 1024 KB", () => {
+    expect(formatSizeKb(1024 * 1024)).toBe("1 MB");
+  });
+
+  it("formats a multi-MB size in MB with a decimal, not thousands of KB", () => {
+    expect(formatSizeKb(1024 * 1024 * 5.5)).toBe("5.5 MB");
   });
 });

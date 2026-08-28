@@ -371,6 +371,25 @@ describe("ThreadView", () => {
 
       expect(await screen.findByText("11:05")).toBeInTheDocument();
     });
+
+    // #348: the compact "11:05"/"Ayer"/"13 jul" label is meant to be
+    // skimmed — the exact date/time must still be available on demand.
+    it("carries the full absolute date/time as a title attribute on the compact label", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.receivedAt = new Date(2026, 6, 21, 11, 5, 0).toISOString();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const dateLabel = await screen.findByText("11:05");
+      expect(dateLabel).toHaveAttribute("title", expect.stringContaining("2026"));
+    });
   });
 
   it("keeps action buttons from wrapping and lets the hint shrink so it truncates as a unit", async () => {

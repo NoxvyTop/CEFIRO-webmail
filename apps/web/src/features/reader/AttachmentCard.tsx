@@ -85,8 +85,20 @@ function attachmentIconFor(type: string) {
   return FileGenericIcon;
 }
 
-function formatSizeKb(size: number) {
-  return `${(size / 1024).toFixed(1)} KB`;
+// #348: printed "1024.0 KB" for a 1MB+ attachment instead of rolling over to
+// MB — Intl.NumberFormat drops the trailing ".0" for a whole number, and the
+// KB/MB switch at the 1MB boundary keeps the number itself from ever reading
+// as "a thousand-plus". Locale fixed to "en-US" rather than the active UI
+// language: "KB"/"MB" are themselves untranslated English abbreviations
+// (like every other size unit in this codebase), so the digits next to them
+// stay in the same convention instead of switching decimal separator with
+// the interface language.
+const SIZE_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+export function formatSizeKb(sizeBytes: number): string {
+  const kb = sizeBytes / 1024;
+  if (kb < 1024) return `${SIZE_FORMATTER.format(kb)} KB`;
+  return `${SIZE_FORMATTER.format(kb / 1024)} MB`;
 }
 
 // Gmail-style attachment card: a thumbnail/preview area on top (a real

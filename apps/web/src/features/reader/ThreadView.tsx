@@ -20,7 +20,7 @@ import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon, TrashIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
 import { PanelError } from "../../app/ui/PanelError";
-import { formatRelativeTime } from "../../app/ui/relative-time";
+import { formatAbsoluteDateTime, formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
@@ -968,6 +968,9 @@ export function ThreadView({
               yesterdayLabel: t("mail.yesterday"),
               locale: i18n.language,
             });
+            // #348: the compact label above is meant to be skimmed — this is
+            // the exact moment, available on demand via the title attribute.
+            const dateTitle = formatAbsoluteDateTime(email.receivedAt, { locale: i18n.language });
 
             if (!isExpanded) {
               return (
@@ -984,7 +987,9 @@ export function ThreadView({
                       <span className="font-semibold text-ink">{addressLabel(sender)}</span>
                       <span className="text-muted"> — {bodySnippet(email)}</span>
                     </span>
-                    <span className="shrink-0 text-[12px] text-muted">{dateLabel}</span>
+                    <span className="shrink-0 text-[12px] text-muted" title={dateTitle}>
+                      {dateLabel}
+                    </span>
                   </button>
                 </article>
               );
@@ -1098,7 +1103,9 @@ export function ThreadView({
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
+                <span className="shrink-0 text-[12.5px] text-muted" title={dateTitle}>
+                  {dateLabel}
+                </span>
               </>
             );
 

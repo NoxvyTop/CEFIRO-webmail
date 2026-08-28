@@ -41,5 +41,35 @@ export function formatRelativeTime(input: string | Date, options: RelativeTimeOp
   if (dayDiff === 1) {
     return options.yesterdayLabel;
   }
-  return date.toLocaleDateString(options.locale, { day: "numeric", month: "short" });
+  // #348: a bare "13 jul" is ambiguous once the email is over a year old —
+  // it reads as if it just happened. Only add the year when it differs from
+  // `now`'s, so a same-year older date stays as short as before.
+  const includeYear = date.getFullYear() !== now.getFullYear();
+  return date.toLocaleDateString(options.locale, {
+    day: "numeric",
+    month: "short",
+    ...(includeYear ? { year: "numeric" } : {}),
+  });
+}
+
+/**
+ * The full date and time formatRelativeTime's compact label leaves out —
+ * meant for a `title` attribute (or similar) so the exact moment is still
+ * available on demand, not just the skimmable "10:12"/"Ayer"/"13 jul" label.
+ * Returns "" for an unparsable input, matching formatRelativeTime.
+ */
+export function formatAbsoluteDateTime(
+  input: string | Date,
+  options: { locale?: string } = {},
+): string {
+  const date = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleString(options.locale, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
