@@ -562,6 +562,11 @@ export function MailPage() {
             inboxMailboxId={inboxMailboxId}
             trashMailboxId={trashMailboxId}
             accountId={accountParam}
+            // #343: the same mailbox the list is scoped to, so archiving or
+            // deleting from the reader acts on the whole conversation as it
+            // appears in that folder — undefined here (starred, a
+            // folder-spanning label) means "no current mailbox".
+            currentMailboxId={messageListMailboxId ?? null}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">

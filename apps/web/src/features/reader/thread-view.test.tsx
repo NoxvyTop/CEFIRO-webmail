@@ -2917,3 +2917,145 @@ describe("ThreadView — AI actions gate (#339)", () => {
     );
   });
 });
+
+// #343: archive/unarchive/delete acted on `lastEmail` alone, so a conversation
+// whose other messages were still in Recibidos stayed in the list right after
+// "Archivar", now showing the previous message. And none of these mutations had
+// an onError, so a 5xx/401 left the reader untouched with nothing said.
+describe("ThreadView — conversation-wide moves and error reporting (#343)", () => {
+  function stubMoveThread(options: {
+    patch?: () => Response;
+    mailboxIds?: [string[], string[]];
+  } = {}) {
+    const state = structuredClone(thread);
+    const [firstBox, secondBox] = options.mailboxIds ?? [["mb-inbox"], ["mb-inbox"]];
+    state.emails[0]!.mailboxIds = firstBox;
+    state.emails[1]!.mailboxIds = secondBox;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/mail/messages/") && method === "PATCH") {
+        return options.patch ? options.patch() : new Response(null, { status: 204 });
+      }
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function renderReader(currentMailboxId: string | null = "mb-inbox") {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ToastProvider>
+            <ThreadView
+              threadId="t1"
+              archiveMailboxId="arch1"
+              inboxMailboxId="mb-inbox"
+              trashMailboxId="trash1"
+              currentMailboxId={currentMailboxId}
+            />
+          </ToastProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return { invalidateSpy };
+  }
+
+  function movePatchIds(fetchMock: ReturnType<typeof vi.fn>): string[] {
+    return fetchMock.mock.calls
+      .filter(([input, init]) => {
+        const body = (init as RequestInit | undefined)?.body;
+        return (
+          String(input).includes("/api/mail/messages/") &&
+          (init as RequestInit | undefined)?.method === "PATCH" &&
+          typeof body === "string" &&
+          body.includes("mailboxIds")
+        );
+      })
+      .map(([input]) => String(input).split("/").pop() as string);
+  }
+
+  it("archives every message of the conversation sitting in the mailbox being viewed", async () => {
+    const fetchMock = stubMoveThread();
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock).sort()).toEqual(["e1", "e2"]));
+  });
+
+  it("leaves the conversation's messages in other mailboxes where they are", async () => {
+    // e1 is the sent copy in Enviados: archiving from Recibidos must not move it.
+    const fetchMock = stubMoveThread({ mailboxIds: [["mb-sent"], ["mb-inbox"]] });
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock)).toEqual(["e2"]));
+  });
+
+  it("deletes every message of the conversation in the current mailbox", async () => {
+    const fetchMock = stubMoveThread();
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.delete") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock).sort()).toEqual(["e1", "e2"]));
+  });
+
+  it("falls back to the newest message when the view is not scoped to a mailbox", async () => {
+    // A label/starred view spans folders — there is no "current mailbox" to
+    // scope the move to, so the action keeps its old single-message meaning.
+    const fetchMock = stubMoveThread();
+    renderReader(null);
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock)).toEqual(["e2"]));
+  });
+
+  it("reports a failed archive with a toast instead of leaving the reader unchanged", async () => {
+    stubMoveThread({
+      patch: () => new Response(JSON.stringify({ code: "database_unavailable" }), { status: 503 }),
+    });
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    expect(
+      await screen.findByText(i18n.t("mail.errors.database_unavailable")),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a failed star toggle", async () => {
+    stubMoveThread({
+      patch: () => new Response(JSON.stringify({ code: "database_unavailable" }), { status: 503 }),
+    });
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.star") }));
+
+    expect(
+      await screen.findByText(i18n.t("mail.errors.database_unavailable")),
+    ).toBeInTheDocument();
+  });
+
+  it("revalidates the session when a move is refused with 401", async () => {
+    stubMoveThread({
+      patch: () => new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 }),
+    });
+    const { invalidateSpy } = renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth", "me"] }),
+    );
+  });
+});

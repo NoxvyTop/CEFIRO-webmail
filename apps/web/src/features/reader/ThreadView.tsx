@@ -4,10 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { MailApiError, copyMessageToInbox, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
+import { MailApiError, copyMessageToInbox, destroyMessages, fetchInstanceSettings, fetchThread, updateMessage, updateMessages } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
+import { AUTH_QUERY_KEY } from "../auth/useAuth";
 import { fetchIdentities } from "../composer/api";
 import { fetchAiStatus } from "../composer/aiApi";
 import { replyRecipients } from "../composer/reply";
@@ -58,6 +59,12 @@ interface ThreadViewProps {
   // threaded into the thread query key and every read/mutation so the whole
   // reader operates on that account. Absent = personal mailbox (unchanged).
   accountId?: string;
+  // #343: the mailbox the list this reader was opened from is scoped to, so
+  // archive/unarchive/delete/destroy act on every message of the CONVERSATION
+  // sitting in it rather than on the newest one alone. Null/absent = a view
+  // that spans folders (starred, a label), where there is no current mailbox
+  // to scope by and the actions keep their single-message meaning.
+  currentMailboxId?: string | null;
 }
 
 interface DeletePermanentlyConfirmDialogProps {
@@ -190,6 +197,7 @@ const MAILBOX_MOVE_INVALIDATION_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KE
 
 export function ThreadView({
   threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null, accountId,
+  currentMailboxId = null,
 }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
@@ -319,47 +327,93 @@ export function ThreadView({
     }
   }
 
+  // #343: archive/unarchive/delete/star/keyword had no onError at all, so a
+  // 5xx left the reader exactly as it was with nothing said, and a 401 left the
+  // user in front of a thread that silently refused every write until
+  // ["auth","me"] happened to refetch on window focus. Revalidating the session
+  // is what hands them to the login screen (RequireAuth reads that same key).
+  function reportMutationError(error: unknown) {
+    if (error instanceof MailApiError && error.status === 401) {
+      queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+    }
+    showToast(t(mailErrorKey(error)));
+  }
+
+  // #343: the list row this reader was opened from is a CONVERSATION, so a move
+  // has to take every message of the thread that sits in the mailbox being
+  // viewed — moving `lastEmail` alone left the row in Recibidos, now showing the
+  // previous message of the same conversation. Messages of the thread that live
+  // elsewhere (the copy in Enviados, say) stay where they are.
+  //
+  // Without a current mailbox the view spans folders (starred, a label): there
+  // is nothing to scope by, so the action keeps its single-message meaning
+  // rather than sweeping the thread out of every folder at once.
+  function threadMessagesInCurrentMailbox(): EmailDetail[] {
+    const newest = emails[emails.length - 1];
+    if (!newest) return [];
+    if (!currentMailboxId) return [newest];
+    const inMailbox = emails.filter((email) => email.mailboxIds.includes(currentMailboxId));
+    return inMailbox.length > 0 ? inMailbox : [newest];
+  }
+
   const archiveMutation = useMutation({
-    mutationFn: (email: EmailDetail) => {
+    mutationFn: (targets: EmailDetail[]) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
-      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [archiveMailboxId]: true } },
+        accountId,
+      );
     },
     onSuccess: () => {
-      invalidateAfterMailboxMove();
       showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
       backToList();
     },
+    onError: reportMutationError,
+    // #343: a partial move still changed the server, so the listings and the
+    // mailbox counters must be re-read whether or not every PATCH succeeded.
+    onSettled: invalidateAfterMailboxMove,
   });
 
-  // Inverse of archiveMutation: moves the email back into Recibidos. Same
-  // single-mailbox move (JMAP mailboxIds is a full set, so this drops the
+  // Inverse of archiveMutation: moves the conversation back into Recibidos.
+  // Same single-mailbox move (JMAP mailboxIds is a full set, so this drops the
   // archive membership and adds the inbox), same post-success flow.
   const unarchiveMutation = useMutation({
-    mutationFn: (email: EmailDetail) => {
+    mutationFn: (targets: EmailDetail[]) => {
       if (!inboxMailboxId) throw new Error("no inbox mailbox");
-      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [inboxMailboxId]: true } },
+        accountId,
+      );
     },
     onSuccess: () => {
-      invalidateAfterMailboxMove();
       showToast(t("mail.unarchived"));
       backToList();
     },
+    onError: reportMutationError,
+    onSettled: invalidateAfterMailboxMove,
   });
 
-  // GH #133: Delete moves the last email to Trash — the same single-mailbox
+  // GH #133: Delete moves the conversation to Trash — the same single-mailbox
   // move archiveMutation/unarchiveMutation above already use (JMAP
   // mailboxIds is a full-set replace). Recoverable, so it needs no
   // confirmation — just feedback, mirroring archiveMutation's toast.
   const deleteMutation = useMutation({
-    mutationFn: (email: EmailDetail) => {
+    mutationFn: (targets: EmailDetail[]) => {
       if (!trashMailboxId) throw new Error("no trash mailbox");
-      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [trashMailboxId]: true } },
+        accountId,
+      );
     },
     onSuccess: () => {
-      invalidateAfterMailboxMove();
       showToast(t("mail.deleted"));
       backToList();
     },
+    onError: reportMutationError,
+    onSettled: invalidateAfterMailboxMove,
   });
 
   const [deletePermanentlyConfirmOpen, setDeletePermanentlyConfirmOpen] = useState(false);
@@ -370,7 +424,8 @@ export function ThreadView({
   // DeletePermanentlyConfirmDialog below — never directly from the action
   // bar click.
   const destroyMutation = useMutation({
-    mutationFn: (email: EmailDetail) => destroyMessage(email.id, accountId),
+    mutationFn: (targets: EmailDetail[]) =>
+      destroyMessages(targets.map((target) => target.id), accountId),
     onSuccess: () => {
       invalidateAfterMailboxMove();
       setDeletePermanentlyConfirmOpen(false);
@@ -420,6 +475,7 @@ export function ThreadView({
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
     },
+    onError: reportMutationError,
   });
 
   // GH #314: "Trust <domain>" / "Stop trusting <domain>". Both invalidate the
@@ -473,6 +529,7 @@ export function ThreadView({
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
     },
+    onError: reportMutationError,
   });
 
   function openCompose(param: string) {
@@ -693,7 +750,7 @@ export function ThreadView({
         {showArchive && (
           <button
             type="button"
-            onClick={() => archiveMutation.mutate(lastEmail)}
+            onClick={() => archiveMutation.mutate(threadMessagesInCurrentMailbox())}
             className={actionButtonClass}
           >
             <ArchiveIcon size={15} />
@@ -703,7 +760,7 @@ export function ThreadView({
         {showUnarchive && (
           <button
             type="button"
-            onClick={() => unarchiveMutation.mutate(lastEmail)}
+            onClick={() => unarchiveMutation.mutate(threadMessagesInCurrentMailbox())}
             className={actionButtonClass}
           >
             <InboxIcon size={15} />
@@ -713,7 +770,7 @@ export function ThreadView({
         {showDelete && (
           <button
             type="button"
-            onClick={() => deleteMutation.mutate(lastEmail)}
+            onClick={() => deleteMutation.mutate(threadMessagesInCurrentMailbox())}
             className={actionButtonClass}
           >
             <TrashIcon size={15} />
@@ -1151,7 +1208,7 @@ export function ThreadView({
           subject={lastEmail.subject || t("mail.noSubject")}
           deleting={destroyMutation.isPending}
           deleteError={destroyError}
-          onConfirm={() => destroyMutation.mutate(lastEmail)}
+          onConfirm={() => destroyMutation.mutate(threadMessagesInCurrentMailbox())}
           onCancel={handleCancelDeletePermanently}
         />
       )}
