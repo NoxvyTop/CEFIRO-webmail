@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_ENTRIES, readCachedSummary, summaryStorageKey, writeCachedSummary } from "./summaryCache";
+import {
+  MAX_ENTRIES, clearAllSummaryCache, readCachedSummary, summaryStorageKey, writeCachedSummary,
+} from "./summaryCache";
 
 beforeEach(() => {
   localStorage.clear();
@@ -79,6 +81,45 @@ describe("read/write round-trip", () => {
     const key = summaryStorageKey({ isThread: false, messageId: "e1", threadId: "t1", messageCount: 1 });
     localStorage.setItem(key, JSON.stringify({ v: 1, bullets: "not-an-array", ts: 1 }));
     expect(readCachedSummary(key)).toBeUndefined();
+  });
+});
+
+// GH #341: a fresh sign-in in the same tab must not keep showing the previous
+// user's AI summaries. The other half of the fix (React Query) clears request
+// caches; this clears the localStorage layer that sits UNDER React Query and
+// survives a query-cache clear on its own.
+describe("clearAllSummaryCache (GH #341)", () => {
+  it("removes every cefiro-ai-summary: entry", () => {
+    writeCachedSummary("cefiro-ai-summary:m:e1", ["one"]);
+    writeCachedSummary("cefiro-ai-summary:t:t1:abc", ["two"]);
+
+    clearAllSummaryCache();
+
+    expect(readCachedSummary("cefiro-ai-summary:m:e1")).toBeUndefined();
+    expect(readCachedSummary("cefiro-ai-summary:t:t1:abc")).toBeUndefined();
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("leaves unrelated localStorage keys untouched", () => {
+    localStorage.setItem("cefiro-theme", "night");
+    writeCachedSummary("cefiro-ai-summary:m:e1", ["one"]);
+
+    clearAllSummaryCache();
+
+    expect(localStorage.getItem("cefiro-theme")).toBe("night");
+  });
+
+  it("does nothing when localStorage is unavailable", () => {
+    vi.stubGlobal("localStorage", {
+      get length(): number {
+        throw new Error("unavailable");
+      },
+    });
+    try {
+      expect(() => clearAllSummaryCache()).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

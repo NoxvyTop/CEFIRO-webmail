@@ -103,6 +103,26 @@ export function writeCachedSummary(key: string, bullets: string[]): void {
   }
 }
 
+/**
+ * Drops every cached summary (GH #341). A React Query cache clear on
+ * logout/session-expiry only reaches the in-memory layer — this localStorage
+ * layer sits underneath it and survives on its own, so a fresh sign-in in the
+ * same tab kept showing the previous user's AI summaries until each one aged
+ * out or was overwritten.
+ */
+export function clearAllSummaryCache(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(PREFIX)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    // storage unavailable (private mode, disabled) — nothing to clear.
+  }
+}
+
 /** Drops the oldest-written entries once the entry count exceeds MAX_ENTRIES. */
 function evictOldestPastCap(): void {
   const entries: { key: string; ts: number }[] = [];

@@ -122,6 +122,11 @@
     "signedInAs": "Signed in as {{email}}",
     "subtitle": "Sign in to your team's mail",
     "credentialsDisabled": "Credential-based sign-in is disabled. Available only in recovery mode.",
+    "serviceUnavailable": {
+      "title": "Service unavailable",
+      "description": "Could not reach the server. Check your connection and try again.",
+      "retry": "Retry"
+    },
     "errors": {
       "account_archived": "Your account is archived. Ask an administrator to reactivate it.",
       "generic": "Sign-in could not be completed",

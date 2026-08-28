@@ -26,7 +26,10 @@ function accountQuery(accountId?: string): string {
   return accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
 }
 
-async function parseError(res: Response): Promise<never> {
+// Exported so callers outside the mail feature that share this same ApiError
+// envelope shape (GH #341: useAuth's /api/auth/me) can throw the same
+// MailApiError instead of re-implementing the code-extraction dance.
+export async function parseError(res: Response): Promise<never> {
   let code = "internal";
   try {
     code = ((await res.json()) as { code?: string }).code ?? "internal";

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { AUTH_QUERY_KEY } from "../auth/useAuth";
 import { createNewMailNotice, inboxUnreadCount } from "./newMailNotice";
+import { clearAllSummaryCache } from "../reader/summaryCache";
 
 // The same endpoint the EventSource opens. The probe below re-asks it with
 // fetch() precisely because fetch exposes the HTTP status that EventSource hides.
@@ -255,10 +255,14 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
         // is about.
         stopped = true;
         if (verdict === "sessionExpired") {
-          // Re-read the session so RequireAuth takes the user to the login
-          // screen, rather than leaving them in front of a mailbox that has
-          // quietly stopped updating.
-          queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+          // GH #341: clearing the whole cache (not just re-invalidating
+          // ["auth","me"]) drops every mail/thread/profile query left over
+          // from the expired session, so RequireAuth's login screen is not
+          // preceded by a flash of stale content once a new session starts.
+          // clear() removes the auth query too, so the next read re-fetches
+          // it and RequireAuth still routes to the login screen.
+          queryClient.clear();
+          clearAllSummaryCache();
           return;
         }
         // streamLimited: the session is fine and the server is up — another

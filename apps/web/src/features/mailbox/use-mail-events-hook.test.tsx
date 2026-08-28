@@ -99,10 +99,11 @@ async function flushProbe() {
 function makeWrapper() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const invalidate = vi.spyOn(client, "invalidateQueries");
+  const clear = vi.spyOn(client, "clear");
   function wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   }
-  return { invalidate, wrapper };
+  return { invalidate, clear, wrapper };
 }
 
 function setHidden(hidden: boolean) {
@@ -379,7 +380,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
   it("stops reconnecting for good once the events endpoint answers 401 (session gone)", async () => {
     vi.useFakeTimers();
     const probe = stubAuthProbe(401);
-    const { invalidate, wrapper } = makeWrapper();
+    const { clear, wrapper } = makeWrapper();
     renderHook(() => useMailEvents(true), { wrapper });
 
     act(() => FakeEventSource.instances[0]?.refuseHandshake());
@@ -395,9 +396,10 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     // No amount of waiting reopens the stream: only a fresh login can.
     act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
     expect(FakeEventSource.instances).toHaveLength(1);
-    // And the session is re-read, so RequireAuth routes to the login screen
-    // instead of leaving a mailbox that quietly stopped updating.
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+    // GH #341: the whole cache is dropped, not just ["auth","me"] — otherwise
+    // a mailbox/thread/profile query from the expired session stays cached and
+    // can flash stale content before RequireAuth routes to the login screen.
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 
   // GH #274: a second tab over the 8/user cap gets 429 too_many_streams. That
@@ -407,7 +409,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
   it("distinguishes a 429 too_many_streams: stops retrying and reports live updates limited, leaving the session alone", async () => {
     vi.useFakeTimers();
     const probe = stubAuthProbe(429);
-    const { invalidate, wrapper } = makeWrapper();
+    const { clear, wrapper } = makeWrapper();
     const { result } = renderHook(() => useMailEvents(true), { wrapper });
 
     expect(result.current.liveUpdatesLimited).toBe(false);
@@ -423,7 +425,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     // The tab is flagged limited so the UI can say so...
     expect(result.current.liveUpdatesLimited).toBe(true);
     // ...the session is left untouched (this is not a 401)...
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+    expect(clear).not.toHaveBeenCalled();
     // ...and it never silently reconnects again.
     act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
     expect(FakeEventSource.instances).toHaveLength(1);

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "../../app/i18n";
+import i18n from "../../app/i18n";
 import { routes } from "../../app/routes";
 
 function renderAt(path: string) {
@@ -68,6 +69,37 @@ describe("auth flow", () => {
     });
     fireEvent.click(avatarButton);
     expect(await screen.findByText("Cerrar sesión")).toBeInTheDocument();
+  });
+
+  // GH #341: /api/auth/me only ever mapped 401 -> null. A 502/503 (the proxy
+  // answering while the backend is down) fell through to
+  // sessionUserSchema.parse(await res.json()), threw, and after retries
+  // RequireAuth rendered the login screen — as if credentials were the
+  // problem, when the service itself was unreachable.
+  it("shows a service-unavailable state (not the login screen) when /me fails with a non-401 status, and retries", async () => {
+    let meCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) {
+          meCalls += 1;
+          if (meCalls === 1) return new Response("{}", { status: 502 });
+          return new Response(JSON.stringify(user));
+        }
+        return new Response(JSON.stringify({ status: "ok", checks: {} }));
+      }),
+    );
+    renderAt("/");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(i18n.t("auth.serviceUnavailable.title"));
+    // Not the login screen — a 502 is not a rejected credential.
+    expect(screen.queryByText(i18n.t("auth.signIn", { provider: "SSO" }))).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("auth.serviceUnavailable.retry") }));
+
+    expect(await screen.findByText("CÉFIRO")).toBeInTheDocument();
   });
 
   it("redirects unknown routes to the home page", async () => {

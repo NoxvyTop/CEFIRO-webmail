@@ -122,6 +122,11 @@
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
     "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
+    "serviceUnavailable": {
+      "title": "Servicio no disponible",
+      "description": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "retry": "Reintentar"
+    },
     "errors": {
       "account_archived": "Tu cuenta está archivada. Pide a un administrador que la reactive.",
       "generic": "No se pudo completar el inicio de sesión",
