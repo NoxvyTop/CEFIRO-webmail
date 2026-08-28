@@ -172,6 +172,41 @@ describe("useMailEvents (hook lifecycle)", () => {
     ]);
   });
 
+  // #349: a user scrolled N pages deep into the infinite messages list used
+  // to pay N sequential /api/mail/messages requests for every single
+  // StateChange (GH #167 narrowed WHICH keys get invalidated; this narrows
+  // the messages key's own refetch cost). TanStack Query v5 removed v4's
+  // `refetchPage` predicate — `maxPages` is the only remaining primitive,
+  // and it EVICTS pages beyond the cap from the query's own data, which
+  // would drop already-visible rows mid-scroll the moment a user reads past
+  // the cap, not just on an SSE event. Invalidating with `refetchType:
+  // "none"` avoids both: nothing is evicted, nothing refetches all N pages
+  // — the list just goes stale and catches up next time something already
+  // triggers a refetch (window focus once past the new 30s staleTime, a
+  // remount). The thread/mailboxes keys are unpaginated, so they keep the
+  // normal eager refetch.
+  it("marks the messages list stale WITHOUT eagerly refetching it, unlike the unpaginated thread/mailboxes keys", () => {
+    const { invalidate, wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    FakeEventSource.instances[0]?.emitMessage(
+      JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1", Mailbox: "s2" } } }),
+    );
+
+    const calls = invalidate.mock.calls.map(
+      ([arg]) => arg as { queryKey: string[]; refetchType?: string },
+    );
+    const messagesCall = calls.find(
+      (call) => call.queryKey.join(".") === "mail.messages",
+    );
+    const threadCall = calls.find((call) => call.queryKey.join(".") === "mail.thread");
+    const mailboxesCall = calls.find((call) => call.queryKey.join(".") === "mail.mailboxes");
+
+    expect(messagesCall?.refetchType).toBe("none");
+    expect(threadCall?.refetchType).toBeUndefined();
+    expect(mailboxesCall?.refetchType).toBeUndefined();
+  });
+
   // GH #265. This is the production path: the server proxies Stalwart's stream
   // untouched and JMAP names its frames `event: state` (RFC 8887 §7.1). Before
   // the fix the hook listened only on "message" — which in SSE fires solely for

@@ -258,9 +258,28 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
       // Mailbox state too (the unread counter is part of it), so the signal we
       // act on is the one a delivery actually produces.
       const before = inboxUnreadCount(queryClient);
-      const settled = invalidationKeysForStateChange(event.data ?? "").map((queryKey) =>
-        queryClient.invalidateQueries({ queryKey }),
-      );
+      const settled = invalidationKeysForStateChange(event.data ?? "").map((queryKey) => {
+        // #349: the infinite messages list refetched EVERY already-loaded
+        // page on every single StateChange — a user 10 pages deep paid 10
+        // sequential /api/mail/messages requests per incoming event. v5
+        // dropped v4's `refetchPage` predicate (which used to let a caller
+        // refetch just the first page); `maxPages` is the only remaining
+        // page-bounding primitive, and it EVICTS pages beyond the cap from
+        // the query's own data — that would drop already-visible rows
+        // mid-scroll the moment a user reads past the cap during ordinary
+        // scrolling, not just on an SSE event. `refetchType: "none"` avoids
+        // both: nothing is evicted, nothing refetches all N pages — the
+        // list goes stale and catches up next time something already
+        // triggers a refetch (window focus once past the 30s default
+        // staleTime, a remount) instead of eagerly, mid-scroll. The
+        // thread/mailboxes keys are single, unpaginated fetches, so they
+        // keep the normal eager refetch.
+        const isMessagesKey = queryKey.length === 2 && queryKey[0] === "mail" && queryKey[1] === "messages";
+        return queryClient.invalidateQueries({
+          queryKey,
+          ...(isMessagesKey ? { refetchType: "none" as const } : {}),
+        });
+      });
       void Promise.all(settled)
         .then(() => notice(before, inboxUnreadCount(queryClient)))
         .catch(() => {
