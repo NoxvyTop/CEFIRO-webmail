@@ -9,6 +9,7 @@ import { createApp } from "../../app";
 import { createAuthRouter } from "./router";
 import { createSessionStore } from "./sessions";
 import { createBootstrap, type Bootstrap } from "../setup/bootstrap";
+import type { SetupCompletion } from "../setup/completion";
 
 const sql = createDb(testDatabaseUrl());
 
@@ -23,7 +24,7 @@ function cookieValue(res: Response, name: string): string | null {
   return null;
 }
 
-function makeApp(boot: Bootstrap) {
+function makeApp(boot: Bootstrap, completion?: SetupCompletion) {
   return createApp({
     authRouter: createAuthRouter({
       sessions: createSessionStore(sql),
@@ -32,6 +33,7 @@ function makeApp(boot: Bootstrap) {
       bootstrap: boot,
       appUrl: "http://localhost:5173",
       sessionTtlHours: 1,
+      ...(completion ? { completion } : {}),
     }),
   });
 }
@@ -118,5 +120,88 @@ describe("bootstrap login", () => {
       (u) => u.email === "bootstrap-admin@webmail.local",
     );
     expect(rows.length).toBe(1);
+  });
+
+  // GH #346: the same second gate the setup router got in #234. A
+  // `BOOTSTRAP_MODE=true` left on after the instance is set up was a standing
+  // offer of admin behind one static password, and the flag was the ONLY thing
+  // guarding it.
+  it("is 404 once the setup completion latch has closed", async () => {
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
+    const app = makeApp(boot, { isComplete: async () => true });
+    const res = await app.request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "x", password: boot.password }),
+    });
+    // `not_found`, the same answer as a router that was never enabled: a
+    // completed instance must not confirm that the break-glass door exists.
+    expect(res.status).toBe(404);
+    expect(cookieValue(res, "session")).toBeNull();
+  });
+
+  it("still opens while the latch is open", async () => {
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
+    const app = makeApp(boot, { isComplete: async () => false });
+    const res = await app.request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "x", password: boot.password }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  // GH #346: an admin who archives the emergency account from the console was
+  // being overruled — the next bootstrap login flipped `active` back on and
+  // re-promoted the row. The break-glass path no longer writes to it at all.
+  it("refuses an archived bootstrap admin instead of reactivating it", async () => {
+    const users = createUsersRepo(sql);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
+    const app = makeApp(boot);
+    await app.request("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "x", password: boot.password }),
+    });
+    const admin = await users.findByEmail("bootstrap-admin@webmail.local");
+    expect(admin).toBeTruthy();
+    await users.setActive(admin!.id, false);
+    try {
+      const res = await app.request("/api/auth/bootstrap", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "x", password: boot.password }),
+      });
+      // 401, not a 403 that would say "the account exists but is archived".
+      expect(res.status).toBe(401);
+      expect(cookieValue(res, "session")).toBeNull();
+      expect((await users.findByEmail("bootstrap-admin@webmail.local"))?.active).toBe(false);
+    } finally {
+      // Leave the shared row as the other cases in this file expect to find it.
+      await users.setActive(admin!.id, true);
+    }
+  });
+
+  it("does not re-promote a demoted bootstrap admin", async () => {
+    const users = createUsersRepo(sql);
+    const boot = createBootstrap(true, BOOTSTRAP_PASSWORD);
+    const app = makeApp(boot);
+    const admin = await users.findByEmail("bootstrap-admin@webmail.local");
+    expect(admin).toBeTruthy();
+    await users.setRole(admin!.id, "employee");
+    try {
+      const res = await app.request("/api/auth/bootstrap", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "x", password: boot.password }),
+      });
+      // The session is still issued — the credential was right — but with the
+      // role the console left on the row, not the one this path used to force
+      // back on with `setRole`.
+      expect(res.status).toBe(200);
+      expect((await users.findByEmail("bootstrap-admin@webmail.local"))?.role).toBe("employee");
+    } finally {
+      await users.setRole(admin!.id, "admin");
+    }
   });
 });
