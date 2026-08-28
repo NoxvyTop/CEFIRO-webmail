@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { ActiveSession } from "@webmail/shared";
+import { formatRelativeTime } from "../../app/ui/relative-time";
 import { MailApiError } from "../mailbox/api";
 import { SessionsSettings, deviceLabel } from "./SessionsSettings";
 
@@ -79,6 +80,49 @@ describe("SessionsSettings", () => {
     expect(
       screen.getByText(i18n.t("settings.sessions.location", { ip: "198.51.100.9" })),
     ).toBeInTheDocument();
+  });
+
+  // #348: two sessions that share the same coarse "Chrome · Windows" device
+  // label were otherwise indistinguishable — the creation date is the one
+  // thing that tells them apart.
+  it("shows each session's creation date, distinguishing two sessions with the same device label", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(NOW));
+    try {
+      const olderTwin: ActiveSession = {
+        ...current,
+        id: "s-older-twin",
+        current: false,
+        createdAt: "2026-07-20T09:00:00.000Z",
+      };
+      renderSettings([current, olderTwin]);
+
+      await screen.findAllByText("Chrome · Windows");
+      expect(
+        screen.getByText(
+          i18n.t("settings.sessions.created", {
+            time: formatRelativeTime(current.createdAt, {
+              now: new Date(NOW),
+              yesterdayLabel: i18n.t("mail.yesterday"),
+              locale: i18n.language,
+            }),
+          }),
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          i18n.t("settings.sessions.created", {
+            time: formatRelativeTime(olderTwin.createdAt, {
+              now: new Date(NOW),
+              yesterdayLabel: i18n.t("mail.yesterday"),
+              locale: i18n.language,
+            }),
+          }),
+        ),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows the unknown-device fallback for a session with no user agent", async () => {

@@ -331,3 +331,63 @@ export function SparkleIcon({ size = 15 }: IconProps) {
     </svg>
   );
 }
+
+// #348: RichTextEditor's toolbar used bare letters — "L"/"C"/"R" for BOTH
+// text align and image align, and "S"/"M"/"L" for image size, all with no
+// visual distinction beyond a tiny aria-label a sighted mouse user never
+// sees. These give every one of those nine buttons its own recognizable
+// glyph; the aria-label (unchanged) still carries the accessible name.
+
+export function AlignLeftIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M4 6h16" />
+      <path d="M4 12h10" />
+      <path d="M4 18h14" />
+    </svg>
+  );
+}
+
+export function AlignCenterIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M4 6h16" />
+      <path d="M7 12h10" />
+      <path d="M5 18h14" />
+    </svg>
+  );
+}
+
+export function AlignRightIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M4 6h16" />
+      <path d="M10 12h10" />
+      <path d="M6 18h14" />
+    </svg>
+  );
+}
+
+export function SizeSmallIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="8" y="8" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
+export function SizeMediumIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="5" y="5" width="14" height="14" rx="1.5" />
+    </svg>
+  );
+}
+
+export function SizeLargeIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+    </svg>
+  );
+}

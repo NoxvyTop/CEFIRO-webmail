@@ -103,6 +103,17 @@ export function SessionsSettings() {
                   }),
                 })}
               </span>
+              {/* #348: two sessions can share the same coarse device label
+                  ("Chrome · Windows" twice) — the creation date is what
+                  actually tells them apart. */}
+              <span className="text-xs text-muted">
+                {t("settings.sessions.created", {
+                  time: formatRelativeTime(session.createdAt, {
+                    yesterdayLabel: t("mail.yesterday"),
+                    locale: i18n.language,
+                  }),
+                })}
+              </span>
               {session.ip && (
                 <span className="text-xs text-muted">
                   {t("settings.sessions.location", { ip: session.ip })}

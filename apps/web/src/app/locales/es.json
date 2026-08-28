@@ -489,6 +489,7 @@
       "current": "Este dispositivo",
       "unknownDevice": "Dispositivo desconocido",
       "lastActivity": "Última actividad: {{time}}",
+      "created": "Creada: {{time}}",
       "location": "IP aproximada: {{ip}}",
       "close": "Cerrar",
       "closeOthers": "Cerrar las demás",

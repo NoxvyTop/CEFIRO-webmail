@@ -453,6 +453,24 @@ describe("RichTextEditor text alignment toolbar", () => {
     expect(screen.getByRole("button", { name: i18n.t("composer.textAlignRight") })).toBeInTheDocument();
   });
 
+  // #348: these three buttons — and the six image-size/image-align buttons
+  // below — used to render a single bare capital letter ("L"/"C"/"R", and
+  // "S"/"M"/"L" for image size, ambiguous with image-align's own "L") as
+  // their only visible content. Every one of the nine now renders an inline
+  // svg icon instead, with the aria-label carrying the accessible name.
+  it("renders an svg icon, not a bare letter, in each text-align button", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const leftButton = await screen.findByRole("button", { name: i18n.t("composer.textAlignLeft") });
+    const centerButton = screen.getByRole("button", { name: i18n.t("composer.textAlignCenter") });
+    const rightButton = screen.getByRole("button", { name: i18n.t("composer.textAlignRight") });
+
+    for (const button of [leftButton, centerButton, rightButton]) {
+      expect(button.querySelector("svg")).not.toBeNull();
+      expect(button.textContent?.trim()).toBe("");
+    }
+  });
+
   it("applies text-align: center to the current paragraph when the center button is clicked", async () => {
     const handleChange = vi.fn();
     render(<RichTextEditor html="<p>Hello</p>" onChange={handleChange} ariaLabel="Message" />);
@@ -506,6 +524,27 @@ describe("RichTextEditor image size/alignment toolbar", () => {
     expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignLeft") })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("composer.imageAlignRight") })).toBeInTheDocument();
+  });
+
+  // #348: see the equivalent text-align test above — image size used bare
+  // "S"/"M"/"L" and image align reused the SAME "L"/"C"/"R" letters as text
+  // align, ambiguous within one toolbar. All six now render an svg icon.
+  it("renders an svg icon, not a bare letter, in each size/align button", async () => {
+    render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+
+    const buttons = [
+      await screen.findByRole("button", { name: i18n.t("composer.imageSizeSmall") }),
+      screen.getByRole("button", { name: i18n.t("composer.imageSizeMedium") }),
+      screen.getByRole("button", { name: i18n.t("composer.imageSizeLarge") }),
+      screen.getByRole("button", { name: i18n.t("composer.imageAlignLeft") }),
+      screen.getByRole("button", { name: i18n.t("composer.imageAlignCenter") }),
+      screen.getByRole("button", { name: i18n.t("composer.imageAlignRight") }),
+    ];
+
+    for (const button of buttons) {
+      expect(button.querySelector("svg")).not.toBeNull();
+      expect(button.textContent?.trim()).toBe("");
+    }
   });
 
   it("disables size/alignment buttons when no image is selected, even if an image exists in the doc", async () => {
