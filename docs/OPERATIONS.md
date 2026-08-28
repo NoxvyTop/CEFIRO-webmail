@@ -262,6 +262,7 @@ cuelgue el servicio.
 | `OIDC_TIMEOUT_MS` | `10000` | Plazo de las llamadas al proveedor OIDC. |
 | `MAX_BODY_BYTES` | `2097152` | Techo global del cuerpo de petición (2 MiB). Excepto la subida de adjuntos, que va en streaming. |
 | `TRUSTED_PROXY_HOPS` | `1` | Cuántos proxies añaden su salto a `X-Forwarded-For`. De ello dependen los cinco límites por IP y la columna `ip` de la auditoría. Ver [Proxies de confianza](#proxies-de-confianza). |
+| `OIDC_ALLOW_INSECURE_ISSUER` | `false` | Permite un `issuer` (y unos `token_endpoint`/`jwks_uri`/`authorization_endpoint`) por `http:` en vez de `https:`. **No activar en producción**: existe solo para el doble local de la suite e2e (`e2e/oidc-idp.ts`), que no puede terminar TLS. Deliberadamente no depende de `NODE_ENV` — la suite e2e arranca a propósito con `NODE_ENV=production`. |
 
 ### Proxies de confianza
 

@@ -711,6 +711,32 @@ describe("loadConfig", () => {
     });
   });
 
+  // GH #347: whether apps/server's OIDC client (auth/oidc.ts discover()) skips
+  // the https: requirement on the issuer and the endpoints discovery returns.
+  // Off by default, and NOT tied to NODE_ENV — see the parameter's own comment
+  // in oidc.ts for why: the e2e suite boots with NODE_ENV=production on
+  // purpose. This is a dedicated, explicit opt-in only that harness sets.
+  describe("OIDC_ALLOW_INSECURE_ISSUER (GH #347)", () => {
+    it("defaults to false", () => {
+      expect(loadConfig(validEnv).oidcAllowInsecureIssuer).toBe(false);
+    });
+
+    it("is true only for the literal 'true' or '1'", () => {
+      expect(
+        loadConfig({ ...validEnv, OIDC_ALLOW_INSECURE_ISSUER: "true" }).oidcAllowInsecureIssuer,
+      ).toBe(true);
+      expect(
+        loadConfig({ ...validEnv, OIDC_ALLOW_INSECURE_ISSUER: "1" }).oidcAllowInsecureIssuer,
+      ).toBe(true);
+      expect(
+        loadConfig({ ...validEnv, OIDC_ALLOW_INSECURE_ISSUER: "false" }).oidcAllowInsecureIssuer,
+      ).toBe(false);
+      expect(
+        loadConfig({ ...validEnv, OIDC_ALLOW_INSECURE_ISSUER: "yes" }).oidcAllowInsecureIssuer,
+      ).toBe(false);
+    });
+  });
+
   // GH #235: the break-glass credential is the operator's to set now — the
   // process used to mint one and print it to the log stream in plaintext.
   describe("BOOTSTRAP_PASSWORD (GH #235)", () => {

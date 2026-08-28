@@ -241,6 +241,15 @@ export default defineConfig({
             // one neither races it to CREATE DATABASE nor rebuilds the SPA.
             E2E_WAIT_FOR: `${BASE_URL}/api/health`,
             E2E_SKIP_BUILD: "1",
+            // GH #347: apps/server's OIDC client now refuses a plain-http issuer
+            // by default. This is the one server that logs in against
+            // oidc-idp.ts, the local test provider served over plain HTTP (see
+            // IDP_ISSUER above) — a double that has no certificate to terminate
+            // TLS with. NODE_ENV=production (appServerEnv) stays as-is on
+            // purpose; this is a dedicated, explicit opt-in rather than a
+            // production-wide loosening. See OIDC_ALLOW_INSECURE_ISSUER in
+            // apps/server/src/core/config.ts.
+            OIDC_ALLOW_INSECURE_ISSUER: "true",
           },
         },
         {

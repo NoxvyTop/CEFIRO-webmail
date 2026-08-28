@@ -27,6 +27,15 @@ describe("setupSsoSchema", () => {
     expect(() => setupSsoSchema.parse({ ...SSO, issuer: "" })).toThrow();
   });
 
+  // GH #347: a plain-http issuer lets whoever controls the network path between
+  // this server and "the issuer" answer discovery/token/jwks on its behalf,
+  // including receiving the client_secret at a token_endpoint it chose. Setup
+  // and the admin SSO form are the only places an operator supplies an issuer,
+  // so refusing it here closes the hole before any row is ever written.
+  it("rejects a non-https issuer", () => {
+    expect(() => setupSsoSchema.parse({ ...SSO, issuer: "http://id.example.com" })).toThrow();
+  });
+
   it("rejects an empty clientId, clientSecret or scopes", () => {
     expect(() => setupSsoSchema.parse({ ...SSO, clientId: "" })).toThrow();
     expect(() => setupSsoSchema.parse({ ...SSO, clientSecret: "" })).toThrow();
