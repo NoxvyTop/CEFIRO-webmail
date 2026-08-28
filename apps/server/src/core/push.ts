@@ -30,6 +30,13 @@ export type PushPayload = {
    * thread id). Never displayed, never sensitive.
    */
   targetId?: string;
+  /**
+   * The JMAP account `targetId` lives in, when that is NOT the user's own —
+   * i.e. a shared mailbox (GH #337). The service worker appends it to the URL
+   * it opens, because a shared thread id does not resolve in the personal view.
+   * Omitted for personal mail, so the common case names no account at all.
+   */
+  accountId?: string;
 };
 
 /**

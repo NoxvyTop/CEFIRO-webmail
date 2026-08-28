@@ -5,7 +5,16 @@
     "themeLight": "Switch to light theme",
     "themeNight": "Switch to night theme",
     "sentWith": "Sent with",
-    "sealMotto": "the wind that moves your team"
+    "sealMotto": "the wind that moves your team",
+    "offline": "No internet connection",
+    "routeError": {
+      "staleTitle": "A new version is available",
+      "staleDescription": "This tab has been open since before an update, and some files no longer exist on the server. Reload the page to continue.",
+      "genericTitle": "Something went wrong",
+      "genericDescription": "This screen could not be shown. Reloading the page usually fixes it.",
+      "reload": "Reload"
+    },
+    "toastDismiss": "Dismiss notification"
   },
   "admin": {
     "title": "Administration",
@@ -64,7 +73,10 @@
       "role": "Role",
       "archive": "Archive",
       "reactivate": "Reactivate",
-      "confirmArchive": "Confirm archive"
+      "confirmArchive": "Confirm archive",
+      "confirmRoleChangeQuestion": "Change the role to {{role}}?",
+      "confirmRoleChange": "Confirm",
+      "cancelRoleChange": "Cancel"
     },
     "new": {
       "title": "New user",
@@ -122,6 +134,11 @@
     "signedInAs": "Signed in as {{email}}",
     "subtitle": "Sign in to your team's mail",
     "credentialsDisabled": "Credential-based sign-in is disabled. Available only in recovery mode.",
+    "serviceUnavailable": {
+      "title": "Service unavailable",
+      "description": "Could not reach the server. Check your connection and try again.",
+      "retry": "Retry"
+    },
     "errors": {
       "account_archived": "Your account is archived. Ask an administrator to reactivate it.",
       "generic": "Sign-in could not be completed",
@@ -152,6 +169,8 @@
     "connecting": "Connecting…",
     "disabled": "Setup mode is disabled",
     "status": "SSO configured: {{sso}} — Users: {{count}}",
+    "yes": "Yes",
+    "no": "No",
     "ssoTitle": "SSO provider (OIDC)",
     "userTitle": "New user",
     "save": "Save",
@@ -180,6 +199,10 @@
       "displayName": "Name",
       "role": "Role",
       "locale": "Language",
+      "localeOptions": {
+        "es": "Spanish",
+        "en": "English"
+      },
       "mailPassword": "Mailbox password"
     }
   },
@@ -211,6 +234,10 @@
     "newMailNotification": "New mail",
     "liveUpdatesLimited": "Live updates are limited in this tab because too many are open. Close another tab and reload to resume here.",
     "enableNotifications": "Enable notifications",
+    "notificationsBlocked": "Alerts blocked by the browser",
+    "newMailNotificationBody_one": "{{count}} unread message in the inbox",
+    "newMailNotificationBody_other": "{{count}} unread messages in the inbox",
+    "unreadTitle": "({{count}}) Céfiro",
     "resizeList": "Resize message list",
     "errors": {
       "mail_not_configured": "The mail server is not configured",
@@ -237,8 +264,8 @@
       "cta": "Link mailbox",
       "hint": "Ask an administrator to link it."
     },
-    "summarizeWithAi": "✦ Summarize with AI",
-    "summarizeConversation": "✦ Summarize conversation",
+    "summarizeWithAi": "Summarize with AI",
+    "summarizeConversation": "Summarize conversation",
     "aiSummaryTitle": "AI Summary",
     "aiSummaryLoading": "Analyzing the message…",
     "backToList": "Back to messages",
@@ -316,7 +343,8 @@
   },
   "groups": {
     "title": "Groups",
-    "showInInbox": "Show in main inbox"
+    "showInInbox": "Show mail addressed to {{groups}} in my inbox",
+    "showInInboxHelp": "Only changes what your inbox shows; it does not ask the server for copies."
   },
   "accounts": {
     "selectorLabel": "Active mailbox",
@@ -387,6 +415,11 @@
     "removeRecipient": "Remove {{email}}",
     "dropHint": "Drop to attach",
     "duplicateAttachment": "{{name}} was already attached",
+    "retry": "Retry",
+    "remove": "Remove",
+    "retryUpload": "Retry uploading {{name}}",
+    "removeUpload": "Remove {{name}}",
+    "uploadsPendingHint": "Wait for the uploads to finish before sending",
     "errors": {
       "noRecipients": "Add at least one recipient",
       "invalid_identity": "Invalid identity",
@@ -400,6 +433,8 @@
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "database_unavailable": "The service is temporarily unavailable. Try again",
+      "payload_too_large": "The file is too large",
+      "uploadsPending": "Wait for the uploads to finish before sending",
       "generic": "Something went wrong"
     },
     "draftWithAi": "✦ Draft with AI",
@@ -454,9 +489,13 @@
       "current": "This device",
       "unknownDevice": "Unknown device",
       "lastActivity": "Last activity: {{time}}",
+      "created": "Created: {{time}}",
       "location": "Approx. IP: {{ip}}",
       "close": "Close",
-      "closeOthers": "Close the others"
+      "closeOthers": "Close the others",
+      "confirmCloseOthersQuestion": "Sign out of every other device?",
+      "confirmCloseOthersAction": "Close the others",
+      "cancelCloseOthers": "Cancel"
     },
     "newSignature": "New signature",
     "name": "Name",
@@ -468,6 +507,9 @@
     "save": "Save",
     "saved": "Saved",
     "delete": "Delete",
+    "confirmDeleteSignatureQuestion": "Delete the signature \"{{name}}\"? This can't be undone.",
+    "confirmDeleteAction": "Delete permanently",
+    "cancelDelete": "Cancel",
     "edit": "Edit",
     "retry": "Try again",
     "errors": {
@@ -488,6 +530,9 @@
   "filters": {
     "title": "Filters",
     "newRule": "New rule",
+    "confirmDeleteRuleQuestion": "Delete the rule \"{{name}}\"? This can't be undone.",
+    "confirmDeleteAction": "Delete permanently",
+    "cancelDelete": "Cancel",
     "name": "Name",
     "matchType": "Match",
     "matchAll": "All conditions",
@@ -582,6 +627,16 @@
     "enabledOnThisDevice": "Notifications enabled on this device",
     "working": "One moment…",
     "unsupported": "Your browser does not support push notifications.",
+    "unavailableOnServer": "Background notifications are not available on this server.",
+    "pushTitle": "In the background",
+    "browser": {
+      "title": "Alerts while Céfiro is open",
+      "description": "Show a system alert when new mail reaches your inbox and the tab is not in the foreground.",
+      "enable": "Allow alerts",
+      "granted": "Alerts allowed in this browser",
+      "denied": "Alerts blocked in this browser. Re-allow them from your browser settings.",
+      "unsupported": "This browser does not support system alerts."
+    },
     "errors": {
       "permissionDenied": "Notification permission was not granted. Enable it in your browser settings.",
       "unavailable": "Notifications are not available right now. Try again.",

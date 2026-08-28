@@ -133,23 +133,51 @@ describe("AdminPage users table", () => {
     fireEvent.click(within(row).getByRole("button", { name: i18n.t("admin.actions.linkMailbox") }));
 
     const passwordInput = within(row).getByLabelText(i18n.t("admin.actions.linkMailbox"));
+    // #348: a mailbox credential, not the admin's own login — must not be
+    // offered as an autofill candidate for the admin's saved password.
+    expect(passwordInput).toHaveAttribute("autocomplete", "new-password");
     fireEvent.change(passwordInput, { target: { value: "supersecret1" } });
     fireEvent.click(within(row).getByRole("button", { name: i18n.t("admin.actions.saveCredential") }));
 
     await waitFor(() => expect(setUserCredential).toHaveBeenCalledWith("u2", "supersecret1"));
   });
 
-  it("changes the role via the select and calls setUserRole", async () => {
+  it("changes the role via the select, after confirming, and calls setUserRole", async () => {
     fetchAdminUsers.mockResolvedValue(usersPage([employeeUnlinked]));
     setUserRole.mockResolvedValue({ ...employeeUnlinked, role: "admin" });
+    renderPage();
+
+    const row = (await screen.findByText("emp@example.com")).closest("tr") as HTMLElement;
+    // #348: a role change now needs a two-step confirm — the select alone no
+    // longer applies it.
+    fireEvent.change(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") }), {
+      target: { value: "admin" },
+    });
+    expect(setUserRole).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(row).getByRole("button", { name: i18n.t("admin.actions.confirmRoleChange") }),
+    );
+
+    await waitFor(() => expect(setUserRole).toHaveBeenCalledWith("u2", "admin"));
+  });
+
+  it("cancels a role change without calling setUserRole", async () => {
+    setUserRole.mockClear();
+    fetchAdminUsers.mockResolvedValue(usersPage([employeeUnlinked]));
     renderPage();
 
     const row = (await screen.findByText("emp@example.com")).closest("tr") as HTMLElement;
     fireEvent.change(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") }), {
       target: { value: "admin" },
     });
+    fireEvent.click(
+      within(row).getByRole("button", { name: i18n.t("admin.actions.cancelRoleChange") }),
+    );
 
-    await waitFor(() => expect(setUserRole).toHaveBeenCalledWith("u2", "admin"));
+    expect(setUserRole).not.toHaveBeenCalled();
+    expect(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") })).toHaveValue(
+      "employee",
+    );
   });
 
   it("archives via a two-click inline confirm", async () => {
@@ -188,6 +216,9 @@ describe("AdminPage users table", () => {
     fireEvent.change(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") }), {
       target: { value: "admin" },
     });
+    fireEvent.click(
+      within(row).getByRole("button", { name: i18n.t("admin.actions.confirmRoleChange") }),
+    );
 
     expect(await within(row).findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });

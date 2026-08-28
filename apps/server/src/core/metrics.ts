@@ -27,6 +27,8 @@
  * before anyone could see it.
  */
 
+import { secretMatches } from "./constant-time";
+
 /** What Prometheus expects for the text exposition format it scrapes. */
 export const PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";
 
@@ -514,21 +516,13 @@ export function recordSharedMailboxCopy(result: SharedMailboxCopyResult): void {
   active?.recordSharedMailboxCopy(result);
 }
 
-async function sha256(value: string): Promise<Uint8Array> {
-  return new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
-  );
-}
-
 /**
  * Constant-time check of an `Authorization: Bearer <token>` header against the
  * configured scrape token.
  *
- * Both sides are hashed first (the same trick sessions.ts uses to store a
- * session token) so the comparison runs over two fixed 32-byte digests: a plain
- * string compare would leak the length of the secret and how many of its
- * leading characters a guess got right, and the loop below deliberately has no
- * early exit.
+ * The comparison itself moved to core/constant-time.ts (GH #346) so the
+ * break-glass credential in setup/bootstrap.ts, which was checking a `===` on
+ * two hex digests, shares this one instead of having its own.
  */
 export async function bearerTokenMatches(
   header: string | undefined,
@@ -536,9 +530,5 @@ export async function bearerTokenMatches(
 ): Promise<boolean> {
   const scheme = "bearer ";
   if (!header || header.slice(0, scheme.length).toLowerCase() !== scheme) return false;
-  const provided = header.slice(scheme.length).trim();
-  const [a, b] = await Promise.all([sha256(provided), sha256(expected)]);
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a[i]! ^ b[i]!;
-  return diff === 0;
+  return secretMatches(header.slice(scheme.length).trim(), expected);
 }

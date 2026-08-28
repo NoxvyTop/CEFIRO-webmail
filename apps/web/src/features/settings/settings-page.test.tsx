@@ -300,6 +300,7 @@ describe("settings screen accessibility (GH #252)", () => {
     ["settings.nav.filters", "filters.title"],
     ["settings.nav.vacation", "vacation.title"],
     ["settings.nav.contacts", "contacts.title"],
+    ["settings.nav.notifications", "notifications.title"],
   ])("passes an axe run over the %s section", async (navKey, headingKey) => {
     renderPage();
 
@@ -319,5 +320,36 @@ describe("settings screen accessibility (GH #252)", () => {
 
     await screen.findByRole("alert");
     await expectNoAxeViolations(document.body);
+  });
+});
+
+// GH #337: the nav entry used to appear only when GET /api/push/status said
+// push was enabled, so on a server without VAPID keys "Notificaciones" simply
+// did not exist — and the in-tab alert, which needs no server support at all,
+// had nowhere to live.
+describe("SettingsPage notifications section (GH #337)", () => {
+  it("offers Notificaciones even when the server has background push off", async () => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("settings.nav.label") });
+    fireEvent.click(within(nav).getByRole("button", { name: i18n.t("settings.nav.notifications") }));
+
+    expect(
+      await screen.findByRole("heading", { name: i18n.t("notifications.title") }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(i18n.t("notifications.unavailableOnServer")),
+    ).toBeInTheDocument();
+  });
+
+  it("hosts the in-tab browser permission in that same section", async () => {
+    renderPage();
+
+    const nav = await screen.findByRole("navigation", { name: i18n.t("settings.nav.label") });
+    fireEvent.click(within(nav).getByRole("button", { name: i18n.t("settings.nav.notifications") }));
+
+    expect(
+      await screen.findByText(i18n.t("notifications.browser.description")),
+    ).toBeInTheDocument();
   });
 });

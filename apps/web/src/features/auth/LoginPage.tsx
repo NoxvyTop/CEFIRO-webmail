@@ -193,6 +193,7 @@ export function LoginPage() {
                 <input
                   id="bootstrap-password"
                   type="password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(event) => {
                     setPassword(event.target.value);

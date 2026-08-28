@@ -8,7 +8,7 @@ import { createMailCredentialsRepo } from "../../infra/repos/mail-credentials";
 import { createAiSummariesRepo } from "../../infra/repos/ai-summaries";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { capThreadMessages, createAiRouter, stripQuotedTrail, threadContentKey } from "./router";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import type { AiClient } from "../../core/ai";

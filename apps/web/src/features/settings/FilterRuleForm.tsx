@@ -137,6 +137,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
               ))}
             </select>
             <input
+              name="condition-value"
               aria-label={`${t("filters.value")} ${index + 1}`}
               value={condition.value}
               maxLength={500}
@@ -212,6 +213,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
             )}
             {action.type === "flag" && (
               <input
+                name="action-keyword"
                 aria-label={`${t("filters.keyword")} ${index + 1}`}
                 value={action.keyword}
                 maxLength={64}
@@ -254,6 +256,7 @@ export function FilterRuleForm({ initial, mailboxes, onSubmit, onCancel }: Props
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
+          name="rule-enabled"
           checked={enabled}
           onChange={(event) => setEnabled(event.target.checked)}
         />

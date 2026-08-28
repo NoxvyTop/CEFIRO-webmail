@@ -6,7 +6,9 @@
 // an offline layer, and cannot break the SPA it ships beside.
 //
 // The push payload is the privacy contract from the server (core/push.ts):
-// `{ title, body, targetId? }` and nothing else — never a message body.
+// `{ title, body, targetId?, accountId? }` and nothing else — never a message
+// body. `accountId` is present only when the target thread lives in a SHARED
+// account (GH #337); the user's own account is the default and is never named.
 
 self.addEventListener("push", (event) => {
   let payload = {};
@@ -19,10 +21,14 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "Céfiro";
   const options = {
     body: payload.body || "",
-    icon: "/favicon.svg",
-    badge: "/favicon.svg",
-    // Carried through to the click handler so it can open the right thread.
-    data: { targetId: payload.targetId },
+    // GH #350: PNG, not the SVG favicon — Android Chrome silently ignores an
+    // SVG here and shows no icon, and `badge` is rendered as a monochrome MASK
+    // (only its alpha survives), so it needs its own single-colour art.
+    icon: "/icon-192.png",
+    badge: "/badge-96.png",
+    // Carried through to the click handler so it can open the right thread —
+    // in the right account (GH #337).
+    data: { targetId: payload.targetId, accountId: payload.accountId },
     // Collapse repeat pushes about the same thread into one notification.
     tag: payload.targetId || undefined,
   };
@@ -33,10 +39,18 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetId = event.notification.data && event.notification.data.targetId;
-  // The reader opens a thread from the `thread` query param (see MailPage), so
+  const data = event.notification.data || {};
+  const targetId = data.targetId;
+  const accountId = data.accountId;
+  // The reader opens a thread from the `thread` query param, and reads the
+  // active shared mailbox from `account` (ACTIVE_ACCOUNT_PARAM in MailPage), so
   // deep-link straight to it; fall back to the inbox when there is no target.
-  const url = targetId ? `/?thread=${encodeURIComponent(targetId)}` : "/";
+  //
+  // GH #337: without `account` a push about a shared mailbox opened the
+  // PERSONAL view, where that thread id does not exist — the notification led
+  // to an empty reader.
+  const account = accountId ? `account=${encodeURIComponent(accountId)}&` : "";
+  const url = targetId ? `/?${account}thread=${encodeURIComponent(targetId)}` : "/";
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {

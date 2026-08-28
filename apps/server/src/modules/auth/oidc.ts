@@ -51,12 +51,49 @@ export function withOidcTransportErrors(fetchFn: typeof fetch): typeof fetch {
   }) as typeof fetch;
 }
 
+/**
+ * `url` uses `https:`, or `allowInsecureIssuer` is set (GH #347).
+ *
+ * Guards the issuer itself and every endpoint discovery hands back
+ * (`token_endpoint`, `jwks_uri`, `authorization_endpoint`): all of them are
+ * used verbatim, including sending the client_secret to `token_endpoint`
+ * (auth/router.ts exchangeCode), so an http URL anywhere in that set lets
+ * whoever controls the network path impersonate the IdP or read the secret.
+ * A malformed URL fails the same way an insecure one does — there is nothing
+ * safe to do with either.
+ */
+function requireHttps(url: string, allowInsecureIssuer: boolean): boolean {
+  if (allowInsecureIssuer) return true;
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export async function discover(
   issuer: string,
   fetchFn: typeof fetch = fetch,
   /** Outbound deadline — see core/deadline.ts (GH #165). */
   timeoutMs: number = DEFAULT_OIDC_TIMEOUT_MS,
+  /**
+   * Skip the https: requirement on the issuer and every endpoint discovery
+   * returns (GH #347). OFF by default. The one legitimate use is a local IdP
+   * double that cannot terminate TLS — e2e/oidc-idp.ts, served over plain
+   * HTTP on 127.0.0.1/localhost. This is a caller-supplied flag rather than a
+   * NODE_ENV check because the e2e suite deliberately boots its app servers
+   * with NODE_ENV=production (playwright.config.ts, core/config.ts's
+   * WEAK_MASTER_KEY_ENVS) to exercise the same config a real production boot
+   * enforces — a NODE_ENV-keyed escape hatch would have to loosen THAT too.
+   * See OIDC_ALLOW_INSECURE_ISSUER in core/config.ts.
+   */
+  allowInsecureIssuer = false,
 ): Promise<OidcEndpoints> {
+  // Refused before any outbound call: an insecure issuer must not even get to
+  // amplify into a fetch against whatever it names.
+  if (!requireHttps(issuer, allowInsecureIssuer)) {
+    throw new DomainError("oidc_discovery_invalid", 502, "errors.oidc_discovery_invalid");
+  }
   const wellKnown = `${issuer.replace(/\/$/, "")}/.well-known/openid-configuration`;
   // Deadline first, transport mapping outermost: the deadline's DomainError has
   // to reach the wrapper as a DomainError so it passes through as 504 instead of
@@ -68,10 +105,26 @@ export async function discover(
     throw new DomainError("oidc_discovery_failed", 502, "errors.oidc_discovery_failed");
   }
   const doc = (await res.json()) as {
+    issuer: string;
     authorization_endpoint: string;
     token_endpoint: string;
     jwks_uri: string;
   };
+  // OIDC Discovery §4.3: "The issuer value returned MUST be identical to the
+  // Issuer URL that was directly used to retrieve the configuration
+  // information" — case-sensitive, trailing slash and all. A mismatch means
+  // this document did not come from the issuer that was configured, which is
+  // exactly what a malicious or misconfigured discovery response looks like.
+  if (doc.issuer !== issuer) {
+    throw new DomainError("oidc_issuer_mismatch", 502, "errors.oidc_issuer_mismatch");
+  }
+  if (
+    !requireHttps(doc.authorization_endpoint, allowInsecureIssuer) ||
+    !requireHttps(doc.token_endpoint, allowInsecureIssuer) ||
+    !requireHttps(doc.jwks_uri, allowInsecureIssuer)
+  ) {
+    throw new DomainError("oidc_discovery_invalid", 502, "errors.oidc_discovery_invalid");
+  }
   return {
     authorizationEndpoint: doc.authorization_endpoint,
     tokenEndpoint: doc.token_endpoint,

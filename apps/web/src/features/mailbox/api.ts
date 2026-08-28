@@ -26,7 +26,10 @@ function accountQuery(accountId?: string): string {
   return accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
 }
 
-async function parseError(res: Response): Promise<never> {
+// Exported so callers outside the mail feature that share this same ApiError
+// envelope shape (GH #341: useAuth's /api/auth/me) can throw the same
+// MailApiError instead of re-implementing the code-extraction dance.
+export async function parseError(res: Response): Promise<never> {
   let code = "internal";
   try {
     code = ((await res.json()) as { code?: string }).code ?? "internal";
@@ -35,6 +38,12 @@ async function parseError(res: Response): Promise<never> {
   }
   throw new MailApiError(res.status, code);
 }
+
+// GH #13/#50: the one cache key for the shared-mailbox list, shared by the
+// "Buzones compartidos" page, the mail view banner and (since #340) the
+// sidebar's group rows, so all three read one entry instead of each declaring
+// their own copy of it.
+export const SHARED_ACCOUNTS_QUERY_KEY = ["mail", "shared-accounts"] as const;
 
 // GH #13/#50: the shared mailboxes the signed-in member can browse — the
 // non-personal accounts Stalwart lists in their JMAP session. The account
@@ -105,6 +114,27 @@ export async function updateMessage(id: string, update: EmailUpdate, accountId?:
   if (!res.ok) return parseError(res);
 }
 
+// #343: the list and the reader work on CONVERSATIONS, so archiving, moving to
+// Trash or restoring one has to act on every message of the thread that sits in
+// the mailbox being viewed — acting on the newest message alone left the row in
+// Recibidos, now showing the previous message of the same conversation.
+//
+// The server exposes no batch update (PATCH /api/mail/messages/:id is strictly
+// per message, see apps/server/src/modules/mail/router.ts), so this issues one
+// request per id. `allSettled` rather than `all`: a rejection must not abandon
+// the requests already in flight and leave the conversation half-moved. The
+// first rejection is re-thrown so the caller's onError reports it — and, in
+// particular, so a 401 still reaches the session revalidation.
+export async function updateMessages(
+  ids: string[],
+  update: EmailUpdate,
+  accountId?: string,
+): Promise<void> {
+  const results = await Promise.allSettled(ids.map((id) => updateMessage(id, update, accountId)));
+  const rejected = results.find((result) => result.status === "rejected");
+  if (rejected) throw (rejected as PromiseRejectedResult).reason;
+}
+
 // GH #133: permanently destroys a message via DELETE /api/mail/messages/:id
 // (Email/set `destroy` on the server). Irreversible — the server refuses
 // unless the message is actually sitting in Trash; the caller must only ever
@@ -115,6 +145,15 @@ export async function destroyMessage(id: string, accountId?: string): Promise<vo
     method: "DELETE",
   });
   if (!res.ok) return parseError(res);
+}
+
+// #343: the destroy counterpart of updateMessages above — same per-id fan-out,
+// same first-rejection-wins reporting. Only ever called on messages already in
+// Trash (the server refuses anything else).
+export async function destroyMessages(ids: string[], accountId?: string): Promise<void> {
+  const results = await Promise.allSettled(ids.map((id) => destroyMessage(id, accountId)));
+  const rejected = results.find((result) => result.status === "rejected");
+  if (rejected) throw (rejected as PromiseRejectedResult).reason;
 }
 
 // GH #13/#50 (G-2): copies a message from a shared mailbox into the member's

@@ -110,7 +110,9 @@ describe("SharedMailboxesPage (GH #13/#50 G-4)", () => {
     const toggle = await screen.findByLabelText(copyToggleName("Ventas"));
     fireEvent.click(toggle);
 
-    expect(await screen.findByText(i18n.t("sharedMailboxes.copyError"))).toBeInTheDocument();
+    // #348: an error toast is an assertive alert, not a polite status — it
+    // must interrupt, not wait to be noticed.
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sharedMailboxes.copyError"));
     expect(setSharedAccountCopyPreference).toHaveBeenCalledWith("acc-ventas", true);
     await waitFor(() => expect(screen.getByLabelText(copyToggleName("Ventas"))).not.toBeChecked());
   });

@@ -53,7 +53,8 @@ test("the first run configures SSO, mints the first admin, and closes the wizard
   // database this is where the spec would say so, instead of failing three
   // steps later for a vaguer reason.
   const status = page.getByText(/SSO configurado:/);
-  await expect(status).toContainText("SSO configurado: no");
+  // #348 normalised the status words to "Sí"/"No" (they are i18n keys now).
+  await expect(status).toContainText("SSO configurado: No");
   await expect(status).toContainText("Usuarios: 0");
 
   // An invalid issuer never reaches the server — setupSsoSchema requires a URL

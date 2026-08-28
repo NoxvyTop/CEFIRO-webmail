@@ -63,6 +63,27 @@ describe("setup page", () => {
     ).toBeInTheDocument();
   });
 
+  // #348: the wizard interpolated the raw English literals "yes"/"no" into
+  // the status line, and left the role/locale <option> labels as untranslated
+  // English words ("employee", "admin", "es", "en") regardless of locale.
+  it("localizes the sso status line and the role/locale option labels", async () => {
+    await connectAt(async (input) => {
+      const path = String(input);
+      if (path.includes("/api/setup/status")) return new Response(CONNECTED_STATUS);
+      return new Response("{}", { status: 404 });
+    });
+
+    expect(screen.getByText("SSO configurado: No — Usuarios: 0")).toBeInTheDocument();
+
+    const roleSelect = screen.getByLabelText("Rol") as HTMLSelectElement;
+    const roleOptionLabels = Array.from(roleSelect.options).map((option) => option.textContent);
+    expect(roleOptionLabels).toEqual(["Empleado", "Administrador"]);
+
+    const localeSelect = screen.getByLabelText("Idioma") as HTMLSelectElement;
+    const localeOptionLabels = Array.from(localeSelect.options).map((option) => option.textContent);
+    expect(localeOptionLabels).toEqual(["Español", "Inglés"]);
+  });
+
   it("connects and sends the sso form with the token header", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -86,7 +107,11 @@ describe("setup page", () => {
       target: { value: "https://auth.noxvytop.com" },
     });
     fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "webmail" } });
-    fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "secret-1" } });
+    const clientSecretInput = screen.getByLabelText("Client Secret");
+    // #348: not a login credential — the browser must not offer to save this
+    // as a password, nor autofill an unrelated saved password into it.
+    expect(clientSecretInput).toHaveAttribute("autocomplete", "off");
+    fireEvent.change(clientSecretInput, { target: { value: "secret-1" } });
     fireEvent.click(screen.getByText("Guardar"));
 
     await waitFor(() => {

@@ -10,7 +10,7 @@ import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
 import { createSentRecipientsRepo, type SentRecipientsRepo } from "../../infra/repos/sent-recipients";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createMailRouter } from "./router";
 import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";
 

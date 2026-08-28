@@ -82,7 +82,7 @@ al desplegar, no a mitad de la jornada.
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha. Si se cambia, hay que ajustar también el `HEALTHCHECK` del Dockerfile. |
-| `NODE_ENV` | `development` | `production` sirve la SPA estática y **fuerza cookies `Secure`** aunque `APP_URL` sea `http://`. En producción va siempre a `production`. |
+| `NODE_ENV` | `development` | `production` sirve la SPA estática. **No decide el atributo `Secure` de las cookies**: desde #288 sale del esquema con el que el cliente llegó al edge (`X-Forwarded-Proto` dentro de `TRUSTED_PROXY_HOPS`, o el esquema del socket si no hay proxy de confianza). En producción va siempre a `production`. |
 | `BOOTSTRAP_MODE` | `false` | Modo de primer arranque/recuperación. Ver el checklist. **En operación normal, `false`.** |
 | `BOOTSTRAP_PASSWORD` | — | Credencial de emergencia. **Obligatoria si `BOOTSTRAP_MODE=true`** (el proceso no arranca sin ella) e ignorada si no. Mínimo 24 caracteres; se genera con `openssl rand -base64 24`. Es contraseña del login de emergencia **y** token de `/setup`: va en el mismo gestor de secretos que `MASTER_KEY` y se retira al volver a `false`. |
 | `SESSION_TTL_HOURS` | `12` | Vida absoluta de la sesión (tope no extensible). |
@@ -262,6 +262,7 @@ cuelgue el servicio.
 | `OIDC_TIMEOUT_MS` | `10000` | Plazo de las llamadas al proveedor OIDC. |
 | `MAX_BODY_BYTES` | `2097152` | Techo global del cuerpo de petición (2 MiB). Excepto la subida de adjuntos, que va en streaming. |
 | `TRUSTED_PROXY_HOPS` | `1` | Cuántos proxies añaden su salto a `X-Forwarded-For`. De ello dependen los cinco límites por IP y la columna `ip` de la auditoría. Ver [Proxies de confianza](#proxies-de-confianza). |
+| `OIDC_ALLOW_INSECURE_ISSUER` | `false` | Permite un `issuer` (y unos `token_endpoint`/`jwks_uri`/`authorization_endpoint`) por `http:` en vez de `https:`. **No activar en producción**: existe solo para el doble local de la suite e2e (`e2e/oidc-idp.ts`), que no puede terminar TLS. Deliberadamente no depende de `NODE_ENV` — la suite e2e arranca a propósito con `NODE_ENV=production`. |
 
 ### Proxies de confianza
 
@@ -300,6 +301,14 @@ Traefik (`forwardedHeaders`) y Caddy (`X-Forwarded-For`) anexan por defecto y no
 necesitan nada más. Un proxy configurado con `proxy_set_header X-Forwarded-For
 $remote_addr` (sustituir) **también funciona** con `1`: deja una cadena de un
 solo elemento escrito por él.
+
+**`X-Forwarded-Proto` no se anexa.** `$scheme` **sustituye** la cabecera entera,
+y lo mismo hacen Cloudflare y el resto de CDN, así que con `TRUSTED_PROXY_HOPS=2`
+llega **un solo valor**, no dos. De ahí sale el atributo `Secure` de las cookies
+(#288): cuando la cadena es más corta que el número de saltos declarado se lee la
+entrada **de más a la derecha**, la que escribió el proxy más interno — antes se
+caía al esquema del socket del contenedor (`http`) y la cookie de sesión salía
+sin `Secure` (#334). Sin la cabecera, manda el esquema del socket.
 
 **Streaming (SSE).** `/api/mail/events` es una respuesta de larga duración.
 Responde con `X-Accel-Buffering: no` para que un nginx con `proxy_buffering on`
@@ -609,9 +618,11 @@ no texto para el operador. El `code` es lo que se busca.
 | `invalid_body`, `invalid_query`, `invalid_identity`, `invalid_order` | 400 | El cliente mandó algo que no valida. |
 | `unauthorized` | 401 | Sin sesión o sesión caducada. Normal en `/api/auth/me`. |
 | `forbidden` | 403 | Sesión válida sin permiso de administración. |
+| `csrf` | 403 | Mutación rechazada por la puerta CSRF (#335): `Sec-Fetch-Site: same-site`/`cross-site`, `Origin`/`Referer` que no es el de `APP_URL`, o ninguna de las tres cabeceras. Un cliente que no sea navegador (`curl`, script de operación) se admite **solo** con una cabecera de autenticación propia — hoy únicamente `x-setup-token`, la del asistente de instalación; para todo lo demás debe mandar `Origin: <APP_URL>`. Deja una línea `csrf refused` con la ruta y el motivo. |
 | `not_found` | 404 | Ruta o recurso inexistente. |
 | `user_exists`, `contact_exists`, `last_admin`, `self_demotion`, `self_archive`, `not_in_trash`, `destroy_failed`, `update_failed` | 409 | Conflicto de estado; la operación se rechaza a propósito. |
 | `payload_too_large` | 413 | Cuerpo por encima de `MAX_BODY_BYTES`. |
+| `unsupported_media_type` | 415 | Mutación con cuerpo cuyo `Content-Type` no es `application/json` (#335). `POST /api/mail/blobs` está exento por ser binario. |
 | `too_many_requests` | 429 | Límite del login de emergencia. |
 | `rate_limited` | 429 | Límite de `/api/health` o `/metrics`. |
 | `ai_rate_limited` | 429 | Cuota de IA por usuario agotada. |

@@ -371,6 +371,25 @@ describe("ThreadView", () => {
 
       expect(await screen.findByText("11:05")).toBeInTheDocument();
     });
+
+    // #348: the compact "11:05"/"Ayer"/"13 jul" label is meant to be
+    // skimmed — the exact date/time must still be available on demand.
+    it("carries the full absolute date/time as a title attribute on the compact label", async () => {
+      const state = structuredClone(thread);
+      state.emails[1]!.receivedAt = new Date(2026, 6, 21, 11, 5, 0).toISOString();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const dateLabel = await screen.findByText("11:05");
+      expect(dateLabel).toHaveAttribute("title", expect.stringContaining("2026"));
+    });
   });
 
   it("keeps action buttons from wrapping and lets the hint shrink so it truncates as a unit", async () => {
@@ -548,7 +567,8 @@ describe("ThreadView", () => {
       const actionsBar = await screen.findByTestId("thread-actions-bar");
       fireEvent.click(within(actionsBar).getByRole("button", { name: i18n.t("mail.copyToInbox") }));
 
-      expect(await screen.findByText(i18n.t("mail.errors.copy_failed"))).toBeInTheDocument();
+      // #348: an error toast is an assertive alert, not a polite status.
+      expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.copy_failed"));
     });
   });
 
@@ -972,6 +992,28 @@ describe("ThreadView", () => {
       expect(ventasItem).toHaveAttribute("aria-checked", "false");
       expect(within(menu).getByRole("menuitemcheckbox", { name: "Soporte" })).toBeInTheDocument();
       expect(within(menu).queryByRole("menuitemcheckbox", { name: "urgente" })).not.toBeInTheDocument();
+    });
+
+    // #348: WAI-ARIA menu pattern — opening the menu must move focus onto
+    // its first item, and ArrowDown/ArrowUp must move between items.
+    it("focuses the first label on open and moves focus with arrow keys", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const soporte: CustomLabel = { slug: "soporte", name: "Soporte", color: "#2FB8C4" };
+      stubFetch(NO_IDENTITIES, [ventas, soporte]);
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+
+      const menu = await screen.findByRole("menu");
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      const soporteItem = within(menu).getByRole("menuitemcheckbox", { name: "Soporte" });
+      expect(ventasItem).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: "ArrowDown" });
+      expect(soporteItem).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: "ArrowUp" });
+      expect(ventasItem).toHaveFocus();
     });
 
     it("toggling a custom label applies the keyword and shows it as a chip next to the subject", async () => {
@@ -1962,6 +2004,48 @@ describe("ThreadView", () => {
     });
   });
 
+  // GH #345: the bare `<p role="alert">` sat ABOVE the action bar that holds
+  // the `lg:hidden` back button — below `lg`, MailPage hides the list while
+  // `?thread=` is set (MailPage.tsx), so a failed thread load left a mobile
+  // reader with no way back and no way to retry.
+  describe("thread load error state (GH #345)", () => {
+    it("offers a back button and a retry button instead of a dead-end alert", async () => {
+      // 404 (mail_not_configured): mailRetry gives up immediately for any
+      // 4xx, so the alert appears on the very first failure with no retry
+      // delay to wait out.
+      let calls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/api/mail/threads/")) {
+            calls += 1;
+            if (calls === 1) {
+              return new Response(JSON.stringify({ code: "mail_not_configured" }), { status: 404 });
+            }
+            return new Response(JSON.stringify(thread));
+          }
+          if (url.includes("/api/mail/identities")) return new Response(JSON.stringify(NO_IDENTITIES));
+          if (url.includes("/api/mail/preferences")) {
+            return new Response(JSON.stringify({ groupMailInMainInbox: true, customLabels: [] }));
+          }
+          if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+          return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+        }),
+      );
+      renderThread();
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain(i18n.t("mail.errors.mail_not_configured"));
+      expect(screen.getByRole("button", { name: i18n.t("mail.backToList") })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+      await screen.findByRole("heading", { name: "Re: Quarterly report" });
+      expect(calls).toBe(2);
+    });
+  });
+
   // GH #92: the last message gets a subtle visual highlight — a real border
   // on an elevated bg-panel card with shadow-card — so it stands out from
   // earlier (or collapsed) messages above it.
@@ -2843,7 +2927,296 @@ describe("sender trust badge and trust-this-service action (GH #314)", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: trustAction() }));
 
-    expect(await screen.findByText(i18n.t("mail.errors.invalid_domain"))).toBeInTheDocument();
+    // #348: an error toast is an assertive alert, not a polite status.
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("mail.errors.invalid_domain"));
     expect(screen.getByRole("button", { name: trustAction() })).toBeInTheDocument();
+  });
+});
+
+// #339: the reader offered "Resumir con IA" / "Resumir conversación" even on an
+// instance with no AI provider configured, where the very first click can only
+// come back as `ai_disabled`. The gate is the same `["ai","status"]` query the
+// composer already reads, so both surfaces agree on one answer per session.
+describe("ThreadView — AI actions gate (#339)", () => {
+  function stubAiThread(aiEnabled: boolean) {
+    const state = structuredClone(thread);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/ai/status")) {
+        return new Response(JSON.stringify({ enabled: aiEnabled }));
+      }
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("renders no summarize action while the server reports AI disabled", async () => {
+    stubAiThread(false);
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("button", { name: i18n.t("mail.summarizeWithAi") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the conversation summary action once the server reports AI enabled", async () => {
+    stubAiThread(true);
+    renderThread();
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the action hidden when the status endpoint itself fails", async () => {
+    // fetchAiStatus resolves `false` on any non-ok answer — AI off is the safe
+    // default, so a 500 must not paint an action that cannot work.
+    const state = structuredClone(thread);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});
+
+// #343: archive/unarchive/delete acted on `lastEmail` alone, so a conversation
+// whose other messages were still in Recibidos stayed in the list right after
+// "Archivar", now showing the previous message. And none of these mutations had
+// an onError, so a 5xx/401 left the reader untouched with nothing said.
+describe("ThreadView — conversation-wide moves and error reporting (#343)", () => {
+  function stubMoveThread(options: {
+    patch?: () => Response;
+    mailboxIds?: [string[], string[]];
+  } = {}) {
+    const state = structuredClone(thread);
+    const [firstBox, secondBox] = options.mailboxIds ?? [["mb-inbox"], ["mb-inbox"]];
+    state.emails[0]!.mailboxIds = firstBox;
+    state.emails[1]!.mailboxIds = secondBox;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/mail/messages/") && method === "PATCH") {
+        return options.patch ? options.patch() : new Response(null, { status: 204 });
+      }
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function renderReader(currentMailboxId: string | null = "mb-inbox") {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ToastProvider>
+            <ThreadView
+              threadId="t1"
+              archiveMailboxId="arch1"
+              inboxMailboxId="mb-inbox"
+              trashMailboxId="trash1"
+              currentMailboxId={currentMailboxId}
+            />
+          </ToastProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return { invalidateSpy };
+  }
+
+  function movePatchIds(fetchMock: ReturnType<typeof vi.fn>): string[] {
+    return fetchMock.mock.calls
+      .filter(([input, init]) => {
+        const body = (init as RequestInit | undefined)?.body;
+        return (
+          String(input).includes("/api/mail/messages/") &&
+          (init as RequestInit | undefined)?.method === "PATCH" &&
+          typeof body === "string" &&
+          body.includes("mailboxIds")
+        );
+      })
+      .map(([input]) => String(input).split("/").pop() as string);
+  }
+
+  it("archives every message of the conversation sitting in the mailbox being viewed", async () => {
+    const fetchMock = stubMoveThread();
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock).sort()).toEqual(["e1", "e2"]));
+  });
+
+  it("leaves the conversation's messages in other mailboxes where they are", async () => {
+    // e1 is the sent copy in Enviados: archiving from Recibidos must not move it.
+    const fetchMock = stubMoveThread({ mailboxIds: [["mb-sent"], ["mb-inbox"]] });
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock)).toEqual(["e2"]));
+  });
+
+  it("deletes every message of the conversation in the current mailbox", async () => {
+    const fetchMock = stubMoveThread();
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.delete") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock).sort()).toEqual(["e1", "e2"]));
+  });
+
+  it("falls back to the newest message when the view is not scoped to a mailbox", async () => {
+    // A label/starred view spans folders — there is no "current mailbox" to
+    // scope the move to, so the action keeps its old single-message meaning.
+    const fetchMock = stubMoveThread();
+    renderReader(null);
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() => expect(movePatchIds(fetchMock)).toEqual(["e2"]));
+  });
+
+  it("reports a failed archive with a toast instead of leaving the reader unchanged", async () => {
+    stubMoveThread({
+      patch: () => new Response(JSON.stringify({ code: "database_unavailable" }), { status: 503 }),
+    });
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    expect(
+      await screen.findByText(i18n.t("mail.errors.database_unavailable")),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a failed star toggle", async () => {
+    stubMoveThread({
+      patch: () => new Response(JSON.stringify({ code: "database_unavailable" }), { status: 503 }),
+    });
+    renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.star") }));
+
+    expect(
+      await screen.findByText(i18n.t("mail.errors.database_unavailable")),
+    ).toBeInTheDocument();
+  });
+
+  it("revalidates the session when a move is refused with 401", async () => {
+    stubMoveThread({
+      patch: () => new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 }),
+    });
+    const { invalidateSpy } = renderReader();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.archive") }));
+
+    await vi.waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth", "me"] }),
+    );
+  });
+});
+
+// #340: a group address is one of the account's identities, and describeAudience
+// counted every identity as "me" — so a message delivered to the group's mailbox
+// read "para mí" even though the user's own address is nowhere on it. Only the
+// signed-in user's own address is "me"; a group address is named.
+describe("ThreadView — audience of group mail (#340)", () => {
+  function stubGroupThread() {
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [{ name: null, email: "ventas@example.com" }];
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/me")) {
+        return new Response(
+          JSON.stringify({
+            userId: "u1", email: "bob@example.com", displayName: "Bob",
+            role: "employee", locale: "es",
+          }),
+        );
+      }
+      if (url.includes("/api/mail/identities")) {
+        return new Response(
+          JSON.stringify([
+            { id: "i1", name: "Bob", email: "bob@example.com" },
+            { id: "i2", name: "Ventas", email: "ventas@example.com" },
+          ]),
+        );
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  it("names the group address instead of claiming the message was for me", async () => {
+    vi.stubGlobal("fetch", stubGroupThread());
+    renderThread();
+
+    expect(
+      await screen.findByText(/carol@example\.com · para ventas@example\.com/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/carol@example\.com · para mí/)).not.toBeInTheDocument();
+  });
+
+  it("still says 'para mí' when the message really is addressed to the user", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [{ name: "Bob", email: "bob@example.com" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/auth/me")) {
+          return new Response(
+            JSON.stringify({
+              userId: "u1", email: "bob@example.com", displayName: "Bob",
+              role: "employee", locale: "es",
+            }),
+          );
+        }
+        if (url.includes("/api/mail/identities")) {
+          return new Response(
+            JSON.stringify([
+              { id: "i1", name: "Bob", email: "bob@example.com" },
+              { id: "i2", name: "Ventas", email: "ventas@example.com" },
+            ]),
+          );
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    expect(await screen.findByText(/carol@example\.com · para mí/)).toBeInTheDocument();
   });
 });

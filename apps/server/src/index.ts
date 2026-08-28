@@ -372,7 +372,8 @@ log("info", "push features", { enabled: pushClient !== null });
 // outbound deadline reaches it (GH #165). The JWKS fetch behind createVerifier
 // carries jose's own 5s `timeoutDuration` default and needs nothing from us.
 const oidcClient: OidcClient = {
-  discover: (issuer) => discover(issuer, undefined, config.oidcTimeoutMs),
+  discover: (issuer) =>
+    discover(issuer, undefined, config.oidcTimeoutMs, config.oidcAllowInsecureIssuer),
   exchangeCode: (input) => exchangeCode({ ...input, timeoutMs: config.oidcTimeoutMs }),
   createVerifier: ({ jwksUri, issuer, clientId }) =>
     createIdTokenVerifier({ issuer, clientId, keySource: remoteKeySource(jwksUri) }),
@@ -426,6 +427,8 @@ const app = createApp({
   metricsToken: config.metricsToken,
   // The proxy contract every per-IP ceiling is keyed on (GH #238).
   trustedProxyHops: config.trustedProxyHops,
+  // The one origin a mutating request may come from (GH #335). See core/csrf.ts.
+  appUrl: config.appUrl,
   instanceSettings,
   authRouter: createAuthRouter({
     sessions,
@@ -461,6 +464,12 @@ const app = createApp({
     // worker reads, so a message the member pulled themselves is not
     // delivered to them again by the next cycle.
     sharedMailboxCopies,
+    // GH #337: the /events tap is where Web Push is emitted from — an Email
+    // state advance on this user's subscription becomes one push per device.
+    // `pushClient` is null when VAPID is unconfigured, which turns the emitter
+    // off without turning the tap off.
+    pushClient,
+    pushSubscriptions,
     timeoutMs: config.jmapTimeoutMs,
     // The raw-fetch routes (SSE, blob up/download) must present the mailbox
     // credential the same way the JMAP client does, or `bearer` would work for

@@ -12,7 +12,7 @@ import {
 import { createSsoConfigRepo, type SsoConfigRepo } from "../../infra/repos/sso-config";
 import { createAuditRepo, type AuditRepo } from "../../infra/repos/audit";
 import { importMasterKey } from "../credentials/crypto";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createBootstrap } from "./bootstrap";
 import type { SetupCompletion } from "./completion";
 import { createSetupRouter } from "./router";
@@ -268,6 +268,49 @@ describe("setup api hardening", () => {
       body: "{ not json",
     });
     expect(res.status).toBe(400);
+  });
+
+  // GH #347: admin/router.ts's POST /users already closes this TOCTOU (GH
+  // #277) — the findByEmail pre-check is a courtesy, not the guarantee, since
+  // two requests creating the same email concurrently can both read "not
+  // found" and both reach the insert, where the unique index on users.email
+  // lets exactly one win. setup/router.ts's POST /users ran the same
+  // pre-check-then-insert shape without the catch, so the loser's raw 23505
+  // escaped as 500 `internal` instead of the same 409 `user_exists` the
+  // pre-check answers.
+  it("POST /users: a duplicate that races the unique index returns 409, not 500", async () => {
+    const racingUsers = {
+      async findByEmail() {
+        return null;
+      },
+      async create() {
+        throw Object.assign(new Error("duplicate key value violates unique constraint"), {
+          code: "23505",
+        });
+      },
+    } as unknown as UsersRepo;
+    const racingApp = createApp({
+      setupRouter: createSetupRouter({
+        bootstrap,
+        users: racingUsers,
+        mailCredentials: createMailCredentialsRepo(sql, masterKey),
+        ssoConfig: createSsoConfigRepo(sql, masterKey),
+        audit: createAuditRepo(sql),
+        completion: MID_SETUP,
+      }),
+    });
+
+    const res = await racingApp.request("/api/setup/users", {
+      method: "POST",
+      headers: { "x-setup-token": bootstrap.password!, "content-type": "application/json" },
+      body: JSON.stringify({
+        email: `race-${crypto.randomUUID()}@noxvytop.com`,
+        displayName: "Race",
+        mailPassword: "mailbox-pass-123",
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("user_exists");
   });
 });
 

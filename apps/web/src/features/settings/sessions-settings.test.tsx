@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import i18n from "../../app/i18n";
 import type { ActiveSession } from "@webmail/shared";
+import { formatRelativeTime } from "../../app/ui/relative-time";
 import { MailApiError } from "../mailbox/api";
 import { SessionsSettings, deviceLabel } from "./SessionsSettings";
 
@@ -81,6 +82,49 @@ describe("SessionsSettings", () => {
     ).toBeInTheDocument();
   });
 
+  // #348: two sessions that share the same coarse "Chrome · Windows" device
+  // label were otherwise indistinguishable — the creation date is the one
+  // thing that tells them apart.
+  it("shows each session's creation date, distinguishing two sessions with the same device label", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(NOW));
+    try {
+      const olderTwin: ActiveSession = {
+        ...current,
+        id: "s-older-twin",
+        current: false,
+        createdAt: "2026-07-20T09:00:00.000Z",
+      };
+      renderSettings([current, olderTwin]);
+
+      await screen.findAllByText("Chrome · Windows");
+      expect(
+        screen.getByText(
+          i18n.t("settings.sessions.created", {
+            time: formatRelativeTime(current.createdAt, {
+              now: new Date(NOW),
+              yesterdayLabel: i18n.t("mail.yesterday"),
+              locale: i18n.language,
+            }),
+          }),
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          i18n.t("settings.sessions.created", {
+            time: formatRelativeTime(olderTwin.createdAt, {
+              now: new Date(NOW),
+              yesterdayLabel: i18n.t("mail.yesterday"),
+              locale: i18n.language,
+            }),
+          }),
+        ),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows the unknown-device fallback for a session with no user agent", async () => {
     renderSettings([current, { ...other, userAgent: null }]);
 
@@ -109,16 +153,37 @@ describe("SessionsSettings", () => {
     expect(screen.getByText("Chrome · Windows")).toBeInTheDocument();
   });
 
-  it("closes every other session via the bulk action", async () => {
+  it("closes every other session via the bulk action, after confirming", async () => {
     revokeOtherSessions.mockResolvedValueOnce(1);
     renderSettings([current, other]);
 
     await screen.findByText("Safari · iOS");
     fetchSessions.mockResolvedValue([current]);
+    // #348: a bulk destructive action — first click only asks for
+    // confirmation (two-step confirm, matching Sidebar's label delete).
     fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.sessions.closeOthers") }));
+    expect(revokeOtherSessions).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("settings.sessions.confirmCloseOthersAction") }),
+    );
 
     await waitFor(() => expect(revokeOtherSessions).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByText("Safari · iOS")).not.toBeInTheDocument());
+  });
+
+  it("cancels the close-others confirmation without revoking anything", async () => {
+    renderSettings([current, other]);
+
+    await screen.findByText("Safari · iOS");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.sessions.closeOthers") }));
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("settings.sessions.cancelCloseOthers") }),
+    );
+
+    expect(revokeOtherSessions).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: i18n.t("settings.sessions.closeOthers") }),
+    ).toBeInTheDocument();
   });
 
   it("hides the bulk action and any Close button when only the current session exists", async () => {

@@ -27,6 +27,29 @@ describe("setupSsoSchema", () => {
     expect(() => setupSsoSchema.parse({ ...SSO, issuer: "" })).toThrow();
   });
 
+  // GH #347: a plain-http issuer lets whoever controls the network path between
+  // this server and "the issuer" answer discovery/token/jwks on its behalf,
+  // including receiving the client_secret at a token_endpoint it chose. Setup
+  // and the admin SSO form are the only places an operator supplies an issuer,
+  // so refusing it here closes the hole before any row is ever written.
+  it("rejects a non-https issuer", () => {
+    expect(() => setupSsoSchema.parse({ ...SSO, issuer: "http://id.example.com" })).toThrow();
+  });
+
+  // Regression: the https refine used to call `new URL(value)` unguarded. For
+  // an issuer that fails the EARLIER `.url()` check (e.g. no scheme at all),
+  // zod still runs a chained `.refine()` — it only skips on an "aborted"
+  // status, and a failed string check like `.url()` merely marks the result
+  // "dirty" — so `new URL("not-a-url")` threw an uncaught TypeError straight
+  // out of safeParse() instead of producing a clean { success: false }. The
+  // admin/setup routers call safeParse (never the throwing parse()), so this
+  // turned an ordinary bad-input 400 into a 500 — caught by
+  // admin-sso.test.ts's "invalid body 400" assertion actually observing 500.
+  it("reports a clean failure through safeParse for a string that is not a URL at all", () => {
+    const result = setupSsoSchema.safeParse({ ...SSO, issuer: "not-a-url" });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an empty clientId, clientSecret or scopes", () => {
     expect(() => setupSsoSchema.parse({ ...SSO, clientId: "" })).toThrow();
     expect(() => setupSsoSchema.parse({ ...SSO, clientSecret: "" })).toThrow();

@@ -225,6 +225,16 @@ const configSchema = z.object({
     .int()
     .nonnegative()
     .default(DEFAULT_TRUSTED_PROXY_HOPS),
+  // GH #347: lets apps/server's OIDC client (auth/oidc.ts discover()) accept a
+  // plain-http issuer and http token_endpoint/jwks_uri/authorization_endpoint.
+  // Off by default. Deliberately NOT tied to `nodeEnv` the way
+  // WEAK_MASTER_KEY_ENVS is above: the e2e Playwright suite boots its app
+  // servers with NODE_ENV=production on purpose (to exercise the same config
+  // a real production boot enforces), so a NODE_ENV-keyed escape hatch would
+  // have to loosen this for every real production deployment too. Only that
+  // suite's SSO server sets this — see e2e/playwright.config.ts, where it
+  // points at e2e/oidc-idp.ts, a local double that cannot terminate TLS.
+  oidcAllowInsecureIssuer: z.boolean().default(false),
   // GH #313: the background worker that copies new shared-mailbox mail into
   // each opted-in member's inbox (modules/mail/shared-copy/). ON by default,
   // unlike AI and push, because it is inert without opt-ins: a deployment
@@ -514,6 +524,8 @@ export function loadConfig(
     // get the endpoint unlocked by whitespace.
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
     trustedProxyHops: env.TRUSTED_PROXY_HOPS || undefined,
+    oidcAllowInsecureIssuer:
+      env.OIDC_ALLOW_INSECURE_ISSUER === "true" || env.OIDC_ALLOW_INSECURE_ISSUER === "1",
     // Trimmed and lower-cased before the enum, exactly like JMAP_URL_MODE
     // above, so ` FALSE ` is the off an operator plainly meant. An unknown
     // word is NOT normalised into a default: it fails the enum and refuses

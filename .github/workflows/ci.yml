@@ -26,6 +26,11 @@ concurrency:
 
 # Where each job runs is deliberate, not incidental.
 #
+# 2026-08-28: EVERY job runs on GitHub's stock image. The repository is public,
+# so hosted runners cost nothing, and the only thing the self-hosted runner
+# still bought was a dependency on a laptop being switched on. The history
+# below explains how we got here and is kept on purpose.
+#
 # The self-hosted runner is OUR machine: our kernel, our packages, our Docker.
 # It is excellent for the inner loop — fast, and it costs no Actions minutes —
 # but validating a release against an environment we tuned ourselves is the
@@ -45,6 +50,16 @@ concurrency:
 # switched on — a public repository cannot depend on them at all — so the
 # expression below is repeated verbatim on each job (workflow YAML has no
 # anchors) and the tag clause is part of it.
+#
+# `preproduc` is a delivery branch too, since 2026-08-28: every push that
+# passes publishes `:staging`, and the preproduction stack follows that tag on
+# its own (Komodo auto update, see docker-cefiro). The day the audit that
+# closed v1.2 landed, no self-hosted runner was registered and the publish sat
+# in the queue while the registry still held a `staging` from three weeks
+# earlier — a stale image nobody could tell apart from a fresh one. So pushes
+# to `preproduc`, and pull requests targeting it, take the same GitHub-hosted
+# path as `main`. Feature and audit branches keep the self-hosted runner: they
+# are the inner loop, and nothing downstream waits on them.
 #
 # Containerising the jobs is what makes this safe to alternate: the toolchain
 # is declared in this file, so the same job behaves identically on either.
@@ -66,7 +81,7 @@ jobs:
   # build is skipped, and every commit keeps resolving to the bytes it was
   # written against.
   fixture:
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -121,7 +136,7 @@ jobs:
   # the workspace. Same runner-selection and root-ownership handling as `test`,
   # for the reasons documented on that job.
   lint:
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     container: node:22-bookworm
     steps:
       - uses: actions/checkout@v4
@@ -140,7 +155,7 @@ jobs:
 
   test:
     needs: [lint]
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     # The job runs inside a declared image rather than on whatever the runner
     # host happens to have. That host is shared with other projects, so any
     # system-level dependency installed for one of them could change this
@@ -219,7 +234,7 @@ jobs:
   # package average.
   coverage:
     needs: [lint]
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     container: node:22-bookworm
     services:
       postgres:
@@ -259,7 +274,7 @@ jobs:
   # blocks publish (see that job's `needs`).
   restore-drill:
     needs: [lint]
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     # The Postgres client MUST match the server's major version — pg_dump refuses
     # to dump a server newer than itself — so this job runs in the postgres:17
     # image, which carries pg_dump/pg_restore/psql 17. The node image used by
@@ -297,7 +312,7 @@ jobs:
     # this job pulls, so the tag can never name bytes other than the ones this
     # commit declares.
     needs: [fixture]
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     # The official Playwright image, pinned to the exact @playwright/test
     # version the lockfile resolves. These two must match: Playwright refuses
     # to launch a browser from a mismatched image, and it was a caret range
@@ -474,7 +489,7 @@ jobs:
     needs: [test, e2e, coverage, restore-drill]
     # A release tag is cut from main, so it validates and publishes on neutral
     # GitHub-hosted infra just like main does.
-    runs-on: ${{ (github.ref_name == 'main' || github.base_ref == 'main' || startsWith(github.ref, 'refs/tags/v')) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","x64","docker"]') }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write

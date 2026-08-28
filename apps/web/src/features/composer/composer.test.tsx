@@ -161,6 +161,60 @@ describe("Composer", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
+  // GH #344(a): send() used to build its payload from `attachments` only,
+  // ignoring `state.uploads` entirely — a message could leave without the
+  // file the user was still watching upload. Disabling the button is the
+  // visible half of the fix; useComposer's own guard (use-composer.test.ts)
+  // is the other.
+  describe("Send is disabled while an upload is pending (#344a)", () => {
+    it("disables Send and shows a hint while an upload is in flight, re-enabling once it resolves", async () => {
+      let resolveUpload: (value: { blobId: string; type: string; size: number }) => void = () => {};
+      uploadAttachment.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveUpload = resolve;
+        }),
+      );
+      renderComposer();
+
+      const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
+      fireEvent.change(toInput, { target: { value: "bob@example.com" } });
+      fireEvent.keyDown(toInput, { key: "Enter" });
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["hello"], "a.png", { type: "image/png" })] },
+      });
+
+      const sendButton = await screen.findByRole("button", { name: i18n.t("composer.send") });
+      expect(sendButton).toBeDisabled();
+      expect(screen.getByText(i18n.t("composer.uploadsPendingHint"))).toBeInTheDocument();
+
+      await act(async () => {
+        resolveUpload({ blobId: "b1", type: "image/png", size: 5 });
+      });
+      await waitFor(() => expect(sendButton).not.toBeDisabled());
+      expect(screen.queryByText(i18n.t("composer.uploadsPendingHint"))).not.toBeInTheDocument();
+    });
+
+    it("does not disable Send for a FAILED upload — only a genuinely in-flight one", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      renderComposer();
+
+      const toInput = await screen.findByRole("combobox", { name: i18n.t("composer.to") });
+      fireEvent.change(toInput, { target: { value: "bob@example.com" } });
+      fireEvent.keyDown(toInput, { key: "Enter" });
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["hello"], "a.png", { type: "image/png" })] },
+      });
+      await screen.findByText(i18n.t("composer.errors.generic"));
+
+      const sendButton = screen.getByRole("button", { name: i18n.t("composer.send") });
+      expect(sendButton).not.toBeDisabled();
+    });
+  });
+
   it("calls onClose when Cancel is clicked", async () => {
     const { onClose } = renderComposer();
 
@@ -270,6 +324,58 @@ describe("Composer", () => {
       // Pending uploads have no blobId yet, so they must not render the
       // full preview-capable AttachmentCard structure.
       expect(screen.queryByTestId("attachment-card-thumbnail")).not.toBeInTheDocument();
+    });
+  });
+
+  // GH #344(b): a failed upload used to be a permanent, unremovable error
+  // card showing only the generic message — no way to clear it or try again,
+  // and the real server code (e.g. a 413) was thrown away.
+  describe("pending upload errors (#344b)", () => {
+    it("shows the code-specific message for a MailApiError, not the generic fallback", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(413, "payload_too_large"));
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "big.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      expect(await screen.findByText(i18n.t("composer.errors.payload_too_large"))).toBeInTheDocument();
+    });
+
+    it("removes the failed upload's card when Remove is clicked", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "failed.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await screen.findByText(/failed\.png/);
+
+      const removeButton = await screen.findByRole("button", {
+        name: i18n.t("composer.removeUpload", { name: "failed.png" }),
+      });
+      fireEvent.click(removeButton);
+
+      expect(screen.queryByText(/failed\.png/)).not.toBeInTheDocument();
+    });
+
+    it("retries the same file when Retry is clicked, replacing the error with the upload it produces", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "retry-me.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await screen.findByText(/retry-me\.png/);
+
+      uploadAttachment.mockResolvedValueOnce({ blobId: "b1", type: "image/png", size: 5 });
+      const retryButton = await screen.findByRole("button", {
+        name: i18n.t("composer.retryUpload", { name: "retry-me.png" }),
+      });
+      fireEvent.click(retryButton);
+
+      expect(await screen.findByTestId("attachment-card-thumbnail")).toBeInTheDocument();
+      expect(uploadAttachment).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -771,6 +877,24 @@ describe("Composer", () => {
 
       expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
       expect(onClose).not.toHaveBeenCalled();
+    });
+
+    // GH #344(c): a FAILED upload produced nothing — no blobId, no in-flight
+    // request — so unlike a genuinely pending one (test above) it must not
+    // force a discard confirmation on an otherwise-empty compose.
+    it("closes immediately on Escape when only a FAILED upload is present and nothing else was typed", async () => {
+      uploadAttachment.mockRejectedValueOnce(new MailApiError(500, "internal"));
+      const { onClose } = renderComposer();
+
+      const fileInput = (await screen.findByLabelText(i18n.t("composer.attach"))) as HTMLInputElement;
+      const file = new File(["hello"], "failed.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      expect(await screen.findByText(i18n.t("composer.errors.generic"))).toBeInTheDocument();
+
+      pressEscape();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
 
     it("returns to empty once the only attachment is removed, so Escape closes immediately again", async () => {

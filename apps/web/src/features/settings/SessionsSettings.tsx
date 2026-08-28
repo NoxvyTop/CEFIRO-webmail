@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { formatRelativeTime } from "../../app/ui/relative-time";
@@ -42,6 +43,11 @@ export function SessionsSettings() {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: SESSIONS_QUERY_KEY, queryFn: fetchSessions });
 
+  // #348: closing every other session is a bulk destructive action — mirrors
+  // Sidebar.tsx's inline two-step confirm for deleting a label (GH #103)
+  // rather than acting on the first click.
+  const [confirmingCloseOthers, setConfirmingCloseOthers] = useState(false);
+
   const invalidate = () => queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
   const revokeOne = useMutation({
     mutationFn: (id: string) => revokeSession(id),
@@ -49,7 +55,10 @@ export function SessionsSettings() {
   });
   const revokeRest = useMutation({
     mutationFn: () => revokeOtherSessions(),
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      setConfirmingCloseOthers(false);
+      await invalidate();
+    },
   });
 
   // GH #250/#272 language: a failed load replaces the panel with a retry; a
@@ -94,6 +103,17 @@ export function SessionsSettings() {
                   }),
                 })}
               </span>
+              {/* #348: two sessions can share the same coarse device label
+                  ("Chrome · Windows" twice) — the creation date is what
+                  actually tells them apart. */}
+              <span className="text-xs text-muted">
+                {t("settings.sessions.created", {
+                  time: formatRelativeTime(session.createdAt, {
+                    yesterdayLabel: t("mail.yesterday"),
+                    locale: i18n.language,
+                  }),
+                })}
+              </span>
               {session.ip && (
                 <span className="text-xs text-muted">
                   {t("settings.sessions.location", { ip: session.ip })}
@@ -115,16 +135,37 @@ export function SessionsSettings() {
         ))}
       </ul>
 
-      {otherCount > 0 && (
-        <button
-          type="button"
-          onClick={() => revokeRest.mutate()}
-          disabled={revokeRest.isPending}
-          className="self-start rounded-[11px] border border-line-strong px-3 py-1 text-sm font-semibold text-danger transition hover:border-danger hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {t("settings.sessions.closeOthers")}
-        </button>
-      )}
+      {otherCount > 0 &&
+        (confirmingCloseOthers ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-warn">
+              {t("settings.sessions.confirmCloseOthersQuestion")}
+            </span>
+            <button
+              type="button"
+              onClick={() => revokeRest.mutate()}
+              disabled={revokeRest.isPending}
+              className="rounded-[11px] border border-line-strong px-3 py-1 text-sm font-semibold text-danger transition hover:border-danger hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t("settings.sessions.confirmCloseOthersAction")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingCloseOthers(false)}
+              className="rounded-[9px] px-2 py-1 text-sm text-muted transition hover:bg-hover"
+            >
+              {t("settings.sessions.cancelCloseOthers")}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmingCloseOthers(true)}
+            className="self-start rounded-[11px] border border-line-strong px-3 py-1 text-sm font-semibold text-danger transition hover:border-danger hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t("settings.sessions.closeOthers")}
+          </button>
+        ))}
     </div>
   );
 }

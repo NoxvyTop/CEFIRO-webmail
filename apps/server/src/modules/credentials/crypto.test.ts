@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aadFor,
   asKeyring,
   createKeyring,
   decryptSecret,
@@ -45,6 +46,48 @@ describe("credential crypto", () => {
 
   it("rejects keys that are not 32 bytes", async () => {
     await expect(importMasterKey(btoa("short"))).rejects.toThrow();
+  });
+});
+
+// GH #347: rows are addressable by whoever can write ciphertext/iv/key_version
+// into the table — a Postgres write access, not necessarily the master key —
+// so nothing before this bound a ciphertext to WHO or WHAT it was sealed for.
+// Moving row A's ciphertext/iv/key_version onto row B's key_version column
+// decrypted cleanly under the shared master key; only the AAD tying decryption
+// to the caller's own context (mail:<userId>, "sso", "oidc_state") can refuse
+// that.
+describe("AES-GCM additional authenticated data (GH #347)", () => {
+  it("round-trips a secret bound to a context", async () => {
+    const key = await importMasterKey(randomKeyB64());
+    const { ciphertext, iv } = await encryptSecret(key, "mailbox-password", aadFor("mail:u1"));
+    expect(await decryptSecret(key, ciphertext, iv, aadFor("mail:u1"))).toBe("mailbox-password");
+  });
+
+  it("refuses to decrypt under a different context (swapped-owner ciphertext)", async () => {
+    const key = await importMasterKey(randomKeyB64());
+    const { ciphertext, iv } = await encryptSecret(key, "victim-password", aadFor("mail:victim"));
+    // An attacker who moved this row's ciphertext/iv onto their own user_id
+    // must not have it decrypt under their own context.
+    await expect(
+      decryptSecret(key, ciphertext, iv, aadFor("mail:attacker")),
+    ).rejects.toThrow();
+  });
+
+  it("still decrypts a legacy ciphertext sealed before AAD existed", async () => {
+    // Rows written by encryptSecret(key, plaintext) with no third argument, i.e.
+    // every row in the database before this change shipped. Reading them now
+    // passes a context — the read side has no way to know a row is legacy in
+    // advance — so the fallback below is what keeps them decryptable.
+    const key = await importMasterKey(randomKeyB64());
+    const { ciphertext, iv } = await encryptSecret(key, "legacy-password");
+    expect(await decryptSecret(key, ciphertext, iv, aadFor("mail:u1"))).toBe("legacy-password");
+  });
+
+  it("keyring helpers thread the context through encrypt and decrypt", async () => {
+    const keyring = createKeyring({ version: 1, key: await importMasterKey(randomKeyB64()) });
+    const sealed = await encryptWithKeyring(keyring, "sso-secret", aadFor("sso"));
+    expect(await decryptWithKeyring(keyring, sealed, aadFor("sso"))).toBe("sso-secret");
+    await expect(decryptWithKeyring(keyring, sealed, aadFor("oidc_state"))).rejects.toThrow();
   });
 });
 

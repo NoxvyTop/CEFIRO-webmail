@@ -67,3 +67,21 @@ describe("theme.css solid CTA contrast (#283)", () => {
     });
   }
 });
+
+// #348: --danger (#f26565) as normal-size text (13-14px) on white panels
+// only clears 3.08:1 in the light theme — below WCAG AA's 4.5:1 for text.
+// Night's --danger sits on dark panels and already clears AA, so only the
+// light override is asserted here.
+describe("theme.css --danger text contrast (#348)", () => {
+  it("danger clears WCAG AA (4.5:1) on --panel in the light theme", () => {
+    const source = THEMES.light;
+    const ratio = contrast(hex(source, "--danger"), hex(source, "--panel"));
+    expect(ratio, `light: danger on panel is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("danger clears WCAG AA (4.5:1) on --panel in the night theme", () => {
+    const source = THEMES.night;
+    const ratio = contrast(hex(source, "--danger"), hex(source, "--panel"));
+    expect(ratio, `night: danger on panel is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  });
+});

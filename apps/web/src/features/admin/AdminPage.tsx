@@ -331,6 +331,7 @@ export function AdminPage() {
                     {t("admin.new.mailPassword")}
                     <input
                       type="password"
+                      autoComplete="new-password"
                       minLength={8}
                       value={newUser.mailPassword}
                       onChange={(event) => setNewUser({ ...newUser, mailPassword: event.target.value })}
@@ -503,6 +504,7 @@ export function AdminPage() {
                   {t("admin.sso.fields.clientSecret")}
                   <input
                     type="password"
+                    autoComplete="off"
                     value={ssoForm.clientSecret}
                     onChange={(event) => setSsoForm({ ...ssoForm, clientSecret: event.target.value })}
                     className={inputClass}

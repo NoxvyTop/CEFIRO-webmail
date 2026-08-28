@@ -129,6 +129,9 @@ describe("ProfileSettings", () => {
 
     await screen.findByLabelText(i18n.t("settings.displayName"));
     const fileInput = screen.getByLabelText(i18n.t("settings.photo")) as HTMLInputElement;
+    // #348: DevTools warns "A form field element should have an id or name
+    // attribute" — this file input, inside a real <form>, had neither.
+    expect(fileInput).toHaveAttribute("name", "avatar");
     const file = pngFile("avatar.png", 10, "image/png");
     fireEvent.change(fileInput, { target: { files: [file] } });
 

@@ -317,3 +317,77 @@ export function FileGenericIcon({ size = 16 }: IconProps) {
     </svg>
   );
 }
+
+// GH #339: the AI mark used to be the literal "✦" character, printed both from
+// the i18n string and as a decorative span beside it — so the button read
+// "✦ ✦ Resumir con IA". One inline SVG instead, matching the icon contract in
+// docs/design/cefiro/README.md ("SVG inline stroke currentColor, 15-17px,
+// stroke-width 2"), so it scales and inherits the accent color like every
+// other icon here.
+export function SparkleIcon({ size = 15 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M12 3.2 13.9 9a3.2 3.2 0 0 0 2.1 2.1l5.8 1.9-5.8 1.9a3.2 3.2 0 0 0-2.1 2.1L12 22.8 10.1 17a3.2 3.2 0 0 0-2.1-2.1L2.2 13l5.8-1.9A3.2 3.2 0 0 0 10.1 9Z" />
+    </svg>
+  );
+}
+
+// #348: RichTextEditor's toolbar used bare letters — "L"/"C"/"R" for BOTH
+// text align and image align, and "S"/"M"/"L" for image size, all with no
+// visual distinction beyond a tiny aria-label a sighted mouse user never
+// sees. These give every one of those nine buttons its own recognizable
+// glyph; the aria-label (unchanged) still carries the accessible name.
+
+export function AlignLeftIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M4 6h16" />
+      <path d="M4 12h10" />
+      <path d="M4 18h14" />
+    </svg>
+  );
+}
+
+export function AlignCenterIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M4 6h16" />
+      <path d="M7 12h10" />
+      <path d="M5 18h14" />
+    </svg>
+  );
+}
+
+export function AlignRightIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M4 6h16" />
+      <path d="M10 12h10" />
+      <path d="M6 18h14" />
+    </svg>
+  );
+}
+
+export function SizeSmallIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="8" y="8" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
+export function SizeMediumIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="5" y="5" width="14" height="14" rx="1.5" />
+    </svg>
+  );
+}
+
+export function SizeLargeIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+    </svg>
+  );
+}

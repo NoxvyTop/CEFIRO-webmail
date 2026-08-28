@@ -86,11 +86,19 @@ test.describe("admin mutations", () => {
     await expect(row.getByLabel("Rol")).toHaveValue("employee");
     await row.getByLabel("Rol").selectOption("admin");
 
-    // The select is controlled by the query's data, not by local state, so it
-    // snaps back to "employee" until the PUT lands and the invalidated query
-    // returns. Settling on "admin" here IS the round trip — and waiting for it
-    // is also what keeps the reload below from aborting an in-flight request.
+    // #348: a role change is a privilege change, so picking the option only
+    // arms it — the row shows "¿Cambiar el rol a Administrador?" with a
+    // Confirmar button, and nothing is sent until it is clicked. The select
+    // shows the pending choice meanwhile, so asserting "admin" before the
+    // click would prove nothing; the reload below is the real check.
+    await row.getByRole("button", { name: "Confirmar" }).click();
+
+    // Once confirmed the select is controlled by the query's data again, so it
+    // settles on "admin" only when the PUT lands and the invalidated query
+    // returns. Waiting for it is also what keeps the reload below from
+    // aborting an in-flight request.
     await expect(row.getByLabel("Rol")).toHaveValue("admin");
+    await expect(row.getByRole("button", { name: "Confirmar" })).toHaveCount(0);
 
     // Then re-read from a cold page: this mutation is what grants access to
     // this console, so "the dropdown changed" is not the claim worth making.

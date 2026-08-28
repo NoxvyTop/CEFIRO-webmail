@@ -14,6 +14,10 @@ export function UserRow({ user }: { user: AdminUser }) {
   const [credentialOpen, setCredentialOpen] = useState(false);
   const [mailPassword, setMailPassword] = useState("");
   const [confirmingArchive, setConfirmingArchive] = useState(false);
+  // #348: a role change is a privilege change, not a plain preference toggle
+  // — mirrors the archive button's own two-step confirm rather than applying
+  // on the first onChange.
+  const [pendingRole, setPendingRole] = useState<"employee" | "admin" | null>(null);
 
   function invalidateUsers() {
     return queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY });
@@ -21,7 +25,10 @@ export function UserRow({ user }: { user: AdminUser }) {
 
   const roleMutation = useMutation({
     mutationFn: (role: "employee" | "admin") => setUserRole(user.id, role),
-    onSuccess: () => invalidateUsers(),
+    onSuccess: async () => {
+      setPendingRole(null);
+      await invalidateUsers();
+    },
   });
 
   const activeMutation = useMutation({
@@ -90,15 +97,43 @@ export function UserRow({ user }: { user: AdminUser }) {
         </div>
       </td>
       <td className="px-3 py-2.5">
-        <select
-          aria-label={t("admin.actions.role")}
-          value={user.role}
-          onChange={(event) => roleMutation.mutate(event.target.value as "employee" | "admin")}
-          className="h-8 rounded-[8px] border border-line bg-soft px-2 text-xs font-medium text-ink field-focus"
-        >
-          <option value="employee">{t("admin.roles.employee")}</option>
-          <option value="admin">{t("admin.roles.admin")}</option>
-        </select>
+        <div className="flex flex-col items-start gap-1">
+          <select
+            aria-label={t("admin.actions.role")}
+            value={pendingRole ?? user.role}
+            onChange={(event) => {
+              const nextRole = event.target.value as "employee" | "admin";
+              setPendingRole(nextRole === user.role ? null : nextRole);
+            }}
+            className="h-8 rounded-[8px] border border-line bg-soft px-2 text-xs font-medium text-ink field-focus"
+          >
+            <option value="employee">{t("admin.roles.employee")}</option>
+            <option value="admin">{t("admin.roles.admin")}</option>
+          </select>
+          {pendingRole && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-xs text-warn">
+                {t("admin.actions.confirmRoleChangeQuestion", {
+                  role: t(`admin.roles.${pendingRole}`),
+                })}
+              </span>
+              <button
+                type="button"
+                onClick={() => roleMutation.mutate(pendingRole)}
+                className="rounded-[9px] px-2 py-1 text-xs font-semibold text-warn transition hover:bg-hover"
+              >
+                {t("admin.actions.confirmRoleChange")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingRole(null)}
+                className="rounded-[9px] px-2 py-1 text-xs text-muted transition hover:bg-hover"
+              >
+                {t("admin.actions.cancelRoleChange")}
+              </button>
+            </div>
+          )}
+        </div>
       </td>
       <td className="px-3 py-2.5">
         {user.mailboxLinked ? (
@@ -129,6 +164,7 @@ export function UserRow({ user }: { user: AdminUser }) {
             <form onSubmit={handleCredentialSubmit} className="flex items-center gap-1">
               <input
                 type="password"
+                autoComplete="new-password"
                 aria-label={t("admin.actions.linkMailbox")}
                 minLength={8}
                 required

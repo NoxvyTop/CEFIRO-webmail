@@ -89,30 +89,77 @@ export function masterKeyWeakness(base64: string): string | null {
   return null;
 }
 
+// --- Additional authenticated data (GH #347) ---------------------------------
+//
+// AES-GCM authenticated only the ciphertext: whoever could write
+// ciphertext/iv/key_version into a row — a Postgres write, not necessarily the
+// master key — could move one row's encrypted columns onto another row's
+// primary key and have it decrypt cleanly, because nothing tied a ciphertext
+// to WHO or WHAT it was sealed for. `additionalData` closes that: it is mixed
+// into the GCM authentication tag at encryption time and must be supplied
+// byte-for-byte at decryption, so a ciphertext moved to a different context
+// fails tag verification instead of silently decrypting under it.
+//
+// The context is a short ASCII descriptor of the row's owner/purpose —
+// `mail:<userId>`, `"sso"`, `"oidc_state"` — encoded with this helper so every
+// caller derives the same bytes from the same string.
+export function aadFor(context: string): Uint8Array {
+  return new TextEncoder().encode(context);
+}
+
 export async function encryptSecret(
   key: CryptoKey,
   plaintext: string,
+  additionalData?: Uint8Array,
 ): Promise<{ ciphertext: Uint8Array; iv: Uint8Array }> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const encrypted = await crypto.subtle.encrypt(
-    { name: ALGO, iv },
+    { name: ALGO, iv, ...(additionalData ? { additionalData } : {}) },
     key,
     new TextEncoder().encode(plaintext),
   );
   return { ciphertext: new Uint8Array(encrypted), iv };
 }
 
+/**
+ * `additionalData`, when given, must match what `encryptSecret` was called
+ * with — otherwise GCM tag verification fails and this throws.
+ *
+ * Rows written before AAD existed (every row in the database as of GH #347)
+ * carry no bound context, so an AAD-bound attempt against one fails for a
+ * reason indistinguishable from tampering. The migration-safe fix is a single
+ * fallback retry with no AAD at all: it only ever rescues a ciphertext that
+ * was genuinely sealed without one, because GCM's tag is computed over the
+ * AAD actually used at encryption time — a ciphertext sealed WITH a (now
+ * mismatched) context still fails both attempts, which is what keeps a
+ * swapped-owner row refused rather than accidentally readable. No migration,
+ * `key_version` bump or format marker is needed: the two attempts together
+ * cover every row this database has ever written or will write.
+ */
 export async function decryptSecret(
   key: CryptoKey,
   ciphertext: Uint8Array,
   iv: Uint8Array,
+  additionalData?: Uint8Array,
 ): Promise<string> {
-  const plain = await crypto.subtle.decrypt(
-    { name: ALGO, iv: iv as BufferSource },
-    key,
-    ciphertext as BufferSource,
-  );
-  return new TextDecoder().decode(new Uint8Array(plain));
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: ALGO, iv: iv as BufferSource, ...(additionalData ? { additionalData } : {}) },
+      key,
+      ciphertext as BufferSource,
+    );
+    return new TextDecoder().decode(new Uint8Array(plain));
+  } catch (err) {
+    if (!additionalData) throw err;
+    // Legacy fallback — see the doc comment above. Its own failure (a genuine
+    // AAD mismatch, or real tampering) propagates untouched.
+    const plain = await crypto.subtle.decrypt(
+      { name: ALGO, iv: iv as BufferSource },
+      key,
+      ciphertext as BufferSource,
+    );
+    return new TextDecoder().decode(new Uint8Array(plain));
+  }
 }
 
 // --- Key rotation -----------------------------------------------------------
@@ -199,18 +246,20 @@ export function keyForVersion(keyring: Keyring, version: number): CryptoKey | nu
 export async function encryptWithKeyring(
   keyring: Keyring,
   plaintext: string,
+  additionalData?: Uint8Array,
 ): Promise<SealedSecret> {
-  const { ciphertext, iv } = await encryptSecret(keyring.current.key, plaintext);
+  const { ciphertext, iv } = await encryptSecret(keyring.current.key, plaintext, additionalData);
   return { ciphertext, iv, keyVersion: keyring.current.version };
 }
 
 export async function decryptWithKeyring(
   keyring: Keyring,
   secret: SealedSecret,
+  additionalData?: Uint8Array,
 ): Promise<string> {
   const key = keyForVersion(keyring, secret.keyVersion);
   if (!key) {
     throw new UnknownKeyVersionError(secret.keyVersion, knownKeyVersions(keyring));
   }
-  return decryptSecret(key, secret.ciphertext, secret.iv);
+  return decryptSecret(key, secret.ciphertext, secret.iv, additionalData);
 }

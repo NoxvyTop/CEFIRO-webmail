@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
-import { retryDelayMs, useMailEvents } from "./useMailEvents";
+import { STREAM_STABLE_MS, retryDelayMs, useMailEvents } from "./useMailEvents";
+import { NEW_MAIL_NOTICE_TAG, PERSONAL_MAILBOXES_QUERY_KEY } from "./newMailNotice";
 
 // The first rung of the backoff ladder in useMailEvents.ts (GH #243), with
 // Math.random pinned to the 0.5 the timing tests below stub in: base 2 s, half
@@ -98,10 +99,11 @@ async function flushProbe() {
 function makeWrapper() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const invalidate = vi.spyOn(client, "invalidateQueries");
+  const clear = vi.spyOn(client, "clear");
   function wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   }
-  return { invalidate, wrapper };
+  return { invalidate, clear, wrapper };
 }
 
 function setHidden(hidden: boolean) {
@@ -136,6 +138,22 @@ describe("useMailEvents (hook lifecycle)", () => {
     expect(FakeEventSource.instances[0]?.url).toBe("/api/mail/events");
   });
 
+  // GH #342: MailPage/MessageList need to know whether live updates are
+  // actually flowing right now (not just "enabled") to decide when to fall
+  // back to polling — this is the one signal that answers that.
+  it("exposes streamOpen: true only while a stream is actually connected", () => {
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useMailEvents(true), { wrapper });
+
+    expect(result.current.streamOpen).toBe(false);
+
+    act(() => FakeEventSource.instances[0]?.emitOpen());
+    expect(result.current.streamOpen).toBe(true);
+
+    act(() => FakeEventSource.instances[0]?.emitError());
+    expect(result.current.streamOpen).toBe(false);
+  });
+
   it("invalidates only the query keys the StateChange names", () => {
     const { invalidate, wrapper } = makeWrapper();
     renderHook(() => useMailEvents(true), { wrapper });
@@ -145,10 +163,136 @@ describe("useMailEvents (hook lifecycle)", () => {
     );
 
     const keys = invalidate.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    // #340: the mailbox key rides along with Email — arriving mail moves unread
+    // counts, including the per-shared-account ones the sidebar reads.
     expect(keys).toEqual([
       ["mail", "messages"],
       ["mail", "thread"],
+      ["mail", "mailboxes"],
     ]);
+  });
+
+  // #349/review-fix: a user scrolled N pages deep into the infinite messages
+  // list used to pay N sequential /api/mail/messages requests for every
+  // single StateChange (GH #167 narrowed WHICH keys get invalidated; this
+  // bounds the messages key's own refetch cost). The FIRST attempt at this
+  // invalidated the messages key with `refetchType: "none"` — that stopped
+  // the storm, but it also stopped the inbox from updating live on a
+  // StateChange at all (a regression on the exact #340/#342 "inbox does not
+  // update" behavior this whole audit started from). TanStack Query v5
+  // removed v4's `refetchPage` predicate (the one primitive that could have
+  // refetched just the first page) and `maxPages` EVICTS pages beyond the
+  // cap from the query's own data — that would drop already-visible rows
+  // mid-scroll during ordinary scrolling, not just on an SSE event. So
+  // instead: every cached infinite messages query is trimmed down to its
+  // first page BEFORE the (now-default, eager) invalidation, bounding the
+  // refetch to exactly one page while the query stays live. See the
+  // "keeps the message list live" test below for the actual refetch-count
+  // assertion this trims for.
+  it("invalidates the messages key with the default (eager) refetchType, like thread/mailboxes", () => {
+    const { invalidate, wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    FakeEventSource.instances[0]?.emitMessage(
+      JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1", Mailbox: "s2" } } }),
+    );
+
+    const calls = invalidate.mock.calls.map(
+      ([arg]) => arg as { queryKey: string[]; refetchType?: string },
+    );
+    const messagesCall = calls.find(
+      (call) => call.queryKey.join(".") === "mail.messages",
+    );
+    const threadCall = calls.find((call) => call.queryKey.join(".") === "mail.thread");
+    const mailboxesCall = calls.find((call) => call.queryKey.join(".") === "mail.mailboxes");
+
+    expect(messagesCall?.refetchType).toBeUndefined();
+    expect(threadCall?.refetchType).toBeUndefined();
+    expect(mailboxesCall?.refetchType).toBeUndefined();
+  });
+
+  // Regression test for the review fix above: an ACTIVE (mounted) infinite
+  // messages query must refetch on a StateChange WITHOUT any window focus —
+  // this is the live-update behavior #340/#342 depend on, and the
+  // `refetchType: "none"` first attempt silently broke it.
+  it("keeps the message list live: an ACTIVE messages query refetches on a StateChange, with no window focus involved", async () => {
+    const queryFn = vi.fn(async ({ pageParam }: { pageParam: number }) => ({
+      emails: [],
+      total: 0,
+      position: pageParam,
+    }));
+    const { wrapper } = makeWrapper();
+    renderHook(
+      () => {
+        useInfiniteQuery({
+          queryKey: ["mail", "messages", "mb-inbox"],
+          queryFn,
+          initialPageParam: 0,
+          getNextPageParam: () => undefined,
+        });
+        return useMailEvents(true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitState(
+        JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
+      );
+    });
+
+    // No focus/visibility event fired anywhere above — the refetch must come
+    // from the StateChange invalidation alone.
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
+  });
+
+  // The trim-to-first-page half of the fix: a query that had already loaded
+  // several pages must not replay all of them on a StateChange — only the
+  // first page's queryFn call should fire (pageParam 0), even though the
+  // query had reached page 2 before the event.
+  it("trims an already-multi-page messages query back to its first page before refetching, instead of replaying every loaded page", async () => {
+    const queryFn = vi.fn(async ({ pageParam }: { pageParam: number }) => ({
+      emails: [{ id: `e${pageParam}` }],
+      total: 999,
+      position: pageParam,
+    }));
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => {
+        const query = useInfiniteQuery({
+          queryKey: ["mail", "messages", "mb-inbox"],
+          queryFn,
+          initialPageParam: 0,
+          getNextPageParam: (lastPage: { position: number; total: number }) =>
+            lastPage.position + 1 < lastPage.total ? lastPage.position + 1 : undefined,
+        });
+        useMailEvents(true);
+        return query;
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+
+    // Scroll down to page 2 — three pages now cached.
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    expect(queryFn).toHaveBeenCalledTimes(3);
+    queryFn.mockClear();
+
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitState(
+        JSON.stringify({ "@type": "StateChange", changed: { acc: { Email: "s1" } } }),
+      );
+    });
+
+    // Exactly one request — the trimmed first page — not three.
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+    expect(queryFn).toHaveBeenCalledWith(expect.objectContaining({ pageParam: 0 }));
   });
 
   // GH #265. This is the production path: the server proxies Stalwart's stream
@@ -166,9 +310,12 @@ describe("useMailEvents (hook lifecycle)", () => {
     );
 
     const keys = invalidate.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    // #340: the mailbox key rides along with Email — arriving mail moves unread
+    // counts, including the per-shared-account ones the sidebar reads.
     expect(keys).toEqual([
       ["mail", "messages"],
       ["mail", "thread"],
+      ["mail", "mailboxes"],
     ]);
   });
 
@@ -193,30 +340,50 @@ describe("useMailEvents (hook lifecycle)", () => {
     expect(FakeEventSource.instances[1]?.url).toBe("/api/mail/events");
   });
 
-  it("notifies once per message only when the tab is hidden and permission is granted", () => {
+  // GH #338: the alert used to fire for ANY frame carrying `Email`. It now
+  // waits for the invalidation to settle and compares the personal Inbox's
+  // unread count across it, so only a genuine arrival speaks.
+  it("notifies only when the Inbox unread count grew, and only while hidden", async () => {
     const notify = vi.fn();
     class FakeNotification {
       static permission = "granted";
-      constructor(title: string) {
-        notify(title);
+      constructor(title: string, options?: NotificationOptions) {
+        notify(title, options);
       }
     }
     vi.stubGlobal("Notification", FakeNotification);
-    const { wrapper } = makeWrapper();
-    renderHook(() => useMailEvents(true), { wrapper });
 
-    // Visible tab: a message must not raise a notification.
-    setHidden(false);
-    FakeEventSource.instances[0]?.emitMessage();
+    let unread = 1;
+    const { wrapper } = makeWrapper();
+    renderHook(
+      () => {
+        useQuery({
+          queryKey: PERSONAL_MAILBOXES_QUERY_KEY,
+          queryFn: async () => [{ id: "mb-inbox", role: "inbox", unreadEmails: unread }],
+        });
+        return useMailEvents(true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    // A change that does not move the count says nothing.
+    setHidden(true);
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitMessage();
+    });
     expect(notify).not.toHaveBeenCalled();
 
-    // Hidden tab: one notification per arriving message.
-    setHidden(true);
-    FakeEventSource.instances[0]?.emitMessage();
-    expect(notify).toHaveBeenCalledTimes(1);
+    // An arrival does.
+    unread = 4;
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitMessage();
+    });
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]?.[1]).toMatchObject({ tag: NEW_MAIL_NOTICE_TAG });
   });
 
-  it("does not notify when notification permission was not granted", () => {
+  it("does not notify when notification permission was not granted", async () => {
     const notify = vi.fn();
     class FakeNotification {
       static permission = "default";
@@ -226,10 +393,25 @@ describe("useMailEvents (hook lifecycle)", () => {
     }
     vi.stubGlobal("Notification", FakeNotification);
     setHidden(true);
-    const { wrapper } = makeWrapper();
-    renderHook(() => useMailEvents(true), { wrapper });
 
-    FakeEventSource.instances[0]?.emitMessage();
+    let unread = 1;
+    const { wrapper } = makeWrapper();
+    renderHook(
+      () => {
+        useQuery({
+          queryKey: PERSONAL_MAILBOXES_QUERY_KEY,
+          queryFn: async () => [{ id: "mb-inbox", role: "inbox", unreadEmails: unread }],
+        });
+        return useMailEvents(true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    unread = 9;
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitMessage();
+    });
 
     expect(notify).not.toHaveBeenCalled();
   });
@@ -311,7 +493,14 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     }
   });
 
-  it("restarts the ladder from the bottom once a stream opens again", () => {
+  // GH #342: an "open" that immediately drops again used to reset `attempt`
+  // to 0 unconditionally — exactly what happens when a proxy accepts the SSE
+  // handshake and then cuts it (proxy_read_timeout, an upstream that closes
+  // after headers). That turned the backoff ladder into a flat ~1s retry
+  // loop, each attempt also paying for the classifyRefusedHandshake probe. A
+  // reset now requires the stream to have stayed open for the stability
+  // window (below), or to have delivered at least one data frame.
+  it("restarts the ladder from the bottom once a stream has stayed open long enough to be trusted", () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
     const { wrapper } = makeWrapper();
@@ -324,10 +513,66 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     act(() => vi.advanceTimersByTime(3_000));
     expect(FakeEventSource.instances).toHaveLength(3);
 
-    // The third stream connects, proving the server is serving again, so the
-    // next outage waits the FIRST rung rather than the third.
+    // The third stream opens and STAYS open past the stability window,
+    // proving the server is serving again, so the next outage waits the
+    // FIRST rung rather than the third.
     act(() => FakeEventSource.instances[2]?.emitOpen());
+    act(() => vi.advanceTimersByTime(STREAM_STABLE_MS));
     act(() => FakeEventSource.instances[2]?.emitError());
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS - 1));
+    expect(FakeEventSource.instances).toHaveLength(3);
+    act(() => vi.advanceTimersByTime(1));
+    expect(FakeEventSource.instances).toHaveLength(4);
+  });
+
+  it("does NOT reset the backoff for a stream that opens and drops again before the stability window elapses (GH #342)", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.emitError());
+    act(() => vi.advanceTimersByTime(1_500));
+    act(() => FakeEventSource.instances[1]?.emitError());
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(FakeEventSource.instances).toHaveLength(3);
+
+    // Accepted, then cut almost immediately — an intermediary closing the
+    // handshake, not proof the server has recovered.
+    act(() => FakeEventSource.instances[2]?.emitOpen());
+    act(() => vi.advanceTimersByTime(STREAM_STABLE_MS - 1));
+    act(() => FakeEventSource.instances[2]?.emitError());
+
+    // If attempt had reset to 0, the next stream would appear after
+    // FIRST_RETRY_MS (1_500ms). It must not: the ladder continues from the
+    // third rung (6_000ms) instead.
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS));
+    expect(FakeEventSource.instances).toHaveLength(3);
+    act(() => vi.advanceTimersByTime(6_000 - FIRST_RETRY_MS - 1));
+    expect(FakeEventSource.instances).toHaveLength(3);
+    act(() => vi.advanceTimersByTime(1));
+    expect(FakeEventSource.instances).toHaveLength(4);
+  });
+
+  it("resets the backoff as soon as the first data frame arrives, without waiting for the full stability window (GH #342)", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.emitError());
+    act(() => vi.advanceTimersByTime(1_500));
+    act(() => FakeEventSource.instances[1]?.emitError());
+    act(() => vi.advanceTimersByTime(3_000));
+
+    act(() => FakeEventSource.instances[2]?.emitOpen());
+    act(() =>
+      FakeEventSource.instances[2]?.emitState(
+        JSON.stringify({ "@type": "StateChange", changed: {} }),
+      ),
+    );
+    act(() => FakeEventSource.instances[2]?.emitError());
+
     act(() => vi.advanceTimersByTime(FIRST_RETRY_MS - 1));
     expect(FakeEventSource.instances).toHaveLength(3);
     act(() => vi.advanceTimersByTime(1));
@@ -337,7 +582,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
   it("stops reconnecting for good once the events endpoint answers 401 (session gone)", async () => {
     vi.useFakeTimers();
     const probe = stubAuthProbe(401);
-    const { invalidate, wrapper } = makeWrapper();
+    const { clear, wrapper } = makeWrapper();
     renderHook(() => useMailEvents(true), { wrapper });
 
     act(() => FakeEventSource.instances[0]?.refuseHandshake());
@@ -353,9 +598,10 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     // No amount of waiting reopens the stream: only a fresh login can.
     act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
     expect(FakeEventSource.instances).toHaveLength(1);
-    // And the session is re-read, so RequireAuth routes to the login screen
-    // instead of leaving a mailbox that quietly stopped updating.
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+    // GH #341: the whole cache is dropped, not just ["auth","me"] — otherwise
+    // a mailbox/thread/profile query from the expired session stays cached and
+    // can flash stale content before RequireAuth routes to the login screen.
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 
   // GH #274: a second tab over the 8/user cap gets 429 too_many_streams. That
@@ -365,7 +611,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
   it("distinguishes a 429 too_many_streams: stops retrying and reports live updates limited, leaving the session alone", async () => {
     vi.useFakeTimers();
     const probe = stubAuthProbe(429);
-    const { invalidate, wrapper } = makeWrapper();
+    const { clear, wrapper } = makeWrapper();
     const { result } = renderHook(() => useMailEvents(true), { wrapper });
 
     expect(result.current.liveUpdatesLimited).toBe(false);
@@ -381,7 +627,7 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     // The tab is flagged limited so the UI can say so...
     expect(result.current.liveUpdatesLimited).toBe(true);
     // ...the session is left untouched (this is not a 401)...
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["auth", "me"] });
+    expect(clear).not.toHaveBeenCalled();
     // ...and it never silently reconnects again.
     act(() => vi.advanceTimersByTime(WELL_PAST_THE_CAP_MS));
     expect(FakeEventSource.instances).toHaveLength(1);
@@ -420,6 +666,26 @@ describe("useMailEvents reconnect backoff (GH #243)", () => {
     act(() => FakeEventSource.instances[0]?.refuseHandshake());
     await flushProbe();
 
+    act(() => vi.advanceTimersByTime(FIRST_RETRY_MS));
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  // GH #342: the probe is a second request on top of the EventSource itself.
+  // While the browser is offline it cannot possibly tell 401 from 429 from
+  // "server restarting" — it will just fail too — so it is skipped, and the
+  // refusal is treated as transient (ordinary backoff, no probe cost).
+  it("skips the session probe while the browser is offline and treats the refusal as transient", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(FIXED_RANDOM);
+    const probe = stubAuthProbe(200);
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useMailEvents(true), { wrapper });
+
+    act(() => FakeEventSource.instances[0]?.refuseHandshake());
+    await flushProbe();
+
+    expect(probe).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(FIRST_RETRY_MS));
     expect(FakeEventSource.instances).toHaveLength(2);
   });

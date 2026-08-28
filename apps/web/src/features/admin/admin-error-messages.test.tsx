@@ -100,9 +100,13 @@ describe("the admin console explains WHY an action was refused (GH #46)", () => 
     renderUsersSection();
 
     const row = await rowFor("admin@example.com");
+    // #348: changing the role is now a two-step confirm, like archive.
     fireEvent.change(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") }), {
       target: { value: "employee" },
     });
+    fireEvent.click(
+      within(row).getByRole("button", { name: i18n.t("admin.actions.confirmRoleChange") }),
+    );
 
     expect(
       await within(row).findByText(i18n.t("admin.errors.last_admin")),
@@ -118,6 +122,9 @@ describe("the admin console explains WHY an action was refused (GH #46)", () => 
     fireEvent.change(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") }), {
       target: { value: "employee" },
     });
+    fireEvent.click(
+      within(row).getByRole("button", { name: i18n.t("admin.actions.confirmRoleChange") }),
+    );
 
     expect(
       await within(row).findByText(i18n.t("admin.errors.self_demotion")),
@@ -150,6 +157,9 @@ describe("the admin console explains WHY an action was refused (GH #46)", () => 
     fireEvent.change(within(row).getByRole("combobox", { name: i18n.t("admin.actions.role") }), {
       target: { value: "admin" },
     });
+    fireEvent.click(
+      within(row).getByRole("button", { name: i18n.t("admin.actions.confirmRoleChange") }),
+    );
 
     expect(await within(row).findByText(i18n.t("admin.errors.generic"))).toBeInTheDocument();
   });
@@ -166,6 +176,12 @@ describe("the admin console explains WHY an action was refused (GH #46)", () => 
     fireEvent.change(screen.getByLabelText(i18n.t("admin.new.name")), {
       target: { value: "Taken" },
     });
+    // #348: the new mailbox's password, not the admin's own login — must not
+    // be offered as an autofill candidate for the admin's saved password.
+    expect(screen.getByLabelText(i18n.t("admin.new.mailPassword"))).toHaveAttribute(
+      "autocomplete",
+      "new-password",
+    );
     fireEvent.click(screen.getByRole("button", { name: i18n.t("admin.new.create") }));
 
     expect(await screen.findByText(i18n.t("admin.errors.user_exists"))).toBeInTheDocument();
