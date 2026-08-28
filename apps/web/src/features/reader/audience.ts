@@ -11,8 +11,11 @@ function label(address: EmailAddress): string {
  * Gmail-style one-line summary of who a received message was addressed to,
  * computed from the real `to`/`cc` of the message rather than a fixed string.
  *
- * `identityEmails` are the account's own identity addresses; a recipient
- * matching any of them (case-insensitively) is "me". Recipients are deduped by
+ * `identityEmails` are the addresses that count as "me" — a recipient matching
+ * any of them (case-insensitively) is folded into "mí". #340: the caller passes
+ * the signed-in user's OWN address here, not every identity: a group address is
+ * an identity too, and counting it as "me" made group mail read "para mí" when
+ * the user was nowhere on it. Recipients are deduped by
  * lowercased email before counting so the same address in both `to` and `cc`
  * (or twice in one) is never double-counted.
  *

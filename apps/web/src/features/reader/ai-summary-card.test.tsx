@@ -113,6 +113,34 @@ describe("AiSummaryCard", () => {
   });
 });
 
+describe("AiSummaryCard — sparkle mark (#339)", () => {
+  it("renders the sparkle once, as an inline svg, never as a character in the label", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["a"] })));
+    vi.stubGlobal("fetch", fetchMock);
+    renderCard();
+
+    const button = await screen.findByRole("button", { name: i18n.t("mail.summarizeWithAi") });
+    // The label itself no longer carries the glyph — it used to, on top of the
+    // decorative one beside it, so the button read "✦ ✦ Resumir con IA".
+    expect(button.textContent).not.toContain("✦");
+    expect(i18n.t("mail.summarizeWithAi")).not.toContain("✦");
+    expect(i18n.t("mail.summarizeConversation")).not.toContain("✦");
+    expect(button.querySelectorAll("svg")).toHaveLength(1);
+  });
+
+  it("keeps a single inline svg on the loading and ready states", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["a"] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = renderCard();
+
+    fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.summarizeWithAi") }));
+
+    const region = await screen.findByRole("region", { name: i18n.t("mail.aiSummaryTitle") });
+    expect(region.querySelectorAll("svg")).toHaveLength(1);
+    expect(container.textContent).not.toContain("✦");
+  });
+});
+
 describe("AiSummaryCard — thread mode", () => {
   it("calls the thread summarize endpoint and labels itself as a conversation summary when there is more than one message", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ bullets: ["x", "y"] })));

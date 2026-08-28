@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { AUTH_QUERY_KEY } from "../auth/useAuth";
+import type { MessagesPage } from "@webmail/shared";
+import { createNewMailNotice, inboxUnreadCount } from "./newMailNotice";
+import { clearAllSummaryCache } from "../reader/summaryCache";
 
 // The same endpoint the EventSource opens. The probe below re-asks it with
 // fetch() precisely because fetch exposes the HTTP status that EventSource hides.
@@ -22,6 +24,19 @@ const MAIL_EVENTS_URL = "/api/mail/events";
 // under the delay, so the first retry is never effectively instant.
 const RETRY_BASE_DELAY_MS = 2_000;
 const RETRY_MAX_DELAY_MS = 60_000;
+
+// GH #342: handleOpen used to reset `attempt` to 0 unconditionally, on the
+// theory that an "open" event proves the server is serving again. It does
+// not: an intermediary that accepts the SSE handshake and then cuts it (a
+// proxy_read_timeout, an upstream that closes right after headers) also
+// fires "open" — and then "error" a moment later — so the ladder never grew
+// past its first rung, turning the backoff into a flat ~1-2s retry loop
+// (each attempt also paying for the classifyRefusedHandshake probe below).
+// A stream now has to stay open for this long before it is trusted enough
+// to reset the ladder; receiving actual data (the first frame) is treated
+// as proof sooner, since a frame cannot arrive over a connection an
+// intermediary already dropped.
+export const STREAM_STABLE_MS = 30_000;
 
 // EventSource never surfaces the HTTP status of the request that failed: the
 // error event carries none, and a 401 arrives looking exactly like a dropped
@@ -78,6 +93,12 @@ export function retryDelayMs(attempt: number, random: number = Math.random()): n
 type HandshakeVerdict = "sessionExpired" | "streamLimited" | "transient";
 
 async function classifyRefusedHandshake(): Promise<HandshakeVerdict> {
+  // GH #342: while the browser is offline, the probe cannot possibly answer
+  // (it would just fail too) — it can only add a doomed second request on
+  // top of the doomed EventSource. There is nothing to distinguish yet: once
+  // connectivity returns, the ordinary backoff's next attempt re-opens the
+  // stream and can classify a refusal properly then.
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "transient";
   try {
     const controller = new AbortController();
     const res = await fetch(MAIL_EVENTS_URL, {
@@ -144,16 +165,30 @@ export function invalidationKeysForStateChange(raw: string): string[][] {
 
   const keys = [
     ...(types.has("Email") ? EMAIL_QUERY_KEYS : []),
-    ...(types.has("Mailbox") ? MAILBOX_QUERY_KEYS : []),
+    // #340: the mailbox key rides along with Email, not only with Mailbox.
+    // Arriving or read mail moves unread/total counts, which live in the
+    // mailbox query — including the per-shared-account entries the sidebar's
+    // group rows read (["mail","mailboxes",<accountId>], reached by the prefix
+    // match) — and the provider does not reliably bump Mailbox state in the
+    // same frame. Without this, the stream delivered the shared account's
+    // StateChange and no counter anywhere ever moved. The cost is one extra
+    // GET /api/mail/mailboxes per account per event, which is small next to
+    // the listing refetch already triggered beside it.
+    ...(types.has("Email") || types.has("Mailbox") ? MAILBOX_QUERY_KEYS : []),
   ];
   return keys.length > 0 ? keys : ALL_MAIL_DATA_KEYS;
 }
 
-/** What the hook reports back to its one consumer (MailPage). */
+/** What the hook reports back to its consumers (MailPage, MessageList). */
 export interface MailEventsStatus {
   // GH #274: true once the stream was refused with 429 too_many_streams and the
   // hook gave up retrying — the tab is live-update-limited until it is reloaded.
   liveUpdatesLimited: boolean;
+  // GH #342: true only while an EventSource is actually connected right now —
+  // not merely "enabled". Consumers use this to fall back to polling
+  // (refetchInterval) for exactly as long as live updates are not flowing:
+  // while reconnecting, while liveUpdatesLimited, or while offline.
+  streamOpen: boolean;
 }
 
 export function useMailEvents(enabled: boolean): MailEventsStatus {
@@ -162,17 +197,24 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
   const tRef = useRef(t);
   tRef.current = t;
   const [liveUpdatesLimited, setLiveUpdatesLimited] = useState(false);
+  const [streamOpen, setStreamOpen] = useState(false);
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return undefined;
     // A fresh effect run (re-enabled) starts from a clean slate; the flag only
     // latches back on if this run's stream is refused for the cap again.
     setLiveUpdatesLimited(false);
+    setStreamOpen(false);
 
     let source: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // GH #342: pending proof that the currently-open stream has stayed open
+    // long enough (STREAM_STABLE_MS) to trust it and reset the ladder. Only
+    // ever armed while a stream is actually open; cleared the moment it stops
+    // being open, one way or another.
+    let stableTimer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
-    // Consecutive failures since the last stream that reached "open"; the only
+    // Consecutive failures since the last stream trusted stable; the only
     // input to the backoff curve.
     let attempt = 0;
     // Latched once the session is known to be gone. Nothing can reconnect until
@@ -180,25 +222,102 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
     // unauthenticated request against a server that already said no.
     let stopped = false;
 
-    function handleMessage(event: MessageEvent<string>) {
-      for (const queryKey of invalidationKeysForStateChange(event.data ?? "")) {
-        queryClient.invalidateQueries({ queryKey });
-      }
-      if (
-        document.hidden &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted"
-      ) {
-        // eslint-disable-next-line no-new
-        new Notification(tRef.current("mail.newMailNotification"));
+    // GH #338: one notice per stream, so its debounce spans the connection
+    // rather than restarting with every frame.
+    const notice = createNewMailNotice({
+      translate: (count) => ({
+        title: tRef.current("mail.newMailNotification"),
+        body: tRef.current("mail.newMailNotificationBody", { count }),
+      }),
+    });
+
+    function clearStableTimer() {
+      if (stableTimer) {
+        clearTimeout(stableTimer);
+        stableTimer = null;
       }
     }
 
-    // A stream that opened is proof the server is serving again, so the next
-    // outage starts its backoff from scratch instead of inheriting the ladder
-    // climbed during the previous one.
-    function handleOpen() {
+    // The one place `attempt` is actually reset — called once a stream has
+    // proven itself stable, either by staying open past STREAM_STABLE_MS or
+    // by delivering its first data frame (handleFirstFrame below).
+    function markStreamStable() {
       attempt = 0;
+      clearStableTimer();
+    }
+
+    function handleMessage(event: MessageEvent<string>) {
+      // GH #338: read BEFORE the invalidation, compare AFTER it settles. The
+      // alert used to fire on any frame that mentioned `Email` — a flag flipped
+      // in another tab, a move, a delete, a message the user SENT, and every
+      // change in every shared account the session can reach. What actually
+      // means "new mail" is the personal Inbox's unread count going up, and the
+      // only way to see that is across the refetch this very handler triggers.
+      //
+      // A frame that moves `Email` alone does not refetch the mailboxes, so the
+      // count cannot move and nothing is said: a real delivery advances the
+      // Mailbox state too (the unread counter is part of it), so the signal we
+      // act on is the one a delivery actually produces.
+      const before = inboxUnreadCount(queryClient);
+      const settled = invalidationKeysForStateChange(event.data ?? "").map((queryKey) => {
+        // #349 (review fix): the infinite messages list refetched EVERY
+        // already-loaded page on every single StateChange — a user 10 pages
+        // deep paid 10 sequential /api/mail/messages requests per incoming
+        // event. The first attempt at bounding that cost invalidated the
+        // messages key with `refetchType: "none"`, which stopped the storm
+        // but also stopped the inbox from updating live on a StateChange at
+        // all — a regression on the #340/#342 "inbox does not update"
+        // behavior this whole audit started from.
+        //
+        // v5 removed v4's `refetchPage` predicate (the one primitive that
+        // could refetch just a single page), and `maxPages` EVICTS pages
+        // beyond the cap from the query's OWN data — that would drop
+        // already-visible rows mid-scroll the moment a user reads past the
+        // cap during ordinary scrolling, not just on an SSE event.
+        //
+        // So instead: every cached infinite messages query is trimmed back
+        // to its first page here, BEFORE the (now-default, eager)
+        // invalidation below. The query stays active and genuinely
+        // refetches — the list is live again — but the refetch is bounded
+        // to exactly one page no matter how deep the user had scrolled.
+        // Deeper pages reload lazily as the user scrolls back down, the
+        // same way they loaded the first time (getNextPageParam in
+        // MessageList.tsx). The thread/mailboxes keys are single,
+        // unpaginated fetches, so they were never part of this cost.
+        const isMessagesKey = queryKey.length === 2 && queryKey[0] === "mail" && queryKey[1] === "messages";
+        if (isMessagesKey) {
+          queryClient.setQueriesData<InfiniteData<MessagesPage, number>>({ queryKey }, (old) =>
+            old ? { pages: old.pages.slice(0, 1), pageParams: old.pageParams.slice(0, 1) } : old,
+          );
+        }
+        return queryClient.invalidateQueries({ queryKey });
+      });
+      void Promise.all(settled)
+        .then(() => notice(before, inboxUnreadCount(queryClient)))
+        .catch(() => {
+          // a refetch that failed is not an arrival — stay quiet
+        });
+    }
+
+    // GH #342: an "open" event does NOT by itself prove the server is
+    // serving again — an intermediary can accept the handshake and cut it a
+    // moment later. It only starts the clock on trusting this stream; the
+    // ladder resets once that clock reaches STREAM_STABLE_MS (or a data
+    // frame arrives first, see handleFirstFrame).
+    function handleOpen() {
+      setStreamOpen(true);
+      clearStableTimer();
+      stableTimer = setTimeout(markStreamStable, STREAM_STABLE_MS);
+    }
+
+    // GH #342: a frame can only arrive over a connection that is genuinely
+    // relaying the server's stream, so it is stronger proof of health than
+    // merely staying open — no need to wait out the rest of the stability
+    // window once one has been seen. Registered as its own listener (see
+    // connect() below) rather than folded into handleMessage, which owns the
+    // StateChange/notification handling this hook does elsewhere.
+    function handleFirstFrame() {
+      markStreamStable();
     }
 
     function scheduleRetry() {
@@ -208,6 +327,8 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
     }
 
     function handleError() {
+      setStreamOpen(false);
+      clearStableTimer();
       // Read before close(): closing sets readyState to CLOSED itself, which
       // would make every error look like a refused handshake.
       const refusedHandshake = source?.readyState === EVENT_SOURCE_CLOSED;
@@ -227,10 +348,14 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
         // is about.
         stopped = true;
         if (verdict === "sessionExpired") {
-          // Re-read the session so RequireAuth takes the user to the login
-          // screen, rather than leaving them in front of a mailbox that has
-          // quietly stopped updating.
-          queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+          // GH #341: clearing the whole cache (not just re-invalidating
+          // ["auth","me"]) drops every mail/thread/profile query left over
+          // from the expired session, so RequireAuth's login screen is not
+          // preceded by a flash of stale content once a new session starts.
+          // clear() removes the auth query too, so the next read re-fetches
+          // it and RequireAuth still routes to the login screen.
+          queryClient.clear();
+          clearAllSummaryCache();
           return;
         }
         // streamLimited: the session is fine and the server is up — another
@@ -253,6 +378,11 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
       // idempotent, and no server sends both for one change.
       source.addEventListener("state", handleMessage);
       source.addEventListener("message", handleMessage);
+      // GH #342: a second, independent listener for the same two frame
+      // types — see handleFirstFrame's own comment for why this isn't
+      // folded into handleMessage above.
+      source.addEventListener("state", handleFirstFrame);
+      source.addEventListener("message", handleFirstFrame);
       source.addEventListener("error", handleError);
     }
 
@@ -260,10 +390,11 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
 
     return () => {
       cancelled = true;
+      clearStableTimer();
       source?.close();
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [enabled, queryClient]);
 
-  return { liveUpdatesLimited };
+  return { liveUpdatesLimited, streamOpen };
 }

@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- GH #350: the installed-PWA surface. Without a manifest the app cannot
+         be installed at all, and iOS Safari only delivers Web Push to a PWA
+         installed in standalone mode. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <!-- One per scheme: the browser/OS chrome around the installed app has to
+         follow the theme the user is actually in. The data-theme above is only
+         the pre-mount fallback themeInit overwrites (see app/ui/themeInit.ts),
+         so it cannot be what colours the chrome. -->
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0b10" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f1f4f4" />
     <title>Céfiro</title>
   </head>
   <body>

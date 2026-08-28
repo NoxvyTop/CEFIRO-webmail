@@ -61,6 +61,9 @@ export default defineConfig({
         // provisions (GH #181). It is only ever imported by tests, the same
         // reason the web package excludes src/test/**.
         "src/infra/db/test-db.ts",
+        // Same reason, for the seam that makes an app under test answer the way
+        // it does to a browser (GH #335): imported only by tests.
+        "src/test/**",
       ],
       // Thresholds are checked PER FILE (GH #228). Before this they were
       // aggregate-only, so a file could rot all the way to zero while the

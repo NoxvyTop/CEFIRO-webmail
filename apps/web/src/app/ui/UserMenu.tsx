@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { Avatar } from "./Avatar";
 import { BellIcon, KeyboardIcon, LogoutIcon, MoonIcon, SettingsIcon, SunIcon, UsersIcon } from "./icons";
+import { useMenuKeyboardNav } from "./useMenuKeyboardNav";
 
 interface UserMenuUser {
   email: string;
@@ -18,7 +19,12 @@ interface UserMenuProps {
   theme: "night" | "light";
   onToggleTheme: () => void;
   onLogout: () => void;
-  showNotifications: boolean;
+  // GH #337 (b): the browser's own Notification permission, or null when the
+  // API does not exist. It replaces the `showNotifications` boolean because the
+  // item has three states, not two: askable, blocked (visible but inert, so a
+  // user who once said no is not left wondering where the alerts went), and
+  // done. The boolean could only ever express the first.
+  notificationPermission: NotificationPermission | null;
   onEnableNotifications: () => void;
   // GH #13/#50 (G-4): opens the keyboard-shortcuts dialog. The standalone
   // "Atajos" header button moved in here; the `?` keyboard trigger is unchanged.
@@ -34,13 +40,16 @@ export function UserMenu({
   theme,
   onToggleTheme,
   onLogout,
-  showNotifications,
+  notificationPermission,
   onEnableNotifications,
   onShowShortcuts,
 }: UserMenuProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // #348: WAI-ARIA menu keyboard behavior — focus the first item on open,
+  // ArrowUp/ArrowDown/Home/End move between items.
+  const menuRef = useMenuKeyboardNav<HTMLDivElement>(open);
 
   useEffect(() => {
     if (!open) return;
@@ -80,6 +89,7 @@ export function UserMenu({
       </button>
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           className="absolute right-0 top-[calc(100%+8px)] z-50 flex min-w-[230px] flex-col rounded-[12px] border border-line bg-panel py-1 shadow-pop"
         >
@@ -121,15 +131,22 @@ export function UserMenu({
             {theme === "night" ? <SunIcon /> : <MoonIcon />}
             {t(theme === "night" ? "app.themeLight" : "app.themeNight")}
           </button>
-          {showNotifications && (
+          {(notificationPermission === "default" || notificationPermission === "denied") && (
             <button
               type="button"
               role="menuitem"
-              className={menuItemClass}
+              className={`${menuItemClass} disabled:cursor-default disabled:text-muted disabled:hover:bg-transparent`}
+              // Blocked is shown, not offered: requestPermission resolves
+              // "denied" without ever prompting again, so a live button would
+              // be a control that cannot work. Settings > Notificaciones says
+              // how to undo it.
+              disabled={notificationPermission === "denied"}
               onClick={onEnableNotifications}
             >
               <BellIcon />
-              {t("mail.enableNotifications")}
+              {notificationPermission === "denied"
+                ? t("mail.notificationsBlocked")
+                : t("mail.enableNotifications")}
             </button>
           )}
           <div className="my-1 border-t border-line" />

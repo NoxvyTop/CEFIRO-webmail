@@ -110,6 +110,10 @@ export function FilterSettings() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reapplied, setReapplied] = useState(false);
+  // #348: deleting a rule is irreversible — mirrors Sidebar.tsx's inline
+  // two-step confirm for deleting a label (GH #103) rather than deleting on
+  // the first click.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
 
   function invalidateFilters() {
     return queryClient.invalidateQueries({ queryKey: FILTERS_QUERY_KEY });
@@ -155,6 +159,7 @@ export function FilterSettings() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteFilterRule(id),
     onMutate: beginMutation,
+    onSuccess: () => setConfirmingDeleteId(null),
     onError: handleError,
     onSettled: () => invalidateFilters(),
   });
@@ -333,13 +338,35 @@ export function FilterSettings() {
               >
                 {t("settings.edit")}
               </button>
-              <button
-                type="button"
-                onClick={() => deleteMutation.mutate(rule.id)}
-                className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
-              >
-                {t("settings.delete")}
-              </button>
+              {confirmingDeleteId === rule.id ? (
+                <>
+                  <span className="text-warn">
+                    {t("filters.confirmDeleteRuleQuestion", { name: rule.name })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => deleteMutation.mutate(rule.id)}
+                    className="rounded-[9px] px-2 py-1 text-xs font-semibold text-warn transition hover:bg-hover"
+                  >
+                    {t("filters.confirmDeleteAction")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDeleteId(null)}
+                    className="rounded-[9px] px-2 py-1 text-xs text-muted transition hover:bg-hover"
+                  >
+                    {t("filters.cancelDelete")}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDeleteId(rule.id)}
+                  className="rounded-[9px] px-2 py-1 text-xs transition hover:bg-hover"
+                >
+                  {t("settings.delete")}
+                </button>
+              )}
             </div>
           </li>
         ))}

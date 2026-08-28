@@ -1,19 +1,25 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import type { CustomLabel, EmailSummary } from "@webmail/shared";
-import { ACTIVE_ACCOUNT_PARAM, fetchMailboxes, fetchThread } from "./api";
-import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
-import { isUnlinkedMailboxError, mailErrorKey, mailRetry } from "./queryErrors";
+import {
+  ACTIVE_ACCOUNT_PARAM, SHARED_ACCOUNTS_QUERY_KEY, fetchMailboxes, fetchSharedAccounts, fetchThread,
+} from "./api";
+import {
+  deriveGroupAddresses, fetchPreferences, mergeGroupEntries, updatePreferences, type GroupEntry,
+} from "./groups";
+import { isUnlinkedMailboxError, mailErrorKey, mailRetry, mailRetryDelay } from "./queryErrors";
 import { MessageList } from "./MessageList";
 import { SharedMailboxBanner } from "./SharedMailboxBanner";
 import { Sidebar } from "./Sidebar";
 import { useMailEvents } from "./useMailEvents";
+import { useUnreadBadge } from "./useUnreadBadge";
 import { ThreadView } from "../reader/ThreadView";
 import { CefiroLogo } from "../../app/ui/CefiroLogo";
 import { MenuIcon } from "../../app/ui/icons";
 import { folderName } from "../../app/ui/folders";
+import { PanelError } from "../../app/ui/PanelError";
 import { useToast } from "../../app/ui/toast";
 import { fetchIdentities } from "../composer/api";
 import { buildEditDraft, emptyDraft, forwardDraft, replyDraft, type ComposerDraft } from "../composer/reply";
@@ -42,7 +48,17 @@ export function MailPage() {
   // (the 8/user cap of #241). When it does, the hook stops the silent retry loop
   // and reports it here so the tab can say live updates are limited rather than
   // spinning forever with no sign to the user.
-  const { liveUpdatesLimited } = useMailEvents(true);
+  // GH #342: `streamOpen` is false for every reason live updates aren't
+  // flowing right now (reconnecting, limited, offline) — used below as the
+  // single signal for whether the mailboxes/messages queries need to fall
+  // back to polling.
+  const { liveUpdatesLimited, streamOpen } = useMailEvents(true);
+  const pollWhileStreamDown = !streamOpen;
+  // GH #338: the unread count in the tab title and on the favicon. Mounted here
+  // rather than in the shell because this is the screen that holds the live
+  // stream — and keeping the PERSONAL mailboxes query active is also what lets
+  // an arrival be detected while a shared mailbox is the one on screen.
+  useUnreadBadge();
 
   const mailboxParam = searchParams.get("mailbox");
   // GH #13/#50: the active shared mailbox (the account selector in the header
@@ -50,6 +66,19 @@ export function MailPage() {
   // when no shared mailbox is selected.
   const accountParam = searchParams.get(ACTIVE_ACCOUNT_PARAM) ?? undefined;
   const threadParam = searchParams.get("thread");
+  // #348: closing the reader (Archivar/Eliminar/the back button, all of
+  // which clear `thread`) used to leave focus on whatever DOM node vanished
+  // under it — the browser's fallback is <body>. Tracks the PREVIOUS thread
+  // param so this only fires on a genuine close transition, not on initial
+  // load with no thread ever open.
+  const listSectionRef = useRef<HTMLElement>(null);
+  const previousThreadParamRef = useRef<string | null>(threadParam);
+  useEffect(() => {
+    if (previousThreadParamRef.current && !threadParam) {
+      listSectionRef.current?.focus();
+    }
+    previousThreadParamRef.current = threadParam;
+  }, [threadParam]);
   const queryParam = searchParams.get("q");
   const composeParam = searchParams.get("compose");
   const groupParam = searchParams.get("group");
@@ -68,6 +97,11 @@ export function MailPage() {
     queryKey: ["mail", "mailboxes", accountParam ?? null],
     queryFn: () => fetchMailboxes(accountParam),
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
+    // GH #342: same polling fallback as MessageList's messages query — see
+    // its comment for why.
+    refetchInterval: pollWhileStreamDown ? 60_000 : undefined,
+    refetchIntervalInBackground: false,
   });
 
   const identitiesQuery = useQuery({
@@ -121,6 +155,45 @@ export function MailPage() {
   );
 
   const groupAddresses = useMemo(() => groups.map((group) => group.email), [groups]);
+
+  // #340: the shared mailboxes the member can open. The sidebar used to list a
+  // group twice under the same name — once here as a send-as identity opening
+  // the PERSONAL inbox filtered by recipient, and once on the "Buzones
+  // compartidos" page opening the group's own account — and neither showed
+  // unread, so a new message in the group's mailbox looked like it never
+  // arrived ("0 correos" on the filtered view). One merged row now, and it
+  // opens the group's own mailbox when there is one.
+  const sharedAccountsQuery = useQuery({
+    queryKey: SHARED_ACCOUNTS_QUERY_KEY,
+    queryFn: fetchSharedAccounts,
+    retry: mailRetry,
+  });
+  const sharedAccounts = useMemo(() => sharedAccountsQuery.data ?? [], [sharedAccountsQuery.data]);
+
+  // #340: one light mailbox read per shared account, purely for the unread
+  // count on its sidebar row. Deliberately the SAME query key the mail view
+  // itself uses for that account (["mail","mailboxes",<accountId>]), so opening
+  // the mailbox costs nothing extra and the SSE stream's ["mail","mailboxes"]
+  // invalidation — which prefix-matches every account — keeps the counter live
+  // without a second invalidation path (see useMailEvents.ts).
+  const sharedMailboxQueries = useQueries({
+    queries: sharedAccounts.map((account) => ({
+      queryKey: ["mail", "mailboxes", account.id],
+      queryFn: () => fetchMailboxes(account.id),
+      retry: mailRetry,
+    })),
+  });
+
+  // Plain derivation rather than a memo: useQueries hands back a fresh result
+  // array on every render, so any dependency list over it would either be a lie
+  // or recompute anyway — and merging a handful of groups is far cheaper than
+  // the bookkeeping to avoid it.
+  const groupEntries: GroupEntry[] = mergeGroupEntries(groups, sharedAccounts).map((entry) => {
+    if (!entry.accountId) return entry;
+    const index = sharedAccounts.findIndex((account) => account.id === entry.accountId);
+    const inbox = sharedMailboxQueries[index]?.data?.find((box) => box.role === "inbox");
+    return inbox ? { ...entry, unread: inbox.unreadEmails } : entry;
+  });
 
   const composeThreadQuery = useQuery({
     queryKey: ["mail", "thread", threadParam ?? "", accountParam ?? null],
@@ -191,8 +264,17 @@ export function MailPage() {
   const isMainInboxSelected =
     !starredParam && !groupParam && selectedMailboxId !== null && selectedMailboxId === inboxMailboxId;
 
+  // #340: "the personal main inbox" — the only view the groupMailInMainInbox
+  // preference governs. Without the account check it also matched the INBOX OF A
+  // SHARED MAILBOX (same role, same fallback), where excluding the group's own
+  // address hides exactly the mail that mailbox exists to hold, and where the
+  // checkbox was offered over a list it has no bearing on.
+  const isPersonalMainInboxSelected = isMainInboxSelected && !accountParam;
+
   const messageListExcludeTo =
-    isMainInboxSelected && preferences?.groupMailInMainInbox === false && groupAddresses.length > 0
+    isPersonalMainInboxSelected &&
+    preferences?.groupMailInMainInbox === false &&
+    groupAddresses.length > 0
       ? groupAddresses
       : undefined;
 
@@ -229,12 +311,28 @@ export function MailPage() {
     });
   }
 
-  function handleSelectGroup(address: string) {
+  // #340: a group row is one destination now. When the member can reach the
+  // group's OWN mailbox (a shared account in their JMAP session) that is what
+  // opens — it is the source of truth, it holds the mail that actually arrived,
+  // and it is the only one of the two views that can carry an unread count.
+  // The `?group=` filter over the PERSONAL inbox stays as the fallback for a
+  // group known only as a send-as identity, where there is no shared account to
+  // open (see docs/design/shared-mailboxes.md: Stalwart does not deliver a copy
+  // to each member, so that view is empty unless the copy opt-in put one there).
+  function handleSelectGroup(group: GroupEntry) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set("group", address);
       next.delete("thread");
       next.delete("starred");
+      next.delete("mailbox");
+      next.delete("label");
+      if (group.accountId) {
+        next.set(ACTIVE_ACCOUNT_PARAM, group.accountId);
+        next.delete("group");
+        return next;
+      }
+      next.delete(ACTIVE_ACCOUNT_PARAM);
+      next.set("group", group.address ?? group.label);
       return next;
     });
   }
@@ -382,6 +480,15 @@ export function MailPage() {
     });
   }
 
+  // #340: the label rail accumulated every keyword ever seen, so the labels
+  // discovered in the personal mailbox stayed on screen after switching to a
+  // shared account that has none of them — a taxonomy leaking across mailboxes
+  // that do not share one. Accumulation is still right WITHIN an account (the
+  // list only ever reports the keywords of the pages it has loaded), so the
+  // reset is scoped to the account changing.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setAvailableLabels([]), [accountParam]);
+
   function handleLabels(labels: string[]) {
     setAvailableLabels((prev) => {
       const merged = Array.from(new Set([...prev, ...labels])).sort();
@@ -437,8 +544,9 @@ export function MailPage() {
         onSelectMailbox={handleSelectMailbox}
         starredSelected={starredParam}
         onSelectStarred={handleSelectStarred}
-        groups={groups}
+        groups={groupEntries}
         selectedGroup={groupParam}
+        selectedAccountId={accountParam ?? null}
         onSelectGroup={handleSelectGroup}
         labels={availableLabels}
         selectedLabel={labelParam}
@@ -453,11 +561,13 @@ export function MailPage() {
         onClose={() => setNavOpen(false)}
       />
       <section
+        ref={listSectionRef}
+        tabIndex={-1}
         aria-label={t("mail.listRegion")}
         style={{ "--list-w": `${listWidth}px` } as CSSProperties}
         className={`${
           threadParam ? "hidden lg:flex" : "flex"
-        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
+        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel outline-none lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
         {/* GH #13/#50 (G-4): the account selector that used to name the active
             shared mailbox in the top bar is gone; this read-only indicator names
@@ -476,9 +586,10 @@ export function MailPage() {
           </p>
         )}
         {otherMailboxError && (
-          <p role="alert" className="p-4 text-sm text-warn">
-            {t(mailErrorKey(mailboxesQuery.error))}
-          </p>
+          <PanelError
+            message={t(mailErrorKey(mailboxesQuery.error))}
+            onRetry={() => void mailboxesQuery.refetch()}
+          />
         )}
         {unlinkedMailbox && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted">
@@ -501,14 +612,29 @@ export function MailPage() {
             )}
           </div>
         )}
-        {!starredParam && groupAddresses.length > 0 && (
-          <label className="flex h-[38px] w-full items-center gap-[11px] border-b border-line px-3 text-sm text-muted transition hover:bg-hover">
+        {/* #340: this sat above every non-starred view without saying WHICH
+            group it referred to, and read as a twin of the shared-mailbox opt-in
+            ("Recibir copia de … en mi bandeja") which does something else
+            entirely — that one asks the server to DELIVER copies, this one only
+            filters what the main inbox shows. So it now names the groups, spells
+            out that it delivers nothing, and only appears on the view it
+            actually governs: the main inbox. */}
+        {isPersonalMainInboxSelected && groupAddresses.length > 0 && (
+          <label className="flex w-full items-start gap-[11px] border-b border-line px-3 py-2 text-sm text-muted transition hover:bg-hover">
             <input
               type="checkbox"
+              className="mt-[3px] shrink-0"
+              // The help line below is part of the <label>, so without an
+              // explicit name the control would be announced as the whole
+              // paragraph. Named by the sentence that states what it does.
+              aria-label={t("groups.showInInbox", { groups: groupAddresses.join(", ") })}
               checked={preferences?.groupMailInMainInbox ?? false}
               onChange={(event) => toggleGroupMailInInboxMutation.mutate(event.target.checked)}
             />
-            {t("groups.showInInbox")}
+            <span className="flex min-w-0 flex-col">
+              <span>{t("groups.showInInbox", { groups: groupAddresses.join(", ") })}</span>
+              <span className="text-[12px] text-muted">{t("groups.showInInboxHelp")}</span>
+            </span>
           </label>
         )}
         {/* GH #106: a label view spanning folders deliberately leaves
@@ -534,6 +660,7 @@ export function MailPage() {
             onArchived={handleArchived}
             customLabels={customLabels}
             accountId={accountParam}
+            pollWhileStreamDown={pollWhileStreamDown}
           />
         )}
       </section>
@@ -562,6 +689,11 @@ export function MailPage() {
             inboxMailboxId={inboxMailboxId}
             trashMailboxId={trashMailboxId}
             accountId={accountParam}
+            // #343: the same mailbox the list is scoped to, so archiving or
+            // deleting from the reader acts on the whole conversation as it
+            // appears in that folder — undefined here (starred, a
+            // folder-spanning label) means "no current mailbox".
+            currentMailboxId={messageListMailboxId ?? null}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">

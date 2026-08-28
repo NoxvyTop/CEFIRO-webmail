@@ -9,7 +9,7 @@ import { createAuditRepo } from "../../infra/repos/audit";
 import { createSsoConfigRepo } from "../../infra/repos/sso-config";
 import { createInstanceSettingsRepo } from "../../infra/repos/instance-settings";
 import { importMasterKey } from "../credentials/crypto";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createSessionStore } from "../auth/sessions";
 import { createAdminRouter } from "./router";
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import type { CustomLabel, Identity, Mailbox } from "@webmail/shared";
+import type { CustomLabel, Mailbox } from "@webmail/shared";
 import { useTranslation } from "react-i18next";
+import type { GroupEntry } from "./groups";
 import { ArchiveIcon, CloseIcon, InboxIcon, PlusIcon, SendIcon, StarIcon, UsersIcon } from "../../app/ui/icons";
 import { folderName, orderedMailboxes } from "../../app/ui/folders";
 import { labelColor, labelDisplayName, mergeLabels } from "../../app/ui/labels";
@@ -22,9 +23,17 @@ interface SidebarProps {
   onSelectMailbox: (mailboxId: string) => void;
   starredSelected: boolean;
   onSelectStarred: () => void;
-  groups: Identity[];
+  // #340: one row per group, whatever the group is reachable through — see
+  // GroupEntry in ./groups. The parent decides what a click opens (the group's
+  // own mailbox when it has one, otherwise the personal inbox filtered by
+  // recipient), so this stays presentational like every other nav item here.
+  groups: GroupEntry[];
   selectedGroup: string | null;
-  onSelectGroup: (address: string) => void;
+  // #340: the shared account the mail view is currently scoped to, so the group
+  // row highlights while its own mailbox is open — `selectedGroup` only ever
+  // tracks the `?group=` personal-inbox filter.
+  selectedAccountId?: string | null;
+  onSelectGroup: (group: GroupEntry) => void;
   labels: string[];
   selectedLabel: string | null;
   onSelectLabel: (label: string) => void;
@@ -52,7 +61,8 @@ interface SidebarProps {
 
 export function Sidebar({
   mailboxes, selectedMailboxId, onSelectMailbox, starredSelected, onSelectStarred,
-  groups, selectedGroup, onSelectGroup, labels, selectedLabel, onSelectLabel, onCompose,
+  groups, selectedGroup, selectedAccountId = null, onSelectGroup,
+  labels, selectedLabel, onSelectLabel, onCompose,
   onOpenSharedMailboxes = () => {},
   composeDisabled = false, customLabels = [], onCreateLabel = () => {}, onDeleteLabel = () => {},
   open = false, onClose = () => {},
@@ -349,16 +359,32 @@ export function Sidebar({
           </p>
           <ul className="flex flex-col gap-1">
             {groups.map((group) => {
-              const selected = group.email === selectedGroup;
+              // #340: current either because its own mailbox is open, or
+              // because the personal inbox is filtered to its address.
+              const selected =
+                (group.accountId != null && group.accountId === selectedAccountId) ||
+                (group.address != null && group.address === selectedGroup);
+              const unread = group.unread ?? 0;
               return (
-                <li key={group.id}>
+                <li key={group.key}>
                   <button
                     type="button"
                     aria-current={selected ? "true" : undefined}
-                    onClick={() => selectGroup(group.email)}
-                    className="flex h-[34px] w-full items-center justify-between truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
+                    onClick={() => selectGroup(group)}
+                    className="flex h-[34px] w-full items-center gap-[11px] truncate rounded-[9px] px-3 text-left text-sm hover:bg-hover aria-[current=true]:bg-sel aria-[current=true]:font-[650]"
                   >
-                    <span className="truncate">{group.email}</span>
+                    <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                    {/* #340: the count of the GROUP's own inbox — the whole
+                        point of merging the two rows. Same shape as the folder
+                        badge above (GH #253): the digit is hidden from
+                        assistive tech and the counted sentence rendered beside
+                        it, since a bare number glued to a name reads as noise. */}
+                    {unread > 0 && (
+                      <span className="shrink-0 text-xs font-bold text-accent-text">
+                        <span aria-hidden="true">{unread}</span>
+                        <span className="sr-only">{t("mail.unread", { count: unread })}</span>
+                      </span>
+                    )}
                   </button>
                 </li>
               );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMeta } from "@webmail/shared";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
+import { useInViewport } from "../../app/ui/useInViewport";
 import {
   CloseIcon,
   FileArchiveIcon,
@@ -85,8 +86,20 @@ function attachmentIconFor(type: string) {
   return FileGenericIcon;
 }
 
-function formatSizeKb(size: number) {
-  return `${(size / 1024).toFixed(1)} KB`;
+// #348: printed "1024.0 KB" for a 1MB+ attachment instead of rolling over to
+// MB — Intl.NumberFormat drops the trailing ".0" for a whole number, and the
+// KB/MB switch at the 1MB boundary keeps the number itself from ever reading
+// as "a thousand-plus". Locale fixed to "en-US" rather than the active UI
+// language: "KB"/"MB" are themselves untranslated English abbreviations
+// (like every other size unit in this codebase), so the digits next to them
+// stay in the same convention instead of switching decimal separator with
+// the interface language.
+const SIZE_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+export function formatSizeKb(sizeBytes: number): string {
+  const kb = sizeBytes / 1024;
+  if (kb < 1024) return `${SIZE_FORMATTER.format(kb)} KB`;
+  return `${SIZE_FORMATTER.format(kb / 1024)} MB`;
 }
 
 // Gmail-style attachment card: a thumbnail/preview area on top (a real
@@ -117,9 +130,17 @@ export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCa
   // (image/pdf) attachments only. See AttachmentViewer.tsx.
   const [viewerOpen, setViewerOpen] = useState(false);
 
+  // #349: PdfThumbnail fetches the whole PDF (and pulls in an extra ~1MB
+  // pdf.js chunk) the instant it mounts, and the image thumbnail's <img>
+  // fetches the full attachment — both used to fire for every card on
+  // screen regardless of visibility, so a thread with 10 attachments meant
+  // 10 full downloads at once. Deferred until the card is actually about to
+  // scroll into view; see app/ui/useInViewport.ts.
+  const [viewportRef, inViewport] = useInViewport<HTMLDivElement>();
+
   const thumbnailContent = (
     <>
-      {kind === "image" && !imageFailed && (
+      {kind === "image" && !imageFailed && inViewport && (
         <img
           src={blobUrl(attachment.blobId, name, attachment.type, { accountId })}
           alt={name}
@@ -128,7 +149,7 @@ export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCa
           className="h-full w-full object-cover"
         />
       )}
-      {kind === "pdf" && (
+      {kind === "pdf" && inViewport && (
         <PdfThumbnail
           blobId={attachment.blobId}
           name={name}
@@ -143,12 +164,15 @@ export function AttachmentCard({ attachment, onRemove, accountId }: AttachmentCa
           fallback={<Icon size={32} />}
         />
       )}
-      {(kind === "icon" || (kind === "image" && imageFailed)) && <Icon size={32} />}
+      {(kind === "icon" || (kind === "image" && imageFailed) || !inViewport) && <Icon size={32} />}
     </>
   );
 
   return (
-    <div className="relative flex w-[172px] shrink-0 flex-col overflow-hidden rounded-xl border border-line">
+    <div
+      ref={viewportRef}
+      className="relative flex w-[172px] shrink-0 flex-col overflow-hidden rounded-xl border border-line"
+    >
       {onRemove && (
         <button
           type="button"

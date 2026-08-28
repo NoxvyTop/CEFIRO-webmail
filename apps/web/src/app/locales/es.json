@@ -5,7 +5,16 @@
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",
-    "sealMotto": "el viento que mueve tu equipo"
+    "sealMotto": "el viento que mueve tu equipo",
+    "offline": "Sin conexión a internet",
+    "routeError": {
+      "staleTitle": "Hay una nueva versión disponible",
+      "staleDescription": "Esta pestaña llevaba abierta desde antes de una actualización y algunos archivos ya no existen en el servidor. Recarga la página para continuar.",
+      "genericTitle": "Algo salió mal",
+      "genericDescription": "No se pudo mostrar esta pantalla. Recargar la página suele solucionarlo.",
+      "reload": "Recargar"
+    },
+    "toastDismiss": "Cerrar aviso"
   },
   "admin": {
     "title": "Administración",
@@ -64,7 +73,10 @@
       "role": "Rol",
       "archive": "Archivar",
       "reactivate": "Reactivar",
-      "confirmArchive": "Confirmar archivado"
+      "confirmArchive": "Confirmar archivado",
+      "confirmRoleChangeQuestion": "¿Cambiar el rol a {{role}}?",
+      "confirmRoleChange": "Confirmar",
+      "cancelRoleChange": "Cancelar"
     },
     "new": {
       "title": "Nuevo usuario",
@@ -122,6 +134,11 @@
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
     "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
+    "serviceUnavailable": {
+      "title": "Servicio no disponible",
+      "description": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "retry": "Reintentar"
+    },
     "errors": {
       "account_archived": "Tu cuenta está archivada. Pide a un administrador que la reactive.",
       "generic": "No se pudo completar el inicio de sesión",
@@ -152,6 +169,8 @@
     "connecting": "Conectando…",
     "disabled": "El modo de configuración está desactivado",
     "status": "SSO configurado: {{sso}} — Usuarios: {{count}}",
+    "yes": "Sí",
+    "no": "No",
     "ssoTitle": "Proveedor SSO (OIDC)",
     "userTitle": "Nuevo usuario",
     "save": "Guardar",
@@ -180,6 +199,10 @@
       "displayName": "Nombre",
       "role": "Rol",
       "locale": "Idioma",
+      "localeOptions": {
+        "es": "Español",
+        "en": "Inglés"
+      },
       "mailPassword": "Contraseña del buzón"
     }
   },
@@ -211,6 +234,10 @@
     "newMailNotification": "Correo nuevo",
     "liveUpdatesLimited": "Las actualizaciones en vivo están limitadas en esta pestaña porque hay demasiadas abiertas. Cierra otra y recarga para reanudarlas aquí.",
     "enableNotifications": "Activar notificaciones",
+    "notificationsBlocked": "Avisos bloqueados por el navegador",
+    "newMailNotificationBody_one": "{{count}} mensaje sin leer en la bandeja de entrada",
+    "newMailNotificationBody_other": "{{count}} mensajes sin leer en la bandeja de entrada",
+    "unreadTitle": "({{count}}) Céfiro",
     "resizeList": "Ajustar ancho de la lista",
     "errors": {
       "mail_not_configured": "El servidor de correo no está configurado",
@@ -237,8 +264,8 @@
       "cta": "Vincular buzón",
       "hint": "Pide a un administrador que lo vincule."
     },
-    "summarizeWithAi": "✦ Resumir con IA",
-    "summarizeConversation": "✦ Resumir conversación",
+    "summarizeWithAi": "Resumir con IA",
+    "summarizeConversation": "Resumir conversación",
     "aiSummaryTitle": "Resumen IA",
     "aiSummaryLoading": "Analizando el mensaje…",
     "backToList": "Volver a la lista",
@@ -300,7 +327,7 @@
     },
     "bodyTruncated": {
       "title": "Este mensaje está incompleto",
-      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondés o reenviás, se citará únicamente la parte que se ve acá."
+      "hint": "Superó el límite de tamaño, así que solo se cargó el principio. Si respondes o reenvías, se citará únicamente la parte que se ve acá."
     },
     "showQuotedContent": "Mostrar contenido citado",
     "hideQuotedContent": "Ocultar contenido citado",
@@ -316,7 +343,8 @@
   },
   "groups": {
     "title": "Grupos",
-    "showInInbox": "Mostrar en bandeja principal"
+    "showInInbox": "Mostrar en mi bandeja el correo dirigido a {{groups}}",
+    "showInInboxHelp": "Solo cambia lo que ves en tu bandeja; no pide copias al servidor."
   },
   "accounts": {
     "selectorLabel": "Buzón activo",
@@ -325,8 +353,8 @@
   },
   "sharedMailboxes": {
     "title": "Buzones compartidos",
-    "description": "Los buzones compartidos a los que tenés acceso. Entrá a cualquiera o pedí que sus correos también lleguen a tu bandeja.",
-    "empty": "Todavía no tenés buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
+    "description": "Los buzones compartidos a los que tienes acceso. Entra a cualquiera o pide que sus correos también lleguen a tu bandeja.",
+    "empty": "Todavía no tienes buzones compartidos. Cuando el administrador te agregue a uno, aparecerá acá.",
     "enter": "Entrar",
     "copyLabel": "Recibir copia en mi bandeja",
     "copyToggle": "Recibir copia de {{name}} en mi bandeja",
@@ -387,6 +415,11 @@
     "removeRecipient": "Quitar {{email}}",
     "dropHint": "Suelta para adjuntar",
     "duplicateAttachment": "{{name}} ya fue adjuntado",
+    "retry": "Reintentar",
+    "remove": "Quitar",
+    "retryUpload": "Reintentar la subida de {{name}}",
+    "removeUpload": "Quitar {{name}}",
+    "uploadsPendingHint": "Espera a que terminen las subidas para poder enviar",
     "errors": {
       "noRecipients": "Agrega al menos un destinatario",
       "invalid_identity": "Identidad inválida",
@@ -400,6 +433,8 @@
       "mail_not_configured": "El servidor de correo no está configurado",
       "mail_credentials_missing": "Tu buzón no está vinculado todavía",
       "database_unavailable": "El servicio no está disponible temporalmente. Inténtalo de nuevo",
+      "payload_too_large": "El archivo es demasiado grande",
+      "uploadsPending": "Espera a que terminen las subidas antes de enviar",
       "generic": "Ocurrió un error"
     },
     "draftWithAi": "✦ Redactar con IA",
@@ -429,7 +464,7 @@
     "print": "Imprimir",
     "close": "Cerrar",
     "previewLoading": "Cargando vista previa…",
-    "previewError": "No se pudo cargar la vista previa. Probá descargarlo.",
+    "previewError": "No se pudo cargar la vista previa. Prueba descargarlo.",
     "count_one": "{{count}} adjunto",
     "count_other": "{{count}} adjuntos"
   },
@@ -454,9 +489,13 @@
       "current": "Este dispositivo",
       "unknownDevice": "Dispositivo desconocido",
       "lastActivity": "Última actividad: {{time}}",
+      "created": "Creada: {{time}}",
       "location": "IP aproximada: {{ip}}",
       "close": "Cerrar",
-      "closeOthers": "Cerrar las demás"
+      "closeOthers": "Cerrar las demás",
+      "confirmCloseOthersQuestion": "¿Cerrar sesión en todos los demás dispositivos?",
+      "confirmCloseOthersAction": "Cerrar las demás",
+      "cancelCloseOthers": "Cancelar"
     },
     "newSignature": "Nueva firma",
     "name": "Nombre",
@@ -468,6 +507,9 @@
     "save": "Guardar",
     "saved": "Guardado",
     "delete": "Eliminar",
+    "confirmDeleteSignatureQuestion": "¿Eliminar la firma «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar",
     "edit": "Editar",
     "retry": "Reintentar",
     "errors": {
@@ -488,6 +530,9 @@
   "filters": {
     "title": "Filtros",
     "newRule": "Nueva regla",
+    "confirmDeleteRuleQuestion": "¿Eliminar la regla «{{name}}»? No podrás deshacerlo.",
+    "confirmDeleteAction": "Eliminar definitivamente",
+    "cancelDelete": "Cancelar",
     "name": "Nombre",
     "matchType": "Coincidencia",
     "matchAll": "Todas las condiciones",
@@ -582,6 +627,16 @@
     "enabledOnThisDevice": "Notificaciones activadas en este dispositivo",
     "working": "Un momento…",
     "unsupported": "Tu navegador no admite notificaciones push.",
+    "unavailableOnServer": "Las notificaciones en segundo plano no están disponibles en este servidor.",
+    "pushTitle": "En segundo plano",
+    "browser": {
+      "title": "Avisos mientras Céfiro está abierto",
+      "description": "Muestra un aviso del sistema cuando llegue correo nuevo a tu bandeja de entrada y la pestaña no esté en primer plano.",
+      "enable": "Permitir avisos",
+      "granted": "Avisos permitidos en este navegador",
+      "denied": "Avisos bloqueados en este navegador. Vuelve a permitirlos desde los ajustes del navegador.",
+      "unsupported": "Este navegador no admite avisos del sistema."
+    },
     "errors": {
       "permissionDenied": "No se concedió el permiso de notificaciones. Actívalo en los ajustes del navegador.",
       "unavailable": "Las notificaciones no están disponibles ahora mismo. Inténtalo de nuevo.",

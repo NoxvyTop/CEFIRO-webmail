@@ -10,7 +10,8 @@ import { CefiroLogo } from "./ui/CefiroLogo";
 import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { isPlainShortcut } from "./ui/shortcuts";
 import { ToastProvider } from "./ui/toast";
-import { UserMenu } from "./ui/UserMenu";
+import { AppUserMenu } from "./ui/AppUserMenu";
+import { useOnlineStatus } from "./ui/useOnlineStatus";
 import { useTheme } from "./ui/useTheme";
 
 async function fetchHealth() {
@@ -18,22 +19,29 @@ async function fetchHealth() {
   return healthResponseSchema.parse(await res.json());
 }
 
-function currentNotificationPermission(): NotificationPermission | null {
-  return typeof Notification === "undefined" ? null : Notification.permission;
-}
-
 export function App() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
   const profile = useProfile();
   const { theme, toggleTheme } = useTheme();
-  const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
+  // GH #345: there was no offline signal anywhere in the UI — a lost
+  // connection looked identical to a slow one until every in-flight request
+  // failed on its own.
+  const online = useOnlineStatus();
+  // GH #342: used to run exactly once (on mount), so a backend that degraded
+  // mid-session never surfaced "Servicio degradado" — the banner only ever
+  // reflected the state at page load. Polling lets it appear at any point in
+  // an open session, not just after a fresh navigation.
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: fetchHealth,
+    refetchInterval: 60_000,
+  });
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryParam = searchParams.get("q") ?? "";
   const [searchValue, setSearchValue] = useState(queryParam);
-  const [notificationPermission, setNotificationPermission] = useState(currentNotificationPermission);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -76,12 +84,6 @@ export function App() {
     });
   }
 
-  async function handleEnableNotifications() {
-    if (typeof Notification === "undefined") return;
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
-  }
-
   // MailPage (the "/" route) renders no landmark of its own, so the shell
   // supplies the <main> for it. Settings/Admin already wrap their content in
   // their own <main>, so here the shell must NOT add a second one (a nested
@@ -102,7 +104,11 @@ export function App() {
 
   return (
     <ToastProvider>
-      <div className="flex h-screen flex-col">
+      {/* #348: h-screen resolves against iOS Safari's LARGE viewport, which
+          includes the area the address/toolbar chrome covers before it
+          collapses on scroll — h-dvh tracks the dynamic viewport instead, so
+          the shell isn't taller than what's actually visible on first paint. */}
+      <div className="flex h-dvh flex-col">
         <a
           href="#main-content"
           className="sr-only left-4 top-4 z-50 rounded-md bg-accent px-4 py-2 text-sm font-bold text-accent-ink shadow-cta focus:not-sr-only focus:absolute"
@@ -151,19 +157,31 @@ export function App() {
                   the "Buzones compartidos" page (left sidebar), and "Atajos"
                   moved into the profile menu below. The `?`/Escape handlers stay
                   wired regardless. */}
-              <UserMenu
+              {/* GH #337 (b): the notification opt-in moved into AppUserMenu,
+                  which lives inside ToastProvider and can therefore report what
+                  the browser answered. */}
+              <AppUserMenu
                 user={user}
                 avatarUrl={profile.data?.avatarDataUrl}
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onLogout={() => void logout()}
-                showNotifications={notificationPermission === "default"}
-                onEnableNotifications={() => void handleEnableNotifications()}
                 onShowShortcuts={() => setShowShortcuts(true)}
               />
             </div>
           )}
         </header>
+        {/* GH #345: persistent (not a toast) — the condition lasts until the
+            connection actually returns, and a toast fading out would read
+            as "resolved" while still offline. */}
+        {!online && (
+          <p
+            role="status"
+            className="shrink-0 border-b border-line bg-soft px-4 py-2 text-center text-xs text-warn"
+          >
+            {t("app.offline")}
+          </p>
+        )}
         {shellOwnsMainLandmark ? (
           <main id="main-content" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             {outletRegion}

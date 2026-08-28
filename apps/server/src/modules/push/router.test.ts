@@ -6,7 +6,7 @@ import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createPushSubscriptionsRepo } from "../../infra/repos/push-subscriptions";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createPushRouter } from "./router";
 import { createRateLimiter, type RateLimiter } from "../../core/rate-limit";
 import type { PushSender } from "../../core/push";

@@ -164,7 +164,16 @@ export type AuthRouterDeps = {
    * login screen can learn whether the first-run setup CTA is still worth
    * showing WITHOUT polling the authenticated `GET /api/setup/status`, which
    * recorded a `setup.auth_failed` audit row on every unauthenticated hit
-   * (#305). Optional: when absent, `/mode` reports `setupComplete: true`.
+   * (#305), and — since #346 — it CLOSES `POST /bootstrap` on an instance that
+   * is already set up, the way #234 closed the setup router.
+   *
+   * Optional, and the two readers default in OPPOSITE directions on purpose.
+   * `/mode` reports `setupComplete: true` when it is absent, because that field
+   * only decides whether a CTA is drawn and nagging a set-up instance is the
+   * worse mistake. `/bootstrap` treats it as "not complete", because there the
+   * default decides whether a door is OPEN: a router with no latch wired is one
+   * `BOOTSTRAP_MODE` gate deep, exactly as it was before #346, and that flag
+   * still has to be on for the route to exist at all.
    */
   completion?: SetupCompletion;
   rateLimiter?: RateLimiter;
@@ -212,17 +221,28 @@ export function createAuthRouter(deps: AuthRouterDeps) {
     // (TRUSTED_PROXY_HOPS). When it is a comma-separated chain, read the entry
     // the SAME way core/client-ip.ts attributes the client IP: count trusted
     // hops from the RIGHT (the end a client cannot reach) and take that hop's
-    // scheme. A chain shorter than the declared hop count — or no header at all
-    // — did not travel the described path, so fall through to the direct scheme.
+    // scheme.
+    //
+    // A chain SHORTER than the declared hop count is not a broken deployment,
+    // it is the normal one (GH #334). Unlike X-Forwarded-For, which every proxy
+    // appends to, X-Forwarded-Proto is SET: `proxy_set_header X-Forwarded-Proto
+    // $scheme` in nginx and the equivalent at a CDN both overwrite whatever
+    // arrived, so the documented `CDN -> nginx -> container` topology
+    // (TRUSTED_PROXY_HOPS=2) delivers ONE entry, not two. Counting two hops
+    // from the right landed on index -1 and dropped through to the container's
+    // own http socket, and the 12h session cookie went out without `Secure` in
+    // production. When the chain is short, the RIGHTMOST entry is the answer:
+    // it was written by the innermost trusted proxy — the hop a client cannot
+    // reach past — so it is both the freshest description of the client's leg
+    // and the one part of the header no caller can forge. Only a header that is
+    // absent entirely still falls through.
     if (trustedProxyHops > 0) {
       const forwardedProto = c.req.header("x-forwarded-proto");
       if (forwardedProto) {
         const chain = forwardedProto.split(",");
         const index = chain.length - trustedProxyHops;
-        if (index >= 0) {
-          const scheme = chain[index]?.trim().toLowerCase() ?? "";
-          if (scheme !== "") return scheme === "https";
-        }
+        const scheme = (index >= 0 ? chain[index] : chain.at(-1))?.trim().toLowerCase() ?? "";
+        if (scheme !== "") return scheme === "https";
       }
     }
     // No trusted proxy (or nothing usable in the header): the scheme on the
@@ -381,6 +401,28 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       c.header("Retry-After", String(gate.retryAfterSeconds));
       return errorResponse(c, "too_many_requests", 429);
     }
+    // Second gate (GH #346), the one the setup router already has (GH #234):
+    // a setup that already happened closes this door too, whatever
+    // `BOOTSTRAP_MODE` still says. `BOOTSTRAP_MODE` was the ONLY gate here, and
+    // a flag left on in production is not a stale toggle — it is a standing
+    // offer of `role:"admin"`, unauthenticated, behind one static password with
+    // no SSO and no MFA in front of it. Same class of risk #234 closed on
+    // /api/setup, through the other door. See ../setup/completion.ts for how
+    // "already happened" is decided and why it cannot lock an operator out.
+    //
+    // Answering the SAME `not_found` as a router that was never enabled is
+    // deliberate: a completed instance must not confirm that a break-glass
+    // login exists at all. Placed AHEAD of the body parse and the password
+    // check so a closed door verifies no secrets and writes no audit rows,
+    // exactly like a disabled one; behind the rate gate so the two reads it
+    // costs stay bounded per IP, and they stop entirely once the latch trips.
+    //
+    // Optional dep: with no latch wired there is nothing to consult, and the
+    // `BOOTSTRAP_MODE` gate above is what stands. index.ts wires the same
+    // instance the setup router gets, so both doors see one state.
+    if (await deps.completion?.isComplete()) {
+      return errorResponse(c, "not_found", 404);
+    }
     let body: { email: string; password: string };
     try {
       const parsed = bootstrapLoginSchema.safeParse(await c.req.json());
@@ -408,9 +450,25 @@ export function createAuthRouter(deps: AuthRouterDeps) {
         displayName: "Bootstrap Admin",
         role: "admin",
       });
-    } else {
-      if (!admin.active) await users.setActive(admin.id, true);
-      if (admin.role !== "admin") await users.setRole(admin.id, "admin");
+    } else if (!admin.active) {
+      // GH #346: this used to be `setActive(admin.id, true)` — an administrator
+      // who archived the emergency account from the console had their decision
+      // silently undone by the next bootstrap login, and the same held for a
+      // `setRole` demotion. An archived account is the operator saying this way
+      // back in is closed, and the break-glass path is the last place that gets
+      // to overrule it. The row is now READ here, never written: nothing on
+      // this path re-activates or re-promotes it.
+      //
+      // 401, the same answer as a wrong password, rather than a 403 naming the
+      // state: an unauthenticated caller learns nothing about the account from
+      // it either way. The audit row is where the difference is recorded, and
+      // it mirrors the OIDC callback's `login.denied_archived`.
+      await audit.record({
+        actor: BOOTSTRAP_ADMIN_EMAIL,
+        action: "bootstrap.login_denied_archived",
+        ip,
+      });
+      return errorResponse(c, "unauthorized", 401);
     }
     const ttl = deps.sessionTtlHours ?? 12;
     // #302: capture the device metadata for the active-sessions list. `ip` is
@@ -427,6 +485,12 @@ export function createAuthRouter(deps: AuthRouterDeps) {
       maxAge: ttl * 3600,
     });
     await audit.record({ actor: BOOTSTRAP_ADMIN_EMAIL, action: "bootstrap.login", ip });
+    // GH #346: `warn`, not `info`. A successful break-glass login is not
+    // routine traffic — it is an admin session minted without SSO and without
+    // MFA — and it was visible only in the audit table, which nothing pages on.
+    // At `warn` it reaches the log stream an operator already watches, next to
+    // the audit row rather than instead of it.
+    log("warn", "bootstrap admin login succeeded", { ip });
     return c.json({ ok: true });
   });
 

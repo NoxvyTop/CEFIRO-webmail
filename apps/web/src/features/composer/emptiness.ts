@@ -55,6 +55,15 @@ export function isComposerBodyEmpty(bodyHtml: string): boolean {
  * started the upload) to produce it, and closing without confirmation would
  * lose that — the same failure this whole rule exists to prevent, only
  * worse, since there is no way to recreate an in-flight upload by retyping.
+ *
+ * GH #344(b): uploadCount must NOT include a FAILED upload. A failed upload
+ * produced nothing — there is no blobId, no in-flight request, nothing this
+ * confirmation would protect — it is just an error card sitting in the
+ * composer that the user can already remove or retry (Composer.tsx's
+ * PendingUploadCard). Counting it as content used to force a confirmation
+ * dialog on an otherwise-empty compose the user was just trying to close.
+ * The caller (Composer.tsx) is responsible for excluding errored entries
+ * before passing this count in — this module only sees the number.
  */
 export function isComposerDraftEmpty(
   draft: ComposerDraft,

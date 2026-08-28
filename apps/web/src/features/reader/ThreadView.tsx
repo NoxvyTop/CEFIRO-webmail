@@ -4,11 +4,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 import type { EmailAddress, EmailDetail, Identity } from "@webmail/shared";
-import { MailApiError, copyMessageToInbox, destroyMessage, fetchInstanceSettings, fetchThread, updateMessage } from "../mailbox/api";
+import { MailApiError, copyMessageToInbox, destroyMessages, fetchInstanceSettings, fetchThread, updateMessage, updateMessages } from "../mailbox/api";
 import { fetchPreferences } from "../mailbox/groups";
-import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
+import { mailErrorKey, mailRetry, mailRetryDelay } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
+import { AUTH_QUERY_KEY } from "../auth/useAuth";
+import { useAuth } from "../auth/useAuth";
 import { fetchIdentities } from "../composer/api";
+import { fetchAiStatus } from "../composer/aiApi";
 import { replyRecipients } from "../composer/reply";
 import { errorMessageKey } from "../../app/errorMessages";
 import { Avatar } from "../../app/ui/Avatar";
@@ -16,10 +19,12 @@ import { Button } from "../../app/ui/Button";
 import { CefiroLoader } from "../../app/ui/CefiroLoader";
 import { ArchiveIcon, ArrowLeftIcon, InboxIcon, ReplyIcon, StarFilledIcon, StarIcon, TagIcon, TrashIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
-import { formatRelativeTime } from "../../app/ui/relative-time";
+import { PanelError } from "../../app/ui/PanelError";
+import { formatAbsoluteDateTime, formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
+import { useMenuKeyboardNav } from "../../app/ui/useMenuKeyboardNav";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { describeAudience } from "./audience";
 import { AttachmentCard } from "./AttachmentCard";
@@ -57,6 +62,12 @@ interface ThreadViewProps {
   // threaded into the thread query key and every read/mutation so the whole
   // reader operates on that account. Absent = personal mailbox (unchanged).
   accountId?: string;
+  // #343: the mailbox the list this reader was opened from is scoped to, so
+  // archive/unarchive/delete/destroy act on every message of the CONVERSATION
+  // sitting in it rather than on the newest one alone. Null/absent = a view
+  // that spans folders (starred, a label), where there is no current mailbox
+  // to scope by and the actions keep their single-message meaning.
+  currentMailboxId?: string | null;
 }
 
 interface DeletePermanentlyConfirmDialogProps {
@@ -187,18 +198,29 @@ function hasReplyAllRecipient(email: EmailDetail, identities: Identity[]): boole
 // it in full, and this reuses that module's own key sets so the two can't drift.
 const MAILBOX_MOVE_INVALIDATION_KEYS = [...EMAIL_QUERY_KEYS, ...MAILBOX_QUERY_KEYS];
 
+// GH #345: hoisted to module scope (out of the component body) so the error
+// branch below — rendered before `lastEmail` and the rest of the action-bar
+// state exist — can share the exact same button styling as the real bar,
+// instead of the error state's back button looking like a different control.
+const ACTION_BUTTON_BASE_CLASS =
+  "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
+const ACTION_BUTTON_CLASS = `${ACTION_BUTTON_BASE_CLASS} text-ink`;
+
 export function ThreadView({
   threadId, archiveMailboxId, inboxMailboxId, trashMailboxId = null, accountId,
+  currentMailboxId = null,
 }: ThreadViewProps) {
   const { t, i18n } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { user } = useAuth();
 
   const threadQuery = useQuery({
     queryKey: ["mail", "thread", threadId, accountId ?? null],
     queryFn: () => fetchThread(threadId, accountId),
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
   });
 
   // Used to detect messages the account itself sent (from === one of our
@@ -210,9 +232,25 @@ export function ThreadView({
     queryFn: fetchIdentities,
   });
   const identities = identitiesQuery.data ?? [];
-  // The account's own identity addresses, used to work out who a received
-  // message was addressed to relative to "me" (see describeAudience below).
   const identityEmails = identities.map((identity) => identity.email);
+  // #340: the addresses that count as "me" when working out who a received
+  // message was addressed to (see describeAudience below). Every non-primary
+  // identity is a GROUP address (deriveGroupAddresses, ./mailbox/groups.ts), so
+  // handing the whole identity list over made a message delivered to the group's
+  // mailbox read "para mí" — the user's own address was nowhere on it. Only the
+  // signed-in user's own address is "me"; the group gets named. Falls back to
+  // the identity list while the session query is still resolving, which is the
+  // pre-#340 behaviour and never worse than it.
+  const selfEmails = user ? [user.email] : identityEmails;
+
+  // GH #339: whether this instance has an AI provider configured at all. The
+  // summary card used to render unconditionally, so on an instance with AI off
+  // the reader offered "Resumir con IA" / "Resumir conversación" whose only
+  // possible outcome was the `ai_disabled` error that hides the card — an
+  // action painted purely to fail. Same `["ai","status"]` key the composer
+  // reads, so both surfaces share one answer per session, and `false` while it
+  // loads (or when the probe itself fails) keeps AI-off the safe default.
+  const { data: aiEnabled = false } = useQuery({ queryKey: ["ai", "status"], queryFn: fetchAiStatus });
 
   // Powers custom label colors/names in the subject chips and the label-apply
   // menu below — shares the ["mail","preferences"] cache key with MailPage's
@@ -252,6 +290,11 @@ export function ThreadView({
   const labelButtonRef = useRef<HTMLButtonElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  // #348: WAI-ARIA menu keyboard behavior — focus the first label on open,
+  // ArrowUp/ArrowDown/Home/End move between labels. Shares labelMenuRef
+  // (rather than creating its own ref) since the click-outside handler below
+  // already needs a ref to this same portaled element.
+  useMenuKeyboardNav(labelMenuOpen, labelMenuRef);
 
   function toggleLabelMenu() {
     setLabelMenuOpen((open) => {
@@ -309,47 +352,93 @@ export function ThreadView({
     }
   }
 
+  // #343: archive/unarchive/delete/star/keyword had no onError at all, so a
+  // 5xx left the reader exactly as it was with nothing said, and a 401 left the
+  // user in front of a thread that silently refused every write until
+  // ["auth","me"] happened to refetch on window focus. Revalidating the session
+  // is what hands them to the login screen (RequireAuth reads that same key).
+  function reportMutationError(error: unknown) {
+    if (error instanceof MailApiError && error.status === 401) {
+      queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+    }
+    showToast(t(mailErrorKey(error)));
+  }
+
+  // #343: the list row this reader was opened from is a CONVERSATION, so a move
+  // has to take every message of the thread that sits in the mailbox being
+  // viewed — moving `lastEmail` alone left the row in Recibidos, now showing the
+  // previous message of the same conversation. Messages of the thread that live
+  // elsewhere (the copy in Enviados, say) stay where they are.
+  //
+  // Without a current mailbox the view spans folders (starred, a label): there
+  // is nothing to scope by, so the action keeps its single-message meaning
+  // rather than sweeping the thread out of every folder at once.
+  function threadMessagesInCurrentMailbox(): EmailDetail[] {
+    const newest = emails[emails.length - 1];
+    if (!newest) return [];
+    if (!currentMailboxId) return [newest];
+    const inMailbox = emails.filter((email) => email.mailboxIds.includes(currentMailboxId));
+    return inMailbox.length > 0 ? inMailbox : [newest];
+  }
+
   const archiveMutation = useMutation({
-    mutationFn: (email: EmailDetail) => {
+    mutationFn: (targets: EmailDetail[]) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
-      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [archiveMailboxId]: true } },
+        accountId,
+      );
     },
     onSuccess: () => {
-      invalidateAfterMailboxMove();
       showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
       backToList();
     },
+    onError: reportMutationError,
+    // #343: a partial move still changed the server, so the listings and the
+    // mailbox counters must be re-read whether or not every PATCH succeeded.
+    onSettled: invalidateAfterMailboxMove,
   });
 
-  // Inverse of archiveMutation: moves the email back into Recibidos. Same
-  // single-mailbox move (JMAP mailboxIds is a full set, so this drops the
+  // Inverse of archiveMutation: moves the conversation back into Recibidos.
+  // Same single-mailbox move (JMAP mailboxIds is a full set, so this drops the
   // archive membership and adds the inbox), same post-success flow.
   const unarchiveMutation = useMutation({
-    mutationFn: (email: EmailDetail) => {
+    mutationFn: (targets: EmailDetail[]) => {
       if (!inboxMailboxId) throw new Error("no inbox mailbox");
-      return updateMessage(email.id, { mailboxIds: { [inboxMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [inboxMailboxId]: true } },
+        accountId,
+      );
     },
     onSuccess: () => {
-      invalidateAfterMailboxMove();
       showToast(t("mail.unarchived"));
       backToList();
     },
+    onError: reportMutationError,
+    onSettled: invalidateAfterMailboxMove,
   });
 
-  // GH #133: Delete moves the last email to Trash — the same single-mailbox
+  // GH #133: Delete moves the conversation to Trash — the same single-mailbox
   // move archiveMutation/unarchiveMutation above already use (JMAP
   // mailboxIds is a full-set replace). Recoverable, so it needs no
   // confirmation — just feedback, mirroring archiveMutation's toast.
   const deleteMutation = useMutation({
-    mutationFn: (email: EmailDetail) => {
+    mutationFn: (targets: EmailDetail[]) => {
       if (!trashMailboxId) throw new Error("no trash mailbox");
-      return updateMessage(email.id, { mailboxIds: { [trashMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [trashMailboxId]: true } },
+        accountId,
+      );
     },
     onSuccess: () => {
-      invalidateAfterMailboxMove();
       showToast(t("mail.deleted"));
       backToList();
     },
+    onError: reportMutationError,
+    onSettled: invalidateAfterMailboxMove,
   });
 
   const [deletePermanentlyConfirmOpen, setDeletePermanentlyConfirmOpen] = useState(false);
@@ -360,7 +449,8 @@ export function ThreadView({
   // DeletePermanentlyConfirmDialog below — never directly from the action
   // bar click.
   const destroyMutation = useMutation({
-    mutationFn: (email: EmailDetail) => destroyMessage(email.id, accountId),
+    mutationFn: (targets: EmailDetail[]) =>
+      destroyMessages(targets.map((target) => target.id), accountId),
     onSuccess: () => {
       invalidateAfterMailboxMove();
       setDeletePermanentlyConfirmOpen(false);
@@ -399,7 +489,9 @@ export function ThreadView({
       // Same mapped-key treatment the destroy path uses (GH #215): an unmapped
       // server code resolves to the namespace's generic message rather than
       // being shown to the user as a literal i18n key.
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -410,6 +502,7 @@ export function ThreadView({
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
     },
+    onError: reportMutationError,
   });
 
   // GH #314: "Trust <domain>" / "Stop trusting <domain>". Both invalidate the
@@ -439,7 +532,9 @@ export function ThreadView({
     onError: (err) => {
       // Mapped-key treatment (GH #215): an unmapped server code resolves to
       // the namespace's generic message, never to a literal i18n key.
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -450,7 +545,9 @@ export function ThreadView({
       showToast(t("mail.senderTrust.untrusted", { domain }));
     },
     onError: (err) => {
-      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)));
+      showToast(t(errorMessageKey("mail", err instanceof MailApiError ? err.code : null)), {
+        variant: "error",
+      });
     },
   });
 
@@ -463,6 +560,7 @@ export function ThreadView({
       queryClient.invalidateQueries({ queryKey: ["mail", "thread", threadId] });
       queryClient.invalidateQueries({ queryKey: ["mail", "messages"] });
     },
+    onError: reportMutationError,
   });
 
   function openCompose(param: string) {
@@ -598,10 +696,30 @@ export function ThreadView({
   }
 
   if (threadQuery.isError) {
+    // GH #345: this used to be a bare `<p role="alert">` rendered BEFORE the
+    // action bar that holds the `lg:hidden` back button (below `lg`,
+    // MailPage hides the message list while `?thread=` is set) — a failed
+    // thread load left a mobile reader with no way back and no way to retry.
     return (
-      <p role="alert" className="p-4 text-sm text-warn">
-        {t(mailErrorKey(threadQuery.error))}
-      </p>
+      <div className="flex h-full flex-col">
+        <div
+          data-testid="thread-actions-bar"
+          className="flex h-[52px] shrink-0 items-center gap-[6px] border-b border-line px-[22px]"
+        >
+          <button
+            type="button"
+            onClick={backToList}
+            aria-label={t("mail.backToList")}
+            className={`${ACTION_BUTTON_CLASS} px-2 lg:hidden`}
+          >
+            <ArrowLeftIcon />
+          </button>
+        </div>
+        <PanelError
+          message={t(mailErrorKey(threadQuery.error))}
+          onRetry={() => void threadQuery.refetch()}
+        />
+      </div>
     );
   }
 
@@ -652,10 +770,6 @@ export function ThreadView({
   // order, so only this display copy is reversed.
   const displayEmails = [...emails].reverse();
 
-  const actionButtonBaseClass =
-    "flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-lg px-3 text-[13px] transition hover:bg-hover";
-  const actionButtonClass = `${actionButtonBaseClass} text-ink`;
-
   return (
     <div className="flex h-full flex-col">
       {/* GH #214: the bar used to be overflow-x-hidden while its buttons are
@@ -676,15 +790,15 @@ export function ThreadView({
           type="button"
           onClick={backToList}
           aria-label={t("mail.backToList")}
-          className={`${actionButtonClass} px-2 lg:hidden`}
+          className={`${ACTION_BUTTON_CLASS} px-2 lg:hidden`}
         >
           <ArrowLeftIcon />
         </button>
         {showArchive && (
           <button
             type="button"
-            onClick={() => archiveMutation.mutate(lastEmail)}
-            className={actionButtonClass}
+            onClick={() => archiveMutation.mutate(threadMessagesInCurrentMailbox())}
+            className={ACTION_BUTTON_CLASS}
           >
             <ArchiveIcon size={15} />
             {t("mail.archive")}
@@ -693,8 +807,8 @@ export function ThreadView({
         {showUnarchive && (
           <button
             type="button"
-            onClick={() => unarchiveMutation.mutate(lastEmail)}
-            className={actionButtonClass}
+            onClick={() => unarchiveMutation.mutate(threadMessagesInCurrentMailbox())}
+            className={ACTION_BUTTON_CLASS}
           >
             <InboxIcon size={15} />
             {t("mail.unarchive")}
@@ -703,8 +817,8 @@ export function ThreadView({
         {showDelete && (
           <button
             type="button"
-            onClick={() => deleteMutation.mutate(lastEmail)}
-            className={actionButtonClass}
+            onClick={() => deleteMutation.mutate(threadMessagesInCurrentMailbox())}
+            className={ACTION_BUTTON_CLASS}
           >
             <TrashIcon size={15} />
             {t("mail.delete")}
@@ -714,7 +828,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => setDeletePermanentlyConfirmOpen(true)}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <TrashIcon size={15} />
             {t("mail.deletePermanently")}
@@ -729,7 +843,7 @@ export function ThreadView({
             type="button"
             onClick={() => copyToInboxMutation.mutate(lastEmail)}
             disabled={copyToInboxMutation.isPending}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             <InboxIcon size={15} />
             {t("mail.copyToInbox")}
@@ -739,7 +853,7 @@ export function ThreadView({
           type="button"
           aria-label={t(starred ? "mail.unstar" : "mail.star")}
           onClick={() => starMutation.mutate({ email: lastEmail, starred: !starred })}
-          className={`${actionButtonBaseClass} ${starred ? "text-star" : "text-ink"}`}
+          className={`${ACTION_BUTTON_BASE_CLASS} ${starred ? "text-star" : "text-ink"}`}
         >
           {starred ? <StarFilledIcon size={15} /> : <StarIcon size={15} />}
           {t(starred ? "mail.unstar" : "mail.star")}
@@ -747,7 +861,7 @@ export function ThreadView({
         <button
           type="button"
           onClick={() => openCompose(`reply:${lastEmail.id}`)}
-          className={actionButtonClass}
+          className={ACTION_BUTTON_CLASS}
         >
           <ReplyIcon size={15} />
           {t("composer.reply")}
@@ -756,7 +870,7 @@ export function ThreadView({
           <button
             type="button"
             onClick={() => openCompose(`reply-all:${lastEmail.id}`)}
-            className={actionButtonClass}
+            className={ACTION_BUTTON_CLASS}
           >
             {t("composer.replyAll")}
           </button>
@@ -764,7 +878,7 @@ export function ThreadView({
         <button
           type="button"
           onClick={() => openCompose(`forward:${lastEmail.id}`)}
-          className={actionButtonClass}
+          className={ACTION_BUTTON_CLASS}
         >
           {t("composer.forward")}
         </button>
@@ -775,7 +889,7 @@ export function ThreadView({
           aria-haspopup="menu"
           aria-expanded={labelMenuOpen}
           onClick={toggleLabelMenu}
-          className={actionButtonClass}
+          className={ACTION_BUTTON_CLASS}
         >
           <TagIcon size={15} />
           {t("mail.labels")}
@@ -854,6 +968,9 @@ export function ThreadView({
               yesterdayLabel: t("mail.yesterday"),
               locale: i18n.language,
             });
+            // #348: the compact label above is meant to be skimmed — this is
+            // the exact moment, available on demand via the title attribute.
+            const dateTitle = formatAbsoluteDateTime(email.receivedAt, { locale: i18n.language });
 
             if (!isExpanded) {
               return (
@@ -870,7 +987,9 @@ export function ThreadView({
                       <span className="font-semibold text-ink">{addressLabel(sender)}</span>
                       <span className="text-muted"> — {bodySnippet(email)}</span>
                     </span>
-                    <span className="shrink-0 text-[12px] text-muted">{dateLabel}</span>
+                    <span className="shrink-0 text-[12px] text-muted" title={dateTitle}>
+                      {dateLabel}
+                    </span>
                   </button>
                 </article>
               );
@@ -980,11 +1099,13 @@ export function ThreadView({
                     <span className="block truncate text-[12.5px] text-muted">
                       {isSentByMe
                         ? `${t("mail.sentTo")} ${toCcLabel}`
-                        : `${sender?.email} · ${describeAudience(email.to, email.cc, identityEmails, t)}`}
+                        : `${sender?.email} · ${describeAudience(email.to, email.cc, selfEmails, t)}`}
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 text-[12.5px] text-muted">{dateLabel}</span>
+                <span className="shrink-0 text-[12.5px] text-muted" title={dateTitle}>
+                  {dateLabel}
+                </span>
               </>
             );
 
@@ -1018,7 +1139,7 @@ export function ThreadView({
                   </div>
                 )}
                 {trustAction}
-                {isNewest && (
+                {isNewest && aiEnabled && (
                   // #308: `emails` is chronological (oldest→newest, the same
                   // order the server hashes) so its ids key the persistent
                   // summary cache — a new reply changes the set and misses.
@@ -1141,7 +1262,7 @@ export function ThreadView({
           subject={lastEmail.subject || t("mail.noSubject")}
           deleting={destroyMutation.isPending}
           deleteError={destroyError}
-          onConfirm={() => destroyMutation.mutate(lastEmail)}
+          onConfirm={() => destroyMutation.mutate(threadMessagesInCurrentMailbox())}
           onCancel={handleCancelDeletePermanently}
         />
       )}

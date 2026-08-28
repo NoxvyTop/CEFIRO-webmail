@@ -8,11 +8,13 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import type { CustomLabel, EmailSummary, MessagesPage } from "@webmail/shared";
-import { fetchMessages, updateMessage, PAGE_SIZE } from "./api";
-import { mailErrorKey, mailRetry } from "./queryErrors";
+import { fetchMessages, updateMessage, updateMessages, MailApiError, PAGE_SIZE } from "./api";
+import { mailErrorKey, mailRetry, mailRetryDelay } from "./queryErrors";
+import { AUTH_QUERY_KEY } from "../auth/useAuth";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
+import { PanelError } from "../../app/ui/PanelError";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -44,6 +46,11 @@ interface MessageListProps {
   // query key (so switching accounts is a distinct cache entry) and threaded
   // into every read/mutation. Absent = personal mailbox (unchanged).
   accountId?: string;
+  // GH #342: true while the SSE stream (useMailEvents) is not actually open —
+  // reconnecting, live-update-limited, or offline — so there is no other
+  // source of freshness for this list. MailPage derives it from the hook's
+  // `streamOpen` and passes it straight through.
+  pollWhileStreamDown?: boolean;
 }
 
 function rowClassName(selected: boolean) {
@@ -170,7 +177,7 @@ export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
   onLabels, activeLabel, onClearLabel, onClearSearch, archiveMailboxId, onArchived, customLabels = [],
-  accountId,
+  accountId, pollWhileStreamDown = false,
 }: MessageListProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -214,6 +221,14 @@ export function MessageList({
         ? lastPage.position + lastPage.emails.length
         : undefined,
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
+    // GH #342: while the SSE stream is not open there is no other source of
+    // freshness for this list, so poll instead. `refetchIntervalInBackground:
+    // false` keeps a backgrounded tab from spending that request — it will
+    // catch up the moment it's foregrounded again (React Query's own
+    // refetchOnWindowFocus).
+    refetchInterval: pollWhileStreamDown ? 60_000 : undefined,
+    refetchIntervalInBackground: false,
   });
 
   const emails = useMemo(
@@ -313,16 +328,56 @@ export function MessageList({
     },
   });
 
+  // #343: none of the write paths reported failures — a 5xx left the row
+  // exactly as it was with nothing said, and a 401 left the user in front of a
+  // mailbox that silently refused every write until ["auth","me"] happened to
+  // refetch on window focus. Revalidating the session is what takes them to the
+  // login screen (RequireAuth reads that same key).
+  function reportMutationError(error: unknown) {
+    if (error instanceof MailApiError && error.status === 401) {
+      queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+    }
+    showToast(t(mailErrorKey(error)));
+  }
+
+  // #343: the rows are conversations, so archiving one has to move every LOADED
+  // message of that thread which sits in the mailbox being viewed — moving only
+  // the representative left the row in Recibidos, now showing the previous
+  // message of the same conversation. Messages of the thread that live
+  // elsewhere (the copy in Enviados, say) are deliberately left where they are.
+  //
+  // A view with no `mailboxId` spans folders (starred, a label): there is no
+  // current mailbox to scope by, so the action keeps its single-message
+  // meaning rather than sweeping a thread across every folder at once.
+  function threadMessagesInCurrentMailbox(conversation: ConversationRow): EmailSummary[] {
+    if (!mailboxId) return [conversation.representative];
+    const inMailbox = conversation.messages.filter((message) =>
+      message.mailboxIds.includes(mailboxId),
+    );
+    return inMailbox.length > 0 ? inMailbox : [conversation.representative];
+  }
+
   const archiveMutation = useMutation({
-    mutationFn: (email: EmailSummary) => {
+    mutationFn: (targets: EmailSummary[]) => {
       if (!archiveMailboxId) throw new Error("no archive mailbox");
-      return updateMessage(email.id, { mailboxIds: { [archiveMailboxId]: true } }, accountId);
+      return updateMessages(
+        targets.map((target) => target.id),
+        { mailboxIds: { [archiveMailboxId]: true } },
+        accountId,
+      );
     },
-    onSuccess: (_data, email) => {
+    onSuccess: (_data, targets) => {
+      showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
+      // Any message of the thread identifies it — the parent only reads its
+      // threadId, to close the reader when the open thread is the archived one.
+      if (targets[0]) onArchived?.(targets[0]);
+    },
+    onError: reportMutationError,
+    // #343: invalidate whether or not every PATCH succeeded — a partial move
+    // still changed the server, so the list must be re-read either way.
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey });
       queryClient.invalidateQueries({ queryKey: ["mail", "thread"] });
-      showToast(`${t("mail.archived")} · ${t("mail.archivedHint")}`);
-      onArchived?.(email);
     },
   });
 
@@ -409,8 +464,15 @@ export function MessageList({
         return;
       }
 
-      const selectedEmail = emails.find((email) => email.threadId === selectedThreadId);
-      if (!selectedEmail) return;
+      // #343: resolved through the conversation the row actually stands for,
+      // not through the first raw email whose threadId happens to match — the
+      // two agree on the representative, but only the conversation knows the
+      // rest of the thread that `e` has to move with it.
+      const selectedConversation = conversations.find(
+        (conversation) => conversation.threadId === selectedThreadId,
+      );
+      if (!selectedConversation) return;
+      const selectedEmail = selectedConversation.representative;
 
       if (event.key === "s") {
         event.preventDefault();
@@ -420,7 +482,7 @@ export function MessageList({
 
       if (event.key === "e" && archiveMailboxId) {
         event.preventDefault();
-        archiveMutation.mutate(selectedEmail);
+        archiveMutation.mutate(threadMessagesInCurrentMailbox(selectedConversation));
       }
     }
 
@@ -659,9 +721,10 @@ export function MessageList({
 
   if (messagesQuery.isError) {
     content = (
-      <p role="alert" className="p-4 text-sm text-warn">
-        {t(mailErrorKey(messagesQuery.error))}
-      </p>
+      <PanelError
+        message={t(mailErrorKey(messagesQuery.error))}
+        onRetry={() => void messagesQuery.refetch()}
+      />
     );
   } else if (messagesQuery.isLoading) {
     // GH #272: the first page is still in flight (a fresh folder/label/search).

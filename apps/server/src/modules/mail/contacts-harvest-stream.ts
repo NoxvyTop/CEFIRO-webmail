@@ -46,10 +46,21 @@ export function emailStateFromFrame(frame: string, accountId: string): string | 
  * deterministic); its rejections are swallowed — harvesting is best-effort and
  * must never break the stream.
  */
+/**
+ * The state transition one callback invocation describes: the account's Email
+ * state before this frame and after it.
+ *
+ * `previousState` is what makes an incremental read possible (GH #337): it is
+ * exactly the `sinceState` an `Email/changes` call needs to learn WHICH
+ * messages appeared, instead of re-listing the mailbox to guess. Both are
+ * always defined at the call site — the baseline frame does not fire.
+ */
+export type EmailStateChange = { state: string; previousState: string };
+
 export function tapEmailStateChanges(input: {
   source: ReadableStream<Uint8Array<ArrayBufferLike>>;
   accountId: string;
-  onEmailStateChange: () => Promise<void> | void;
+  onEmailStateChange: (change: EmailStateChange) => Promise<void> | void;
 }): ReadableStream<Uint8Array<ArrayBufferLike>> {
   const decoder = new TextDecoder();
   const pending = new Set<Promise<void>>();
@@ -57,9 +68,9 @@ export function tapEmailStateChanges(input: {
   let lastEmailState: string | undefined;
   let baselineSet = false;
 
-  const fire = () => {
+  const fire = (change: EmailStateChange) => {
     const promise = Promise.resolve()
-      .then(() => input.onEmailStateChange())
+      .then(() => input.onEmailStateChange(change))
       .catch(() => {});
     pending.add(promise);
     void promise.finally(() => pending.delete(promise));
@@ -74,8 +85,9 @@ export function tapEmailStateChanges(input: {
       return;
     }
     if (state === lastEmailState) return;
+    const previousState = lastEmailState as string;
     lastEmailState = state;
-    fire();
+    fire({ state, previousState });
   };
 
   const transform = new TransformStream<Uint8Array<ArrayBufferLike>, Uint8Array<ArrayBufferLike>>({

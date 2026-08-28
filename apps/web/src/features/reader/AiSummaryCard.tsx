@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { MailApiError } from "../mailbox/api";
+import { SparkleIcon } from "../../app/ui/icons";
 import { fetchSummary, summarizeThread } from "./aiApi";
 import { readCachedSummary, summaryStorageKey, writeCachedSummary } from "./summaryCache";
 
@@ -106,13 +107,13 @@ export function AiSummaryCard({ messageId, threadId, messageCount, emailIds }: A
           onClick={() => query.refetch()}
           className="flex items-center gap-2 bg-transparent text-[13.5px] font-semibold text-accent-text transition hover:opacity-80"
         >
-          <span aria-hidden="true" className="text-[15px]">✦</span>
+          <SparkleIcon size={15} />
           {t(isThread ? "mail.summarizeConversation" : "mail.summarizeWithAi")}
         </button>
       )}
       {query.isFetching && (
         <p className="flex animate-pulse items-center gap-2 text-[13.5px] font-semibold text-accent-text">
-          <span aria-hidden="true">✦</span> {t("mail.aiSummaryLoading")}
+          <SparkleIcon size={15} /> {t("mail.aiSummaryLoading")}
         </p>
       )}
       {/* GH #253: a named <section> IS a region — the explicit role="region" on
@@ -120,7 +121,7 @@ export function AiSummaryCard({ messageId, threadId, messageCount, emailIds }: A
       {ready && (
         <section aria-label={t("mail.aiSummaryTitle")} style={{ animation: "fadeUp 0.3s ease" }}>
           <h3 className="mb-[9px] flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-accent-text">
-            <span aria-hidden="true">✦</span> {t("mail.aiSummaryTitle")}
+            <SparkleIcon size={13} /> {t("mail.aiSummaryTitle")}
           </h3>
           <ul className="flex list-disc flex-col gap-[5px] pl-[18px] text-[13.5px] leading-[1.5]">
             {(query.data ?? []).map((bullet, index) => (

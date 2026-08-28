@@ -182,7 +182,7 @@ export function SetupPage() {
         <>
           <p className="text-xs text-muted">
             {t("setup.status", {
-              sso: status.ssoConfigured ? "yes" : "no",
+              sso: status.ssoConfigured ? t("setup.yes") : t("setup.no"),
               count: status.userCount,
             })}
           </p>
@@ -218,6 +218,7 @@ export function SetupPage() {
             <input
               id="sso-client-secret"
               type="password"
+              autoComplete="off"
               value={sso.clientSecret}
               onChange={(event) => setSso({ ...sso, clientSecret: event.target.value })}
               className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
@@ -301,8 +302,8 @@ export function SetupPage() {
               }
               className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
             >
-              <option value="employee">employee</option>
-              <option value="admin">admin</option>
+              <option value="employee">{t("admin.roles.employee")}</option>
+              <option value="admin">{t("admin.roles.admin")}</option>
             </select>
 
             <label htmlFor="user-locale">{t("setup.fields.locale")}</label>
@@ -312,8 +313,8 @@ export function SetupPage() {
               onChange={(event) => setUser({ ...user, locale: event.target.value })}
               className="h-11 rounded-[10px] border border-line bg-soft px-3.5 text-[14px] text-ink field-focus"
             >
-              <option value="es">es</option>
-              <option value="en">en</option>
+              <option value="es">{t("setup.fields.localeOptions.es")}</option>
+              <option value="en">{t("setup.fields.localeOptions.en")}</option>
             </select>
 
             <label htmlFor="user-mail-password">{t("setup.fields.mailPassword")}</label>

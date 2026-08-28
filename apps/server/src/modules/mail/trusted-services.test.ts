@@ -10,7 +10,7 @@ import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo, MAX_TRUSTED_SERVICES } from "../../infra/repos/user-preferences";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createMailRouter } from "./router";
 import { TRUSTED_SERVICES_SEED } from "./trusted-services-seed";
 

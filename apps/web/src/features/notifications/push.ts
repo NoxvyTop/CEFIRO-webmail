@@ -44,11 +44,18 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuf
  * call again before subscribing — registration is idempotent. Failures are
  * swallowed: the app works without push, so a registration error must not be
  * fatal at boot.
+ *
+ * GH #350: it also asks the browser to re-check the script. Registration alone
+ * is register-and-forget — the browser re-fetches sw.js on its own schedule
+ * (roughly daily, and only on navigation), so a deployed fix to the worker can
+ * sit unused for a long time on an installed PWA that never fully restarts.
+ * `update()` makes each load the schedule.
  */
 export async function registerPushServiceWorker(): Promise<void> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register(SERVICE_WORKER_URL);
+    const registration = await navigator.serviceWorker.register(SERVICE_WORKER_URL);
+    await registration.update();
   } catch {
     // non-fatal — push simply stays unavailable on this load
   }
@@ -60,6 +67,33 @@ export async function getExistingPushSubscription(): Promise<PushSubscription | 
   const registration = await navigator.serviceWorker.getRegistration();
   if (!registration) return null;
   return registration.pushManager.getSubscription();
+}
+
+/**
+ * Re-announce this device's existing subscription to the server, and report
+ * whether the device has one at all (GH #337).
+ *
+ * The settings panel used to read the browser alone: a `PushSubscription`
+ * object was taken as proof the server would push here. It is not — the row
+ * can be gone (pruned after a `410`, lost with a restore, dropped when the
+ * endpoint was re-pointed at another user) while the browser still holds a
+ * perfectly valid subscription, and the user is then shown "enabled on this
+ * device" for a device that will never be pushed to again.
+ *
+ * `POST /api/push/subscribe` is an upsert by endpoint, so re-posting on load is
+ * idempotent and cheap. A failed POST is swallowed on purpose: the device IS
+ * subscribed in the browser, and saying otherwise because the network blinked
+ * would ask the user to re-grant a permission they already gave.
+ */
+export async function resyncPushSubscription(): Promise<boolean> {
+  const subscription = await getExistingPushSubscription();
+  if (!subscription) return false;
+  try {
+    await subscribePush(subscription.toJSON() as PushSubscriptionInput);
+  } catch {
+    // non-fatal — the browser subscription stands whatever the server said
+  }
+  return true;
 }
 
 export type EnablePushOutcome = "subscribed" | "denied" | "unsupported" | "unavailable";

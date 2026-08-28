@@ -7,7 +7,7 @@ import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
 import { createContactsRepo } from "../../infra/repos/contacts";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createContactsRouter } from "./router";
 import { contactSchema } from "@webmail/shared";
 

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
 import "../i18n";
+import i18n from "../i18n";
 import { UserMenu } from "./UserMenu";
 
 const baseUser = {
@@ -20,7 +21,7 @@ function renderMenu(overrides: Partial<Parameters<typeof UserMenu>[0]> = {}) {
     theme: "night" as const,
     onToggleTheme,
     onLogout,
-    showNotifications: false,
+    notificationPermission: "granted" as NotificationPermission,
     onEnableNotifications,
     onShowShortcuts,
     ...overrides,
@@ -58,6 +59,28 @@ describe("UserMenu", () => {
     expect(screen.getByRole("menuitem", { name: /Administración/ })).toBeInTheDocument();
   });
 
+  // #348: WAI-ARIA menu pattern — opening the menu must move focus onto its
+  // first item so a keyboard user does not have to Tab in blind.
+  it("focuses the first menu item as soon as it opens", () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
+    expect(screen.getByRole("menuitem", { name: /Ajustes/ })).toHaveFocus();
+  });
+
+  it("moves focus with ArrowDown/ArrowUp between menu items", () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
+    const settingsItem = screen.getByRole("menuitem", { name: /Ajustes/ });
+    const shortcutsItem = screen.getByRole("menuitem", { name: /Atajos/ });
+    expect(settingsItem).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(shortcutsItem).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(settingsItem).toHaveFocus();
+  });
+
   it("closes when Escape is pressed", () => {
     renderMenu();
     fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
@@ -85,5 +108,55 @@ describe("UserMenu", () => {
 
     expect(onShowShortcuts).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+// GH #337 (b): the item used to be a one-shot with no visible outcome — it
+// vanished whatever the user answered, and a browser that had already blocked
+// alerts showed nothing at all. The permission itself now drives it.
+describe("UserMenu notification item (GH #337)", () => {
+  function openMenu() {
+    fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
+  }
+
+  it("offers the item while the browser has not been asked", () => {
+    const { onEnableNotifications } = renderMenu({ notificationPermission: "default" });
+    openMenu();
+
+    const item = screen.getByRole("menuitem", { name: i18n.t("mail.enableNotifications") });
+    expect(item).toBeEnabled();
+    fireEvent.click(item);
+    expect(onEnableNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the item once permission was granted", () => {
+    renderMenu({ notificationPermission: "granted" });
+    openMenu();
+
+    expect(
+      screen.queryByRole("menuitem", { name: i18n.t("mail.enableNotifications") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a disabled, explanatory item when the browser blocked alerts", () => {
+    const { onEnableNotifications } = renderMenu({ notificationPermission: "denied" });
+    openMenu();
+
+    const item = screen.getByRole("menuitem", { name: i18n.t("mail.notificationsBlocked") });
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
+    expect(onEnableNotifications).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing when the browser has no Notification API", () => {
+    renderMenu({ notificationPermission: null });
+    openMenu();
+
+    expect(
+      screen.queryByRole("menuitem", { name: i18n.t("mail.enableNotifications") }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: i18n.t("mail.notificationsBlocked") }),
+    ).not.toBeInTheDocument();
   });
 });
