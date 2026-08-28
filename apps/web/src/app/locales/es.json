@@ -237,8 +237,8 @@
       "cta": "Vincular buzón",
       "hint": "Pide a un administrador que lo vincule."
     },
-    "summarizeWithAi": "✦ Resumir con IA",
-    "summarizeConversation": "✦ Resumir conversación",
+    "summarizeWithAi": "Resumir con IA",
+    "summarizeConversation": "Resumir conversación",
     "aiSummaryTitle": "Resumen IA",
     "aiSummaryLoading": "Analizando el mensaje…",
     "backToList": "Volver a la lista",
@@ -316,7 +316,8 @@
   },
   "groups": {
     "title": "Grupos",
-    "showInInbox": "Mostrar en bandeja principal"
+    "showInInbox": "Mostrar en mi bandeja el correo dirigido a {{groups}}",
+    "showInInboxHelp": "Solo cambia lo que ves en tu bandeja; no pide copias al servidor."
   },
   "accounts": {
     "selectorLabel": "Buzón activo",

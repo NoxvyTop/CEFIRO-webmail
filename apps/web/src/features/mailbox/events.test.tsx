@@ -109,9 +109,12 @@ describe("mail SSE live refresh and notifications", () => {
     );
 
     const keys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    // #340: the mailbox key rides along with Email — arriving mail moves unread
+    // counts, including the per-shared-account ones the sidebar's group rows read.
     expect(keys).toEqual([
       ["mail", "messages"],
       ["mail", "thread"],
+      ["mail", "mailboxes"],
     ]);
     // GH #167: the whole-namespace sweep also refetched mailboxes, identities,
     // preferences and every loaded page of the infinite listing, on every event.

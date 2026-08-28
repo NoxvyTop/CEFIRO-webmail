@@ -237,8 +237,8 @@
       "cta": "Link mailbox",
       "hint": "Ask an administrator to link it."
     },
-    "summarizeWithAi": "✦ Summarize with AI",
-    "summarizeConversation": "✦ Summarize conversation",
+    "summarizeWithAi": "Summarize with AI",
+    "summarizeConversation": "Summarize conversation",
     "aiSummaryTitle": "AI Summary",
     "aiSummaryLoading": "Analyzing the message…",
     "backToList": "Back to messages",
@@ -316,7 +316,8 @@
   },
   "groups": {
     "title": "Groups",
-    "showInInbox": "Show in main inbox"
+    "showInInbox": "Show mail addressed to {{groups}} in my inbox",
+    "showInInboxHelp": "Only changes what your inbox shows; it does not ask the server for copies."
   },
   "accounts": {
     "selectorLabel": "Active mailbox",

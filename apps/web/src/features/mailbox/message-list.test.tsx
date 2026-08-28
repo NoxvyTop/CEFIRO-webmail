@@ -1041,3 +1041,119 @@ describe("MessageList search header (GH #268)", () => {
     expect(screen.queryByText(i18n.t("mail.searchResults"))).not.toBeInTheDocument();
   });
 });
+
+// #343: the rows are conversations, but archiving moved exactly one message —
+// the newest one of the thread — so after "Archivar" the row stayed in
+// Recibidos showing the previous message of the same conversation. And the
+// archive mutation had no onError at all, so a 5xx/401 left the UI untouched
+// with nothing said.
+describe("MessageList — conversation-wide archive (#343)", () => {
+  const groupOlderSent = {
+    ...threadGroupOlder,
+    id: "g0",
+    mailboxIds: ["mb-sent"],
+    receivedAt: "2026-07-01T04:00:00.000Z",
+  };
+
+  function renderForArchive(
+    page: { total: number; position: number; emails: unknown[] },
+    overrides: Partial<React.ComponentProps<typeof MessageList>> = {},
+    patchResponse: () => Response = () => new Response(null, { status: 204 }),
+  ) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/mail/messages/") && method === "PATCH") return patchResponse();
+      if (url.includes("/api/mail/messages")) return new Response(JSON.stringify(page));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    render(
+      <QueryClientProvider client={client}>
+        <ToastProvider>
+          <MessageList
+            mailboxId="mb-inbox"
+            query={null}
+            selectedThreadId="thread-group"
+            onSelect={vi.fn()}
+            virtualized={false}
+            archiveMailboxId="arch1"
+            {...overrides}
+          />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    return { fetchMock, invalidateSpy };
+  }
+
+  function archivePatchIds(fetchMock: ReturnType<typeof vi.fn>): string[] {
+    return fetchMock.mock.calls
+      .filter(([input, init]) => {
+        const body = (init as RequestInit | undefined)?.body;
+        return (
+          String(input).includes("/api/mail/messages/") &&
+          (init as RequestInit | undefined)?.method === "PATCH" &&
+          typeof body === "string" &&
+          body.includes("mailboxIds")
+        );
+      })
+      .map(([input]) => String(input).split("/").pop() as string);
+  }
+
+  it("pressing e archives every loaded message of the conversation, not only the newest", async () => {
+    const { fetchMock } = renderForArchive({
+      total: 2, position: 0, emails: [threadGroupNewer, threadGroupOlder],
+    });
+
+    await screen.findByText("Re: Original message");
+    fireEvent.keyDown(window, { key: "e" });
+
+    await vi.waitFor(() => expect(archivePatchIds(fetchMock).sort()).toEqual(["g1", "g2"]));
+  });
+
+  it("leaves alone the conversation's messages that are not in the mailbox being viewed", async () => {
+    // g0 lives in Sent: archiving from Recibidos must not drag the sent copy
+    // out of Enviados along with it.
+    const { fetchMock } = renderForArchive({
+      total: 3, position: 0, emails: [threadGroupNewer, threadGroupOlder, groupOlderSent],
+    });
+
+    await screen.findByText("Re: Original message");
+    fireEvent.keyDown(window, { key: "e" });
+
+    await vi.waitFor(() => expect(archivePatchIds(fetchMock).sort()).toEqual(["g1", "g2"]));
+    expect(archivePatchIds(fetchMock)).not.toContain("g0");
+  });
+
+  it("tells the user when the archive fails instead of leaving the row silently unchanged", async () => {
+    renderForArchive(
+      { total: 2, position: 0, emails: [threadGroupNewer, threadGroupOlder] },
+      {},
+      () => new Response(JSON.stringify({ code: "database_unavailable" }), { status: 503 }),
+    );
+
+    await screen.findByText("Re: Original message");
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      i18n.t("mail.errors.database_unavailable"),
+    );
+  });
+
+  it("revalidates the session when the archive is refused with 401", async () => {
+    const { invalidateSpy } = renderForArchive(
+      { total: 2, position: 0, emails: [threadGroupNewer, threadGroupOlder] },
+      {},
+      () => new Response(JSON.stringify({ code: "unauthorized" }), { status: 401 }),
+    );
+
+    await screen.findByText("Re: Original message");
+    fireEvent.keyDown(window, { key: "e" });
+
+    await vi.waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth", "me"] }),
+    );
+  });
+});

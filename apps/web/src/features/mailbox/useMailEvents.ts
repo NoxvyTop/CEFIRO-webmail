@@ -144,7 +144,16 @@ export function invalidationKeysForStateChange(raw: string): string[][] {
 
   const keys = [
     ...(types.has("Email") ? EMAIL_QUERY_KEYS : []),
-    ...(types.has("Mailbox") ? MAILBOX_QUERY_KEYS : []),
+    // #340: the mailbox key rides along with Email, not only with Mailbox.
+    // Arriving or read mail moves unread/total counts, which live in the
+    // mailbox query — including the per-shared-account entries the sidebar's
+    // group rows read (["mail","mailboxes",<accountId>], reached by the prefix
+    // match) — and the provider does not reliably bump Mailbox state in the
+    // same frame. Without this, the stream delivered the shared account's
+    // StateChange and no counter anywhere ever moved. The cost is one extra
+    // GET /api/mail/mailboxes per account per event, which is small next to
+    // the listing refetch already triggered beside it.
+    ...(types.has("Email") || types.has("Mailbox") ? MAILBOX_QUERY_KEYS : []),
   ];
   return keys.length > 0 ? keys : ALL_MAIL_DATA_KEYS;
 }
