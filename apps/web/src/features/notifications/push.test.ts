@@ -4,6 +4,7 @@ import {
   enablePush,
   getExistingPushSubscription,
   isPushSupported,
+  registerPushServiceWorker,
   resyncPushSubscription,
   urlBase64ToUint8Array,
 } from "./push";
@@ -174,5 +175,33 @@ describe("resyncPushSubscription", () => {
     subscribePushMock.mockRejectedValue(new Error("offline"));
 
     expect(await resyncPushSubscription()).toBe(true);
+  });
+});
+
+// GH #350: the worker was registered and forgotten. A browser only re-checks a
+// registered worker's script on its own schedule, so a fixed sw.js could sit
+// unused on a long-lived install for as long as the old one kept running.
+describe("registerPushServiceWorker", () => {
+  it("asks the browser to re-check the worker script on load", async () => {
+    const update = vi.fn(async () => undefined);
+    const registration = stubSupportedBrowser();
+    (registration as unknown as { update: () => Promise<void> }).update = update;
+
+    await registerPushServiceWorker();
+
+    expect(navigator.serviceWorker.register).toHaveBeenCalledWith("/sw.js");
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("survives a browser with no service worker support", async () => {
+    vi.stubGlobal("navigator", {});
+    await expect(registerPushServiceWorker()).resolves.toBeUndefined();
+  });
+
+  it("swallows a registration failure so boot is never blocked", async () => {
+    stubSupportedBrowser();
+    vi.mocked(navigator.serviceWorker.register).mockRejectedValue(new Error("insecure context"));
+
+    await expect(registerPushServiceWorker()).resolves.toBeUndefined();
   });
 });

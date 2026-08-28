@@ -21,8 +21,11 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "Céfiro";
   const options = {
     body: payload.body || "",
-    icon: "/favicon.svg",
-    badge: "/favicon.svg",
+    // GH #350: PNG, not the SVG favicon — Android Chrome silently ignores an
+    // SVG here and shows no icon, and `badge` is rendered as a monochrome MASK
+    // (only its alpha survives), so it needs its own single-colour art.
+    icon: "/icon-192.png",
+    badge: "/badge-96.png",
     // Carried through to the click handler so it can open the right thread —
     // in the right account (GH #337).
     data: { targetId: payload.targetId, accountId: payload.accountId },

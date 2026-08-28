@@ -83,6 +83,15 @@ describe("service worker push handler", () => {
     expect(call?.[1]?.data).toEqual({ targetId: "t9", accountId: "acc-9" });
   });
 
+  // GH #350: /favicon.svg was used for both. Android Chrome ignores SVG in
+  // notifications (no icon at all), and `badge` must be a monochrome PNG mask.
+  it("uses PNG art for the icon and the badge", async () => {
+    const call = await sw.push({ title: "Alice", body: "Factura" });
+
+    expect(call?.[1]?.icon).toMatch(/\.png$/);
+    expect(call?.[1]?.badge).toMatch(/\.png$/);
+  });
+
   it("falls back to a generic notification for an unreadable payload", async () => {
     const call = await sw.push(undefined);
 

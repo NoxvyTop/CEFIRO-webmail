@@ -44,11 +44,18 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuf
  * call again before subscribing — registration is idempotent. Failures are
  * swallowed: the app works without push, so a registration error must not be
  * fatal at boot.
+ *
+ * GH #350: it also asks the browser to re-check the script. Registration alone
+ * is register-and-forget — the browser re-fetches sw.js on its own schedule
+ * (roughly daily, and only on navigation), so a deployed fix to the worker can
+ * sit unused for a long time on an installed PWA that never fully restarts.
+ * `update()` makes each load the schedule.
  */
 export async function registerPushServiceWorker(): Promise<void> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register(SERVICE_WORKER_URL);
+    const registration = await navigator.serviceWorker.register(SERVICE_WORKER_URL);
+    await registration.update();
   } catch {
     // non-fatal — push simply stays unavailable on this load
   }
