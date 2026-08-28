@@ -36,6 +36,12 @@ async function parseError(res: Response): Promise<never> {
   throw new MailApiError(res.status, code);
 }
 
+// GH #13/#50: the one cache key for the shared-mailbox list, shared by the
+// "Buzones compartidos" page, the mail view banner and (since #340) the
+// sidebar's group rows, so all three read one entry instead of each declaring
+// their own copy of it.
+export const SHARED_ACCOUNTS_QUERY_KEY = ["mail", "shared-accounts"] as const;
+
 // GH #13/#50: the shared mailboxes the signed-in member can browse — the
 // non-personal accounts Stalwart lists in their JMAP session. The account
 // selector reads this to offer them; personal is never in the list.

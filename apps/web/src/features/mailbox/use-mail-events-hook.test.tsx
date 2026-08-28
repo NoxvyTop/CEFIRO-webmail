@@ -145,9 +145,12 @@ describe("useMailEvents (hook lifecycle)", () => {
     );
 
     const keys = invalidate.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    // #340: the mailbox key rides along with Email — arriving mail moves unread
+    // counts, including the per-shared-account ones the sidebar reads.
     expect(keys).toEqual([
       ["mail", "messages"],
       ["mail", "thread"],
+      ["mail", "mailboxes"],
     ]);
   });
 
@@ -166,9 +169,12 @@ describe("useMailEvents (hook lifecycle)", () => {
     );
 
     const keys = invalidate.mock.calls.map(([arg]) => (arg as { queryKey: string[] }).queryKey);
+    // #340: the mailbox key rides along with Email — arriving mail moves unread
+    // counts, including the per-shared-account ones the sidebar reads.
     expect(keys).toEqual([
       ["mail", "messages"],
       ["mail", "thread"],
+      ["mail", "mailboxes"],
     ]);
   });
 

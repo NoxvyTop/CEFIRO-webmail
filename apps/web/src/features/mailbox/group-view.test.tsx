@@ -64,6 +64,12 @@ function renderAt(path: string, preferences: { groupMailInMainInbox: boolean }) 
   return { fetchMock };
 }
 
+// #340: the toggle names the groups it governs, so its accessible name is
+// interpolated rather than a bare key.
+function groupToggleName() {
+  return i18n.t("groups.showInInbox", { groups: "soporte@x.com" });
+}
+
 function messagesCalls(fetchMock: ReturnType<typeof vi.fn>) {
   return fetchMock.mock.calls
     .map(([input]) => String(input))
@@ -98,7 +104,7 @@ describe("group view filtering", () => {
   it("turning the toggle on updates preferences and refetches inbox without excludeTo", async () => {
     const { fetchMock } = renderAt("/", { groupMailInMainInbox: false });
 
-    const toggle = await screen.findByRole("checkbox", { name: i18n.t("groups.showInInbox") });
+    const toggle = await screen.findByRole("checkbox", { name: groupToggleName() });
     expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
@@ -121,12 +127,14 @@ describe("group view filtering", () => {
     });
   });
 
-  it("styles the group toggle row like a Sidebar row (fixed height, hover feedback) instead of a bare native checkbox row", async () => {
+  it("styles the group toggle row like a Sidebar row (hover feedback) instead of a bare native checkbox row", async () => {
     await renderAt("/", { groupMailInMainInbox: false });
 
-    const toggle = await screen.findByRole("checkbox", { name: i18n.t("groups.showInInbox") });
+    const toggle = await screen.findByRole("checkbox", { name: groupToggleName() });
     const row = toggle.closest("label") as HTMLElement;
-    expect(row.className).toContain("h-[38px]");
     expect(row.className).toContain("hover:bg-hover");
+    // #340: the row grew a second line explaining that it delivers no copies,
+    // so it is no longer a fixed 38px single-liner.
+    expect(row).toHaveTextContent(i18n.t("groups.showInInboxHelp"));
   });
 });

@@ -9,6 +9,7 @@ import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
 import { AUTH_QUERY_KEY } from "../auth/useAuth";
+import { useAuth } from "../auth/useAuth";
 import { fetchIdentities } from "../composer/api";
 import { fetchAiStatus } from "../composer/aiApi";
 import { replyRecipients } from "../composer/reply";
@@ -203,6 +204,7 @@ export function ThreadView({
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { user } = useAuth();
 
   const threadQuery = useQuery({
     queryKey: ["mail", "thread", threadId, accountId ?? null],
@@ -219,9 +221,16 @@ export function ThreadView({
     queryFn: fetchIdentities,
   });
   const identities = identitiesQuery.data ?? [];
-  // The account's own identity addresses, used to work out who a received
-  // message was addressed to relative to "me" (see describeAudience below).
   const identityEmails = identities.map((identity) => identity.email);
+  // #340: the addresses that count as "me" when working out who a received
+  // message was addressed to (see describeAudience below). Every non-primary
+  // identity is a GROUP address (deriveGroupAddresses, ./mailbox/groups.ts), so
+  // handing the whole identity list over made a message delivered to the group's
+  // mailbox read "para mí" — the user's own address was nowhere on it. Only the
+  // signed-in user's own address is "me"; the group gets named. Falls back to
+  // the identity list while the session query is still resolving, which is the
+  // pre-#340 behaviour and never worse than it.
+  const selfEmails = user ? [user.email] : identityEmails;
 
   // GH #339: whether this instance has an AI provider configured at all. The
   // summary card used to render unconditionally, so on an instance with AI off
@@ -1047,7 +1056,7 @@ export function ThreadView({
                     <span className="block truncate text-[12.5px] text-muted">
                       {isSentByMe
                         ? `${t("mail.sentTo")} ${toCcLabel}`
-                        : `${sender?.email} · ${describeAudience(email.to, email.cc, identityEmails, t)}`}
+                        : `${sender?.email} · ${describeAudience(email.to, email.cc, selfEmails, t)}`}
                     </span>
                   )}
                 </span>

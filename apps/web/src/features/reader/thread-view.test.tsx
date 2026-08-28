@@ -3059,3 +3059,79 @@ describe("ThreadView — conversation-wide moves and error reporting (#343)", ()
     );
   });
 });
+
+// #340: a group address is one of the account's identities, and describeAudience
+// counted every identity as "me" — so a message delivered to the group's mailbox
+// read "para mí" even though the user's own address is nowhere on it. Only the
+// signed-in user's own address is "me"; a group address is named.
+describe("ThreadView — audience of group mail (#340)", () => {
+  function stubGroupThread() {
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [{ name: null, email: "ventas@example.com" }];
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/me")) {
+        return new Response(
+          JSON.stringify({
+            userId: "u1", email: "bob@example.com", displayName: "Bob",
+            role: "employee", locale: "es",
+          }),
+        );
+      }
+      if (url.includes("/api/mail/identities")) {
+        return new Response(
+          JSON.stringify([
+            { id: "i1", name: "Bob", email: "bob@example.com" },
+            { id: "i2", name: "Ventas", email: "ventas@example.com" },
+          ]),
+        );
+      }
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+  }
+
+  it("names the group address instead of claiming the message was for me", async () => {
+    vi.stubGlobal("fetch", stubGroupThread());
+    renderThread();
+
+    expect(
+      await screen.findByText(/carol@example\.com · para ventas@example\.com/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/carol@example\.com · para mí/)).not.toBeInTheDocument();
+  });
+
+  it("still says 'para mí' when the message really is addressed to the user", async () => {
+    const state = structuredClone(thread);
+    state.emails[1]!.to = [{ name: "Bob", email: "bob@example.com" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/auth/me")) {
+          return new Response(
+            JSON.stringify({
+              userId: "u1", email: "bob@example.com", displayName: "Bob",
+              role: "employee", locale: "es",
+            }),
+          );
+        }
+        if (url.includes("/api/mail/identities")) {
+          return new Response(
+            JSON.stringify([
+              { id: "i1", name: "Bob", email: "bob@example.com" },
+              { id: "i2", name: "Ventas", email: "ventas@example.com" },
+            ]),
+          );
+        }
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    expect(await screen.findByText(/carol@example\.com · para mí/)).toBeInTheDocument();
+  });
+});

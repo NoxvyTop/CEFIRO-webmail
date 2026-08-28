@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { deriveGroupAddresses, fetchPreferences, updatePreferences } from "./groups";
+import { deriveGroupAddresses, fetchPreferences, mergeGroupEntries, updatePreferences } from "./groups";
 
 const primary = { id: "i1", name: "Primary", email: "user@noxvytop.com" };
 const groupA = { id: "i2", name: "Sales", email: "sales@noxvytop.com" };
@@ -81,5 +81,51 @@ describe("preferences client", () => {
     });
     const [, init] = (fetchMock as any).mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init?.body))).toEqual({ customLabels: [label] });
+  });
+});
+
+// #340: the sidebar listed a row per group identity AND the shared mailboxes
+// page listed a row per shared account, both named after the same group — two
+// doors to the same team, one of which ("0 correos", no unread) looked broken.
+describe("mergeGroupEntries", () => {
+  const salesAccount = { id: "acc-sales", name: "sales@noxvytop.com", copyOptIn: false };
+
+  it("folds a group identity and its shared account into one entry", () => {
+    expect(mergeGroupEntries([groupA], [salesAccount])).toEqual([
+      { key: "acc-sales", label: "sales@noxvytop.com", address: "sales@noxvytop.com", accountId: "acc-sales" },
+    ]);
+  });
+
+  it("matches an account named with the bare local part", () => {
+    // Stalwart names a group principal by its login name, which may or may not
+    // carry the domain — both spellings mean the same team.
+    const [entry] = mergeGroupEntries([groupA], [{ id: "acc-sales", name: "sales", copyOptIn: false }]);
+    expect(entry?.accountId).toBe("acc-sales");
+    expect(entry?.address).toBe("sales@noxvytop.com");
+  });
+
+  it("does not fold together same-local-part addresses on different domains", () => {
+    const other = { id: "acc-other", name: "sales@other.com", copyOptIn: false };
+    expect(mergeGroupEntries([groupA], [other])).toHaveLength(2);
+  });
+
+  it("keeps a shared account with no matching identity, named after the account", () => {
+    expect(mergeGroupEntries([], [salesAccount])).toEqual([
+      { key: "acc-sales", label: "sales@noxvytop.com", accountId: "acc-sales" },
+    ]);
+  });
+
+  it("keeps a group identity with no shared account, named after the address", () => {
+    expect(mergeGroupEntries([groupB], [])).toEqual([
+      { key: "support@noxvytop.com", label: "support@noxvytop.com", address: "support@noxvytop.com" },
+    ]);
+  });
+
+  it("lists the shared mailboxes first and never repeats a group", () => {
+    const entries = mergeGroupEntries([groupA, groupB], [salesAccount]);
+    expect(entries.map((entry) => entry.label)).toEqual([
+      "sales@noxvytop.com",
+      "support@noxvytop.com",
+    ]);
   });
 });

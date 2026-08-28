@@ -316,7 +316,8 @@
   },
   "groups": {
     "title": "Groups",
-    "showInInbox": "Show in main inbox"
+    "showInInbox": "Show mail addressed to {{groups}} in my inbox",
+    "showInInboxHelp": "Only changes what your inbox shows; it does not ask the server for copies."
   },
   "accounts": {
     "selectorLabel": "Active mailbox",

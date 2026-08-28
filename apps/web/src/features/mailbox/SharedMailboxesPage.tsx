@@ -3,15 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router";
 import type { SharedAccount } from "@webmail/shared";
-import { ACTIVE_ACCOUNT_PARAM, fetchSharedAccounts, setSharedAccountCopyPreference } from "./api";
+import {
+  ACTIVE_ACCOUNT_PARAM, SHARED_ACCOUNTS_QUERY_KEY, fetchSharedAccounts, setSharedAccountCopyPreference,
+} from "./api";
 import { useToast } from "../../app/ui/toast";
 // Reuses the settings panels' shared loading/failed primitives (GH #250) so the
 // list keeps the exact non-content states it had as a settings panel (G-3).
 import { SettingsLoadError, SettingsLoading } from "../settings/PanelStates";
-
-// The same key the mail view banner reads (GH #13/#50), so toggling an opt-in
-// here and switching accounts there stay in step off one cache entry.
-const SHARED_ACCOUNTS_QUERY_KEY = ["mail", "shared-accounts"] as const;
 
 /**
  * GH #13/#50 (G-4) — the "Buzones compartidos" page, reached from the left

@@ -8,10 +8,14 @@ function stateChange(types: Record<string, string>) {
 }
 
 describe("invalidationKeysForStateChange", () => {
-  it("refetches the listing and the open thread when mail changed", () => {
+  it("refetches the listing, the open thread and the mailbox counters when mail changed", () => {
+    // #340: the mailbox key rides along with Email because arriving mail moves
+    // unread counts, and the provider does not reliably bump Mailbox state at
+    // the same time — see the unread-counts describe at the bottom of this file.
     expect(invalidationKeysForStateChange(stateChange({ Email: "abc" }))).toEqual([
       ["mail", "messages"],
       ["mail", "thread"],
+      ["mail", "mailboxes"],
     ]);
   });
 
@@ -72,5 +76,23 @@ describe("invalidationKeysForStateChange", () => {
     for (const untouchable of ["mail/identities", "mail/preferences", "mail/signatures"]) {
       expect(everyKey).not.toContain(untouchable);
     }
+  });
+});
+
+// #340: the sidebar's per-group unread counter reads the shared mailbox's own
+// ["mail","mailboxes",<accountId>] entry. The stream does deliver StateChange
+// for shared accounts, but a frame that only names Email left every mailbox
+// query — and so every unread count, personal and shared — untouched.
+describe("invalidationKeysForStateChange — unread counts (#340)", () => {
+  it("refetches the mailbox list when mail changed, because unread counts moved with it", () => {
+    expect(invalidationKeysForStateChange(stateChange({ Email: "abc" }))).toContainEqual([
+      "mail",
+      "mailboxes",
+    ]);
+  });
+
+  it("keeps the mailbox key listed once when the frame names both types", () => {
+    const keys = invalidationKeysForStateChange(stateChange({ Email: "abc", Mailbox: "def" }));
+    expect(keys.filter((key) => key.join("/") === "mail/mailboxes")).toHaveLength(1);
   });
 });
