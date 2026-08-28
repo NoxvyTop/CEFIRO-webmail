@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { AUTH_QUERY_KEY } from "../auth/useAuth";
+import { createNewMailNotice, inboxUnreadCount } from "./newMailNotice";
 
 // The same endpoint the EventSource opens. The probe below re-asks it with
 // fetch() precisely because fetch exposes the HTTP status that EventSource hides.
@@ -180,18 +181,36 @@ export function useMailEvents(enabled: boolean): MailEventsStatus {
     // unauthenticated request against a server that already said no.
     let stopped = false;
 
+    // GH #338: one notice per stream, so its debounce spans the connection
+    // rather than restarting with every frame.
+    const notice = createNewMailNotice({
+      translate: (count) => ({
+        title: tRef.current("mail.newMailNotification"),
+        body: tRef.current("mail.newMailNotificationBody", { count }),
+      }),
+    });
+
     function handleMessage(event: MessageEvent<string>) {
-      for (const queryKey of invalidationKeysForStateChange(event.data ?? "")) {
-        queryClient.invalidateQueries({ queryKey });
-      }
-      if (
-        document.hidden &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted"
-      ) {
-        // eslint-disable-next-line no-new
-        new Notification(tRef.current("mail.newMailNotification"));
-      }
+      // GH #338: read BEFORE the invalidation, compare AFTER it settles. The
+      // alert used to fire on any frame that mentioned `Email` — a flag flipped
+      // in another tab, a move, a delete, a message the user SENT, and every
+      // change in every shared account the session can reach. What actually
+      // means "new mail" is the personal Inbox's unread count going up, and the
+      // only way to see that is across the refetch this very handler triggers.
+      //
+      // A frame that moves `Email` alone does not refetch the mailboxes, so the
+      // count cannot move and nothing is said: a real delivery advances the
+      // Mailbox state too (the unread counter is part of it), so the signal we
+      // act on is the one a delivery actually produces.
+      const before = inboxUnreadCount(queryClient);
+      const settled = invalidationKeysForStateChange(event.data ?? "").map((queryKey) =>
+        queryClient.invalidateQueries({ queryKey }),
+      );
+      void Promise.all(settled)
+        .then(() => notice(before, inboxUnreadCount(queryClient)))
+        .catch(() => {
+          // a refetch that failed is not an arrival — stay quiet
+        });
     }
 
     // A stream that opened is proof the server is serving again, so the next

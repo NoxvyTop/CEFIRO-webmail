@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../app/i18n";
 import { retryDelayMs, useMailEvents } from "./useMailEvents";
+import { NEW_MAIL_NOTICE_TAG, PERSONAL_MAILBOXES_QUERY_KEY } from "./newMailNotice";
 
 // The first rung of the backoff ladder in useMailEvents.ts (GH #243), with
 // Math.random pinned to the 0.5 the timing tests below stub in: base 2 s, half
@@ -193,30 +194,50 @@ describe("useMailEvents (hook lifecycle)", () => {
     expect(FakeEventSource.instances[1]?.url).toBe("/api/mail/events");
   });
 
-  it("notifies once per message only when the tab is hidden and permission is granted", () => {
+  // GH #338: the alert used to fire for ANY frame carrying `Email`. It now
+  // waits for the invalidation to settle and compares the personal Inbox's
+  // unread count across it, so only a genuine arrival speaks.
+  it("notifies only when the Inbox unread count grew, and only while hidden", async () => {
     const notify = vi.fn();
     class FakeNotification {
       static permission = "granted";
-      constructor(title: string) {
-        notify(title);
+      constructor(title: string, options?: NotificationOptions) {
+        notify(title, options);
       }
     }
     vi.stubGlobal("Notification", FakeNotification);
-    const { wrapper } = makeWrapper();
-    renderHook(() => useMailEvents(true), { wrapper });
 
-    // Visible tab: a message must not raise a notification.
-    setHidden(false);
-    FakeEventSource.instances[0]?.emitMessage();
+    let unread = 1;
+    const { wrapper } = makeWrapper();
+    renderHook(
+      () => {
+        useQuery({
+          queryKey: PERSONAL_MAILBOXES_QUERY_KEY,
+          queryFn: async () => [{ id: "mb-inbox", role: "inbox", unreadEmails: unread }],
+        });
+        return useMailEvents(true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    // A change that does not move the count says nothing.
+    setHidden(true);
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitMessage();
+    });
     expect(notify).not.toHaveBeenCalled();
 
-    // Hidden tab: one notification per arriving message.
-    setHidden(true);
-    FakeEventSource.instances[0]?.emitMessage();
-    expect(notify).toHaveBeenCalledTimes(1);
+    // An arrival does.
+    unread = 4;
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitMessage();
+    });
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]?.[1]).toMatchObject({ tag: NEW_MAIL_NOTICE_TAG });
   });
 
-  it("does not notify when notification permission was not granted", () => {
+  it("does not notify when notification permission was not granted", async () => {
     const notify = vi.fn();
     class FakeNotification {
       static permission = "default";
@@ -226,10 +247,25 @@ describe("useMailEvents (hook lifecycle)", () => {
     }
     vi.stubGlobal("Notification", FakeNotification);
     setHidden(true);
-    const { wrapper } = makeWrapper();
-    renderHook(() => useMailEvents(true), { wrapper });
 
-    FakeEventSource.instances[0]?.emitMessage();
+    let unread = 1;
+    const { wrapper } = makeWrapper();
+    renderHook(
+      () => {
+        useQuery({
+          queryKey: PERSONAL_MAILBOXES_QUERY_KEY,
+          queryFn: async () => [{ id: "mb-inbox", role: "inbox", unreadEmails: unread }],
+        });
+        return useMailEvents(true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    unread = 9;
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitMessage();
+    });
 
     expect(notify).not.toHaveBeenCalled();
   });
