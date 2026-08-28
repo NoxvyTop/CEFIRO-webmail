@@ -5,7 +5,15 @@
     "themeLight": "Switch to light theme",
     "themeNight": "Switch to night theme",
     "sentWith": "Sent with",
-    "sealMotto": "the wind that moves your team"
+    "sealMotto": "the wind that moves your team",
+    "offline": "No internet connection",
+    "routeError": {
+      "staleTitle": "A new version is available",
+      "staleDescription": "This tab has been open since before an update, and some files no longer exist on the server. Reload the page to continue.",
+      "genericTitle": "Something went wrong",
+      "genericDescription": "This screen could not be shown. Reloading the page usually fixes it.",
+      "reload": "Reload"
+    }
   },
   "admin": {
     "title": "Administration",
@@ -122,6 +130,11 @@
     "signedInAs": "Signed in as {{email}}",
     "subtitle": "Sign in to your team's mail",
     "credentialsDisabled": "Credential-based sign-in is disabled. Available only in recovery mode.",
+    "serviceUnavailable": {
+      "title": "Service unavailable",
+      "description": "Could not reach the server. Check your connection and try again.",
+      "retry": "Retry"
+    },
     "errors": {
       "account_archived": "Your account is archived. Ask an administrator to reactivate it.",
       "generic": "Sign-in could not be completed",

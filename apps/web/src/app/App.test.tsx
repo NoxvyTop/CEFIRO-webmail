@@ -1,6 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "./i18n";
@@ -35,6 +35,42 @@ function renderApp() {
     </QueryClientProvider>,
   );
 }
+
+// GH #345: there was no offline signal in the UI at all — a lost connection
+// looked identical to a slow one until every in-flight request failed on
+// its own.
+describe("App offline banner (GH #345)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // GH #345: dispatching a real "offline"/"online" event on window is also
+    // exactly what @tanstack/react-query's own onlineManager listens for
+    // globally (a singleton shared by every QueryClient in the process) — an
+    // assertion failure mid-test that skips the "online" dispatch below would
+    // otherwise leave every LATER test's queries thinking the browser is
+    // offline (paused, never fetching), which showed up as unrelated tests
+    // timing out for no visible reason. Always force it back regardless of
+    // how the test ended.
+    onlineManager.setOnline(true);
+  });
+
+  it("shows a banner while offline and hides it again once back online", async () => {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    renderApp();
+    await screen.findByText("CÉFIRO");
+
+    expect(screen.queryByText(i18n.t("app.offline"))).not.toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    expect(screen.getByText(i18n.t("app.offline"))).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    expect(screen.queryByText(i18n.t("app.offline"))).not.toBeInTheDocument();
+  });
+});
 
 describe("App search input focus treatment", () => {
   it("carries the visible boxed focus indicator on the bordered wrapper, not the transparent inner input", async () => {
@@ -152,5 +188,54 @@ describe("App accessibility shell", () => {
     // that in a real browser.
     await screen.findByRole("link", { name: i18n.t("app.skipToContent") });
     await expectNoShellAxeViolations(container);
+  });
+});
+
+// GH #342: the health query used to run exactly once (mount), so a backend
+// that degraded mid-session never surfaced "Servicio degradado" — the banner
+// only ever reflected the state at page load.
+describe("App health check polling (GH #342)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("polls /api/health every 60s so a mid-session outage can surface", async () => {
+    vi.useFakeTimers();
+    let healthCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/auth/me")) return new Response(JSON.stringify(user));
+        if (path.includes("/api/health")) {
+          healthCalls += 1;
+          const status = healthCalls === 1 ? "ok" : "degraded";
+          return new Response(JSON.stringify({ status, checks: {} }));
+        }
+        return new Response(JSON.stringify({}));
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter(routes, { initialEntries: ["/"] });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await act(async () => {
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    });
+    expect(screen.queryByText(i18n.t("health.degraded"))).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    });
+
+    // Not findByText/waitFor: those poll via a real setTimeout, which never
+    // fires once fake timers own the clock and nothing advances them further.
+    expect(healthCalls).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(i18n.t("health.degraded"))).toBeInTheDocument();
   });
 });

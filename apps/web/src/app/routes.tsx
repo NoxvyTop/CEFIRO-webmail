@@ -5,6 +5,7 @@ import { RequireAuth } from "../features/auth/RequireAuth";
 import { RequireAdmin } from "../features/admin/RequireAdmin";
 import { MailPage } from "../features/mailbox/MailPage";
 import { CefiroLoader } from "./ui/CefiroLoader";
+import { RouteError } from "./RouteError";
 import { App } from "./App";
 
 // The admin, settings and setup screens are rarely the first thing a user
@@ -44,6 +45,14 @@ export const routes: RouteObject[] = [
         <App />
       </RequireAuth>
     ),
+    // GH #345: no route had an `errorElement`, so a rejected lazy import (a
+    // stale hashed chunk — Composer, Settings, pdfjs — 404ing after a
+    // deploy) fell through to react-router's built-in English error page.
+    // Set once on this wrapper route: react-router bubbles an error up to
+    // the nearest ancestor route that HAS an errorElement, so this also
+    // covers every lazy child below (SettingsPage, AdminPage,
+    // SharedMailboxesPage) without repeating it on each one.
+    errorElement: <RouteError />,
     children: [
       { path: "/", element: <MailPage /> },
       { path: "/settings", element: <SettingsPage /> },
@@ -65,6 +74,7 @@ export const routes: RouteObject[] = [
         <SetupPage />
       </Suspense>
     ),
+    errorElement: <RouteError />,
   },
   { path: "*", element: <Navigate to="/" replace /> },
 ];

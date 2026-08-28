@@ -11,6 +11,7 @@ import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { isPlainShortcut } from "./ui/shortcuts";
 import { ToastProvider } from "./ui/toast";
 import { AppUserMenu } from "./ui/AppUserMenu";
+import { useOnlineStatus } from "./ui/useOnlineStatus";
 import { useTheme } from "./ui/useTheme";
 
 async function fetchHealth() {
@@ -23,7 +24,19 @@ export function App() {
   const { user, logout } = useAuth();
   const profile = useProfile();
   const { theme, toggleTheme } = useTheme();
-  const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth });
+  // GH #345: there was no offline signal anywhere in the UI — a lost
+  // connection looked identical to a slow one until every in-flight request
+  // failed on its own.
+  const online = useOnlineStatus();
+  // GH #342: used to run exactly once (on mount), so a backend that degraded
+  // mid-session never surfaced "Servicio degradado" — the banner only ever
+  // reflected the state at page load. Polling lets it appear at any point in
+  // an open session, not just after a fresh navigation.
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: fetchHealth,
+    refetchInterval: 60_000,
+  });
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -154,6 +167,17 @@ export function App() {
             </div>
           )}
         </header>
+        {/* GH #345: persistent (not a toast) — the condition lasts until the
+            connection actually returns, and a toast fading out would read
+            as "resolved" while still offline. */}
+        {!online && (
+          <p
+            role="status"
+            className="shrink-0 border-b border-line bg-soft px-4 py-2 text-center text-xs text-warn"
+          >
+            {t("app.offline")}
+          </p>
+        )}
         {shellOwnsMainLandmark ? (
           <main id="main-content" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             {outletRegion}

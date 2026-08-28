@@ -7,6 +7,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
+import { AppErrorBoundary } from "./app/AppErrorBoundary";
 import { routes } from "./app/routes";
 import { registerPushServiceWorker } from "./features/notifications/push";
 
@@ -21,8 +22,13 @@ void registerPushServiceWorker();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    {/* GH #345: last-resort boundary for anything that throws OUTSIDE the
+        router's own tree — routes.tsx's `errorElement` (RouteError) only
+        catches errors thrown while a matched route renders. */}
+    <AppErrorBoundary>
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </AppErrorBoundary>
   </StrictMode>,
 );

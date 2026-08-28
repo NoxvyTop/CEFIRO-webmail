@@ -5,7 +5,15 @@
     "themeLight": "Cambiar a tema claro",
     "themeNight": "Cambiar a tema noche",
     "sentWith": "Enviado con",
-    "sealMotto": "el viento que mueve tu equipo"
+    "sealMotto": "el viento que mueve tu equipo",
+    "offline": "Sin conexión a internet",
+    "routeError": {
+      "staleTitle": "Hay una nueva versión disponible",
+      "staleDescription": "Esta pestaña llevaba abierta desde antes de una actualización y algunos archivos ya no existen en el servidor. Recarga la página para continuar.",
+      "genericTitle": "Algo salió mal",
+      "genericDescription": "No se pudo mostrar esta pantalla. Recargar la página suele solucionarlo.",
+      "reload": "Recargar"
+    }
   },
   "admin": {
     "title": "Administración",
@@ -122,6 +130,11 @@
     "signedInAs": "Sesión iniciada como {{email}}",
     "subtitle": "Inicia sesión en el correo de tu equipo",
     "credentialsDisabled": "El acceso con credenciales está deshabilitado. Disponible solo en modo recuperación.",
+    "serviceUnavailable": {
+      "title": "Servicio no disponible",
+      "description": "No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+      "retry": "Reintentar"
+    },
     "errors": {
       "account_archived": "Tu cuenta está archivada. Pide a un administrador que la reactive.",
       "generic": "No se pudo completar el inicio de sesión",

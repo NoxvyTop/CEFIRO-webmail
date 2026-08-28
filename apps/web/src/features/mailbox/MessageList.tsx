@@ -9,11 +9,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import type { CustomLabel, EmailSummary, MessagesPage } from "@webmail/shared";
 import { fetchMessages, updateMessage, updateMessages, MailApiError, PAGE_SIZE } from "./api";
-import { mailErrorKey, mailRetry } from "./queryErrors";
+import { mailErrorKey, mailRetry, mailRetryDelay } from "./queryErrors";
 import { AUTH_QUERY_KEY } from "../auth/useAuth";
 import { Avatar } from "../../app/ui/Avatar";
 import { CloseIcon, StarFilledIcon, StarIcon } from "../../app/ui/icons";
 import { labelBackground, labelColor, labelDisplayName, userLabels } from "../../app/ui/labels";
+import { PanelError } from "../../app/ui/PanelError";
 import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
@@ -45,6 +46,11 @@ interface MessageListProps {
   // query key (so switching accounts is a distinct cache entry) and threaded
   // into every read/mutation. Absent = personal mailbox (unchanged).
   accountId?: string;
+  // GH #342: true while the SSE stream (useMailEvents) is not actually open —
+  // reconnecting, live-update-limited, or offline — so there is no other
+  // source of freshness for this list. MailPage derives it from the hook's
+  // `streamOpen` and passes it straight through.
+  pollWhileStreamDown?: boolean;
 }
 
 function rowClassName(selected: boolean) {
@@ -171,7 +177,7 @@ export function MessageList({
   mailboxId, hasKeyword, query, selectedThreadId, onSelect, virtualized = true, to, excludeTo,
   excludeMailboxId, title,
   onLabels, activeLabel, onClearLabel, onClearSearch, archiveMailboxId, onArchived, customLabels = [],
-  accountId,
+  accountId, pollWhileStreamDown = false,
 }: MessageListProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -215,6 +221,14 @@ export function MessageList({
         ? lastPage.position + lastPage.emails.length
         : undefined,
     retry: mailRetry,
+    retryDelay: mailRetryDelay,
+    // GH #342: while the SSE stream is not open there is no other source of
+    // freshness for this list, so poll instead. `refetchIntervalInBackground:
+    // false` keeps a backgrounded tab from spending that request — it will
+    // catch up the moment it's foregrounded again (React Query's own
+    // refetchOnWindowFocus).
+    refetchInterval: pollWhileStreamDown ? 60_000 : undefined,
+    refetchIntervalInBackground: false,
   });
 
   const emails = useMemo(
@@ -707,9 +721,10 @@ export function MessageList({
 
   if (messagesQuery.isError) {
     content = (
-      <p role="alert" className="p-4 text-sm text-warn">
-        {t(mailErrorKey(messagesQuery.error))}
-      </p>
+      <PanelError
+        message={t(mailErrorKey(messagesQuery.error))}
+        onRetry={() => void messagesQuery.refetch()}
+      />
     );
   } else if (messagesQuery.isLoading) {
     // GH #272: the first page is still in flight (a fresh folder/label/search).

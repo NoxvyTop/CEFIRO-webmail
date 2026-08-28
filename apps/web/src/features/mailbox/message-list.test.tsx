@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CustomLabel, EmailSummary } from "@webmail/shared";
 import "../../app/i18n";
@@ -974,6 +974,40 @@ describe("MessageList row handle (GH #225)", () => {
   });
 });
 
+// GH #345: a failed messages page rendered a bare `<p role="alert">` with no
+// way to retry — replaced with the shared PanelError (message + retry).
+describe("MessageList load error state (GH #345)", () => {
+  it("offers a retry button that refetches, instead of a dead-end alert", async () => {
+    // 404 (mail_not_configured): mailRetry gives up immediately for any 4xx
+    // (no bounded-retry delay to wait out), so the alert appears on the very
+    // first failure.
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/messages")) {
+          calls += 1;
+          if (calls === 1) {
+            return new Response(JSON.stringify({ code: "mail_not_configured" }), { status: 404 });
+          }
+          return new Response(JSON.stringify({ total: 1, position: 0, emails: [emailUnread] }));
+        }
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderList();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(i18n.t("mail.errors.mail_not_configured"));
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("settings.retry") }));
+
+    await screen.findByText("Hello there");
+    expect(calls).toBe(2);
+  });
+});
+
 // GH #272: `isLoading` used to gate only the empty state, so switching folders
 // left the list area blank until the first page arrived — indistinguishable
 // from an empty folder. A skeleton now stands in for the pending first page.
@@ -1155,5 +1189,54 @@ describe("MessageList — conversation-wide archive (#343)", () => {
     await vi.waitFor(() =>
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth", "me"] }),
     );
+  });
+});
+
+async function flushMicrotasks() {
+  await act(async () => {
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+  });
+}
+
+// GH #342: while the SSE stream is not open (dropped, limited, offline), there
+// was no backup source of freshness at all — a folder loaded once could sit
+// stale for the rest of the session. MailPage derives `pollWhileStreamDown`
+// from useMailEvents' `streamOpen` and threads it through as this prop.
+describe("polling fallback while the stream is down (GH #342)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("refetches on a 60s interval when pollWhileStreamDown is true", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubFetch({ total: 0, position: 0, emails: [] });
+    renderList(vi.fn(), { pollWhileStreamDown: true });
+
+    await flushMicrotasks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not poll while the stream is open (pollWhileStreamDown false/unset)", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubFetch({ total: 0, position: 0, emails: [] });
+    renderList(vi.fn(), { pollWhileStreamDown: false });
+
+    await flushMicrotasks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
