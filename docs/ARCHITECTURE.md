@@ -110,6 +110,65 @@ OIDC independiente con su propio `client_id`/`client_secret`; los tokens de
 una aplicación no sirven para otra. El SSO entre aplicaciones lo mantiene
 Authentik con su propia cookie en su dominio.
 
+### Defensa CSRF (#335)
+
+La cookie de sesión es la única credencial de las rutas de navegador, y es
+`SameSite=Lax`. Lax corta el POST *cross-site*, pero «site» es el dominio
+registrable: un subdominio hermano (`intranet.example.com` contra
+`mail.example.com`), o un XSS en él, es *same-site* y el navegador manda la
+cookie igual. Por eso todo método que no sea GET/HEAD/OPTIONS pasa antes por
+`apps/server/src/core/csrf.ts`:
+
+1. Si llega `Sec-Fetch-Site`, decide él: se admite `same-origin` y `none` (una
+   petición que inició el usuario). `same-site` se rechaza — es justo el caso
+   del subdominio hermano.
+2. Si no llega (navegadores sin Fetch Metadata), se compara el `Origin` con el
+   origen de `APP_URL`; si tampoco hay `Origin`, el del `Referer`.
+3. Sin ninguna de las tres cabeceras hay **una sola** excepción: que la
+   petición traiga la cabecera `x-setup-token`. Cualquier otra se rechaza con
+   `403 csrf`.
+4. Además, un cuerpo cuyo `Content-Type` no sea `application/json` se rechaza
+   con `415 unsupported_media_type`. Es defensa en profundidad: un formulario
+   HTML cross-site solo puede producir tres tipos, ninguno de ellos JSON. La
+   comprobación va por *presencia de cuerpo*, no por método, porque la SPA
+   manda varias mutaciones sin cuerpo (`POST /api/mail/filters/sync`,
+   `DELETE /api/mail/signatures/:id`). `POST /api/mail/blobs` está exento del
+   tipo — es binario por contrato — pero **no** del control de origen.
+
+No hay token sincronizador: no aporta nada sobre dos cabeceras que pone el
+navegador y que el JavaScript de la página no puede falsificar (`Origin` y
+`Referer` son *forbidden header names*; `Sec-Fetch-*` lo pone la pila de red).
+
+`POST /api/auth/logout` no exige sesión a propósito, pero sí pasa por esta
+puerta: si no, cualquier página ajena podría cerrar la sesión del usuario.
+
+#### Clientes que no son navegadores
+
+Un `curl` no manda ninguna de las tres cabeceras, así que por defecto no puede
+mutar. Se admite **solo** por una cabecera de autenticación propia, y hoy esa
+cabecera es exactamente una: `x-setup-token`, la del asistente de instalación.
+
+Es segura por construcción, y el motivo no tiene que ver con su valor: una
+petición cross-site que lleve **cualquier** cabecera fuera de la lista blanca de
+CORS deja de ser una *simple request*, así que el navegador tiene que ganar
+antes un *preflight*. Esta app no monta middleware de CORS y el nginx de delante
+no añade cabeceras `Access-Control-*`, así que ese preflight no se contesta
+nunca y la petición no llega a salir. La presencia de la cabecera **es** la
+prueba de que quien llama no es una página dirigida desde otro origen.
+
+La cabecera **admite** la petición, no la autentica: el router de setup verifica
+él mismo el secreto de 144 bits, limita los intentos y se cierra para siempre
+cuando la instalación ya se ha completado. Y la excepción solo vale cuando el
+navegador no ha dicho nada: con un `Origin` o un `Sec-Fetch-Site` ajenos, la
+petición se rechaza aunque traiga la cabecera.
+
+`POST /api/auth/bootstrap` **no** entra en la excepción, aunque tampoco exija
+cookie: su credencial viaja en el cuerpo, no en una cabecera infalsificable, y
+quien lo llama es la pantalla de login de la SPA. Sigue exigiendo origen.
+
+Para cualquier otra mutación desde un script hay que mandar `Origin: <APP_URL>`
+y `Content-Type: application/json`.
+
 ### Puente SSO → buzón
 
 La contraseña del buzón se guarda cifrada (AES-256-GCM) en PostgreSQL. La

@@ -5,7 +5,7 @@ import { createDb } from "../../infra/db/client";
 import { testDatabaseUrl } from "../../infra/db/test-db";
 import { migrate } from "../../infra/db/migrate";
 import { createUsersRepo } from "../../infra/repos/users";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createAuthRouter } from "./router";
 import { createSessionStore } from "./sessions";
 

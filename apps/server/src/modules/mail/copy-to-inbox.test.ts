@@ -13,7 +13,7 @@ import {
 } from "../../infra/repos/shared-mailbox-copies";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createMailRouter } from "./router";
 import { evictMailSession } from "./context";
 import type { JmapClient, JmapMethodCall, JmapMethodResponse } from "../../infra/jmap/client";

@@ -426,6 +426,8 @@ const app = createApp({
   metricsToken: config.metricsToken,
   // The proxy contract every per-IP ceiling is keyed on (GH #238).
   trustedProxyHops: config.trustedProxyHops,
+  // The one origin a mutating request may come from (GH #335). See core/csrf.ts.
+  appUrl: config.appUrl,
   instanceSettings,
   authRouter: createAuthRouter({
     sessions,

@@ -98,7 +98,14 @@ test("a second sign-in reuses the provisioned account instead of creating anothe
   const provisioned = await (await page.request.get("/api/auth/me")).json();
 
   // Drop the session and come back through the provider as the same person.
-  const loggedOut = await page.request.post("/api/auth/logout");
+  // `page.request` shares the browser's cookie jar but builds its requests
+  // itself, so it sends none of the Fetch Metadata a real navigation carries —
+  // and the CSRF gate refuses a header-less mutation (GH #335, core/csrf.ts).
+  // Stating the header here is what the browser would have sent for the same
+  // call; the gate itself is covered by apps/server/src/csrf.test.ts.
+  const loggedOut = await page.request.post("/api/auth/logout", {
+    headers: { "sec-fetch-site": "same-origin" },
+  });
   expect(loggedOut.ok()).toBe(true);
 
   await signInThroughIdp(page, email);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createAuthRouter, type OidcClient } from "./router";
 import { createBootstrap } from "../setup/bootstrap";
 import { importMasterKey } from "../credentials/crypto";

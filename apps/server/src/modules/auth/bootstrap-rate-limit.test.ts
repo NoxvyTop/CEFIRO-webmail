@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createAuthRouter } from "./router";
 import { createBootstrap, type Bootstrap } from "../setup/bootstrap";
 import { createRateLimiter } from "../../core/rate-limit";

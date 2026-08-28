@@ -9,7 +9,7 @@ import { createSignaturesRepo } from "../../infra/repos/signatures";
 import { createUserPreferencesRepo } from "../../infra/repos/user-preferences";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createMailRouter } from "./router";
 import { evictMailSession } from "./context";
 import type { JmapClient, JmapMethodCall } from "../../infra/jmap/client";

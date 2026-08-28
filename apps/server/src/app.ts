@@ -6,6 +6,7 @@ import type { InstanceSettingsRepo } from "./infra/repos/instance-settings";
 import { logAccess, loggedPath } from "./core/access-log";
 import { DEFAULT_TRUSTED_PROXY_HOPS, rateLimitKey } from "./core/client-ip";
 import { DEFAULT_MAX_BODY_BYTES } from "./core/config";
+import { csrfDecision, logCsrfRefusal } from "./core/csrf";
 import { errorResponse } from "./core/error-response";
 import { DomainError } from "./core/errors";
 import { createHealthProbe, type HealthCheck } from "./core/health";
@@ -27,6 +28,13 @@ type Env = { Variables: { traceId: string } };
 // routinely exceed the cap — it needs a rate-aware upload budget, not this
 // memory-exhaustion guard (GH #195).
 const STREAMED_UPLOAD_PATH = "/api/mail/blobs";
+
+// The same route is the only one exempt from the `application/json` rule the
+// CSRF middleware enforces (GH #335): it relays whatever the attachment is,
+// which is binary by contract. It is NOT exempt from the origin check. Nothing
+// else here parses a non-JSON body — the avatar arrives as a data: URL inside
+// the profile JSON, so there is no multipart route to exempt.
+const BINARY_BODY_PATHS: ReadonlySet<string> = new Set([STREAMED_UPLOAD_PATH]);
 
 // Flood ceiling for the one route that answers without a session (GH #220).
 // Deliberately generous: the container's own probe polls twice a minute
@@ -68,6 +76,15 @@ export type CreateAppOptions = {
   metricsRateLimiter?: RateLimiter;
   /** Global request-body ceiling in bytes (GH #195). See core/config.ts. */
   maxBodyBytes?: number;
+  /**
+   * The instance's public URL — `config.appUrl`, i.e. `APP_URL` through the
+   * validated schema. Only its ORIGIN is used, and only by the CSRF gate
+   * (GH #335, core/csrf.ts). Optional because most tests build an app without
+   * a config: with none wired (or an unparseable one), the gate compares
+   * against the origin the request was addressed to, which is the same answer
+   * for a single-origin deployment and never weaker than no check at all.
+   */
+  appUrl?: string;
   /**
    * How many proxy hops to trust in `X-Forwarded-For` (GH #238). Keys both
    * ceilings below; see core/client-ip.ts for the attribution rule.
@@ -171,6 +188,19 @@ export function createApp(options: CreateAppOptions = {}) {
   // unlocked by the empty string. core/config.ts already refuses one; this
   // keeps the guarantee for callers that build an app without it (the tests).
   const metricsToken = options.metricsToken?.trim() || undefined;
+  // Only the origin of APP_URL matters to the CSRF gate, and an unparseable
+  // value degrades to "compare against the request's own origin" rather than
+  // refusing every mutation on the instance — core/config.ts already validates
+  // the real one as a URL, so this is a guard for callers that build an app by
+  // hand, not a licence to misconfigure.
+  const expectedOrigin = (() => {
+    if (!options.appUrl) return undefined;
+    try {
+      return new URL(options.appUrl).origin;
+    } catch {
+      return undefined;
+    }
+  })();
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -222,6 +252,41 @@ export function createApp(options: CreateAppOptions = {}) {
       status: c.res.status,
       durationMs,
     });
+  });
+
+  // Cross-site request forgery gate (GH #335), ahead of the body ceiling and of
+  // every router: a forged mutation is refused before a byte of its body is
+  // buffered, and before any handler can act on it. The rule, its exemptions and
+  // the reasoning are in core/csrf.ts; what lives here is only the wiring.
+  //
+  // It sits after the trace/security-header middleware so a refusal still gets a
+  // traceId and the standard headers, like every other answer this app gives.
+  app.use("*", async (c, next) => {
+    const decision = csrfDecision(
+      {
+        method: c.req.method,
+        url: c.req.url,
+        path: c.req.path,
+        header: (name) => c.req.header(name),
+        // `raw.body` is null exactly when there is no body to type-check, and
+        // reading the property does not consume the stream.
+        hasBody: c.req.raw.body !== null,
+      },
+      expectedOrigin,
+      BINARY_BODY_PATHS,
+    );
+    if (decision.allowed) return next();
+    logCsrfRefusal({
+      traceId: c.get("traceId"),
+      method: c.req.method,
+      // Same path rule the access log uses (core/access-log.ts). Routing has not
+      // happened yet at this point, so this is the raw path — which is what the
+      // access log for this very request will record too, so the two agree.
+      route: loggedPath(c.req.matchedRoutes, c.req.path),
+      status: decision.status,
+      reason: decision.reason,
+    });
+    return errorResponse(c, decision.code, decision.status);
   });
 
   // Global request-body ceiling (GH #195), ahead of every router: without it,
