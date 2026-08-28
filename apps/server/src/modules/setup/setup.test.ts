@@ -12,7 +12,7 @@ import {
 import { createSsoConfigRepo, type SsoConfigRepo } from "../../infra/repos/sso-config";
 import { createAuditRepo, type AuditRepo } from "../../infra/repos/audit";
 import { importMasterKey } from "../credentials/crypto";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createBootstrap } from "./bootstrap";
 import type { SetupCompletion } from "./completion";
 import { createSetupRouter } from "./router";

@@ -12,7 +12,7 @@ import { createSieveRawScriptRepo } from "../../infra/repos/sieve-raw-script";
 import { createSieveSyncStateRepo } from "../../infra/repos/sieve-sync-state";
 import { importMasterKey } from "../credentials/crypto";
 import { createSessionStore } from "../auth/sessions";
-import { createApp } from "../../app";
+import { createBrowserApp as createApp } from "../../test/browser-app";
 import { createSieveRouter } from "./router";
 import { DomainError } from "../../core/errors";
 import type { JmapClient, JmapMethodCall, JmapSession } from "../../infra/jmap/client";

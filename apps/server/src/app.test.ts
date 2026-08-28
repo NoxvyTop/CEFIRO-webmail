@@ -642,7 +642,10 @@ describe("global body limit (GH #195)", () => {
   function post(app: ReturnType<typeof createApp>, path: string, bytes: number) {
     return app.request(path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // Set here rather than by importing the browser seam (src/test/browser-app
+      // .ts) the other suites use: this file tests createApp itself, so its apps
+      // stay the real ones. The header is what a browser sends (GH #335).
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
       body: "x".repeat(bytes),
     });
   }
