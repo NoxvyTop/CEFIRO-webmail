@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import type { Db } from "../db/client";
 import { createDb } from "../db/client";
 import { testDatabaseUrl } from "../db/test-db";
 import { migrate } from "../db/migrate";
@@ -28,5 +29,30 @@ describe("instance settings repo", () => {
 
     await repo.set({ sentWithFooterEnabled: false });
     expect((await repo.get()).sentWithFooterEnabled).toBe(false);
+  });
+
+  // GH #347: GET /api/instance is public and unauthenticated, so every hit
+  // used to be a per-request Postgres read. Same in-process cache pattern as
+  // sso-config.ts's providerNameCache — a fake sql counts the SELECTs to
+  // prove the second get() is served from cache and set() invalidates it.
+  it("caches get() in-process and invalidates it on set", async () => {
+    let reads = 0;
+    const fakeSql = ((strings: TemplateStringsArray) => {
+      if (strings.join(" ").includes("select sent_with_footer_enabled")) {
+        reads += 1;
+        return Promise.resolve([{ sent_with_footer_enabled: true }]);
+      }
+      return Promise.resolve([]);
+    }) as unknown as Db;
+    const repo = createInstanceSettingsRepo(fakeSql);
+
+    expect((await repo.get()).sentWithFooterEnabled).toBe(true);
+    expect((await repo.get()).sentWithFooterEnabled).toBe(true);
+    expect(reads).toBe(1); // second read served from cache
+
+    await repo.set({ sentWithFooterEnabled: false });
+    // set() invalidated the cache, so the read below hits Postgres again...
+    expect((await repo.get()).sentWithFooterEnabled).toBe(true);
+    expect(reads).toBe(2);
   });
 });
