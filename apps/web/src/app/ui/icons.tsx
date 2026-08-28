@@ -317,3 +317,17 @@ export function FileGenericIcon({ size = 16 }: IconProps) {
     </svg>
   );
 }
+
+// GH #339: the AI mark used to be the literal "✦" character, printed both from
+// the i18n string and as a decorative span beside it — so the button read
+// "✦ ✦ Resumir con IA". One inline SVG instead, matching the icon contract in
+// docs/design/cefiro/README.md ("SVG inline stroke currentColor, 15-17px,
+// stroke-width 2"), so it scales and inherits the accent color like every
+// other icon here.
+export function SparkleIcon({ size = 15 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...commonProps}>
+      <path d="M12 3.2 13.9 9a3.2 3.2 0 0 0 2.1 2.1l5.8 1.9-5.8 1.9a3.2 3.2 0 0 0-2.1 2.1L12 22.8 10.1 17a3.2 3.2 0 0 0-2.1-2.1L2.2 13l5.8-1.9A3.2 3.2 0 0 0 10.1 9Z" />
+    </svg>
+  );
+}

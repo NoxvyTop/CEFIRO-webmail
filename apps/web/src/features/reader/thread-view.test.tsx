@@ -2847,3 +2847,73 @@ describe("sender trust badge and trust-this-service action (GH #314)", () => {
     expect(screen.getByRole("button", { name: trustAction() })).toBeInTheDocument();
   });
 });
+
+// #339: the reader offered "Resumir con IA" / "Resumir conversación" even on an
+// instance with no AI provider configured, where the very first click can only
+// come back as `ai_disabled`. The gate is the same `["ai","status"]` query the
+// composer already reads, so both surfaces agree on one answer per session.
+describe("ThreadView — AI actions gate (#339)", () => {
+  function stubAiThread(aiEnabled: boolean) {
+    const state = structuredClone(thread);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/mail/ai/status")) {
+        return new Response(JSON.stringify({ enabled: aiEnabled }));
+      }
+      if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+      if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+      if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+      return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("renders no summarize action while the server reports AI disabled", async () => {
+    stubAiThread(false);
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("button", { name: i18n.t("mail.summarizeWithAi") }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the conversation summary action once the server reports AI enabled", async () => {
+    stubAiThread(true);
+    renderThread();
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the action hidden when the status endpoint itself fails", async () => {
+    // fetchAiStatus resolves `false` on any non-ok answer — AI off is the safe
+    // default, so a 500 must not paint an action that cannot work.
+    const state = structuredClone(thread);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/mail/identities")) return new Response(JSON.stringify([]));
+        if (url.includes("/api/instance")) return new Response(JSON.stringify({ sentWithFooter: false }));
+        if (url.includes("/api/mail/threads/")) return new Response(JSON.stringify(state));
+        return new Response(JSON.stringify({ code: "internal" }), { status: 500 });
+      }),
+    );
+    renderThread();
+
+    await screen.findByRole("heading", { name: "Re: Quarterly report" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: i18n.t("mail.summarizeConversation") }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});

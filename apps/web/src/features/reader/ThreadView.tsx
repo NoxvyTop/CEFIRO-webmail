@@ -9,6 +9,7 @@ import { fetchPreferences } from "../mailbox/groups";
 import { mailErrorKey, mailRetry } from "../mailbox/queryErrors";
 import { EMAIL_QUERY_KEYS, MAILBOX_QUERY_KEYS } from "../mailbox/useMailEvents";
 import { fetchIdentities } from "../composer/api";
+import { fetchAiStatus } from "../composer/aiApi";
 import { replyRecipients } from "../composer/reply";
 import { errorMessageKey } from "../../app/errorMessages";
 import { Avatar } from "../../app/ui/Avatar";
@@ -213,6 +214,15 @@ export function ThreadView({
   // The account's own identity addresses, used to work out who a received
   // message was addressed to relative to "me" (see describeAudience below).
   const identityEmails = identities.map((identity) => identity.email);
+
+  // GH #339: whether this instance has an AI provider configured at all. The
+  // summary card used to render unconditionally, so on an instance with AI off
+  // the reader offered "Resumir con IA" / "Resumir conversación" whose only
+  // possible outcome was the `ai_disabled` error that hides the card — an
+  // action painted purely to fail. Same `["ai","status"]` key the composer
+  // reads, so both surfaces share one answer per session, and `false` while it
+  // loads (or when the probe itself fails) keeps AI-off the safe default.
+  const { data: aiEnabled = false } = useQuery({ queryKey: ["ai", "status"], queryFn: fetchAiStatus });
 
   // Powers custom label colors/names in the subject chips and the label-apply
   // menu below — shares the ["mail","preferences"] cache key with MailPage's
@@ -1018,7 +1028,7 @@ export function ThreadView({
                   </div>
                 )}
                 {trustAction}
-                {isNewest && (
+                {isNewest && aiEnabled && (
                   // #308: `emails` is chronological (oldest→newest, the same
                   // order the server hashes) so its ids key the persistent
                   // summary cache — a new reply changes the set and misses.
