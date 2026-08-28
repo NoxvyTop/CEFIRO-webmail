@@ -326,16 +326,23 @@ export function createApp(options: CreateAppOptions = {}) {
   // orchestrator's READINESS probe read it: `/api/health`. See
   // docs/OPERATIONS.md and the Dockerfile's HEALTHCHECK.
   //
-  // Shares the readiness ceiling rather than opening a second one: it is the
-  // same operator surface, the response is a constant, and the container probe
-  // connects directly (no `x-forwarded-for`) into a bucket no proxied caller
-  // can reach.
+  // Deliberately UNLIMITED (GH #347). This used to share the readiness
+  // ceiling on the theory that "the container probe connects directly (no
+  // x-forwarded-for) into a bucket no proxied caller can reach" — but that
+  // bucket is UNATTRIBUTED_CLIENT (core/client-ip.ts), which is shared by
+  // EVERY request whose X-Forwarded-For chain is shorter than
+  // TRUSTED_PROXY_HOPS, not just loopback callers. With TRUSTED_PROXY_HOPS
+  // set for a multi-hop topology, a handful of such requests could exhaust
+  // that shared bucket and turn the container's own HEALTHCHECK poll into a
+  // 429 — marking a perfectly healthy instance unhealthy, i.e. exactly the
+  // outage GH #242 split this endpoint to avoid. The endpoint answers a
+  // hardcoded constant with no dependency check and no cache lookup (see the
+  // "runs no dependency check at all" test below), so there is no cost here
+  // for a limiter to protect — removing it is smaller and safer than trying
+  // to attribute loopback callers through the Bun server handle. /api/health
+  // keeps its limiter: it drives the (cached) health probe and is a heavier
+  // response to serve at volume.
   app.get("/api/health/live", (c) => {
-    const gate = healthRateLimiter.check(rateLimitKey(c, trustedProxyHops));
-    if (!gate.allowed) {
-      c.header("Retry-After", String(gate.retryAfterSeconds));
-      return errorResponse(c, "rate_limited", 429);
-    }
     c.header("cache-control", "no-store");
     return c.json({ status: "alive" });
   });

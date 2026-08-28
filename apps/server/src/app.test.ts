@@ -357,6 +357,26 @@ describe("liveness endpoint (GH #242)", () => {
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(probes).toBe(0);
   });
+
+  // GH #347: with TRUSTED_PROXY_HOPS=2 (or any operator whose chain is longer
+  // than one hop), a request whose X-Forwarded-For chain is SHORTER than the
+  // declared hop count cannot be attributed and fell into UNATTRIBUTED_CLIENT
+  // — the exact bucket the container's own HEALTHCHECK uses, since it connects
+  // on loopback with no X-Forwarded-For at all. A handful of such requests
+  // could exhaust the shared bucket and turn the healthcheck's own poll into a
+  // 429, marking a perfectly healthy container unhealthy. The endpoint answers
+  // a hardcoded constant with no dependency check and no cache lookup, so
+  // rate-limiting it protects nothing — the fix removes the limiter here
+  // entirely rather than trying to attribute loopback callers.
+  it("is never rate-limited, since it does no work worth protecting (GH #347)", async () => {
+    const app = createApp({
+      healthRateLimiter: createRateLimiter({ limit: 1, windowMs: 60_000 }),
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      expect((await app.request("/api/health/live")).status).toBe(200);
+    }
+  });
 });
 
 describe("health probe caching (GH #220)", () => {
