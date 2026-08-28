@@ -12,6 +12,7 @@ import { htmlToPlainText } from "./plainText";
 import { joinQuotedTail, splitQuotedTail } from "./quoteSplit";
 import type { ComposeMode, ComposerDraft } from "./reply";
 import { applySignature } from "./signature";
+import { errorMessageKey } from "../../app/errorMessages";
 import { Button } from "../../app/ui/Button";
 import { CloseIcon } from "../../app/ui/icons";
 import { MODAL_SELECTOR } from "../../app/ui/shortcuts";
@@ -61,7 +62,21 @@ function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
 // Pending uploads have no blobId yet, so they can't use AttachmentCard's
 // server-blob preview — this is a compact placeholder shown in the same
 // grid until the upload resolves (or errors) into a real attachment.
-function PendingUploadCard({ upload }: { upload: PendingUpload }) {
+//
+// GH #344(b): a failed upload used to be a dead end — no way to clear it or
+// try again, and it always rendered the generic message even for a code the
+// app has a real translation for (e.g. a 413 → payload_too_large). Remove and
+// Retry only show once the upload has actually failed; a still-in-flight one
+// only shows its progress, exactly as before.
+function PendingUploadCard({
+  upload,
+  onRemove,
+  onRetry,
+}: {
+  upload: PendingUpload;
+  onRemove(): void;
+  onRetry(): void;
+}) {
   const { t } = useTranslation();
   return (
     <div
@@ -70,9 +85,29 @@ function PendingUploadCard({ upload }: { upload: PendingUpload }) {
     >
       <span className="truncate">{upload.name}</span>
       {upload.error ? (
-        <span role="alert" className="text-warn">
-          {t("composer.errors.generic")}
-        </span>
+        <>
+          <span role="alert" className="text-warn">
+            {t(errorMessageKey("composer", upload.errorCode))}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onRetry}
+              aria-label={t("composer.retryUpload", { name: upload.name })}
+              className="text-accent-text underline"
+            >
+              {t("composer.retry")}
+            </button>
+            <button
+              type="button"
+              onClick={onRemove}
+              aria-label={t("composer.removeUpload", { name: upload.name })}
+              className="text-muted underline"
+            >
+              {t("composer.remove")}
+            </button>
+          </div>
+        </>
       ) : (
         <progress value={upload.progress} max={1} className="w-full" />
       )}
@@ -160,8 +195,25 @@ function DiscardConfirmDialog({
 export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { state, setField, addFiles, removeAttachment, send, saveDraft, discardDraft, draftWithAi } =
-    useComposer(initial, trashMailboxId);
+  const {
+    state,
+    setField,
+    addFiles,
+    removeAttachment,
+    removePendingUpload,
+    retryUpload,
+    send,
+    saveDraft,
+    discardDraft,
+    draftWithAi,
+  } = useComposer(initial, trashMailboxId);
+  // GH #344(a)/(c): a FAILED upload produced nothing (no blobId, no
+  // in-flight request) and is already a visible, dismissible error card
+  // (PendingUploadCard's Remove/Retry) — unlike a genuinely in-flight one, it
+  // must neither block Send nor force the discard confirmation on an
+  // otherwise-empty compose. Every gate below that used to read
+  // state.uploads.length now reads this filtered count instead.
+  const pendingUploadCount = state.uploads.filter((upload) => !upload.error).length;
   // GH #269: derived once from the mode the draft was built with — drives both
   // the dialog's aria-label and its visible <h2> so the two never disagree.
   const composerName = t(COMPOSER_NAME_KEYS[initial.mode ?? "new"]);
@@ -211,7 +263,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   // on success (the composer's work is done, not abandoned — nothing to
   // confirm).
   function requestClose() {
-    if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) {
+    if (isComposerDraftEmpty(state.draft, state.attachments.length, pendingUploadCount)) {
       onClose();
       return;
     }
@@ -238,7 +290,7 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requestClose closes over the same state.draft/attachments/uploads/onClose already listed below
-  }, [state.draft, state.attachments.length, state.uploads.length, onClose]);
+  }, [state.draft, state.attachments.length, pendingUploadCount, onClose]);
 
   // GH #159: closing the browser tab (or the window) outright bypasses the
   // composer entirely — same silent-discard hole as the X button, just
@@ -249,13 +301,13 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
   // that still require it to show their native confirmation prompt.
   useEffect(() => {
     function handleBeforeUnload(event: BeforeUnloadEvent) {
-      if (isComposerDraftEmpty(state.draft, state.attachments.length, state.uploads.length)) return;
+      if (isComposerDraftEmpty(state.draft, state.attachments.length, pendingUploadCount)) return;
       event.preventDefault();
       event.returnValue = "";
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [state.draft, state.attachments.length, state.uploads.length]);
+  }, [state.draft, state.attachments.length, pendingUploadCount]);
 
   function handleKeepEditing() {
     setDiscardConfirmOpen(false);
@@ -328,10 +380,24 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
     }
   }
 
-  // Shared by both the hidden file input and drag&drop — addFiles already
-  // dedups (name+size) and enforces the existing upload limits; this just
-  // surfaces the dedup outcome as a toast, reusing the composer's existing
-  // toast mechanism (also used for the "sent" confirmation above).
+  // Shared by both the hidden file input and drag&drop — this just surfaces
+  // addFiles' dedup outcome (name+size) as a toast, reusing the composer's
+  // existing toast mechanism (also used for the "sent" confirmation above).
+  //
+  // GH #344(d): this comment used to also claim addFiles "enforces the
+  // existing upload limits" (plural). Verified against the code and there is
+  // no such limit to enforce: addFiles (useComposer.ts) only dedups, and
+  // POST /api/mail/blobs — the one route a File actually uploads through — is
+  // the SINGLE route apps/server/src/app.ts explicitly exempts from the
+  // global request-body cap (`STREAMED_UPLOAD_PATH`, since it streams straight
+  // to Stalwart instead of buffering a JSON body). /send and /drafts, which
+  // ARE capped at DEFAULT_MAX_BODY_BYTES (core/config.ts), only ever carry an
+  // attachment as a {blobId, name, type} reference (packages/shared/src/api/
+  // compose.ts's sendAttachmentSchema) — never its bytes — so that cap cannot
+  // bound total attachment size either. In short: this app has no discoverable
+  // server-side ceiling on attachment count or total size to align a client
+  // cap with; a number invented without one would be exactly the "server
+  // limit" this comment falsely claimed already existed.
   function attachFiles(files: File[]) {
     const { skipped } = addFiles(files);
     if (skipped.length > 0) {
@@ -563,7 +629,12 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
                   />
                 ))}
                 {state.uploads.map((upload) => (
-                  <PendingUploadCard key={upload.id} upload={upload} />
+                  <PendingUploadCard
+                    key={upload.id}
+                    upload={upload}
+                    onRemove={() => removePendingUpload(upload.id)}
+                    onRetry={() => retryUpload(upload.id)}
+                  />
                 ))}
               </div>
             )}
@@ -600,7 +671,10 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
           <Button
             variant="primary"
             onClick={handleSend}
-            disabled={state.sending}
+            // GH #344(a): disabled while an upload is genuinely in flight —
+            // useComposer's send() also refuses in that case (defense in
+            // depth: the hint below is the visible half, not the only guard).
+            disabled={state.sending || pendingUploadCount > 0}
             className="flex h-[38px] shrink-0 items-center gap-2 rounded-[11px] px-[22px] text-[14px] font-bold"
           >
             {state.sending ? t("composer.sending") : t("composer.send")}
@@ -609,6 +683,11 @@ export function Composer({ initial, onClose, trashMailboxId }: ComposerProps) {
               <path d="M22 2 15 22l-4-9-9-4Z" />
             </svg>
           </Button>
+          {pendingUploadCount > 0 && (
+            <span role="status" className="text-xs text-muted">
+              {t("composer.uploadsPendingHint")}
+            </span>
+          )}
           {aiEnabled && !state.aiUnavailable && (
             <button
               type="button"

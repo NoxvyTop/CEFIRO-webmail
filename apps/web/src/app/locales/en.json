@@ -388,6 +388,11 @@
     "removeRecipient": "Remove {{email}}",
     "dropHint": "Drop to attach",
     "duplicateAttachment": "{{name}} was already attached",
+    "retry": "Retry",
+    "remove": "Remove",
+    "retryUpload": "Retry uploading {{name}}",
+    "removeUpload": "Remove {{name}}",
+    "uploadsPendingHint": "Wait for the uploads to finish before sending",
     "errors": {
       "noRecipients": "Add at least one recipient",
       "invalid_identity": "Invalid identity",
@@ -401,6 +406,8 @@
       "mail_not_configured": "The mail server is not configured",
       "mail_credentials_missing": "Your mailbox is not linked yet",
       "database_unavailable": "The service is temporarily unavailable. Try again",
+      "payload_too_large": "The file is too large",
+      "uploadsPending": "Wait for the uploads to finish before sending",
       "generic": "Something went wrong"
     },
     "draftWithAi": "✦ Draft with AI",

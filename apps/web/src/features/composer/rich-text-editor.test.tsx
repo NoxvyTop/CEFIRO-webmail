@@ -351,6 +351,95 @@ describe("RichTextEditor image insertion", () => {
     // (!editor.isDestroyed)`) and avoids running a command against — and
     // setting React state from — a component instance mid-teardown.
   });
+
+  // GH #344(c): MAX_IMAGE_BYTES/ALLOWED_IMAGE_TYPES were only enforced in
+  // handleImageFileSelected (the toolbar's own file input) above.
+  // ResizableImage.configure({ allowBase64: true }) means TipTap's default
+  // clipboard/drop handling admits ANY data: image it parses out of pasted
+  // HTML, or any image File dropped straight onto the editor, with no size or
+  // type check at all — a pasted screenshot could produce a multi-MB draft
+  // that then 413s on autosave. handlePaste/handleDrop close that gap using
+  // the exact same allowlist/cap, rejecting instead of inserting.
+  describe("pasted/dropped image size and type guard (#344c)", () => {
+    // No dedicated test drives handleDrop through a real "drop" event: like
+    // the mousedown redirect below (see this file's later comment on
+    // `document.elementFromPoint` being unimplemented in jsdom),
+    // prosemirror-view's own built-in drop handling calls view.posAtCoords
+    // BEFORE it ever reaches a custom handleDrop prop, and posAtCoords
+    // requires layout/hit-testing jsdom does not provide — so a synthetic
+    // drop event cannot reliably reach this code in this test environment.
+    // handleDrop shares its two helpers (rejectedImageFileReason,
+    // rejectedDataImageReason) with handlePaste, which IS fully exercised
+    // below through a path jsdom does support, so the actual rejection logic
+    // is covered even though the drop wiring itself is not.
+    function base64PayloadForBytes(byteLength: number): string {
+      // The guard only estimates decoded length from the base64 string's own
+      // length (no atob() call) — see base64DecodedByteLength in
+      // RichTextEditor.tsx — so any same-length placeholder string, valid
+      // base64 alphabet or not, exercises the same code path.
+      return "A".repeat(Math.ceil((byteLength * 4) / 3));
+    }
+
+    it("rejects a pasted data: image over the size cap and does not insert it", async () => {
+      render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+      const editor = screen.getByRole("textbox", { name: "Message" });
+
+      const oversizedDataUrl = `data:image/png;base64,${base64PayloadForBytes(2_000_000)}`;
+      fireEvent.paste(editor, {
+        clipboardData: {
+          getData: (format: string) =>
+            format === "text/html" ? `<img src="${oversizedDataUrl}">` : "",
+          files: [],
+        },
+      });
+
+      expect(await screen.findByText(i18n.t("composer.imageTooLarge"))).toBeInTheDocument();
+      expect(editor.querySelector("img")).toBeNull();
+    });
+
+    it("rejects a pasted data: image of a disallowed type and does not insert it", async () => {
+      render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+      const editor = screen.getByRole("textbox", { name: "Message" });
+
+      const svgDataUrl = `data:image/svg+xml;base64,${base64PayloadForBytes(10)}`;
+      fireEvent.paste(editor, {
+        clipboardData: {
+          getData: (format: string) => (format === "text/html" ? `<img src="${svgDataUrl}">` : ""),
+          files: [],
+        },
+      });
+
+      expect(await screen.findByText(i18n.t("composer.imageInvalidType"))).toBeInTheDocument();
+      expect(editor.querySelector("img")).toBeNull();
+    });
+
+    it("rejects an oversized image file carried directly on the clipboard (no HTML) and does not insert it", async () => {
+      render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+      const editor = screen.getByRole("textbox", { name: "Message" });
+
+      fireEvent.paste(editor, {
+        clipboardData: {
+          getData: () => "",
+          files: [pngFile("screenshot.png", 2_000_000, "image/png")],
+        },
+      });
+
+      expect(await screen.findByText(i18n.t("composer.imageTooLarge"))).toBeInTheDocument();
+      expect(editor.querySelector("img")).toBeNull();
+    });
+
+    it("does not block an ordinary text paste", async () => {
+      render(<RichTextEditor html="<p>Hello</p>" onChange={() => {}} ariaLabel="Message" />);
+      const editor = screen.getByRole("textbox", { name: "Message" });
+
+      fireEvent.paste(editor, {
+        clipboardData: { getData: () => "", files: [] },
+      });
+
+      expect(screen.queryByText(i18n.t("composer.imageTooLarge"))).not.toBeInTheDocument();
+      expect(screen.queryByText(i18n.t("composer.imageInvalidType"))).not.toBeInTheDocument();
+    });
+  });
 });
 
 describe("RichTextEditor text alignment toolbar", () => {
