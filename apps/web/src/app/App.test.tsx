@@ -162,6 +162,21 @@ describe("App header after the shared-mailboxes refinement", () => {
   });
 });
 
+// #348: h-screen resolves against the LARGE viewport on iOS Safari, which
+// includes the area the address/toolbar chrome covers before it collapses on
+// scroll — so the shell was taller than the space actually visible on first
+// paint, with the header/footer clipped by the toolbar. h-dvh tracks the
+// dynamic viewport (shrinks/grows with the chrome) instead.
+describe("App shell viewport height", () => {
+  it("sizes the shell with the dynamic viewport unit, not h-screen", async () => {
+    renderApp();
+    await screen.findByRole("button", { name: i18n.t("auth.signedInAs", { email: user.email }) });
+
+    expect(document.querySelector(".flex.flex-col.h-dvh")).not.toBeNull();
+    expect(document.querySelector(".h-screen")).toBeNull();
+  });
+});
+
 describe("App accessibility shell", () => {
   it("exposes a skip-to-content link that targets the main landmark", async () => {
     renderApp();

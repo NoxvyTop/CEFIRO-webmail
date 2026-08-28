@@ -13,7 +13,13 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
   useEffect(() => {
     if (!open) return;
     function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      // #348: App.tsx's own global "?" handler (the one that opened this
+      // overlay) is gated by isPlainShortcut(), which returns false while
+      // this dialog is open (see shortcuts.ts's isModalOpen) — so "?" must
+      // close from in here instead, the same way every other single-key
+      // shortcut this overlay documents (j/k/e/s/r/c) is scoped to whatever
+      // owns the keyboard at the time.
+      if (event.key === "Escape" || event.key === "?") onClose();
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);

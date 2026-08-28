@@ -24,6 +24,7 @@ import { formatRelativeTime } from "../../app/ui/relative-time";
 import { isPlainShortcut } from "../../app/ui/shortcuts";
 import { useToast } from "../../app/ui/toast";
 import { useFocusTrap } from "../../app/ui/useFocusTrap";
+import { useMenuKeyboardNav } from "../../app/ui/useMenuKeyboardNav";
 import { AiSummaryCard } from "./AiSummaryCard";
 import { describeAudience } from "./audience";
 import { AttachmentCard } from "./AttachmentCard";
@@ -289,6 +290,11 @@ export function ThreadView({
   const labelButtonRef = useRef<HTMLButtonElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  // #348: WAI-ARIA menu keyboard behavior — focus the first label on open,
+  // ArrowUp/ArrowDown/Home/End move between labels. Shares labelMenuRef
+  // (rather than creating its own ref) since the click-outside handler below
+  // already needs a ref to this same portaled element.
+  useMenuKeyboardNav(labelMenuOpen, labelMenuRef);
 
   function toggleLabelMenu() {
     setLabelMenuOpen((open) => {

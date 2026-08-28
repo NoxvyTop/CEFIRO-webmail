@@ -59,6 +59,28 @@ describe("UserMenu", () => {
     expect(screen.getByRole("menuitem", { name: /Administración/ })).toBeInTheDocument();
   });
 
+  // #348: WAI-ARIA menu pattern — opening the menu must move focus onto its
+  // first item so a keyboard user does not have to Tab in blind.
+  it("focuses the first menu item as soon as it opens", () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
+    expect(screen.getByRole("menuitem", { name: /Ajustes/ })).toHaveFocus();
+  });
+
+  it("moves focus with ArrowDown/ArrowUp between menu items", () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));
+    const settingsItem = screen.getByRole("menuitem", { name: /Ajustes/ });
+    const shortcutsItem = screen.getByRole("menuitem", { name: /Atajos/ });
+    expect(settingsItem).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(shortcutsItem).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(settingsItem).toHaveFocus();
+  });
+
   it("closes when Escape is pressed", () => {
     renderMenu();
     fireEvent.click(screen.getByRole("button", { name: /Sesión iniciada como carla@noxvytop.com/ }));

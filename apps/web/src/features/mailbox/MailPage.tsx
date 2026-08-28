@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router";
@@ -66,6 +66,19 @@ export function MailPage() {
   // when no shared mailbox is selected.
   const accountParam = searchParams.get(ACTIVE_ACCOUNT_PARAM) ?? undefined;
   const threadParam = searchParams.get("thread");
+  // #348: closing the reader (Archivar/Eliminar/the back button, all of
+  // which clear `thread`) used to leave focus on whatever DOM node vanished
+  // under it — the browser's fallback is <body>. Tracks the PREVIOUS thread
+  // param so this only fires on a genuine close transition, not on initial
+  // load with no thread ever open.
+  const listSectionRef = useRef<HTMLElement>(null);
+  const previousThreadParamRef = useRef<string | null>(threadParam);
+  useEffect(() => {
+    if (previousThreadParamRef.current && !threadParam) {
+      listSectionRef.current?.focus();
+    }
+    previousThreadParamRef.current = threadParam;
+  }, [threadParam]);
   const queryParam = searchParams.get("q");
   const composeParam = searchParams.get("compose");
   const groupParam = searchParams.get("group");
@@ -548,11 +561,13 @@ export function MailPage() {
         onClose={() => setNavOpen(false)}
       />
       <section
+        ref={listSectionRef}
+        tabIndex={-1}
         aria-label={t("mail.listRegion")}
         style={{ "--list-w": `${listWidth}px` } as CSSProperties}
         className={`${
           threadParam ? "hidden lg:flex" : "flex"
-        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
+        } min-w-[280px] flex-1 flex-col overflow-y-auto overflow-x-hidden bg-panel outline-none lg:w-[var(--list-w)] lg:min-w-0 lg:flex-none`}
       >
         {/* GH #13/#50 (G-4): the account selector that used to name the active
             shared mailbox in the top bar is gone; this read-only indicator names

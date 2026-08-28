@@ -974,6 +974,28 @@ describe("ThreadView", () => {
       expect(within(menu).queryByRole("menuitemcheckbox", { name: "urgente" })).not.toBeInTheDocument();
     });
 
+    // #348: WAI-ARIA menu pattern — opening the menu must move focus onto
+    // its first item, and ArrowDown/ArrowUp must move between items.
+    it("focuses the first label on open and moves focus with arrow keys", async () => {
+      const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
+      const soporte: CustomLabel = { slug: "soporte", name: "Soporte", color: "#2FB8C4" };
+      stubFetch(NO_IDENTITIES, [ventas, soporte]);
+      renderThread("t1", "arch1");
+
+      fireEvent.click(await screen.findByRole("button", { name: i18n.t("mail.labels") }));
+
+      const menu = await screen.findByRole("menu");
+      const ventasItem = await within(menu).findByRole("menuitemcheckbox", { name: "Ventas" });
+      const soporteItem = within(menu).getByRole("menuitemcheckbox", { name: "Soporte" });
+      expect(ventasItem).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: "ArrowDown" });
+      expect(soporteItem).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: "ArrowUp" });
+      expect(ventasItem).toHaveFocus();
+    });
+
     it("toggling a custom label applies the keyword and shows it as a chip next to the subject", async () => {
       const ventas: CustomLabel = { slug: "ventas", name: "Ventas", color: "#9B6BDB" };
       const fetchMock = stubFetch(NO_IDENTITIES, [ventas]);

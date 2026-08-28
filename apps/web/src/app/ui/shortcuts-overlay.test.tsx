@@ -40,6 +40,17 @@ describe("ShortcutsOverlay", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // #348: App.tsx's own "?" handler is gated by isPlainShortcut(), which
+  // returns false while this overlay's own role="dialog" is open — so the
+  // global handler that OPENED it can never be the one that closes it again.
+  // The overlay must own its own "?" handling instead.
+  it("calls onClose on '?' as well as Escape", () => {
+    const onClose = vi.fn();
+    render(<ShortcutsOverlay open={true} onClose={onClose} />);
+    fireEvent.keyDown(window, { key: "?" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("calls onClose when clicking the backdrop", () => {
     const onClose = vi.fn();
     render(<ShortcutsOverlay open={true} onClose={onClose} />);
